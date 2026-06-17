@@ -1,0 +1,58 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+.cursor/
+.cursorignore/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+instructions/
+
+# Logs
+logs/
+*.log
+
+# Virtual Environment
+venv/
+ENV/
+.venv/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Sensitive data
+credentials/
+database/
+amo/tokens.json
+
+# Database
+*.db
+
+# Text files
+поля.txt
+статус.txt
