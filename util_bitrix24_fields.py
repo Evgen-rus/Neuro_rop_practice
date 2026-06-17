@@ -2,6 +2,11 @@
 Модуль для получения и анализа полей Битрикс24.
 
 Позволяет получить список доступных полей и их параметров через API Битрикс24.
+
+Методы Bitrix24 REST API:
+- crm.lead.fields: получает описание всех полей лида, включая системные и
+  пользовательские UF_CRM_* поля. Нужно для расшифровки структуры карточки лида.
+
 Документация: https://apidocs.bitrix24.ru/api-reference/crm/leads/
 """
 import os
@@ -9,6 +14,7 @@ import requests
 import json
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
+from setup import get_logger
 
 class Bitrix24API:
     """Класс для работы с API Битрикс24"""
@@ -82,6 +88,7 @@ class Bitrix24API:
 
 def main():
     """Основная функция для тестирования API"""
+    logger = get_logger(__file__)
     load_dotenv()
     webhook_url = os.getenv("BITRIX_WEBHOOK_URL")
 
@@ -104,10 +111,10 @@ def main():
             print("\nСписок всех полей:")
             print("-" * 30)
             for field_id, field_info in fields.items():
-                print(f"ID: {field_id}")
-                print(f"Название: {field_info.get('title', 'Не указано')}")
-                print(f"Тип: {field_info.get('type', 'Не указан')}")
-                print("-" * 30)
+                logger.info("ID: %s", field_id)
+                logger.info("Название: %s", field_info.get("title", "Не указано"))
+                logger.info("Тип: %s", field_info.get("type", "Не указан"))
+                logger.info("-" * 30)
                 
     except Exception as e:
         print(f"Произошла ошибка: {e}")
