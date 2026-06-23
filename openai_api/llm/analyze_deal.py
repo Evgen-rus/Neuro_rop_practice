@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--transcript",
         default="latest",
-        help="Transcript path or 'latest'. Default: latest transcript in deal workspace.",
+        help="Transcript path, 'latest', or 'none'. Default: latest transcript in deal workspace.",
     )
     parser.add_argument(
         "--deal-root",
@@ -67,7 +67,9 @@ def latest_transcript(transcripts_dir: Path) -> Path:
     return candidates[0]
 
 
-def resolve_transcript(value: str, deal_dir: Path) -> Path:
+def resolve_transcript(value: str, deal_dir: Path) -> Path | None:
+    if value.lower() == "none":
+        return None
     if value.lower() == "latest":
         return latest_transcript(deal_dir / "transcripts")
 
@@ -86,6 +88,7 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
         "technical_data.md",
         "risk_signals.md",
         "call_attempt_rules.md",
+        "commercial_offer_followup.md",
         "manager_texts.md",
         "objections.md",
         "funnel.md",
@@ -105,20 +108,25 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     )
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
-Проанализируй сделку и новый звонок/событие. Главный вопрос: продвинулся ли клиент к оплате, КП, договору, передаче данных или следующему конкретному шагу.
+Проанализируй сделку и новое событие, если оно есть. Если транскрибация не предоставлена, анализируй текущее состояние сделки по истории, активностям и комментариям. Главный вопрос: продвинулся ли клиент к оплате, КП, договору, передаче данных или следующему конкретному шагу.
 
 Верни только валидный JSON без markdown.
 
 Правила:
 1. Не выдумывай факты.
-2. Если транскрибация является недозвоном, автоответчиком или служебным сообщением, так и укажи.
-3. Если разговора с клиентом не было, new_event.type должен быть "missed_call", а new_event.is_meaningful_contact должен быть false.
-4. Не оценивай качество переговоров, если разговора с клиентом не было.
-5. Используй OKF-правила только как правила, а не как факты сделки.
-6. Готовые тексты клиенту должны быть деловыми, конкретными и готовыми к отправке.
-7. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "уточнить", "{данные}" в готовых текстах и темах письма.
-8. Если не хватает данных, укажи конкретный список и зачем они нужны.
-9. Если содержательного контакта не было, обязательно примени регламент дозвона из OKF и заполни call_attempt_policy.
+2. Если транскрибация не предоставлена, new_event.type должен быть "unknown", а new_event.summary должен пояснить, что анализ идет без нового события.
+3. Если транскрибация является недозвоном, автоответчиком или служебным сообщением, так и укажи.
+4. Если разговора с клиентом не было, new_event.type должен быть "missed_call", а new_event.is_meaningful_contact должен быть false.
+5. Не оценивай качество переговоров, если разговора с клиентом не было.
+6. Используй OKF-правила только как правила, а не как факты сделки.
+7. Готовые тексты клиенту должны быть деловыми, конкретными и готовыми к отправке.
+8. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "уточнить", "{{данные}}" в готовых текстах и темах письма.
+9. Если не хватает данных, укажи конкретный список и зачем они нужны.
+10. Если содержательного контакта не было, обязательно примени рекомендацию по дозвону из OKF и заполни call_attempt_recommendation.
+11. Если КП уже отправлено, не ограничивайся формулировкой "обсудить КП": нужно получить критерии выбора, срок решения, ЛПР и следующий шаг к договору, счету, предоплате или согласованию комплектации.
+12. В готовом тексте после отправки КП не пиши "направляю КП"; используй формулировки вроде "возвращаюсь к направленному КП".
+13. В email или мессенджере после недозвона предлагай 2 конкретных варианта времени для будущего созвона, если это уместно.
+14. В live call script не предлагай время будущего созвона: если менеджер дозвонился, разговор уже идет. Завершай скрипт вопросом о следующем шаге, сроке решения, правках, договоре/счете или внутреннем согласовании.
 
 Нужная JSON-структура:
 {{
@@ -149,16 +157,16 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "missed_points": ["что менеджер упустил"],
     "critical_mistake": null
   }},
-  "call_attempt_policy": {{
+  "call_attempt_recommendation": {{
     "applicable": true,
     "contact_status": "meaningful_contact|missed_call|busy|voicemail|unavailable|dropped|unknown",
     "attempts_found": "что видно по попыткам дозвона",
-    "policy_compliance": "compliant|partial|not_compliant|unknown|not_applicable",
-    "policy_gap": "что не соблюдено или чего не хватает в истории",
+    "recommendation_fit": "follows|partial|does_not_follow|unknown|not_applicable",
+    "recommendation_gap": "что не сделано по рекомендации или чего не хватает в истории",
     "next_call_plan": [
       "конкретное действие по следующей попытке дозвона"
     ],
-    "rop_control": "что должен проверить РОП по дозвону"
+    "rop_control": "что РОПу стоит проверить по дозвону"
   }},
   "manager_action_block": {{
     "recommended_channel": "email|phone|messenger|crm_task",
@@ -192,7 +200,7 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 
 {history_text.strip()}
 
-## ТРАНСКРИБАЦИЯ НОВОГО ЗВОНКА/СОБЫТИЯ
+## ТРАНСКРИБАЦИЯ / НОВОЕ СОБЫТИЕ
 
 {transcript_text.strip()}
 
@@ -207,7 +215,7 @@ def render_report(analysis: dict[str, Any]) -> str:
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
     progress = analysis.get("deal_progress", {}) or {}
-    call_policy = analysis.get("call_attempt_policy", {}) or {}
+    call_recommendation = analysis.get("call_attempt_recommendation", {}) or {}
     manager = analysis.get("manager_action_block", {}) or {}
     primary = manager.get("primary_text", {}) or {}
     rop = analysis.get("rop_action", {}) or {}
@@ -273,18 +281,18 @@ def render_report(analysis: dict[str, Any]) -> str:
 
 Критическая ошибка: {human_value((analysis.get('manager_quality') or {}).get('critical_mistake'))}
 
-## Регламент дозвона
+## Рекомендация по дозвону
 
-- Применим: {human_value(call_policy.get('applicable'))}
-- Статус контакта: {call_policy.get('contact_status', 'не указано')}
-- Попытки в истории: {call_policy.get('attempts_found', 'не указано')}
-- Соблюдение регламента: {call_policy.get('policy_compliance', 'не указано')}
-- Пробел: {call_policy.get('policy_gap', 'не указано')}
-- Контроль РОПа: {call_policy.get('rop_control', 'не указано')}
+- Применима: {human_value(call_recommendation.get('applicable'))}
+- Статус контакта: {call_recommendation.get('contact_status', 'не указано')}
+- Попытки в истории: {call_recommendation.get('attempts_found', 'не указано')}
+- Соответствие рекомендации: {call_recommendation.get('recommendation_fit', 'не указано')}
+- Что усилить: {call_recommendation.get('recommendation_gap', 'не указано')}
+- Что РОПу проверить: {call_recommendation.get('rop_control', 'не указано')}
 
 План дозвона:
 
-{bullet_list(call_policy.get('next_call_plan'))}
+{bullet_list(call_recommendation.get('next_call_plan'))}
 
 ## Что сделать менеджеру
 
@@ -332,7 +340,11 @@ def main() -> None:
         raise FileNotFoundError(f"Knowledge dir not found: {knowledge_dir}")
 
     log_model_file_payload(logger, title="deal history input", model=args.model, path=history_path)
-    log_model_file_payload(logger, title="deal transcript input", model=args.model, path=transcript_path)
+    if transcript_path:
+        log_model_file_payload(logger, title="deal transcript input", model=args.model, path=transcript_path)
+        transcript_text = read_text(transcript_path)
+    else:
+        transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
 
     okf_sections: list[tuple[Path, str]] = []
     for path in knowledge_files(knowledge_dir):
@@ -342,7 +354,7 @@ def main() -> None:
     prompt = build_prompt(
         args.deal_id,
         read_text(history_path),
-        read_text(transcript_path),
+        transcript_text,
         okf_sections,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -369,7 +381,7 @@ def main() -> None:
         "deal_id": str(args.deal_id),
         "input_files": {
             "history": str(history_path),
-            "transcript": str(transcript_path),
+            "transcript": str(transcript_path) if transcript_path else None,
             "knowledge": [str(path) for path, _text in okf_sections],
         },
         "model_metadata": {
