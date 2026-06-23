@@ -1,0 +1,2 @@
+"""Deal-oriented Bitrix scripts."""
+

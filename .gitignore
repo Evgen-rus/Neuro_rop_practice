@@ -32,6 +32,7 @@ instructions/
 # Logs
 logs/
 *.log
+*.log.*
 
 # Virtual Environment
 venv/
@@ -49,12 +50,39 @@ ENV/
 credentials/
 database/
 amo/tokens.json
+.agents/
+.codex/
 
 # Database
 *.db
+*.sqlite
+*.sqlite3
 
-# Text files
+# Local client data and generated reports
+Docs/
+reports/
+knowledge/
+downloads/
+
+# Local media and generated transcripts/analysis exports
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.flac
+*.webm
+*.mp4
+*.mov
+*.avi
+*_transcript.txt
+*_transcript.md
+*_transcript.json
+*_analysis.json
+*_rop_report.md
+*_raw_model_output.txt
+*_request_prompt.txt
+
+# Local Bitrix exports and private CRM maps
 поля.txt
 статус.txt
 crm_pipeline_map.json
-pomoshnik_ropa_presentation.html
