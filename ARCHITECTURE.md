@@ -46,6 +46,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Deal LLM-анализ: `openai_api/llm/analyze_deal.py`
 - Lead LLM-анализ: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
+- Валидация LLM JSON перед отчётом: `openai_api/llm/validation.py`
 - Обработанная OKF-база ПрактикМ: `knowledge/clients/praktikm/index.md`
 - Ручная проверка проекта: `Docs/ручная проверка проекта.md`
 - Целевая MVP-спека: `Docs/rop_assistant_spec.md`
@@ -67,6 +68,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 13. `latest` transcript выбирается по времени изменения файла. Если в папке несколько транскриптов, это может повлиять на анализ.
 14. `ffmpeg` и `ffprobe` — внешние зависимости, они не ставятся через `requirements.txt`.
 15. Сейчас нет SQLite/deal_memory из спеки. Поле `memory_update` в LLM-ответе пока сохраняется в JSON, но не обновляет отдельное хранилище памяти.
+16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
 
 ## 4) Key Domain Objects
 
@@ -219,6 +221,7 @@ Dry-run сохраняет prompt в `analysis/`, но не вызывает Ope
 - Изменение публичных ссылок на лиды/сделки Bitrix: `BITRIX_PORTAL_URL` и `openai_api/bitrix_links.py`.
 - Изменение тарифов моделей и формулы стоимости: `openai_api/pricing.py`.
 - Изменение вызова OpenAI Responses API и JSON-парсинга: `openai_api/llm/llm_client.py`.
+- Изменение проверки обязательных полей и запрещённых плейсхолдеров в LLM JSON: `openai_api/llm/validation.py`.
 - Изменение структуры deal-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_deal.py`.
 - Изменение структуры lead-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_lead.py`.
 - Изменение приоритетного набора OKF-файлов: `knowledge_files()` в `openai_api/llm/analyze_deal.py`.

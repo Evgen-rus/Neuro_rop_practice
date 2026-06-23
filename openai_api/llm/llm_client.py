@@ -24,6 +24,15 @@ from openai_api.pricing import estimate_analysis_cost
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+class ModelJsonParseError(ValueError):
+    """Raised when the model response cannot be parsed as a JSON object."""
+
+    def __init__(self, message: str, raw_output_text: str, metadata: dict[str, Any]):
+        super().__init__(message)
+        self.raw_output_text = raw_output_text
+        self.metadata = metadata
+
+
 def response_output_text(response: Any) -> str:
     output_text = getattr(response, "output_text", None)
     if output_text:
@@ -100,7 +109,6 @@ def call_analysis_json(prompt: str, *, model: str = ANALYSIS_MODEL) -> tuple[dic
         estimated_cost.get("estimated_cost_rub"),
     )
 
-    parsed = parse_json_object(text)
     metadata = {
         "model": model,
         "usage": usage,
@@ -110,5 +118,16 @@ def call_analysis_json(prompt: str, *, model: str = ANALYSIS_MODEL) -> tuple[dic
         "response_id": getattr(response, "id", None),
         "raw_output_text": text,
     }
+
+    try:
+        parsed = parse_json_object(text)
+    except (json.JSONDecodeError, ValueError) as error:
+        preview = text[:500].replace("\n", "\\n")
+        raise ModelJsonParseError(
+            f"Model returned invalid JSON: {error}. Raw output preview: {preview}",
+            raw_output_text=text,
+            metadata=metadata,
+        ) from error
+
     return parsed, metadata
 

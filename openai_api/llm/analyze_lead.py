@@ -19,7 +19,8 @@ from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.analyze_deal import knowledge_files, read_text
-from openai_api.llm.llm_client import call_analysis_json
+from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
+from openai_api.llm.validation import AnalysisValidationError, validate_lead_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
 from setup import MSK_TZ
@@ -69,14 +70,46 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
 
 Верни только валидный JSON без markdown.
 
+<structured_output_contract>
+- Верни только один JSON-объект, без markdown, без ```json, без пояснений до или после JSON.
+- Не добавляй поля вне указанной JSON-структуры.
+- Если данных нет, используй null, "unknown", "не указано" или пустой массив в зависимости от типа поля.
+- Перед финальным ответом проверь, что все фигурные и квадратные скобки закрыты.
+- Все строки должны быть корректно экранированы для JSON.
+</structured_output_contract>
+
+<grounding_rules>
+- Факты лида бери только из истории лида и транскрибации/нового события.
+- OKF-база — это правила оценки и рекомендации, а не источник фактов о конкретном клиенте.
+- Если факт есть только в OKF-базе, не записывай его как факт лида.
+- Если нужного факта нет в истории или транскрибации, прямо укажи, каких данных не хватает.
+</grounding_rules>
+
+<length_limits>
+- summary/reason/description: максимум 2-3 коротких предложения.
+- Списки what_done_well, missed_points, next_call_plan, manager_checklist: максимум 5 пунктов.
+- Готовый email или messenger text: максимум 1200 символов.
+- call_script: максимум 900 символов.
+- Не повторяй одну и ту же мысль в нескольких полях.
+</length_limits>
+
 Правила:
 1. Не выдумывай факты.
 2. Используй OKF-правила только как правила, а не как факты лида.
 3. Если нет транскрибации, анализируй карточку лида, комментарии, звонки, задачи и таймлайн.
 4. Если были только недозвоны/нет контакта, так и укажи.
 5. Готовые тексты должны быть деловыми, конкретными и готовыми к отправке.
-6. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "уточнить", "{{данные}}" в готовых текстах.
+6. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "{{данные}}", "todo", "tbd" в готовых текстах.
 7. Если содержательного контакта не было, обязательно примени рекомендацию по дозвону из OKF и заполни call_attempt_recommendation.
+
+<verification_loop>
+Перед финальным JSON проверь:
+1. JSON валиден и соответствует указанной структуре.
+2. Все факты опираются на историю лида или транскрибацию.
+3. OKF использована только как правила оценки.
+4. В готовых текстах нет "ДОБАВИТЬ", "todo", "tbd", плейсхолдеров с фигурными скобками или других служебных пометок.
+5. Если содержательного контакта не было, это отражено в activity_summary и call_attempt_recommendation.
+</verification_loop>
 
 Нужная JSON-структура:
 {{
@@ -325,9 +358,53 @@ def main() -> None:
         print(f"Dry run complete. Request prompt saved: {prompt_path}")
         return
 
-    analysis, metadata = call_analysis_json(prompt, model=args.model)
+    generated_at = datetime.now(MSK_TZ).isoformat()
+    analysis_path = analysis_dir / f"lead_{args.lead_id}_analysis.json"
+    report_path = analysis_dir / f"lead_{args.lead_id}_rop_report.md"
+    raw_path = analysis_dir / f"lead_{args.lead_id}_raw_model_output.txt"
+    error_path = analysis_dir / f"lead_{args.lead_id}_analysis_error.json"
+
+    try:
+        analysis, metadata = call_analysis_json(prompt, model=args.model)
+    except ModelJsonParseError as error:
+        raw_path.write_text(error.raw_output_text, encoding="utf-8")
+        save_json(
+            error_path,
+            {
+                "generated_at": generated_at,
+                "lead_id": str(args.lead_id),
+                "error": str(error),
+                "model_metadata": {
+                    key: value for key, value in error.metadata.items() if key != "raw_output_text"
+                },
+            },
+        )
+        print(f"Model returned invalid JSON. Raw output saved: {raw_path}")
+        print(f"Error details saved: {error_path}")
+        raise
+
+    try:
+        validate_lead_analysis(analysis)
+    except AnalysisValidationError as error:
+        raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
+        save_json(
+            error_path,
+            {
+                "generated_at": generated_at,
+                "lead_id": str(args.lead_id),
+                "error": str(error),
+                "model_metadata": {
+                    key: value for key, value in metadata.items() if key != "raw_output_text"
+                },
+                "analysis": analysis,
+            },
+        )
+        print(f"Model analysis failed validation. Raw output saved: {raw_path}")
+        print(f"Error details saved: {error_path}")
+        raise
+
     output_payload = {
-        "generated_at": datetime.now(MSK_TZ).isoformat(),
+        "generated_at": generated_at,
         "lead_id": str(args.lead_id),
         "input_files": {
             "history": str(history_path),
@@ -337,10 +414,6 @@ def main() -> None:
         "model_metadata": {key: value for key, value in metadata.items() if key != "raw_output_text"},
         "analysis": analysis,
     }
-
-    analysis_path = analysis_dir / f"lead_{args.lead_id}_analysis.json"
-    report_path = analysis_dir / f"lead_{args.lead_id}_rop_report.md"
-    raw_path = analysis_dir / f"lead_{args.lead_id}_raw_model_output.txt"
 
     save_json(analysis_path, output_payload)
     report_path.write_text(render_report(analysis, metadata), encoding="utf-8")

@@ -18,7 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.config import ANALYSIS_MODEL, logger
-from openai_api.llm.llm_client import call_analysis_json
+from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
+from openai_api.llm.validation import AnalysisValidationError, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
 from setup import MSK_TZ
@@ -114,6 +115,29 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 
 Верни только валидный JSON без markdown.
 
+<structured_output_contract>
+- Верни только один JSON-объект, без markdown, без ```json, без пояснений до или после JSON.
+- Не добавляй поля вне указанной JSON-структуры.
+- Если данных нет, используй null, "unknown", "не указано" или пустой массив в зависимости от типа поля.
+- Перед финальным ответом проверь, что все фигурные и квадратные скобки закрыты.
+- Все строки должны быть корректно экранированы для JSON.
+</structured_output_contract>
+
+<grounding_rules>
+- Факты сделки бери только из истории сделки и транскрибации/нового события.
+- OKF-база — это правила оценки и рекомендации, а не источник фактов о конкретном клиенте.
+- Если факт есть только в OKF-базе, не записывай его как факт сделки.
+- Если нужного факта нет в истории или транскрибации, прямо укажи, каких данных не хватает.
+</grounding_rules>
+
+<length_limits>
+- summary/reason/description: максимум 2-3 коротких предложения.
+- Списки what_changed, what_done_well, missed_points, manager_checklist: максимум 5 пунктов.
+- Готовый email или messenger text: максимум 1200 символов.
+- call_script: максимум 900 символов.
+- Не повторяй одну и ту же мысль в нескольких полях.
+</length_limits>
+
 Правила:
 1. Не выдумывай факты.
 2. Если транскрибация не предоставлена, new_event.type должен быть "unknown", а new_event.summary должен пояснить, что анализ идет без нового события.
@@ -122,13 +146,22 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 5. Не оценивай качество переговоров, если разговора с клиентом не было.
 6. Используй OKF-правила только как правила, а не как факты сделки.
 7. Готовые тексты клиенту должны быть деловыми, конкретными и готовыми к отправке.
-8. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "уточнить", "{{данные}}" в готовых текстах и темах письма.
+8. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "{{данные}}", "todo", "tbd" в готовых текстах и темах письма.
 9. Если не хватает данных, укажи конкретный список и зачем они нужны.
 10. Если содержательного контакта не было, обязательно примени рекомендацию по дозвону из OKF и заполни call_attempt_recommendation.
 11. Если КП уже отправлено, не ограничивайся формулировкой "обсудить КП": нужно получить критерии выбора, срок решения, ЛПР и следующий шаг к договору, счету, предоплате или согласованию комплектации.
 12. В готовом тексте после отправки КП не пиши "направляю КП"; используй формулировки вроде "возвращаюсь к направленному КП".
 13. В email или мессенджере после недозвона предлагай 2 конкретных варианта времени для будущего созвона, если это уместно.
 14. В live call script не предлагай время будущего созвона: если менеджер дозвонился, разговор уже идет. Завершай скрипт вопросом о следующем шаге, сроке решения, правках, договоре/счете или внутреннем согласовании.
+
+<verification_loop>
+Перед финальным JSON проверь:
+1. JSON валиден и соответствует указанной структуре.
+2. Все факты опираются на историю сделки или транскрибацию.
+3. OKF использована только как правила оценки.
+4. В готовых текстах нет "ДОБАВИТЬ", "todo", "tbd", плейсхолдеров с фигурными скобками или других служебных пометок.
+5. Если контакта не было, сделка не отмечена как продвинутая только из-за звонка.
+</verification_loop>
 
 Нужная JSON-структура:
 {{
@@ -395,9 +428,51 @@ def main() -> None:
         print(f"Dry run complete. Request prompt saved: {prompt_path}")
         return
 
-    analysis, metadata = call_analysis_json(prompt, model=args.model)
-
     generated_at = datetime.now(MSK_TZ).isoformat()
+    analysis_path = analysis_dir / f"deal_{args.deal_id}_analysis.json"
+    report_path = analysis_dir / f"deal_{args.deal_id}_rop_report.md"
+    raw_path = analysis_dir / f"deal_{args.deal_id}_raw_model_output.txt"
+    error_path = analysis_dir / f"deal_{args.deal_id}_analysis_error.json"
+
+    try:
+        analysis, metadata = call_analysis_json(prompt, model=args.model)
+    except ModelJsonParseError as error:
+        raw_path.write_text(error.raw_output_text, encoding="utf-8")
+        save_json(
+            error_path,
+            {
+                "generated_at": generated_at,
+                "deal_id": str(args.deal_id),
+                "error": str(error),
+                "model_metadata": {
+                    key: value for key, value in error.metadata.items() if key != "raw_output_text"
+                },
+            },
+        )
+        print(f"Model returned invalid JSON. Raw output saved: {raw_path}")
+        print(f"Error details saved: {error_path}")
+        raise
+
+    try:
+        validate_deal_analysis(analysis)
+    except AnalysisValidationError as error:
+        raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
+        save_json(
+            error_path,
+            {
+                "generated_at": generated_at,
+                "deal_id": str(args.deal_id),
+                "error": str(error),
+                "model_metadata": {
+                    key: value for key, value in metadata.items() if key != "raw_output_text"
+                },
+                "analysis": analysis,
+            },
+        )
+        print(f"Model analysis failed validation. Raw output saved: {raw_path}")
+        print(f"Error details saved: {error_path}")
+        raise
+
     output_payload = {
         "generated_at": generated_at,
         "deal_id": str(args.deal_id),
@@ -411,10 +486,6 @@ def main() -> None:
         },
         "analysis": analysis,
     }
-
-    analysis_path = analysis_dir / f"deal_{args.deal_id}_analysis.json"
-    report_path = analysis_dir / f"deal_{args.deal_id}_rop_report.md"
-    raw_path = analysis_dir / f"deal_{args.deal_id}_raw_model_output.txt"
 
     save_json(analysis_path, output_payload)
     report_path.write_text(render_report(analysis, metadata), encoding="utf-8")
