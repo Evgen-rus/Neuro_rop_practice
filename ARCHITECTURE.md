@@ -29,6 +29,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 
 - Общая настройка путей, времени и логирования: `setup.py`
 - Runtime env для OpenAI: `openai_api/config.py`
+- Публичные ссылки на карточки Bitrix: `openai_api/bitrix_links.py`
 - Расчёт стоимости OpenAI: `openai_api/pricing.py`
 - Bitrix REST client: `bitrix/client.py`
 - Структура рабочих папок лидов/сделок: `bitrix/workspace.py`
@@ -215,6 +216,7 @@ Dry-run сохраняет prompt в `analysis/`, но не вызывает Ope
 - Изменение транскрибации, chunking, `ffmpeg`: `openai_api/audio/transcribe_core.py`.
 - Изменение CLI выбора аудио и сохранения transcript bundle: `openai_api/audio/local_file_transcribe.py`.
 - Изменение модели/лимитов/стоимости анализа: `.env`, `.env.example`, `openai_api/config.py`.
+- Изменение публичных ссылок на лиды/сделки Bitrix: `BITRIX_PORTAL_URL` и `openai_api/bitrix_links.py`.
 - Изменение тарифов моделей и формулы стоимости: `openai_api/pricing.py`.
 - Изменение вызова OpenAI Responses API и JSON-парсинга: `openai_api/llm/llm_client.py`.
 - Изменение структуры deal-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_deal.py`.
@@ -229,6 +231,7 @@ Dry-run сохраняет prompt в `analysis/`, но не вызывает Ope
 Bitrix:
 
 - `BITRIX_WEBHOOK_URL`
+- `BITRIX_PORTAL_URL`
 
 OpenAI:
 

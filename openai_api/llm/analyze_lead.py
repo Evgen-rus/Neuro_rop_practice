@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
+from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.analyze_deal import knowledge_files, read_text
 from openai_api.llm.llm_client import call_analysis_json
@@ -196,7 +197,12 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     backup_texts = manager.get("backup_texts") or []
     backup_md = "\n\n".join(f"### {item.get('title') or item.get('type')}\n\n{item.get('text', '')}" for item in backup_texts) or "Нет запасных текстов"
 
-    return f"""# Отчет РОПу по лиду {analysis.get('lead_id', '')}
+    lead_id = analysis.get("lead_id", "")
+    bitrix_url = bitrix_entity_url("lead", lead_id)
+
+    return f"""# Отчет РОПу по лиду {lead_id}
+
+Ссылка в Bitrix: {bitrix_url or 'не указана'}
 
 ## Состояние лида
 
