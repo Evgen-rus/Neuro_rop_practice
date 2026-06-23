@@ -20,6 +20,7 @@ from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.analyze_deal import knowledge_files, read_text
 from openai_api.llm.llm_client import call_analysis_json
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
+from openai_api.pricing import format_usd_rub
 from setup import MSK_TZ
 
 
@@ -170,7 +171,20 @@ def bullet_list(values: Any) -> str:
     return "\n".join(f"- {item}" for item in values)
 
 
-def render_report(analysis: dict[str, Any]) -> str:
+def render_cost_section(metadata: dict[str, Any] | None) -> str:
+    cost = (metadata or {}).get("estimated_cost") or {}
+    if not cost:
+        return "## Стоимость анализа\n\n- Стоимость: не рассчитана"
+
+    return f"""## Стоимость анализа
+
+- Модель: {cost.get('model', 'не указано')}
+- Токены: input {cost.get('input_tokens', 0)}, cached input {cost.get('cached_input_tokens', 0)}, output {cost.get('output_tokens', 0)}
+- Стоимость: {format_usd_rub(cost.get('estimated_cost_usd'), cost.get('estimated_cost_rub'))}
+- Курс: 1 USD = {cost.get('usd_rub_rate', 'не указан')} руб."""
+
+
+def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
     lead_state = analysis.get("lead_state", {}) or {}
     activity = analysis.get("activity_summary", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
@@ -253,6 +267,8 @@ def render_report(analysis: dict[str, Any]) -> str:
 
 - Требуется: {human_value(rop.get('required'))}
 - Что проконтролировать: {rop.get('text', 'не указано')}
+
+{render_cost_section(metadata)}
 """
 
 
@@ -321,7 +337,7 @@ def main() -> None:
     raw_path = analysis_dir / f"lead_{args.lead_id}_raw_model_output.txt"
 
     save_json(analysis_path, output_payload)
-    report_path.write_text(render_report(analysis), encoding="utf-8")
+    report_path.write_text(render_report(analysis, metadata), encoding="utf-8")
     raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
 
     logger.info("Saved lead analysis JSON: %s", analysis_path)
@@ -330,6 +346,7 @@ def main() -> None:
 
     print(f"Analysis saved: {analysis_path}")
     print(f"ROP report saved: {report_path}")
+    print(f"Estimated analysis cost: {format_usd_rub(metadata.get('estimated_cost_usd'), metadata.get('estimated_cost_rub'))}")
 
 
 if __name__ == "__main__":

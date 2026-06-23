@@ -29,6 +29,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 
 - Общая настройка путей, времени и логирования: `setup.py`
 - Runtime env для OpenAI: `openai_api/config.py`
+- Расчёт стоимости OpenAI: `openai_api/pricing.py`
 - Bitrix REST client: `bitrix/client.py`
 - Структура рабочих папок лидов/сделок: `bitrix/workspace.py`
 - Deal pipeline: `bitrix/deals/run_deals_customer_path_pipeline.py`
@@ -214,6 +215,7 @@ Dry-run сохраняет prompt в `analysis/`, но не вызывает Ope
 - Изменение транскрибации, chunking, `ffmpeg`: `openai_api/audio/transcribe_core.py`.
 - Изменение CLI выбора аудио и сохранения transcript bundle: `openai_api/audio/local_file_transcribe.py`.
 - Изменение модели/лимитов/стоимости анализа: `.env`, `.env.example`, `openai_api/config.py`.
+- Изменение тарифов моделей и формулы стоимости: `openai_api/pricing.py`.
 - Изменение вызова OpenAI Responses API и JSON-парсинга: `openai_api/llm/llm_client.py`.
 - Изменение структуры deal-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_deal.py`.
 - Изменение структуры lead-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_lead.py`.
@@ -234,8 +236,7 @@ OpenAI:
 - `TRANSCRIPTION_MODEL`
 - `ANALYSIS_MODEL`
 - `ANALYSIS_MAX_OUTPUT_TOKENS`
-- `ANALYSIS_INPUT_USD_PER_1M`
-- `ANALYSIS_OUTPUT_USD_PER_1M`
+- `USD_RUB_RATE`
 
 Логирование payload preview:
 
@@ -245,7 +246,7 @@ OpenAI:
 Важно:
 
 - для `gpt-5.5` и длинных отчётов может понадобиться увеличить `ANALYSIS_MAX_OUTPUT_TOKENS`;
-- если цены не заполнены, `estimated_cost_usd` будет `None`, но сам анализ продолжит работать.
+- цены моделей зашиты в `openai_api/pricing.py`, а курс рубля берётся из `USD_RUB_RATE`.
 
 ## 8) Encoding / Text Policy
 

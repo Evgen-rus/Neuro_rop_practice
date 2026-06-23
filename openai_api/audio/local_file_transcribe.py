@@ -28,13 +28,14 @@ from bitrix.workspace import (
     safe_slug,
 )
 from openai_api.audio.transcribe_core import (
-    estimate_transcription_cost_usd,
+    estimate_transcription_cost_details,
     get_audio_duration_seconds,
     save_transcription,
     save_transcription_bundle,
     transcribe_file_async,
 )
 from openai_api.logging_utils import log_model_file_payload
+from openai_api.pricing import format_usd_rub
 
 
 def parse_args() -> argparse.Namespace:
@@ -116,7 +117,7 @@ def main() -> None:
 
     print(f"Файл для транскрибации: {transcribed_audio_path}")
     duration_seconds = get_audio_duration_seconds(transcribed_audio_path)
-    estimated_cost_usd = estimate_transcription_cost_usd(TRANSCRIPTION_MODEL, duration_seconds)
+    estimated_cost = estimate_transcription_cost_details(TRANSCRIPTION_MODEL, duration_seconds)
     log_model_file_payload(
         logger,
         title="manual transcription input file",
@@ -129,15 +130,20 @@ def main() -> None:
             "call_start": args.call_start,
             "subject": args.subject,
             "duration_seconds": duration_seconds,
-            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_cost": estimated_cost,
+            "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
+            "estimated_cost_rub": estimated_cost.get("estimated_cost_rub"),
             "source_audio_path": str(audio_path),
         },
         preview_text=False,
     )
     if duration_seconds is not None:
         print(f"Длительность аудио: {duration_seconds:.1f} сек.")
-    if estimated_cost_usd is not None:
-        print(f"Оценка стоимости транскрибации: ${estimated_cost_usd:.4f} ({TRANSCRIPTION_MODEL})")
+    print(
+        "Оценка стоимости транскрибации: "
+        f"{format_usd_rub(estimated_cost.get('estimated_cost_usd'), estimated_cost.get('estimated_cost_rub'))} "
+        f"({TRANSCRIPTION_MODEL})"
+    )
 
     try:
         text = asyncio.run(
@@ -175,7 +181,9 @@ def main() -> None:
                 "subject": args.subject,
                 "transcription_model": TRANSCRIPTION_MODEL,
                 "audio_duration_seconds": duration_seconds,
-                "estimated_transcription_cost_usd": estimated_cost_usd,
+                "estimated_transcription_cost": estimated_cost,
+                "estimated_transcription_cost_usd": estimated_cost.get("estimated_cost_usd"),
+                "estimated_transcription_cost_rub": estimated_cost.get("estimated_cost_rub"),
                 "source_audio_path": str(audio_path),
                 "workspace_audio_path": str(transcribed_audio_path),
             },

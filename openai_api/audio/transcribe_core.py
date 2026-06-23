@@ -20,15 +20,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai_api.audio.audio_handler import transcribe_voice
-from openai_api.config import TRANSCRIPTION_MODEL, logger
+from openai_api.config import TRANSCRIPTION_MODEL, USD_RUB_RATE, logger
 from openai_api.logging_utils import log_model_file_payload
+from openai_api.pricing import estimate_transcription_cost
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-
-TRANSCRIPTION_ESTIMATED_USD_PER_MINUTE = {
-    "gpt-4o-mini-transcribe": 0.003,
-    "gpt-4o-transcribe": 0.006,
-}
 
 # Жёсткий лимит модели по длительности (по сообщению от OpenAI)
 MODEL_MAX_SECONDS = 1400
@@ -233,12 +229,12 @@ def get_audio_duration_seconds(filepath: str | Path) -> float | None:
 
 
 def estimate_transcription_cost_usd(model: str, duration_seconds: float | None) -> float | None:
-    if duration_seconds is None:
-        return None
-    per_minute = TRANSCRIPTION_ESTIMATED_USD_PER_MINUTE.get(model)
-    if per_minute is None:
-        return None
-    return (duration_seconds / 60.0) * per_minute
+    cost = estimate_transcription_cost(model, duration_seconds, USD_RUB_RATE)
+    return cost.get("estimated_cost_usd")
+
+
+def estimate_transcription_cost_details(model: str, duration_seconds: float | None) -> dict:
+    return estimate_transcription_cost(model, duration_seconds, USD_RUB_RATE)
 
 
 def save_transcription(text: str, original_filepath: str) -> str:
