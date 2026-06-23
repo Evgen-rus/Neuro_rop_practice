@@ -85,6 +85,7 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
         "qualification.md",
         "technical_data.md",
         "risk_signals.md",
+        "call_attempt_rules.md",
         "manager_texts.md",
         "objections.md",
         "funnel.md",
@@ -117,6 +118,7 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 6. Готовые тексты клиенту должны быть деловыми, конкретными и готовыми к отправке.
 7. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "уточнить", "{данные}" в готовых текстах и темах письма.
 8. Если не хватает данных, укажи конкретный список и зачем они нужны.
+9. Если содержательного контакта не было, обязательно примени регламент дозвона из OKF и заполни call_attempt_policy.
 
 Нужная JSON-структура:
 {{
@@ -146,6 +148,17 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "what_done_well": ["что менеджер сделал хорошо"],
     "missed_points": ["что менеджер упустил"],
     "critical_mistake": null
+  }},
+  "call_attempt_policy": {{
+    "applicable": true,
+    "contact_status": "meaningful_contact|missed_call|busy|voicemail|unavailable|dropped|unknown",
+    "attempts_found": "что видно по попыткам дозвона",
+    "policy_compliance": "compliant|partial|not_compliant|unknown|not_applicable",
+    "policy_gap": "что не соблюдено или чего не хватает в истории",
+    "next_call_plan": [
+      "конкретное действие по следующей попытке дозвона"
+    ],
+    "rop_control": "что должен проверить РОП по дозвону"
   }},
   "manager_action_block": {{
     "recommended_channel": "email|phone|messenger|crm_task",
@@ -194,6 +207,7 @@ def render_report(analysis: dict[str, Any]) -> str:
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
     progress = analysis.get("deal_progress", {}) or {}
+    call_policy = analysis.get("call_attempt_policy", {}) or {}
     manager = analysis.get("manager_action_block", {}) or {}
     primary = manager.get("primary_text", {}) or {}
     rop = analysis.get("rop_action", {}) or {}
@@ -258,6 +272,19 @@ def render_report(analysis: dict[str, Any]) -> str:
 {bullet_list((analysis.get('manager_quality') or {}).get('missed_points'))}
 
 Критическая ошибка: {human_value((analysis.get('manager_quality') or {}).get('critical_mistake'))}
+
+## Регламент дозвона
+
+- Применим: {human_value(call_policy.get('applicable'))}
+- Статус контакта: {call_policy.get('contact_status', 'не указано')}
+- Попытки в истории: {call_policy.get('attempts_found', 'не указано')}
+- Соблюдение регламента: {call_policy.get('policy_compliance', 'не указано')}
+- Пробел: {call_policy.get('policy_gap', 'не указано')}
+- Контроль РОПа: {call_policy.get('rop_control', 'не указано')}
+
+План дозвона:
+
+{bullet_list(call_policy.get('next_call_plan'))}
 
 ## Что сделать менеджеру
 
