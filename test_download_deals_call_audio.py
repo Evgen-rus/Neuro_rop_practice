@@ -1,8 +1,15 @@
 """
-Step 4. Try to download call audio files referenced by Bitrix24 CRM call activities.
+Test helper. Try to download call audio files referenced by Bitrix24 CRM call activities.
 
 This script is read-only for Bitrix24. It writes local audio files and a JSON
 manifest with per-call download status.
+
+It is intentionally outside bitrix/deals because audio downloading is not part
+of the main semi-manual pipeline until the Bitrix permissions are confirmed.
+
+```powershell
+.\venv\Scripts\python.exe .\test_download_deals_call_audio.py --deal-ids 18493
+```
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ from urllib.parse import unquote, urlparse
 import requests
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

@@ -33,3 +33,29 @@ Dry run сохранит полный промпт в `analysis/deal_<id>_reques
   --deal-id 18493 `
   --transcript "reports\rop_assistant\deals\deal_18493\transcripts\call_604173_2026-06-17_13-51-19_plus_03-00_transcript.md"
 ```
+
+## Анализ лида
+
+Сначала нужно собрать markdown по raw JSON лида и подготовить workspace:
+
+```powershell
+.\venv\Scripts\python.exe .\bitrix\leads\run_leads_customer_path_pipeline.py --lead-ids 227599
+```
+
+Проверка без API-запроса:
+
+```powershell
+.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227599 --dry-run
+```
+
+Реальный запуск:
+
+```powershell
+.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227599
+```
+
+Если транскрибации нет, скрипт анализирует историю лида, активности и комментарии. Чтобы явно не использовать транскрибацию:
+
+```powershell
+.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227599 --transcript none
+```

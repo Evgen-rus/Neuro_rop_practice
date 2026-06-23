@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT, ensure_entity_workspace
+from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT, ensure_lead_workspace
 from setup import get_logger
 
 
@@ -30,10 +30,9 @@ def main() -> None:
     args = parse_args()
     root = Path(args.workspace_root)
     for lead_id in args.lead_ids:
-        lead_dir = ensure_entity_workspace(str(lead_id), entity_type="lead", workspace_root=root)
+        lead_dir = ensure_lead_workspace(str(lead_id), workspace_root=root)
         logger.info("Prepared lead workspace: %s", lead_dir)
 
 
 if __name__ == "__main__":
     main()
-

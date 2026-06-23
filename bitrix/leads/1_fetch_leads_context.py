@@ -1,10 +1,9 @@
 """
-Test raw Bitrix24 lead context fetcher.
+Step 1. Read full customer-path context for Bitrix24 leads and save raw JSON.
 
-This is intentionally raw-only: it saves the lead card, activities, activity
-details, timeline comments, contact/company records, and discovered file/audio
-references so we can inspect real Bitrix responses before building a markdown
-lead report.
+This script is read-only for Bitrix24: it saves the lead card, activities,
+activity details, timeline comments, contact/company records, and discovered
+file/audio references.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ logger = get_logger(__file__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fetch raw Bitrix24 lead context for inspection")
+    parser = argparse.ArgumentParser(description="Step 1: fetch read-only Bitrix24 lead context into local JSON files")
     parser.add_argument("--lead-ids", nargs="+", required=True, help="Lead IDs to fetch")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Raw JSON output dir")
     return parser.parse_args()
@@ -162,4 +161,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
