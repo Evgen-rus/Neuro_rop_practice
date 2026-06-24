@@ -482,6 +482,7 @@ def deal_management_summary(last_analysis: dict[str, Any] | None) -> dict[str, A
         "deal_mode": analysis.get("deal_mode") or {},
         "resource_control": analysis.get("resource_control") or {},
         "payment_blocker": analysis.get("payment_blocker") or {},
+        "objection_handling": analysis.get("objection_handling") or {},
         "priority_recommendation": analysis.get("priority_recommendation") or {},
     }
 
@@ -500,7 +501,12 @@ def render_mini_recommendation(
     deal_mode = management.get("deal_mode") or {}
     resource_control = management.get("resource_control") or {}
     payment_blocker = management.get("payment_blocker") or {}
+    objection_handling = management.get("objection_handling") or {}
     priority = management.get("priority_recommendation") or {}
+    objections = objection_handling.get("likely_objections") or []
+    main_objection = objections[0] if objection_handling.get("applicable") and objections else {}
+    if not isinstance(main_objection, dict):
+        main_objection = {}
     last_report = previous_state.get("last_report_path") or "не указан"
     risk_level = previous_state.get("last_risk_level") or analysis_risk_level(last_analysis, previous_state) or "не указан"
 
@@ -563,6 +569,8 @@ def render_mini_recommendation(
 - Приоритет из полного анализа: {priority.get('priority', 'не указано')}
 - Платежный блокер: {payment_blocker.get('blocker_type', 'не указано')}
 - Подтвержденная дата оплаты: {payment_blocker.get('confirmed_payment_date') or 'не указана'}
+- Главное возражение: {main_objection.get('objection_type', 'не указано')}
+- Вопрос по возражению: {main_objection.get('follow_up_question', 'не указан')}
 - Тратить технические ресурсы: {human_bool(resource_control.get('should_spend_engineering_time'))}
 - Следующий контроль: {priority.get('next_review_date') or 'не указан'}
 - Последний полный отчет: {last_report}

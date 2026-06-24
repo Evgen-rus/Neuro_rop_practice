@@ -147,6 +147,7 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 - Списки what_changed, what_done_well, missed_points, manager_checklist: максимум 5 пунктов.
 - Списки allowed_work, blocked_work, defense_points, questions_to_client: максимум 5 пунктов.
 - Списки missing_confirmation, next_actions: максимум 5 пунктов.
+- Список likely_objections: максимум 3 пункта.
 - Готовый email или messenger text: максимум 1200 символов.
 - call_script: максимум 900 символов.
 - Не повторяй одну и ту же мысль в нескольких полях.
@@ -191,6 +192,12 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 - missing_confirmation - что конкретно не подтверждено.
 - next_actions - 1-5 действий, которые ведут к статусу "оплачено", дате оплаты или причине задержки.
 - escalation_condition - когда РОПу нужно подключиться или усилить контроль.
+
+Заполни objection_handling:
+- applicable=true только если в истории сделки есть фактические сигналы вероятного возражения: цена, бюджет, Китай, конкурент, пауза, неясный ЛПР, технические сомнения, сроки, внутреннее согласование или задержка оплаты.
+- Выбирай 1-3 наиболее вероятных возражения по фактам сделки, не перечисляй весь справочник.
+- Каждое возражение должно помогать менеджеру в следующем контакте: мягко ответить, задать следующий вопрос и получить движение к договору, счету, правке КП, оплате, дате решения или честной дисквалификации.
+- Не предлагай скидку первым действием. Не спорь с клиентом, не обесценивай конкурента/Китай и не выдумывай факты о бюджете, ЛПР, конкуренте или сроках.
 </management_blocks_rules>
 
 Правила:
@@ -267,6 +274,22 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "next_actions": [],
     "post_payment_next_step": "что нужно сделать сразу после подтверждения оплаты",
     "escalation_condition": "когда РОПу нужно подключиться"
+  }},
+  "objection_handling": {{
+    "applicable": true,
+    "summary": "кратко: какие возражения вероятнее всего и почему",
+    "likely_objections": [
+      {{
+        "objection_type": "price|budget|china|competitor|pause|decision_maker|technical_doubt|timing|internal_approval|payment_delay|unknown",
+        "probability": "high|medium|low",
+        "evidence": "факт из истории сделки, почему это возражение вероятно",
+        "client_phrase": "как клиент может сформулировать возражение",
+        "manager_reply": "короткая мягкая деловая фраза менеджера",
+        "follow_up_question": "вопрос, который двигает сделку дальше",
+        "next_step_goal": "какой результат нужно получить после отработки",
+        "what_not_to_do": "чего менеджеру не делать"
+      }}
+    ]
   }},
   "shaker_question": {{
     "question": "один прямой деловой квалифицирующий вопрос клиенту",
@@ -365,6 +388,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     deal_mode = analysis.get("deal_mode", {}) or {}
     resource_control = analysis.get("resource_control", {}) or {}
     payment_blocker = analysis.get("payment_blocker", {}) or {}
+    objection_handling = analysis.get("objection_handling", {}) or {}
     shaker_question = analysis.get("shaker_question", {}) or {}
     competitor = analysis.get("competitor_defense_checklist", {}) or {}
     priority = analysis.get("priority_recommendation", {}) or {}
@@ -399,6 +423,40 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     backup_md = "\n\n".join(
         f"### {item.get('title') or item.get('type')}\n\n{item.get('text', '')}" for item in backup_texts
     ) or "Нет запасных текстов"
+
+    def render_objections(value: dict[str, Any]) -> str:
+        if not value.get("applicable"):
+            return ""
+        objections = value.get("likely_objections") or []
+        if not isinstance(objections, list) or not objections:
+            return ""
+
+        parts = [
+            "## Возможные возражения и отработка",
+            "",
+            f"Кратко: {value.get('summary', 'не указано')}",
+            "",
+        ]
+        for index, item in enumerate(objections[:3], start=1):
+            if not isinstance(item, dict):
+                continue
+            parts.extend(
+                [
+                    f"### {index}. {item.get('objection_type', 'unknown')} ({item.get('probability', 'unknown')})",
+                    "",
+                    f"- Сигнал из сделки: {item.get('evidence', 'не указано')}",
+                    f"- Как может сказать клиент: {item.get('client_phrase', 'не указано')}",
+                    f"- Как ответить: {item.get('manager_reply', 'не указано')}",
+                    f"- Что спросить дальше: {item.get('follow_up_question', 'не указано')}",
+                    f"- Цель следующего шага: {item.get('next_step_goal', 'не указано')}",
+                    f"- Чего не делать: {item.get('what_not_to_do', 'не указано')}",
+                    "",
+                ]
+            )
+        return "\n".join(parts).strip()
+
+    objections_md = render_objections(objection_handling)
+    objections_section = f"\n\n{objections_md}\n" if objections_md else ""
 
     deal_id = analysis.get("deal_id", "")
     bitrix_url = bitrix_entity_url("deal", deal_id)
@@ -498,6 +556,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 {bullet_list(competitor.get('questions_to_client'))}
 
 Риск, если не защитить: {competitor.get('risk_if_not_defended', 'не указано')}
+{objections_section}
 
 ## Приоритет сделки
 

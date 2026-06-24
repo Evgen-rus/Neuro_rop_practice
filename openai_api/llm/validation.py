@@ -37,6 +37,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_state",
     "deal_mode",
     "new_event",
+    "objection_handling",
     "what_changed",
     "deal_progress",
     "payment_blocker",
@@ -100,10 +101,26 @@ def _client_text_values(manager_action: dict[str, Any]) -> list[tuple[str, str]]
 
 def _validate_client_texts(manager_action: dict[str, Any], errors: list[str]) -> None:
     for path, text in _client_text_values(manager_action):
-        lowered = text.lower()
-        for marker in FORBIDDEN_CLIENT_TEXT_MARKERS:
-            if marker.lower() in lowered:
-                errors.append(f"forbidden placeholder '{marker}' found at {path}")
+        _validate_no_forbidden_markers(path, text, errors)
+
+
+def _validate_no_forbidden_markers(path: str, text: str, errors: list[str]) -> None:
+    lowered = text.lower()
+    for marker in FORBIDDEN_CLIENT_TEXT_MARKERS:
+        if marker.lower() in lowered:
+            errors.append(f"forbidden placeholder '{marker}' found at {path}")
+
+
+def _expect_bool(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, bool):
+        errors.append(f"expected boolean at {path}")
+
+
+def _expect_non_empty_text_without_markers(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"expected non-empty string at {path}")
+        return
+    _validate_no_forbidden_markers(path, value, errors)
 
 
 def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
@@ -170,8 +187,7 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
     payment_blocker = _expect_dict(analysis.get("payment_blocker"), "payment_blocker", errors)
     if payment_blocker:
         applicable = payment_blocker.get("applicable")
-        if not isinstance(applicable, bool):
-            errors.append("expected boolean at payment_blocker.applicable")
+        _expect_bool(applicable, "payment_blocker.applicable", errors)
         _expect_enum(
             payment_blocker.get("blocker_type"),
             "payment_blocker.blocker_type",
@@ -212,6 +228,53 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
                 errors.append("payment_blocker.missing_confirmation must not be empty when applicable=true")
             if not next_actions:
                 errors.append("payment_blocker.next_actions must not be empty when applicable=true")
+
+    objection_handling = _expect_dict(analysis.get("objection_handling"), "objection_handling", errors)
+    if objection_handling:
+        applicable = objection_handling.get("applicable")
+        _expect_bool(applicable, "objection_handling.applicable", errors)
+        _expect_non_empty_string(objection_handling.get("summary"), "objection_handling.summary", errors)
+        objections = _expect_max_list_length(
+            objection_handling.get("likely_objections"),
+            "objection_handling.likely_objections",
+            3,
+            errors,
+        )
+        if applicable is True and not objections:
+            errors.append("objection_handling.likely_objections must not be empty when applicable=true")
+        for index, objection in enumerate(objections):
+            path = f"objection_handling.likely_objections[{index}]"
+            item = _expect_dict(objection, path, errors)
+            if not item:
+                continue
+            _expect_enum(
+                item.get("objection_type"),
+                f"{path}.objection_type",
+                {
+                    "price",
+                    "budget",
+                    "china",
+                    "competitor",
+                    "pause",
+                    "decision_maker",
+                    "technical_doubt",
+                    "timing",
+                    "internal_approval",
+                    "payment_delay",
+                    "unknown",
+                },
+                errors,
+            )
+            _expect_enum(item.get("probability"), f"{path}.probability", {"high", "medium", "low"}, errors)
+            for field in (
+                "evidence",
+                "client_phrase",
+                "manager_reply",
+                "follow_up_question",
+                "next_step_goal",
+                "what_not_to_do",
+            ):
+                _expect_non_empty_text_without_markers(item.get(field), f"{path}.{field}", errors)
 
     shaker_question = _expect_dict(analysis.get("shaker_question"), "shaker_question", errors)
     if shaker_question:
