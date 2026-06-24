@@ -457,11 +457,32 @@ def bullet_list(values: list[str]) -> str:
     return "\n".join(f"- {value}" for value in values)
 
 
+def human_bool(value: Any) -> str:
+    if value is True:
+        return "да"
+    if value is False:
+        return "нет"
+    if value is None:
+        return "не указано"
+    return str(value)
+
+
 def last_primary_text(last_analysis: dict[str, Any] | None) -> dict[str, Any]:
     analysis = extract_analysis(last_analysis)
     manager = analysis.get("manager_action_block", {}) if isinstance(analysis, dict) else {}
     primary = manager.get("primary_text", {}) if isinstance(manager, dict) else {}
     return primary if isinstance(primary, dict) else {}
+
+
+def deal_management_summary(last_analysis: dict[str, Any] | None) -> dict[str, Any]:
+    analysis = extract_analysis(last_analysis)
+    if not isinstance(analysis, dict):
+        return {}
+    return {
+        "deal_mode": analysis.get("deal_mode") or {},
+        "resource_control": analysis.get("resource_control") or {},
+        "priority_recommendation": analysis.get("priority_recommendation") or {},
+    }
 
 
 def render_mini_recommendation(
@@ -474,6 +495,10 @@ def render_mini_recommendation(
     previous_state = previous_state or {}
     last_analysis = previous_state.get("last_analysis")
     primary = last_primary_text(last_analysis)
+    management = deal_management_summary(last_analysis)
+    deal_mode = management.get("deal_mode") or {}
+    resource_control = management.get("resource_control") or {}
+    priority = management.get("priority_recommendation") or {}
     last_report = previous_state.get("last_report_path") or "не указан"
     risk_level = previous_state.get("last_risk_level") or analysis_risk_level(last_analysis, previous_state) or "не указан"
 
@@ -532,6 +557,10 @@ def render_mini_recommendation(
 - Этап Bitrix: {current_stage}
 - Ответственный: {current_assigned}
 - Последний риск из полного анализа: {risk_level}
+- Режим сделки из полного анализа: {deal_mode.get('mode', 'не указано')}
+- Приоритет из полного анализа: {priority.get('priority', 'не указано')}
+- Тратить технические ресурсы: {human_bool(resource_control.get('should_spend_engineering_time'))}
+- Следующий контроль: {priority.get('next_review_date') or 'не указан'}
 - Последний полный отчет: {last_report}
 
 ## Что сделать менеджеру

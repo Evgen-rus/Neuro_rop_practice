@@ -145,10 +145,38 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 <length_limits>
 - summary/reason/description: максимум 2-3 коротких предложения.
 - Списки what_changed, what_done_well, missed_points, manager_checklist: максимум 5 пунктов.
+- Списки allowed_work, blocked_work, defense_points, questions_to_client: максимум 5 пунктов.
 - Готовый email или messenger text: максимум 1200 символов.
 - call_script: максимум 900 символов.
 - Не повторяй одну и ту же мысль в нескольких полях.
 </length_limits>
+
+<management_blocks_rules>
+Определи управленческий режим сделки:
+- active_sale: клиент вовлечен, есть понятный следующий шаг и движение к КП/счету/договору/оплате.
+- managed_pause: клиент прямо взял паузу, причина понятна, есть дата возврата или контрольная дата.
+- hard_qualification: сделка крупная, но не подтверждены бюджет, ЛПР, срок, критерии выбора или реальность проекта.
+- nurture: потребность есть, но срок покупки далеко; нужен прогрев и контрольная дата.
+- disqualify: клиент нецелевой, бюджета нет, задача не подходит или нет смысла продолжать.
+- lost_risk: сделка близка к потере: конкурент, тишина, пауза без даты, цена не принята, ЛПР не найден.
+- unknown: недостаточно данных.
+
+Оцени контроль ресурсов:
+- should_spend_engineering_time=false, если клиент ждет конкурента/Китай, бюджет не подтвержден, критерии выбора не зафиксированы, ЛПР неизвестен, нет конкретного запроса на правку КП или сделка в паузе.
+- should_spend_engineering_time=true, если клиент запросил конкретную правку, есть срок решения, техническая доработка прямо влияет на следующий шаг к счету/договору/оплате.
+- Если данных недостаточно, ставь false и объясняй, какие данные нужны, чтобы оправдать ресурс.
+
+Сформируй shaker_question как один прямой, но деловой квалифицирующий вопрос. Он должен вскрывать бюджет, срок, ЛПР, критерии выбора, конкурента или реальность проекта. Не используй давление, ультиматумы и токсичный тон.
+
+Если есть Китай, конкурент, альтернативный поставщик, тендер, "сравниваем", "ждем другое предложение", "дорого" или "аналог", заполни competitor_defense_checklist. Не выдумывай конкурента, если его нет в истории.
+
+Определи priority_recommendation:
+- high: сделка активна, есть деньги/срок/ЛПР и можно двигать к оплате.
+- medium: потенциал есть, но есть риски: конкурент, пауза, неясный ЛПР, неясные критерии.
+- low: интерес слабый, срок далеко, бюджет не подтвержден.
+- pause: есть явная пауза с датой возврата.
+- disqualify: нет бюджета, нецелевой запрос или нет смысла продолжать.
+</management_blocks_rules>
 
 Правила:
 1. Не выдумывай факты.
@@ -165,6 +193,8 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 12. В готовом тексте после отправки КП не пиши "направляю КП"; используй формулировки вроде "возвращаюсь к направленному КП".
 13. В email или мессенджере после недозвона предлагай 2 конкретных варианта времени для будущего созвона, если это уместно.
 14. В live call script не предлагай время будущего созвона: если менеджер дозвонился, разговор уже идет. Завершай скрипт вопросом о следующем шаге, сроке решения, правках, договоре/счете или внутреннем согласовании.
+15. Если сделка в паузе, не превращай рекомендацию в агрессивный дожим: зафиксируй контрольную дату, критерии сравнения и следующий шаг после паузы.
+16. Если есть конкурент/Китай, защита предложения должна сравнивать не только цену, но и комплектацию, сроки запуска, гарантию, сервис, обучение, ответственность поставщика и риски внедрения.
 
 <verification_loop>
 Перед финальным JSON проверь:
@@ -198,6 +228,37 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "risk_level": "low|medium|medium_high|high",
     "risk_type": "тип риска",
     "description": "описание риска"
+  }},
+  "deal_mode": {{
+    "mode": "active_sale|managed_pause|hard_qualification|nurture|disqualify|lost_risk|unknown",
+    "reason": "почему выбран такой режим",
+    "manager_behavior": "как менеджеру вести сделку в этом режиме",
+    "rop_focus": "что должен контролировать РОП"
+  }},
+  "resource_control": {{
+    "should_spend_engineering_time": false,
+    "reason": "почему можно или нельзя тратить технические ресурсы",
+    "allowed_work": [],
+    "blocked_work": []
+  }},
+  "shaker_question": {{
+    "question": "один прямой деловой квалифицирующий вопрос клиенту",
+    "why_this_question": "что именно должен вскрыть вопрос",
+    "when_to_use": "когда и в каком канале использовать"
+  }},
+  "competitor_defense_checklist": {{
+    "applicable": true,
+    "competitor_type": "china|direct_competitor|alternative_supplier|internal_solution|unknown|not_applicable",
+    "defense_points": [],
+    "questions_to_client": [],
+    "risk_if_not_defended": "что будет, если не защитить предложение"
+  }},
+  "priority_recommendation": {{
+    "priority": "high|medium|low|pause|disqualify",
+    "reason": "почему такой приоритет",
+    "time_allocation": "сколько внимания менеджера/РОПа сейчас оправдано",
+    "next_review_date": "YYYY-MM-DD или null",
+    "what_must_happen_to_raise_priority": "что должно произойти, чтобы поднять приоритет"
   }},
   "manager_quality": {{
     "what_done_well": ["что менеджер сделал хорошо"],
@@ -274,6 +335,11 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     deal_state = analysis.get("deal_state", {}) or {}
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
+    deal_mode = analysis.get("deal_mode", {}) or {}
+    resource_control = analysis.get("resource_control", {}) or {}
+    shaker_question = analysis.get("shaker_question", {}) or {}
+    competitor = analysis.get("competitor_defense_checklist", {}) or {}
+    priority = analysis.get("priority_recommendation", {}) or {}
     progress = analysis.get("deal_progress", {}) or {}
     call_recommendation = analysis.get("call_attempt_recommendation", {}) or {}
     manager = analysis.get("manager_action_block", {}) or {}
@@ -293,6 +359,13 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
         if value is None:
             return "не указано"
         return str(value)
+
+    def yes_no(value: Any) -> str:
+        if value is True:
+            return "да"
+        if value is False:
+            return "нет"
+        return human_value(value)
 
     backup_texts = manager.get("backup_texts") or []
     backup_md = "\n\n".join(
@@ -333,6 +406,57 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 - Уровень: {risk.get('risk_level', 'не указано')}
 - Тип: {risk.get('risk_type', 'не указано')}
 - Описание: {risk.get('description', 'не указано')}
+
+## Режим сделки
+
+- Режим: {deal_mode.get('mode', 'не указано')}
+- Почему: {deal_mode.get('reason', 'не указано')}
+- Как вести менеджеру: {deal_mode.get('manager_behavior', 'не указано')}
+- Фокус РОПа: {deal_mode.get('rop_focus', 'не указано')}
+
+## Контроль ресурсов
+
+- Тратить технические ресурсы сейчас: {yes_no(resource_control.get('should_spend_engineering_time'))}
+- Почему: {resource_control.get('reason', 'не указано')}
+
+Что можно делать:
+
+{bullet_list(resource_control.get('allowed_work'))}
+
+Что не делать:
+
+{bullet_list(resource_control.get('blocked_work'))}
+
+## Ключевой квалифицирующий вопрос
+
+**Вопрос:** {shaker_question.get('question', 'не указано')}
+
+Зачем: {shaker_question.get('why_this_question', 'не указано')}
+
+Когда использовать: {shaker_question.get('when_to_use', 'не указано')}
+
+## Защита от конкурента / альтернативы
+
+- Применимо: {yes_no(competitor.get('applicable'))}
+- Тип конкурента: {competitor.get('competitor_type', 'не указано')}
+
+Что защитить:
+
+{bullet_list(competitor.get('defense_points'))}
+
+Что спросить:
+
+{bullet_list(competitor.get('questions_to_client'))}
+
+Риск, если не защитить: {competitor.get('risk_if_not_defended', 'не указано')}
+
+## Приоритет сделки
+
+- Приоритет: {priority.get('priority', 'не указано')}
+- Почему: {priority.get('reason', 'не указано')}
+- Сколько времени тратить: {priority.get('time_allocation', 'не указано')}
+- Дата следующего контроля: {human_value(priority.get('next_review_date'))}
+- Что должно произойти для повышения приоритета: {priority.get('what_must_happen_to_raise_priority', 'не указано')}
 
 ## Качество работы менеджера
 

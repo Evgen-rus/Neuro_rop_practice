@@ -35,9 +35,14 @@ COMMON_REQUIRED_FIELDS = {
 DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_id",
     "deal_state",
+    "deal_mode",
     "new_event",
     "what_changed",
     "deal_progress",
+    "resource_control",
+    "shaker_question",
+    "competitor_defense_checklist",
+    "priority_recommendation",
 }
 
 LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
@@ -115,6 +120,85 @@ def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None
         _validate_client_texts(manager_action, errors)
 
 
+def _expect_enum(value: Any, path: str, allowed: set[str], errors: list[str]) -> None:
+    if value not in allowed:
+        errors.append(f"invalid enum at {path}: expected one of {sorted(allowed)}, got {value!r}")
+
+
+def _expect_non_empty_string(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"expected non-empty string at {path}")
+
+
+def _expect_max_list_length(value: Any, path: str, max_length: int, errors: list[str]) -> None:
+    items = _expect_list(value, path, errors)
+    if len(items) > max_length:
+        errors.append(f"too many items at {path}: max {max_length}, got {len(items)}")
+
+
+def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
+    deal_mode = _expect_dict(analysis.get("deal_mode"), "deal_mode", errors)
+    if deal_mode:
+        _expect_enum(
+            deal_mode.get("mode"),
+            "deal_mode.mode",
+            {"active_sale", "managed_pause", "hard_qualification", "nurture", "disqualify", "lost_risk", "unknown"},
+            errors,
+        )
+        for field in ("reason", "manager_behavior", "rop_focus"):
+            _expect_non_empty_string(deal_mode.get(field), f"deal_mode.{field}", errors)
+
+    resource_control = _expect_dict(analysis.get("resource_control"), "resource_control", errors)
+    if resource_control:
+        if not isinstance(resource_control.get("should_spend_engineering_time"), bool):
+            errors.append("expected boolean at resource_control.should_spend_engineering_time")
+        _expect_non_empty_string(resource_control.get("reason"), "resource_control.reason", errors)
+        _expect_max_list_length(resource_control.get("allowed_work"), "resource_control.allowed_work", 5, errors)
+        _expect_max_list_length(resource_control.get("blocked_work"), "resource_control.blocked_work", 5, errors)
+
+    shaker_question = _expect_dict(analysis.get("shaker_question"), "shaker_question", errors)
+    if shaker_question:
+        _expect_non_empty_string(shaker_question.get("question"), "shaker_question.question", errors)
+        _expect_non_empty_string(shaker_question.get("why_this_question"), "shaker_question.why_this_question", errors)
+        _expect_non_empty_string(shaker_question.get("when_to_use"), "shaker_question.when_to_use", errors)
+
+    competitor = _expect_dict(
+        analysis.get("competitor_defense_checklist"),
+        "competitor_defense_checklist",
+        errors,
+    )
+    if competitor:
+        if not isinstance(competitor.get("applicable"), bool):
+            errors.append("expected boolean at competitor_defense_checklist.applicable")
+        _expect_enum(
+            competitor.get("competitor_type"),
+            "competitor_defense_checklist.competitor_type",
+            {"china", "direct_competitor", "alternative_supplier", "internal_solution", "unknown", "not_applicable"},
+            errors,
+        )
+        _expect_max_list_length(competitor.get("defense_points"), "competitor_defense_checklist.defense_points", 5, errors)
+        _expect_max_list_length(competitor.get("questions_to_client"), "competitor_defense_checklist.questions_to_client", 5, errors)
+        _expect_non_empty_string(
+            competitor.get("risk_if_not_defended"),
+            "competitor_defense_checklist.risk_if_not_defended",
+            errors,
+        )
+
+    priority = _expect_dict(analysis.get("priority_recommendation"), "priority_recommendation", errors)
+    if priority:
+        _expect_enum(
+            priority.get("priority"),
+            "priority_recommendation.priority",
+            {"high", "medium", "low", "pause", "disqualify"},
+            errors,
+        )
+        for field in ("reason", "time_allocation", "what_must_happen_to_raise_priority"):
+            _expect_non_empty_string(priority.get(field), f"priority_recommendation.{field}", errors)
+        next_review = priority.get("next_review_date")
+        if next_review is not None and (not isinstance(next_review, str) or not next_review.strip()):
+            errors.append("expected next_review_date to be non-empty string or null")
+
+
 def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     errors: list[str] = []
     _require_fields(analysis, DEAL_REQUIRED_FIELDS, "", errors)
@@ -122,6 +206,7 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _expect_dict(analysis.get("new_event"), "new_event", errors)
     _expect_list(analysis.get("what_changed"), "what_changed", errors)
     _expect_dict(analysis.get("deal_progress"), "deal_progress", errors)
+    _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:
         raise AnalysisValidationError("Invalid deal analysis: " + "; ".join(errors))
@@ -135,4 +220,3 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _validate_common_shapes(analysis, errors)
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))
-
