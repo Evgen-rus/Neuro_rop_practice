@@ -146,6 +146,7 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 - summary/reason/description: максимум 2-3 коротких предложения.
 - Списки what_changed, what_done_well, missed_points, manager_checklist: максимум 5 пунктов.
 - Списки allowed_work, blocked_work, defense_points, questions_to_client: максимум 5 пунктов.
+- Списки missing_confirmation, next_actions: максимум 5 пунктов.
 - Готовый email или messenger text: максимум 1200 символов.
 - call_script: максимум 900 символов.
 - Не повторяй одну и ту же мысль в нескольких полях.
@@ -154,12 +155,15 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 <management_blocks_rules>
 Определи управленческий режим сделки:
 - active_sale: клиент вовлечен, есть понятный следующий шаг и движение к КП/счету/договору/оплате.
+- payment_control: договор, счет или условия уже согласованы, и главное узкое место сейчас - аванс, оплата, лизинговый платеж, дата поступления денег или подтверждение платежа.
 - managed_pause: клиент прямо взял паузу, причина понятна, есть дата возврата или контрольная дата.
 - hard_qualification: сделка крупная, но не подтверждены бюджет, ЛПР, срок, критерии выбора или реальность проекта.
 - nurture: потребность есть, но срок покупки далеко; нужен прогрев и контрольная дата.
 - disqualify: клиент нецелевой, бюджета нет, задача не подходит или нет смысла продолжать.
 - lost_risk: сделка близка к потере: конкурент, тишина, пауза без даты, цена не принята, ЛПР не найден.
 - unknown: недостаточно данных.
+
+Если договор подписан, счет выставлен, договор согласован или лизинг сообщил, что ждет аванс/оплату, не ставь lost_risk только из-за отсутствия денег. В такой ситуации ставь deal_mode.mode="payment_control", если нет явных признаков отказа или потери. Цель режима payment_control - довести сделку до денег: получить статус "оплачено", конкретную дату оплаты или причину задержки с планом эскалации.
 
 Оцени контроль ресурсов:
 - should_spend_engineering_time=false, если клиент ждет конкурента/Китай, бюджет не подтвержден, критерии выбора не зафиксированы, ЛПР неизвестен, нет конкретного запроса на правку КП или сделка в паузе.
@@ -172,10 +176,21 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 
 Определи priority_recommendation:
 - high: сделка активна, есть деньги/срок/ЛПР и можно двигать к оплате.
+- high также ставь, если договор/счет уже согласован и осталось получить аванс или оплату, но дата платежа не подтверждена.
 - medium: потенциал есть, но есть риски: конкурент, пауза, неясный ЛПР, неясные критерии.
 - low: интерес слабый, срок далеко, бюджет не подтвержден.
 - pause: есть явная пауза с датой возврата.
 - disqualify: нет бюджета, нецелевой запрос или нет смысла продолжать.
+
+Заполни payment_blocker:
+- applicable=true, если сделка находится около денег: счет, договор, аванс, предоплата, лизинг, оплата поставщику, поступление денег, закрывающие документы или внутреннее финансовое согласование.
+- blocker_type выбирай по фактическому узкому месту: advance_payment, leasing_payment, invoice_payment, internal_approval, documents, unknown.
+- payer - кто должен совершить оплату или действие для оплаты: клиент, лизинг, бухгалтерия, ЛПР, unknown.
+- payment_recipient - кому должна поступить оплата: нам, лизингу, поставщику, unknown.
+- confirmed_payment_date - только если дата явно есть в истории; иначе null.
+- missing_confirmation - что конкретно не подтверждено.
+- next_actions - 1-5 действий, которые ведут к статусу "оплачено", дате оплаты или причине задержки.
+- escalation_condition - когда РОПу нужно подключиться или усилить контроль.
 </management_blocks_rules>
 
 Правила:
@@ -230,7 +245,7 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "description": "описание риска"
   }},
   "deal_mode": {{
-    "mode": "active_sale|managed_pause|hard_qualification|nurture|disqualify|lost_risk|unknown",
+    "mode": "active_sale|payment_control|managed_pause|hard_qualification|nurture|disqualify|lost_risk|unknown",
     "reason": "почему выбран такой режим",
     "manager_behavior": "как менеджеру вести сделку в этом режиме",
     "rop_focus": "что должен контролировать РОП"
@@ -240,6 +255,18 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "reason": "почему можно или нельзя тратить технические ресурсы",
     "allowed_work": [],
     "blocked_work": []
+  }},
+  "payment_blocker": {{
+    "applicable": true,
+    "blocker_type": "advance_payment|leasing_payment|invoice_payment|internal_approval|documents|unknown|not_applicable",
+    "payer": "кто должен оплатить или подтвердить оплату",
+    "payment_recipient": "кому должна поступить оплата",
+    "confirmed_payment_date": "YYYY-MM-DD или null",
+    "current_status": "текущий статус оплаты по фактам сделки",
+    "missing_confirmation": [],
+    "next_actions": [],
+    "post_payment_next_step": "что нужно сделать сразу после подтверждения оплаты",
+    "escalation_condition": "когда РОПу нужно подключиться"
   }},
   "shaker_question": {{
     "question": "один прямой деловой квалифицирующий вопрос клиенту",
@@ -337,6 +364,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     risk = analysis.get("main_risk", {}) or {}
     deal_mode = analysis.get("deal_mode", {}) or {}
     resource_control = analysis.get("resource_control", {}) or {}
+    payment_blocker = analysis.get("payment_blocker", {}) or {}
     shaker_question = analysis.get("shaker_question", {}) or {}
     competitor = analysis.get("competitor_defense_checklist", {}) or {}
     priority = analysis.get("priority_recommendation", {}) or {}
@@ -413,6 +441,27 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 - Почему: {deal_mode.get('reason', 'не указано')}
 - Как вести менеджеру: {deal_mode.get('manager_behavior', 'не указано')}
 - Фокус РОПа: {deal_mode.get('rop_focus', 'не указано')}
+
+## Контроль оплаты
+
+- Применимо: {yes_no(payment_blocker.get('applicable'))}
+- Узкое место: {payment_blocker.get('blocker_type', 'не указано')}
+- Кто должен оплатить/подтвердить: {payment_blocker.get('payer', 'не указано')}
+- Кому должна поступить оплата: {payment_blocker.get('payment_recipient', 'не указано')}
+- Подтвержденная дата оплаты: {human_value(payment_blocker.get('confirmed_payment_date'))}
+- Текущий статус: {payment_blocker.get('current_status', 'не указано')}
+
+Чего не хватает для контроля денег:
+
+{bullet_list(payment_blocker.get('missing_confirmation'))}
+
+Следующие действия:
+
+{bullet_list(payment_blocker.get('next_actions'))}
+
+Шаг после оплаты: {payment_blocker.get('post_payment_next_step', 'не указано')}
+
+Когда подключать РОПа: {payment_blocker.get('escalation_condition', 'не указано')}
 
 ## Контроль ресурсов
 

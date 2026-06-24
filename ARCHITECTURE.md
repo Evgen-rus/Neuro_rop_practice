@@ -91,7 +91,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - `Transcript` — результат транскрибации звонка, обычно хранится в `transcripts/` в `.md`, `.txt`, `.json`.
 - `Knowledge file` — обработанное правило ПрактикМ из `knowledge/clients/praktikm/`.
 - `Analysis JSON` — структурированный ответ модели в `analysis/*_analysis.json`.
-- `Deal management blocks` — управленческие поля deal-анализа: `deal_mode`, `resource_control`, `shaker_question`, `competitor_defense_checklist`, `priority_recommendation`.
+- `Deal management blocks` — управленческие поля deal-анализа: `deal_mode`, `resource_control`, `payment_blocker`, `shaker_question`, `competitor_defense_checklist`, `priority_recommendation`.
 - `ROP report` — человекочитаемый Markdown-отчёт в `analysis/*_rop_report.md`.
 - `Workspace index` — `index.json`, фиксирует тип сущности, ID и локальные папки.
 
@@ -202,6 +202,7 @@ Deal JSON дополнительно содержит управленчески
 
 - `deal_mode` — режим ведения сделки;
 - `resource_control` — стоит ли тратить инженерные/технические ресурсы;
+- `payment_blocker` — узкое место оплаты/аванса/лизинга для сделок около денег;
 - `shaker_question` — ключевой квалифицирующий вопрос клиенту;
 - `competitor_defense_checklist` — защита от конкурента/альтернативы;
 - `priority_recommendation` — приоритет сделки для менеджера и РОПа.

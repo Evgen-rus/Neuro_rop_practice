@@ -39,6 +39,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "new_event",
     "what_changed",
     "deal_progress",
+    "payment_blocker",
     "resource_control",
     "shaker_question",
     "competitor_defense_checklist",
@@ -130,10 +131,11 @@ def _expect_non_empty_string(value: Any, path: str, errors: list[str]) -> None:
         errors.append(f"expected non-empty string at {path}")
 
 
-def _expect_max_list_length(value: Any, path: str, max_length: int, errors: list[str]) -> None:
+def _expect_max_list_length(value: Any, path: str, max_length: int, errors: list[str]) -> list[Any]:
     items = _expect_list(value, path, errors)
     if len(items) > max_length:
         errors.append(f"too many items at {path}: max {max_length}, got {len(items)}")
+    return items
 
 
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
@@ -142,7 +144,16 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
         _expect_enum(
             deal_mode.get("mode"),
             "deal_mode.mode",
-            {"active_sale", "managed_pause", "hard_qualification", "nurture", "disqualify", "lost_risk", "unknown"},
+            {
+                "active_sale",
+                "payment_control",
+                "managed_pause",
+                "hard_qualification",
+                "nurture",
+                "disqualify",
+                "lost_risk",
+                "unknown",
+            },
             errors,
         )
         for field in ("reason", "manager_behavior", "rop_focus"):
@@ -155,6 +166,52 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
         _expect_non_empty_string(resource_control.get("reason"), "resource_control.reason", errors)
         _expect_max_list_length(resource_control.get("allowed_work"), "resource_control.allowed_work", 5, errors)
         _expect_max_list_length(resource_control.get("blocked_work"), "resource_control.blocked_work", 5, errors)
+
+    payment_blocker = _expect_dict(analysis.get("payment_blocker"), "payment_blocker", errors)
+    if payment_blocker:
+        applicable = payment_blocker.get("applicable")
+        if not isinstance(applicable, bool):
+            errors.append("expected boolean at payment_blocker.applicable")
+        _expect_enum(
+            payment_blocker.get("blocker_type"),
+            "payment_blocker.blocker_type",
+            {
+                "advance_payment",
+                "leasing_payment",
+                "invoice_payment",
+                "internal_approval",
+                "documents",
+                "unknown",
+                "not_applicable",
+            },
+            errors,
+        )
+        for field in ("payer", "payment_recipient", "current_status", "post_payment_next_step", "escalation_condition"):
+            _expect_non_empty_string(payment_blocker.get(field), f"payment_blocker.{field}", errors)
+        confirmed_payment_date = payment_blocker.get("confirmed_payment_date")
+        if confirmed_payment_date is not None and (
+            not isinstance(confirmed_payment_date, str) or not confirmed_payment_date.strip()
+        ):
+            errors.append("expected payment_blocker.confirmed_payment_date to be non-empty string or null")
+        missing_confirmation = _expect_max_list_length(
+            payment_blocker.get("missing_confirmation"),
+            "payment_blocker.missing_confirmation",
+            5,
+            errors,
+        )
+        next_actions = _expect_max_list_length(
+            payment_blocker.get("next_actions"),
+            "payment_blocker.next_actions",
+            5,
+            errors,
+        )
+        if applicable is True:
+            if payment_blocker.get("blocker_type") == "not_applicable":
+                errors.append("payment_blocker.blocker_type must not be not_applicable when applicable=true")
+            if not missing_confirmation:
+                errors.append("payment_blocker.missing_confirmation must not be empty when applicable=true")
+            if not next_actions:
+                errors.append("payment_blocker.next_actions must not be empty when applicable=true")
 
     shaker_question = _expect_dict(analysis.get("shaker_question"), "shaker_question", errors)
     if shaker_question:

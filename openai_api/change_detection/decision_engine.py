@@ -481,6 +481,7 @@ def deal_management_summary(last_analysis: dict[str, Any] | None) -> dict[str, A
     return {
         "deal_mode": analysis.get("deal_mode") or {},
         "resource_control": analysis.get("resource_control") or {},
+        "payment_blocker": analysis.get("payment_blocker") or {},
         "priority_recommendation": analysis.get("priority_recommendation") or {},
     }
 
@@ -498,6 +499,7 @@ def render_mini_recommendation(
     management = deal_management_summary(last_analysis)
     deal_mode = management.get("deal_mode") or {}
     resource_control = management.get("resource_control") or {}
+    payment_blocker = management.get("payment_blocker") or {}
     priority = management.get("priority_recommendation") or {}
     last_report = previous_state.get("last_report_path") or "не указан"
     risk_level = previous_state.get("last_risk_level") or analysis_risk_level(last_analysis, previous_state) or "не указан"
@@ -559,6 +561,8 @@ def render_mini_recommendation(
 - Последний риск из полного анализа: {risk_level}
 - Режим сделки из полного анализа: {deal_mode.get('mode', 'не указано')}
 - Приоритет из полного анализа: {priority.get('priority', 'не указано')}
+- Платежный блокер: {payment_blocker.get('blocker_type', 'не указано')}
+- Подтвержденная дата оплаты: {payment_blocker.get('confirmed_payment_date') or 'не указана'}
 - Тратить технические ресурсы: {human_bool(resource_control.get('should_spend_engineering_time'))}
 - Следующий контроль: {priority.get('next_review_date') or 'не указан'}
 - Последний полный отчет: {last_report}
