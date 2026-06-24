@@ -311,6 +311,54 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
     return snapshot
 
 
+def build_lead_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None = None) -> dict[str, Any]:
+    lead = result_item(raw_bundle.get("lead")) or {}
+    activities = normalize_activities(raw_bundle)
+    comments = normalize_timeline_comments(raw_bundle)
+    file_refs = normalize_file_refs(raw_bundle)
+    commercial_file_refs = normalize_commercial_file_refs(raw_bundle)
+    transcript = transcript_snapshot(transcript_path)
+
+    snapshot = {
+        "entity_type": "lead",
+        "lead": {
+            "id": str(lead.get("ID") or raw_bundle.get("lead_id") or ""),
+            "title_hash": text_hash(lead.get("TITLE")),
+            "status_id": str(lead.get("STATUS_ID") or ""),
+            "status_semantic_id": str(lead.get("STATUS_SEMANTIC_ID") or ""),
+            "opportunity": str(lead.get("OPPORTUNITY") or ""),
+            "currency_id": str(lead.get("CURRENCY_ID") or ""),
+            "assigned_by_id": str(lead.get("ASSIGNED_BY_ID") or ""),
+            "moved_time": lead.get("MOVED_TIME") or "",
+            "moved_by_id": str(lead.get("MOVED_BY_ID") or ""),
+            "date_create": lead.get("DATE_CREATE") or "",
+            "date_closed": lead.get("DATE_CLOSED") or "",
+        },
+        "metadata": {
+            "date_modify": lead.get("DATE_MODIFY") or "",
+            "raw_generated_at": raw_bundle.get("generated_at") or "",
+        },
+        "activities": activities,
+        "timeline_comments": comments,
+        "commercial": {
+            "commercial_file_refs_hash": stable_hash(commercial_file_refs),
+            "file_refs_hash": stable_hash(file_refs),
+            "commercial_file_refs_count": len(commercial_file_refs),
+            "file_refs_count": len(file_refs),
+        },
+        "transcript": transcript,
+    }
+    snapshot["counts"] = {
+        "activities": len(activities),
+        "calls": sum(1 for item in activities if item["kind"] == "call"),
+        "emails": sum(1 for item in activities if item["kind"] == "email"),
+        "messages": sum(1 for item in activities if item["kind"] == "message"),
+        "tasks": sum(1 for item in activities if item["kind"] == "task"),
+        "timeline_comments": len(comments),
+    }
+    return snapshot
+
+
 def fingerprint_snapshot(snapshot: dict[str, Any]) -> str:
     # DATE_MODIFY/raw_generated_at are kept for inspection but excluded from the
     # fingerprint because Bitrix can update them without meaningful business
@@ -425,6 +473,120 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
         changes.append("commercial_refs_changed")
         details["commercial_refs_changed"] = changed_hard_commercial
 
+    if previous_commercial.get("file_refs_hash") != current_commercial.get("file_refs_hash"):
+        changes.append("file_refs_changed")
+        details["file_refs_changed"] = ["file_refs_hash"]
+
+    previous_transcript = previous.get("transcript") or {}
+    current_transcript = current.get("transcript") or {}
+    if previous_transcript.get("content_hash") != current_transcript.get("content_hash"):
+        changes.append("transcript_changed")
+
+    only_date_modify_changed = (
+        not changes
+        and (previous.get("metadata") or {}).get("date_modify") != (current.get("metadata") or {}).get("date_modify")
+    )
+
+    return {
+        "has_semantic_changes": bool(changes),
+        "only_date_modify_changed": only_date_modify_changed,
+        "changes": sorted(set(changes)),
+        "details": details,
+    }
+
+
+def compare_lead_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    if not previous:
+        return {
+            "has_semantic_changes": True,
+            "only_date_modify_changed": False,
+            "changes": ["first_snapshot"],
+            "details": {},
+        }
+
+    changes: list[str] = []
+    details: dict[str, Any] = {}
+
+    previous_lead = previous.get("lead", {}) or {}
+    current_lead = current.get("lead", {}) or {}
+    for field, change_name in (
+        ("status_id", "status_changed"),
+        ("status_semantic_id", "status_semantic_changed"),
+        ("opportunity", "amount_changed"),
+        ("assigned_by_id", "assigned_manager_changed"),
+        ("moved_time", "status_moved_time_changed"),
+        ("date_closed", "date_closed_changed"),
+    ):
+        if previous_lead.get(field) != current_lead.get(field):
+            changes.append(change_name)
+            details[change_name] = {"before": previous_lead.get(field), "after": current_lead.get(field)}
+
+    previous_activities = map_by_id(previous.get("activities", []) or [])
+    current_activities = map_by_id(current.get("activities", []) or [])
+    previous_activity_ids = set(previous_activities)
+    current_activity_ids = set(current_activities)
+    new_activity_ids = sorted(current_activity_ids - previous_activity_ids)
+    removed_activity_ids = sorted(previous_activity_ids - current_activity_ids)
+    if new_activity_ids:
+        changes.append("new_activity")
+        details["new_activity_ids"] = new_activity_ids
+        new_kinds = {current_activities[item_id].get("kind") for item_id in new_activity_ids}
+        for kind, change_name in (
+            ("call", "new_call"),
+            ("email", "new_email"),
+            ("message", "new_message"),
+            ("task", "new_task"),
+        ):
+            if kind in new_kinds:
+                changes.append(change_name)
+    if removed_activity_ids:
+        changes.append("activity_removed")
+        details["removed_activity_ids"] = removed_activity_ids
+
+    updated_activity_ids = []
+    task_deadline_changed = []
+    task_completed_changed = []
+    for activity_id in sorted(previous_activity_ids & current_activity_ids):
+        before = previous_activities[activity_id]
+        after = current_activities[activity_id]
+        if stable_hash(before) != stable_hash(after):
+            updated_activity_ids.append(activity_id)
+        if before.get("kind") == "task" or after.get("kind") == "task":
+            if before.get("deadline") != after.get("deadline"):
+                task_deadline_changed.append(activity_id)
+            if before.get("completed") != after.get("completed") or before.get("status") != after.get("status"):
+                task_completed_changed.append(activity_id)
+    if updated_activity_ids:
+        changes.append("activity_updated")
+        details["updated_activity_ids"] = updated_activity_ids
+    if task_deadline_changed:
+        changes.append("task_deadline_changed")
+        details["task_deadline_changed_ids"] = task_deadline_changed
+    if task_completed_changed:
+        changes.append("task_completed_changed")
+        details["task_completed_changed_ids"] = task_completed_changed
+
+    previous_comments = map_by_id(previous.get("timeline_comments", []) or [])
+    current_comments = map_by_id(current.get("timeline_comments", []) or [])
+    new_comment_ids = sorted(set(current_comments) - set(previous_comments))
+    updated_comment_ids = [
+        item_id
+        for item_id in sorted(set(previous_comments) & set(current_comments))
+        if stable_hash(previous_comments[item_id]) != stable_hash(current_comments[item_id])
+    ]
+    if new_comment_ids:
+        changes.append("new_comment")
+        details["new_comment_ids"] = new_comment_ids
+    if updated_comment_ids:
+        changes.append("comment_updated")
+        details["updated_comment_ids"] = updated_comment_ids
+
+    previous_commercial = previous.get("commercial", {}) or {}
+    current_commercial = current.get("commercial", {}) or {}
+    if "commercial_file_refs_hash" in previous_commercial:
+        if previous_commercial.get("commercial_file_refs_hash") != current_commercial.get("commercial_file_refs_hash"):
+            changes.append("commercial_refs_changed")
+            details["commercial_refs_changed"] = ["commercial_file_refs_hash"]
     if previous_commercial.get("file_refs_hash") != current_commercial.get("file_refs_hash"):
         changes.append("file_refs_changed")
         details["file_refs_changed"] = ["file_refs_hash"]

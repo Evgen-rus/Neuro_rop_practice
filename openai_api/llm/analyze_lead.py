@@ -326,7 +326,7 @@ def main() -> None:
     if not args.allow_direct_llm and not args.dry_run:
         raise SystemExit(
             "Direct lead LLM run is blocked to avoid duplicate costs. "
-            "Lead change detection is not implemented yet; pass --allow-direct-llm intentionally."
+            "Use openai_api/llm/analyze_lead_if_changed.py, or pass --allow-direct-llm intentionally."
         )
 
     lead_dir = Path(args.lead_root) / f"lead_{args.lead_id}"

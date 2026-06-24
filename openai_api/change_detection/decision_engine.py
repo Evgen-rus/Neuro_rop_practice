@@ -34,6 +34,17 @@ HARD_CHANGE_TYPES = {
     "transcript_changed",
 }
 
+LEAD_HARD_CHANGE_TYPES = {
+    "status_changed",
+    "status_semantic_changed",
+    "new_call",
+    "new_email",
+    "new_message",
+    "new_comment",
+    "commercial_refs_changed",
+    "transcript_changed",
+}
+
 SOFT_CHANGE_TYPES = {
     "new_activity",
     "new_task",
@@ -47,6 +58,11 @@ SOFT_CHANGE_TYPES = {
     "stage_moved_time_changed",
     "closed_flag_changed",
     "file_refs_changed",
+}
+
+LEAD_SOFT_CHANGE_TYPES = SOFT_CHANGE_TYPES | {
+    "status_moved_time_changed",
+    "date_closed_changed",
 }
 
 
@@ -209,6 +225,55 @@ def mini_triggers(
     return unique
 
 
+def lead_mini_triggers(
+    *,
+    current_snapshot: dict[str, Any],
+    previous_state: dict[str, Any] | None,
+    last_memory: dict[str, Any] | None,
+    last_analysis: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    triggers = mini_triggers(
+        current_snapshot=current_snapshot,
+        previous_state=previous_state,
+        last_memory=last_memory,
+        last_analysis=last_analysis,
+    )
+
+    if previous_state:
+        open_tasks = [
+            item
+            for item in current_snapshot.get("activities", []) or []
+            if item.get("kind") == "task"
+            and str(item.get("completed") or "").upper() not in {"Y", "1", "TRUE"}
+            and str(item.get("status") or "") != "2"
+        ]
+        lead = current_snapshot.get("lead") or {}
+        if not open_tasks and str(lead.get("status_semantic_id") or "").upper() not in {"S", "F"}:
+            triggers.append({"trigger_type": "lead_without_open_task"})
+
+        analysis = extract_analysis(last_analysis)
+        activity_summary = analysis.get("activity_summary", {}) if isinstance(analysis, dict) else {}
+        meaningful_contact = activity_summary.get("meaningful_contact") if isinstance(activity_summary, dict) else None
+        call_count = (current_snapshot.get("counts") or {}).get("calls", 0)
+        if call_count >= 2 and meaningful_contact is False:
+            triggers.append(
+                {
+                    "trigger_type": "multiple_calls_without_meaningful_contact",
+                    "call_count": call_count,
+                }
+            )
+
+    seen = set()
+    unique = []
+    for trigger in triggers:
+        identity = json.dumps(trigger, ensure_ascii=False, sort_keys=True)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(trigger)
+    return unique
+
+
 def soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
     triggers = []
     changes = set(diff.get("changes") or [])
@@ -235,6 +300,14 @@ def soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
     soft_only = sorted((changes & SOFT_CHANGE_TYPES) - set(mapping))
     for change in soft_only:
         triggers.append({"trigger_type": "soft_change_without_llm", "change": change})
+    return triggers
+
+
+def lead_soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
+    triggers = soft_diff_triggers(diff)
+    changes = set(diff.get("changes") or [])
+    for change in sorted((changes & LEAD_SOFT_CHANGE_TYPES) - SOFT_CHANGE_TYPES):
+        triggers.append({"trigger_type": "lead_soft_change_without_llm", "change": change})
     return triggers
 
 
@@ -296,6 +369,64 @@ def decide_deal_processing(
     )
 
 
+def decide_lead_processing(
+    *,
+    previous_state: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+    fingerprint: str,
+    diff: dict[str, Any],
+    last_memory: dict[str, Any] | None = None,
+) -> ProcessingDecision:
+    if not previous_state:
+        return ProcessingDecision(
+            status=FIRST_FULL_ANALYSIS,
+            reasons=["Нет предыдущего состояния лида в SQLite."],
+            triggers=[],
+            diff=diff,
+        )
+
+    last_analysis = previous_state.get("last_analysis")
+    previous_fingerprint = previous_state.get("current_fingerprint")
+    changed = previous_fingerprint != fingerprint
+    semantic_changes = set(diff.get("changes") or [])
+    hard_changes = sorted(semantic_changes & LEAD_HARD_CHANGE_TYPES)
+    if changed and hard_changes:
+        return ProcessingDecision(
+            status=FULL_LLM_ANALYSIS,
+            reasons=[f"Обнаружены hard-изменения лида: {', '.join(hard_changes)}."],
+            triggers=[],
+            diff=diff,
+        )
+
+    triggers = lead_mini_triggers(
+        current_snapshot=current_snapshot,
+        previous_state=previous_state,
+        last_memory=last_memory,
+        last_analysis=last_analysis,
+    )
+    if changed and semantic_changes:
+        triggers = lead_soft_diff_triggers(diff) + triggers
+
+    if triggers:
+        return ProcessingDecision(
+            status=MINI_RECOMMENDATION_NO_LLM,
+            reasons=["Hard-изменений лида для LLM нет, но есть soft-изменения или контрольные триггеры."],
+            triggers=triggers,
+            diff=diff,
+        )
+
+    if diff.get("only_date_modify_changed"):
+        reason = "Изменился только DATE_MODIFY, без изменений активностей, комментариев, статуса, коммерческих ссылок или транскрипта."
+    else:
+        reason = "Смысловых изменений лида и контрольных триггеров не найдено."
+    return ProcessingDecision(
+        status=SKIPPED_NO_CHANGES,
+        reasons=[reason],
+        triggers=[],
+        diff=diff,
+    )
+
+
 def trigger_label(trigger: dict[str, Any]) -> str:
     trigger_type = trigger.get("trigger_type")
     labels = {
@@ -313,6 +444,9 @@ def trigger_label(trigger: dict[str, Any]) -> str:
         "comment_updated_without_llm": "Обновлен комментарий",
         "non_commercial_file_refs_changed_without_llm": "Изменились файлы/ссылки без признаков КП/счета/договора",
         "soft_change_without_llm": "Soft-изменение без запуска LLM",
+        "lead_without_open_task": "У рабочего лида нет открытой задачи",
+        "multiple_calls_without_meaningful_contact": "Несколько звонков без содержательного контакта",
+        "lead_soft_change_without_llm": "Soft-изменение лида без запуска LLM",
     }
     return labels.get(str(trigger_type), str(trigger_type or "триггер"))
 
@@ -396,6 +530,90 @@ def render_mini_recommendation(
 ## Текущее состояние
 
 - Этап Bitrix: {current_stage}
+- Ответственный: {current_assigned}
+- Последний риск из полного анализа: {risk_level}
+- Последний полный отчет: {last_report}
+
+## Что сделать менеджеру
+
+{bullet_list(manager_actions)}
+
+## Что проверить РОПу
+
+{bullet_list(rop_checks)}
+
+## Последний сохраненный текст клиенту
+
+{reused_text}
+"""
+
+
+def render_lead_mini_recommendation(
+    *,
+    lead_id: str,
+    decision: ProcessingDecision,
+    previous_state: dict[str, Any] | None,
+    current_snapshot: dict[str, Any],
+) -> str:
+    previous_state = previous_state or {}
+    last_analysis = previous_state.get("last_analysis")
+    primary = last_primary_text(last_analysis)
+    last_report = previous_state.get("last_report_path") or "не указан"
+    risk_level = previous_state.get("last_risk_level") or analysis_risk_level(last_analysis, previous_state) or "не указан"
+
+    trigger_lines = []
+    for trigger in decision.triggers:
+        detail_parts = []
+        for key, value in trigger.items():
+            if key == "trigger_type":
+                continue
+            detail_parts.append(f"{key}: {value}")
+        suffix = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+        trigger_lines.append(f"{trigger_label(trigger)}{suffix}")
+
+    manager_actions = [
+        "Проверить, есть ли открытая задача по следующему касанию.",
+        "Если контакта не было, выполнить следующий дозвон по регламенту и зафиксировать результат.",
+        "Если лид рабочий, уточнить потребность, срок, ЛПР и следующий шаг.",
+    ]
+    rop_checks = [
+        "Есть ли у лида актуальная задача в CRM.",
+        "Не завис ли лид после попыток дозвона.",
+        "Нужно ли подключить РОПа при высоком риске или отсутствии следующего шага.",
+    ]
+
+    lead = current_snapshot.get("lead") or {}
+    current_status = lead.get("status_id") or "не указан"
+    current_assigned = lead.get("assigned_by_id") or "не указан"
+
+    reused_text = "Сохраненного клиентского текста из последнего полного анализа нет."
+    if primary.get("text"):
+        reused_text = "\n".join(
+            [
+                "Ниже текст из последнего полного LLM-анализа. Новый текст без LLM не генерировался.",
+                "",
+                f"Тип: {primary.get('type') or 'не указан'}",
+                f"Тема: {primary.get('subject') or ''}",
+                "",
+                str(primary.get("text") or ""),
+            ]
+        )
+
+    return f"""# Мини-рекомендация по лиду {lead_id}
+
+Статус: {decision.status}
+
+## Причины
+
+{bullet_list(decision.reasons)}
+
+## Триггеры
+
+{bullet_list(trigger_lines)}
+
+## Текущее состояние
+
+- Статус Bitrix: {current_status}
 - Ответственный: {current_assigned}
 - Последний риск из полного анализа: {risk_level}
 - Последний полный отчет: {last_report}

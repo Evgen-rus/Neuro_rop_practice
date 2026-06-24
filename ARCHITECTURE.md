@@ -49,8 +49,9 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Валидация LLM JSON перед отчётом: `openai_api/llm/validation.py`
 - SQLite-хранилище состояния ROP assistant: `storage/rop_db.py`
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
-- Deal decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
+- Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_deal_if_changed.py`
+- Lead orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_lead_if_changed.py`
 - Инструкция ручного запуска change detection: `Docs/change_detection_runbook.md`
 - Обработанная OKF-база ПрактикМ: `knowledge/clients/praktikm/index.md`
 - Ручная проверка проекта: `Docs/ручная проверка проекта.md`
@@ -77,6 +78,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
 18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
 19. Прямой запуск `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокирован, чтобы не тратить LLM в обход change detection.
+20. Lead change detection использует `STATUS_ID` вместо `STAGE_ID`; задачи и смена ответственного считаются soft diff, новый звонок/email/message/comment/status/transcript — hard diff.
 
 ## 4) Key Domain Objects
 
@@ -242,6 +244,29 @@ Mini recommendation не генерирует новый клиентский т
 - `lead_227661_rop_report.md`
 - `lead_227661_raw_model_output.txt`
 
+### E2) Lead Analysis With Change Detection
+
+Команда:
+
+```powershell
+.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead_if_changed.py --lead-id 227661 --transcript none
+```
+
+Что происходит:
+
+- читается prepared workspace лида и raw JSON из `raw/lead_<id>_context.json`;
+- строится normalized snapshot лида;
+- fingerprint считается без технического шума и без самостоятельного триггера по `DATE_MODIFY`;
+- hard diff запускает `analyze_lead.py --allow-direct-llm`;
+- soft diff или контрольные триггеры создают mini recommendation без LLM;
+- повторные mini recommendation по одному `trigger_type` подавляются в течение дня.
+
+Принудительный полный анализ:
+
+```powershell
+.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead_if_changed.py --lead-id 227661 --transcript none --force-llm
+```
+
 ### F) Dry Run
 
 Для проверки промпта без траты токенов:
@@ -332,7 +357,7 @@ ROP assistant state:
 
 ## 10) Current Gaps
 
-- SQLite для deal change detection добавлен как локальное MVP-хранилище `storage/rop_db.py`, но lead change detection и полноценная портфельная `deal_memory` / `lead_memory` пока не реализованы.
+- SQLite для deal/lead change detection добавлен как локальное MVP-хранилище `storage/rop_db.py`, но полноценная портфельная `deal_memory` / `lead_memory` пока не реализована.
 - Нет Telegram Bot API отправки отчётов.
 - Нет FastAPI/backend сервиса.
 - Нет frontend или личного кабинета.
