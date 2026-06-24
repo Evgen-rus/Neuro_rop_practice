@@ -142,6 +142,7 @@ def run_existing_analyzer(args: argparse.Namespace, transcript_arg: str) -> None
         str(args.deal_root),
         "--transcript",
         transcript_arg,
+        "--allow-direct-llm",
     ]
     if args.model:
         command.extend(["--model", str(args.model)])

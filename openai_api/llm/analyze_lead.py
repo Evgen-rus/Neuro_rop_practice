@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--knowledge-dir", default=str(DEFAULT_KNOWLEDGE_DIR), help="Processed OKF knowledge folder.")
     parser.add_argument("--model", default=ANALYSIS_MODEL, help="OpenAI analysis model")
     parser.add_argument("--dry-run", action="store_true", help="Build and log inputs, save prompt, but do not call OpenAI.")
+    parser.add_argument(
+        "--allow-direct-llm",
+        action="store_true",
+        help="Allow direct LLM call. Lead change detection is planned next; use intentionally.",
+    )
     return parser.parse_args()
 
 
@@ -318,6 +323,12 @@ def save_json(path: Path, value: Any) -> None:
 
 def main() -> None:
     args = parse_args()
+    if not args.allow_direct_llm and not args.dry_run:
+        raise SystemExit(
+            "Direct lead LLM run is blocked to avoid duplicate costs. "
+            "Lead change detection is not implemented yet; pass --allow-direct-llm intentionally."
+        )
+
     lead_dir = Path(args.lead_root) / f"lead_{args.lead_id}"
     history_path = lead_dir / "history" / f"lead_{args.lead_id}_customer_path.md"
     transcript_path = resolve_transcript(args.transcript, lead_dir)

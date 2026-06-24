@@ -52,6 +52,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Build and log inputs, save the request prompt, but do not call OpenAI.",
     )
+    parser.add_argument(
+        "--allow-direct-llm",
+        action="store_true",
+        help="Allow direct LLM call. Prefer analyze_deal_if_changed.py for normal runs.",
+    )
     return parser.parse_args()
 
 
@@ -383,6 +388,12 @@ def save_json(path: Path, value: Any) -> None:
 
 def main() -> None:
     args = parse_args()
+    if not args.allow_direct_llm and not args.dry_run:
+        raise SystemExit(
+            "Direct deal LLM run is blocked to avoid duplicate costs. "
+            "Use openai_api/llm/analyze_deal_if_changed.py, or pass --allow-direct-llm intentionally."
+        )
+
     deal_dir = Path(args.deal_root) / f"deal_{args.deal_id}"
     history_path = deal_dir / "history" / f"deal_{args.deal_id}_customer_path.md"
     transcript_path = resolve_transcript(args.transcript, deal_dir)

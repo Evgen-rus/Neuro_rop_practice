@@ -51,6 +51,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
 - Deal decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_deal_if_changed.py`
+- Инструкция ручного запуска change detection: `Docs/change_detection_runbook.md`
 - Обработанная OKF-база ПрактикМ: `knowledge/clients/praktikm/index.md`
 - Ручная проверка проекта: `Docs/ручная проверка проекта.md`
 - Целевая MVP-спека: `Docs/rop_assistant_spec.md`
@@ -75,6 +76,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
 17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
 18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
+19. Прямой запуск `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокирован, чтобы не тратить LLM в обход change detection.
 
 ## 4) Key Domain Objects
 
