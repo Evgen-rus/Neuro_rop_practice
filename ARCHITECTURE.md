@@ -37,6 +37,7 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Deal raw fetch: `bitrix/deals/1_fetch_deals_context.py`
 - Deal markdown history: `bitrix/deals/2_build_deals_customer_path_report.py`
 - Deal workspace prepare: `bitrix/deals/3_prepare_deals_workspace.py`
+- Deal compact LLM context: `bitrix/deals/4_build_deals_llm_context.py`
 - Lead pipeline: `bitrix/leads/run_leads_customer_path_pipeline.py`
 - Lead raw fetch: `bitrix/leads/1_fetch_leads_context.py`
 - Lead markdown history: `bitrix/leads/2_build_leads_customer_path_report.py`
@@ -73,12 +74,13 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 12. Workspace-структура должна быть одинаковой по смыслу для `lead_*` и `deal_*`: `history/`, `raw/`, `audio/`, `transcripts/`, `analysis/`, `index.json`.
 13. `latest` transcript выбирается по времени изменения файла. Если в папке несколько транскриптов, это может повлиять на анализ.
 14. `ffmpeg` и `ffprobe` — внешние зависимости, они не ставятся через `requirements.txt`.
-15. SQLite есть только как локальное MVP-хранилище для deal change detection. Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
+15. SQLite есть только как локальное MVP-хранилище для deal/lead change detection. Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
 16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
 17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
 18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
 19. Прямой запуск `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокирован, чтобы не тратить LLM в обход change detection.
 20. Lead change detection использует `STATUS_ID` вместо `STAGE_ID`; задачи и смена ответственного считаются soft diff, новый звонок/email/message/comment/status/transcript — hard diff.
+21. Полный `customer_path.md` остается аудитным/UI-артефактом. Для deal LLM prompt используется `history/deal_<id>_llm_context.md`, если он существует; иначе fallback на полный `customer_path.md`.
 
 ## 4) Key Domain Objects
 
@@ -111,9 +113,25 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
   -> reports/bitrix_customer_path/markdown/deal_18507_customer_path.md
 3_prepare_deals_workspace.py
   -> reports/rop_assistant/deals/deal_18507/
+4_build_deals_llm_context.py
+  -> reports/rop_assistant/deals/deal_18507/history/deal_18507_llm_context.md
 ```
 
 Deal-контур также использует audio manifest из `reports/bitrix_customer_path/audio/`, если он уже есть.
+
+Компактный LLM context также можно пересобрать отдельно:
+
+```powershell
+.\venv\Scripts\python.exe .\bitrix\deals\4_build_deals_llm_context.py --deal-ids 18507
+```
+
+Выход:
+
+```text
+reports/rop_assistant/deals/deal_18507/history/deal_18507_llm_context.md
+```
+
+Этот файл удаляет email quotes, подписи, длинные ссылки и технические повторы, но сохраняет ID/даты источников для grounding.
 
 ### B) Lead Customer Path
 

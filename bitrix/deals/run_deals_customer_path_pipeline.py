@@ -5,6 +5,7 @@ Steps:
 1. Fetch raw Bitrix deal context.
 2. Build a readable Markdown customer-path report.
 3. Prepare the per-deal ROP assistant workspace.
+4. Build compact LLM context in the deal workspace.
 """
 
 from __future__ import annotations
@@ -84,6 +85,18 @@ def main() -> None:
             *args.deal_ids,
             "--workspace-root",
             str(workspace_root),
+        ]
+    )
+    run_step(
+        [
+            sys.executable,
+            "bitrix/deals/4_build_deals_llm_context.py",
+            "--input-dir",
+            str(raw_dir),
+            "--workspace-root",
+            str(workspace_root),
+            "--deal-ids",
+            *args.deal_ids,
         ]
     )
     logger.info("Deal pipeline finished. Workspace root: %s", workspace_root)

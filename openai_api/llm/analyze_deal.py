@@ -89,6 +89,13 @@ def resolve_transcript(value: str, deal_dir: Path) -> Path | None:
     return path
 
 
+def resolve_history_path(deal_dir: Path, deal_id: str) -> Path:
+    compact_path = deal_dir / "history" / f"deal_{deal_id}_llm_context.md"
+    if compact_path.exists():
+        return compact_path
+    return deal_dir / "history" / f"deal_{deal_id}_customer_path.md"
+
+
 def knowledge_files(knowledge_dir: Path) -> list[Path]:
     priority = [
         "index.md",
@@ -395,7 +402,7 @@ def main() -> None:
         )
 
     deal_dir = Path(args.deal_root) / f"deal_{args.deal_id}"
-    history_path = deal_dir / "history" / f"deal_{args.deal_id}_customer_path.md"
+    history_path = resolve_history_path(deal_dir, str(args.deal_id))
     transcript_path = resolve_transcript(args.transcript, deal_dir)
     knowledge_dir = Path(args.knowledge_dir)
     analysis_dir = deal_dir / "analysis"
