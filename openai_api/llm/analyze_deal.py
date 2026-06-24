@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from openai_api.bitrix_links import bitrix_entity_url
+from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
 from openai_api.llm.validation import AnalysisValidationError, validate_deal_analysis
@@ -117,10 +118,17 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
     return files + extra
 
 
-def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sections: list[tuple[Path, str]]) -> str:
+def build_prompt(
+    deal_id: str,
+    history_text: str,
+    transcript_text: str,
+    okf_sections: list[tuple[Path, str]],
+    stage_policy: dict[str, Any],
+) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
     )
+    stage_policy_text = json.dumps(stage_policy, ensure_ascii=False, indent=2)
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
 Проанализируй сделку и новое событие, если оно есть. Если транскрибация не предоставлена, анализируй текущее состояние сделки по истории, активностям и комментариям. Главный вопрос: продвинулся ли клиент к оплате, КП, договору, передаче данных или следующему конкретному шагу.
@@ -138,9 +146,33 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 <grounding_rules>
 - Факты сделки бери только из истории сделки и транскрибации/нового события.
 - OKF-база — это правила оценки и рекомендации, а не источник фактов о конкретном клиенте.
+- CRM_STAGE_POLICY — это детерминированные данные из CRM о текущей стадии и закрытии сделки. Используй их как факт CRM-статуса.
 - Если факт есть только в OKF-базе, не записывай его как факт сделки.
 - Если нужного факта нет в истории или транскрибации, прямо укажи, каких данных не хватает.
 </grounding_rules>
+
+<crm_stage_rules>
+Если CRM_STAGE_POLICY.is_closed_lost=true:
+- Не анализируй сделку как обычную открытую сделку.
+- Сначала оцени корректность закрытия в closed_deal_review.
+- Если в истории есть признаки потенциала: потребность, бюджетный ориентир, срок, ЛПР/путь к ЛПР, запрос КП/ТЗ или коммерческий интерес, ставь reopen_candidate=true и rop_decision="needs_manual_review" или "return_to_pipeline".
+- Если закрытие выглядит обоснованным, ставь reopen_candidate=false и rop_decision="keep_closed".
+- Текст клиенту можно дать только как реактивационный сценарий и только если client_reactivation_allowed=true.
+- В manager_action_block.manager_checklist обязательно добавь, что текст использовать только после решения РОПа вернуть/реанимировать сделку.
+
+Правила по типам закрытия:
+- duplicate: не реанимировать как продажу; проверить дубль.
+- lost_to_competitor: разобрать проигрыш конкуренту; возможен мягкий post-loss follow-up.
+- integration_blocker: проверить, это реальный технический стоп или решаемая интеграция.
+- price_lost: проверить защиту ценности, комплектацию, сроки, сервис, лизинг или альтернативный состав.
+- postponed: нужна контрольная дата и прогрев, не считать окончательной потерей без даты возврата.
+- wrong_qualification: искать спорное закрытие, если есть потребность, сумма, срок или путь к ЛПР.
+- cannot_produce: не давать клиентский текст без проверки производства/аналога.
+- not_relevant: проверить реальную причину неактуальности.
+- no_response: проверить качество дозвона и альтернативные каналы.
+
+Если CRM_STAGE_POLICY.is_closed_lost=false, closed_deal_review.applicable=false.
+</crm_stage_rules>
 
 <length_limits>
 - summary/reason/description: максимум 2-3 коротких предложения.
@@ -257,6 +289,21 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
     "manager_behavior": "как менеджеру вести сделку в этом режиме",
     "rop_focus": "что должен контролировать РОП"
   }},
+  "closed_deal_review": {{
+    "applicable": true,
+    "crm_closed": true,
+    "stage_id": "этап CRM, например C15:4",
+    "stage_name": "название этапа CRM",
+    "closed_reason_type": "duplicate|lost_to_competitor|integration_blocker|price_lost|postponed|wrong_qualification|cannot_produce|not_relevant|no_response|won|unknown|not_applicable",
+    "reopen_candidate": true,
+    "confidence": "high|medium|low|unknown",
+    "why_closed_questionable": [],
+    "why_closed_may_be_valid": [],
+    "rop_decision": "return_to_pipeline|keep_closed|needs_manual_review|not_applicable",
+    "recommended_pipeline_action": "что сделать со стадией/сделкой в CRM",
+    "client_reactivation_allowed": true,
+    "client_text_usage_note": "использовать текст клиенту только если РОП решил вернуть или реанимировать сделку"
+  }},
   "resource_control": {{
     "should_spend_engineering_time": false,
     "reason": "почему можно или нельзя тратить технические ресурсы",
@@ -362,6 +409,10 @@ def build_prompt(deal_id: str, history_text: str, transcript_text: str, okf_sect
 
 {transcript_text.strip()}
 
+## CRM_STAGE_POLICY
+
+{stage_policy_text}
+
 ## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
 
 {okf_text}
@@ -386,6 +437,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
     deal_mode = analysis.get("deal_mode", {}) or {}
+    closed_review = analysis.get("closed_deal_review", {}) or {}
     resource_control = analysis.get("resource_control", {}) or {}
     payment_blocker = analysis.get("payment_blocker", {}) or {}
     objection_handling = analysis.get("objection_handling", {}) or {}
@@ -458,6 +510,40 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     objections_md = render_objections(objection_handling)
     objections_section = f"\n\n{objections_md}\n" if objections_md else ""
 
+    def render_closed_deal_review(value: dict[str, Any]) -> str:
+        if not value.get("applicable"):
+            return ""
+        return f"""## Проверка закрытой сделки
+
+- CRM-статус: закрыта как проваленная
+- Этап закрытия: {value.get('stage_name', 'не указано')} ({value.get('stage_id', 'не указано')})
+- Тип причины закрытия: {value.get('closed_reason_type', 'не указано')}
+- Кандидат на возврат в воронку: {yes_no(value.get('reopen_candidate'))}
+- Уверенность оценки: {value.get('confidence', 'не указано')}
+- Решение для РОПа: {value.get('rop_decision', 'не указано')}
+
+Почему закрытие может быть спорным:
+
+{bullet_list(value.get('why_closed_questionable'))}
+
+Почему закрытие может быть обоснованным:
+
+{bullet_list(value.get('why_closed_may_be_valid'))}
+
+Рекомендуемое действие в CRM: {value.get('recommended_pipeline_action', 'не указано')}
+
+Правило для текста клиенту: {value.get('client_text_usage_note', 'не указано')}"""
+
+    closed_review_md = render_closed_deal_review(closed_review)
+    closed_review_section = f"\n\n{closed_review_md}\n" if closed_review_md else ""
+
+    manager_action_warning = ""
+    if closed_review.get("applicable") and closed_review.get("client_reactivation_allowed"):
+        manager_action_warning = (
+            "\nВажно: текст ниже использовать только если РОП решил вернуть "
+            "или реанимировать сделку. Сейчас сделка закрыта как проваленная.\n"
+        )
+
     deal_id = analysis.get("deal_id", "")
     bitrix_url = bitrix_entity_url("deal", deal_id)
 
@@ -492,6 +578,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 - Уровень: {risk.get('risk_level', 'не указано')}
 - Тип: {risk.get('risk_type', 'не указано')}
 - Описание: {risk.get('description', 'не указано')}
+{closed_review_section}
 
 ## Режим сделки
 
@@ -596,6 +683,7 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 - Канал: {manager.get('recommended_channel', 'не указано')}
 - Почему: {manager.get('channel_reason', 'не указано')}
 - Цель: {manager.get('goal', 'не указано')}
+{manager_action_warning}
 
 ### Основной текст
 
@@ -638,6 +726,7 @@ def main() -> None:
     transcript_path = resolve_transcript(args.transcript, deal_dir)
     knowledge_dir = Path(args.knowledge_dir)
     analysis_dir = deal_dir / "analysis"
+    stage_policy = build_deal_stage_policy(deal_dir, str(args.deal_id))
 
     if not history_path.exists():
         raise FileNotFoundError(f"History file not found: {history_path}")
@@ -661,6 +750,7 @@ def main() -> None:
         read_text(history_path),
         transcript_text,
         okf_sections,
+        stage_policy,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -731,6 +821,7 @@ def main() -> None:
             "transcript": str(transcript_path) if transcript_path else None,
             "knowledge": [str(path) for path, _text in okf_sections],
         },
+        "crm_stage_policy": stage_policy,
         "model_metadata": {
             key: value for key, value in metadata.items() if key != "raw_output_text"
         },

@@ -36,6 +36,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_id",
     "deal_state",
     "deal_mode",
+    "closed_deal_review",
     "new_event",
     "objection_handling",
     "what_changed",
@@ -175,6 +176,72 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
         )
         for field in ("reason", "manager_behavior", "rop_focus"):
             _expect_non_empty_string(deal_mode.get(field), f"deal_mode.{field}", errors)
+
+    closed_review = _expect_dict(analysis.get("closed_deal_review"), "closed_deal_review", errors)
+    if closed_review:
+        applicable = closed_review.get("applicable")
+        _expect_bool(applicable, "closed_deal_review.applicable", errors)
+        _expect_bool(closed_review.get("crm_closed"), "closed_deal_review.crm_closed", errors)
+        _expect_bool(closed_review.get("reopen_candidate"), "closed_deal_review.reopen_candidate", errors)
+        _expect_bool(
+            closed_review.get("client_reactivation_allowed"),
+            "closed_deal_review.client_reactivation_allowed",
+            errors,
+        )
+        _expect_enum(
+            closed_review.get("closed_reason_type"),
+            "closed_deal_review.closed_reason_type",
+            {
+                "duplicate",
+                "lost_to_competitor",
+                "integration_blocker",
+                "price_lost",
+                "postponed",
+                "wrong_qualification",
+                "cannot_produce",
+                "not_relevant",
+                "no_response",
+                "won",
+                "unknown",
+                "not_applicable",
+            },
+            errors,
+        )
+        _expect_enum(
+            closed_review.get("confidence"),
+            "closed_deal_review.confidence",
+            {"high", "medium", "low", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            closed_review.get("rop_decision"),
+            "closed_deal_review.rop_decision",
+            {"return_to_pipeline", "keep_closed", "needs_manual_review", "not_applicable"},
+            errors,
+        )
+        for field in ("stage_id", "stage_name", "recommended_pipeline_action", "client_text_usage_note"):
+            _expect_non_empty_string(closed_review.get(field), f"closed_deal_review.{field}", errors)
+        questionable = _expect_max_list_length(
+            closed_review.get("why_closed_questionable"),
+            "closed_deal_review.why_closed_questionable",
+            5,
+            errors,
+        )
+        may_be_valid = _expect_max_list_length(
+            closed_review.get("why_closed_may_be_valid"),
+            "closed_deal_review.why_closed_may_be_valid",
+            5,
+            errors,
+        )
+        if applicable is True:
+            if closed_review.get("closed_reason_type") == "not_applicable":
+                errors.append("closed_deal_review.closed_reason_type must not be not_applicable when applicable=true")
+            if closed_review.get("rop_decision") == "not_applicable":
+                errors.append("closed_deal_review.rop_decision must not be not_applicable when applicable=true")
+            if not questionable and not may_be_valid:
+                errors.append(
+                    "closed_deal_review needs at least one reason in why_closed_questionable or why_closed_may_be_valid when applicable=true"
+                )
 
     resource_control = _expect_dict(analysis.get("resource_control"), "resource_control", errors)
     if resource_control:
