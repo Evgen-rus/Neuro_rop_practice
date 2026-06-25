@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
+from openai_api.audio.build_lead_transcript_context import build_all_lead_transcript_context
 from openai_api.change_detection.decision_engine import (
     ERROR,
     FIRST_FULL_ANALYSIS,
@@ -60,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lead-id", required=True, help="Lead ID to check")
     parser.add_argument("--lead-root", default=str(DEFAULT_LEAD_WORKSPACE_ROOT), help="Root folder with lead workspaces")
     parser.add_argument("--db-path", default=None, help="SQLite path. Default: ROP_DB_PATH or reports/rop_assistant/rop_assistant.sqlite")
-    parser.add_argument("--transcript", default="latest", help="Transcript path, 'latest', or 'none'. Default: latest if exists, else none.")
+    parser.add_argument("--transcript", default="latest", help="Transcript path, 'all', 'latest', or 'none'. Default: latest if exists, else none.")
     parser.add_argument("--model", default=None, help="Optional OpenAI analysis model passed to analyze_lead.py")
     parser.add_argument("--force-llm", action="store_true", help="Force a full LLM analysis regardless of change detection.")
     parser.add_argument(
@@ -108,6 +109,10 @@ def resolve_transcript_for_snapshot(value: str, current_lead_dir: Path) -> tuple
     if lowered == "latest":
         latest = latest_transcript_or_none(current_lead_dir / "transcripts")
         return latest, str(latest) if latest else "none"
+    if lowered == "all":
+        lead_id = current_lead_dir.name.removeprefix("lead_")
+        path = build_all_lead_transcript_context(current_lead_dir, lead_id)
+        return path, str(path)
 
     path = Path(value)
     if not path.is_absolute():

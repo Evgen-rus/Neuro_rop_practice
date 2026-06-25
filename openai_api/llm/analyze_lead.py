@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
 from openai_api.bitrix_links import bitrix_entity_url
+from openai_api.audio.build_lead_transcript_context import build_all_lead_transcript_context
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.analyze_deal import knowledge_files, read_text
 from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
@@ -32,7 +33,7 @@ DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze lead history and optional transcript with OpenAI")
     parser.add_argument("--lead-id", required=True, help="Lead ID to analyze")
-    parser.add_argument("--transcript", default="latest", help="Transcript path, 'latest', or 'none'. Default: latest if exists.")
+    parser.add_argument("--transcript", default="latest", help="Transcript path, 'all', 'latest', or 'none'. Default: latest if exists.")
     parser.add_argument("--lead-root", default=str(DEFAULT_LEAD_WORKSPACE_ROOT), help="Root folder with prepared lead workspaces.")
     parser.add_argument("--knowledge-dir", default=str(DEFAULT_KNOWLEDGE_DIR), help="Processed OKF knowledge folder.")
     parser.add_argument("--model", default=ANALYSIS_MODEL, help="OpenAI analysis model")
@@ -55,10 +56,14 @@ def latest_transcript_or_none(transcripts_dir: Path) -> Path | None:
 
 
 def resolve_transcript(value: str, lead_dir: Path) -> Path | None:
-    if value.lower() == "none":
+    lowered = value.lower()
+    if lowered == "none":
         return None
-    if value.lower() == "latest":
+    if lowered == "latest":
         return latest_transcript_or_none(lead_dir / "transcripts")
+    if lowered == "all":
+        lead_id = lead_dir.name.removeprefix("lead_")
+        return build_all_lead_transcript_context(lead_dir, lead_id)
     path = Path(value)
     if not path.is_absolute():
         path = PROJECT_ROOT / path

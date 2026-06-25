@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from openai_api.bitrix_links import bitrix_entity_url
+from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--transcript",
         default="latest",
-        help="Transcript path, 'latest', or 'none'. Default: latest transcript in deal workspace.",
+        help="Transcript path, 'all', 'latest', or 'none'. Default: latest transcript in deal workspace.",
     )
     parser.add_argument(
         "--deal-root",
@@ -77,10 +78,14 @@ def latest_transcript(transcripts_dir: Path) -> Path:
 
 
 def resolve_transcript(value: str, deal_dir: Path) -> Path | None:
-    if value.lower() == "none":
+    lowered = value.lower()
+    if lowered == "none":
         return None
-    if value.lower() == "latest":
+    if lowered == "latest":
         return latest_transcript(deal_dir / "transcripts")
+    if lowered == "all":
+        deal_id = deal_dir.name.removeprefix("deal_")
+        return build_all_deal_transcript_context(deal_dir, deal_id)
 
     path = Path(value)
     if not path.is_absolute():
