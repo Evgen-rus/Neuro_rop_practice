@@ -117,7 +117,64 @@ def normalize_activity(activity: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+def normalize_activities_from_response(
+    activities_response: dict[str, Any] | None,
+    details: dict[str, Any] | None,
+    *,
+    source: str,
+    owner_type_id: str,
+    owner_id: str,
+) -> list[dict[str, Any]]:
+    activities = result_items(activities_response)
+    details = details or {}
+    normalized = []
+    for activity in activities:
+        activity_id = str(activity.get("ID") or "")
+        detail_container = details.get(activity_id)
+        detail = {}
+        if isinstance(detail_container, dict):
+            detail = result_item(detail_container)
+        row = normalize_activity({**activity, **detail} if detail else activity)
+        row["source"] = source
+        row["owner_type_id"] = owner_type_id
+        row["owner_id"] = owner_id
+        normalized.append(row)
+    return normalized
+
+
+def normalize_activities(
+    bundle: dict[str, Any],
+    *,
+    source: str = "deal",
+    owner_type_id: str = "2",
+    owner_id: str | None = None,
+    include_source_lead: bool = False,
+) -> list[dict[str, Any]]:
+    normalized = normalize_activities_from_response(
+        bundle.get("activities"),
+        bundle.get("activity_details"),
+        source=source,
+        owner_type_id=owner_type_id,
+        owner_id=str(owner_id or bundle.get("deal_id") or bundle.get("lead_id") or ""),
+    )
+
+    source_lead = bundle.get("source_lead") or {}
+    source_lead_id = str(source_lead.get("lead_id") or "")
+    if include_source_lead and source_lead:
+        normalized.extend(
+            normalize_activities_from_response(
+                source_lead.get("activities"),
+                source_lead.get("activity_details"),
+                source="source_lead",
+                owner_type_id="1",
+                owner_id=source_lead_id,
+            )
+        )
+
+    return sorted(normalized, key=lambda item: (item["created"], item["deadline"], item["id"], item["source"]))
+
+
+def normalize_deal_activities_only(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     activities = result_items(bundle.get("activities"))
     details = bundle.get("activity_details", {})
     merged: list[dict[str, Any]] = []
@@ -259,13 +316,21 @@ def transcript_snapshot(transcript_path: Path | None) -> dict[str, Any] | None:
 
 def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None = None) -> dict[str, Any]:
     deal = raw_bundle.get("deal", {}).get("item", {}) or {}
-    activities = normalize_activities(raw_bundle)
+    activities = normalize_activities(
+        raw_bundle,
+        source="deal",
+        owner_type_id="2",
+        owner_id=str(deal.get("ID") or raw_bundle.get("deal_id") or ""),
+        include_source_lead=True,
+    )
     comments = normalize_timeline_comments(raw_bundle)
     product_rows = normalize_product_rows(raw_bundle)
     invoices = normalize_invoice_attempts(raw_bundle)
     file_refs = normalize_file_refs(raw_bundle)
     commercial_file_refs = normalize_commercial_file_refs(raw_bundle)
     transcript = transcript_snapshot(transcript_path)
+    source_lead = raw_bundle.get("source_lead") or {}
+    source_lead_item = source_lead.get("lead", {}).get("item", {}) if isinstance(source_lead, dict) else {}
 
     snapshot = {
         "entity_type": "deal",
@@ -281,6 +346,16 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
             "moved_by_id": str(deal.get("MOVED_BY_ID") or ""),
             "closed": str(deal.get("CLOSED") or ""),
             "date_create": deal.get("DATE_CREATE") or "",
+            "lead_id": str(deal.get("LEAD_ID") or ""),
+        },
+        "source_lead": {
+            "id": str(source_lead_item.get("ID") or source_lead.get("lead_id") or ""),
+            "title_hash": text_hash(source_lead_item.get("TITLE")),
+            "status_id": str(source_lead_item.get("STATUS_ID") or ""),
+            "status_semantic_id": str(source_lead_item.get("STATUS_SEMANTIC_ID") or ""),
+            "assigned_by_id": str(source_lead_item.get("ASSIGNED_BY_ID") or ""),
+            "date_create": source_lead_item.get("DATE_CREATE") or "",
+            "date_closed": source_lead_item.get("DATE_CLOSED") or "",
         },
         "metadata": {
             "date_modify": deal.get("DATE_MODIFY") or "",
@@ -313,7 +388,12 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
 
 def build_lead_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None = None) -> dict[str, Any]:
     lead = result_item(raw_bundle.get("lead")) or {}
-    activities = normalize_activities(raw_bundle)
+    activities = normalize_activities(
+        raw_bundle,
+        source="lead",
+        owner_type_id="1",
+        owner_id=str(lead.get("ID") or raw_bundle.get("lead_id") or ""),
+    )
     comments = normalize_timeline_comments(raw_bundle)
     file_refs = normalize_file_refs(raw_bundle)
     commercial_file_refs = normalize_commercial_file_refs(raw_bundle)

@@ -26,6 +26,7 @@ from setup import BASE_DIR, MSK_TZ, get_logger
 DEFAULT_DEAL_IDS = ["18507", "18493"]
 DEFAULT_OUTPUT_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEAL_OWNER_TYPE_ID = 2
+LEAD_OWNER_TYPE_ID = 1
 
 logger = get_logger(__file__)
 
@@ -103,19 +104,25 @@ def fetch_users(client: BitrixReadOnlyClient, ids: list[Any]) -> dict[str, Any]:
     return users
 
 
-def fetch_timeline_comments(client: BitrixReadOnlyClient, deal_id: str) -> list[dict[str, Any]]:
+def fetch_timeline_comments(
+    client: BitrixReadOnlyClient,
+    entity_id: str,
+    *,
+    entity_type: str = "deal",
+    owner_type_id: int = DEAL_OWNER_TYPE_ID,
+) -> list[dict[str, Any]]:
     attempts = [
         {
             "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE": "deal", "ENTITY_ID": deal_id},
+            "filter": {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id},
         },
         {
             "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"OWNER_TYPE_ID": DEAL_OWNER_TYPE_ID, "OWNER_ID": deal_id},
+            "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": entity_id},
         },
         {
             "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE_ID": DEAL_OWNER_TYPE_ID, "ENTITY_ID": deal_id},
+            "filter": {"ENTITY_TYPE_ID": owner_type_id, "ENTITY_ID": entity_id},
         },
     ]
 
@@ -133,13 +140,17 @@ def fetch_timeline_comments(client: BitrixReadOnlyClient, deal_id: str) -> list[
     return results
 
 
-def fetch_activities(client: BitrixReadOnlyClient, deal_id: str) -> dict[str, Any]:
+def fetch_activities_for_owner(client: BitrixReadOnlyClient, owner_type_id: int, owner_id: str) -> dict[str, Any]:
     payload = {
         "order": {"START_TIME": "ASC", "DEADLINE": "ASC", "ID": "ASC"},
-        "filter": {"OWNER_TYPE_ID": DEAL_OWNER_TYPE_ID, "OWNER_ID": deal_id},
+        "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": owner_id},
         "select": ["*"],
     }
     return client.safe_list_all("crm.activity.list", payload)
+
+
+def fetch_activities(client: BitrixReadOnlyClient, deal_id: str) -> dict[str, Any]:
+    return fetch_activities_for_owner(client, DEAL_OWNER_TYPE_ID, deal_id)
 
 
 def fetch_activity_details(client: BitrixReadOnlyClient, activities: list[dict[str, Any]]) -> dict[str, Any]:
@@ -150,6 +161,31 @@ def fetch_activity_details(client: BitrixReadOnlyClient, activities: list[dict[s
             continue
         details[str(activity_id)] = client.safe_call("crm.activity.get", {"id": activity_id})
     return details
+
+
+def fetch_source_lead_context(client: BitrixReadOnlyClient, lead_id: Any) -> dict[str, Any] | None:
+    if not lead_id:
+        return None
+
+    lead_id = str(lead_id)
+    lead_response = fetch_entity_by_id(client, "crm.lead.get", lead_id)
+    activities_response = fetch_activities_for_owner(client, LEAD_OWNER_TYPE_ID, lead_id)
+    activities = activities_response.get("items", [])
+    activity_details = fetch_activity_details(client, activities)
+    timeline_comments = fetch_timeline_comments(
+        client,
+        lead_id,
+        entity_type="lead",
+        owner_type_id=LEAD_OWNER_TYPE_ID,
+    )
+
+    return {
+        "lead_id": lead_id,
+        "lead": {"response": lead_response, "item": get_result(lead_response) or {}},
+        "activities": activities_response,
+        "activity_details": activity_details,
+        "timeline_comments": timeline_comments,
+    }
 
 
 def extract_refs(value: Any, path: str = "") -> list[dict[str, Any]]:
@@ -199,6 +235,7 @@ def fetch_deal_bundle(
     activities = activities_response.get("items", [])
     activity_details = fetch_activity_details(client, activities)
     timeline_comments = fetch_timeline_comments(client, deal_id)
+    source_lead = fetch_source_lead_context(client, deal.get("LEAD_ID"))
 
     user_ids = [
         deal.get("ASSIGNED_BY_ID"),
@@ -214,6 +251,23 @@ def fetch_deal_bundle(
                 activity.get("EDITOR_ID"),
             ]
         )
+    if source_lead:
+        source_lead_item = source_lead.get("lead", {}).get("item", {})
+        user_ids.extend(
+            [
+                source_lead_item.get("ASSIGNED_BY_ID"),
+                source_lead_item.get("CREATED_BY_ID"),
+                source_lead_item.get("MODIFY_BY_ID"),
+            ]
+        )
+        for activity in source_lead.get("activities", {}).get("items", []):
+            user_ids.extend(
+                [
+                    activity.get("RESPONSIBLE_ID"),
+                    activity.get("AUTHOR_ID"),
+                    activity.get("EDITOR_ID"),
+                ]
+            )
 
     references_source = {
         "deal": deal,
@@ -222,6 +276,7 @@ def fetch_deal_bundle(
         "activities": activities,
         "activity_details": activity_details,
         "timeline_comments": timeline_comments,
+        "source_lead": source_lead,
     }
 
     stage_id = str(deal.get("STAGE_ID") or "")
@@ -242,6 +297,7 @@ def fetch_deal_bundle(
             "company": client.safe_call("crm.company.fields"),
         },
         "product_rows": client.safe_call("crm.deal.productrows.get", {"id": deal_id}),
+        "source_lead": source_lead,
         "activities": activities_response,
         "activity_details": activity_details,
         "timeline_comments": timeline_comments,

@@ -182,15 +182,49 @@ def activity_type(activity: dict[str, Any]) -> str:
     return "activity"
 
 
-def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    activities = result_items(bundle.get("activities"))
-    details = bundle.get("activity_details", {})
+def activity_source_label(source: str, source_id: str | None = None) -> str:
+    return f"{source}:{source_id}" if source_id else source
+
+
+def merge_activities(
+    activities_response: dict[str, Any] | None,
+    details: dict[str, Any] | None,
+    *,
+    source: str,
+    source_id: str | None = None,
+) -> list[dict[str, Any]]:
+    activities = result_items(activities_response)
+    details = details or {}
     merged = []
     for activity in activities:
         activity_id = str(activity.get("ID") or "")
         detail_container = details.get(activity_id)
         detail = result_item(detail_container) if isinstance(detail_container, dict) else {}
-        merged.append({**activity, **detail} if detail else activity)
+        item = {**activity, **detail} if detail else dict(activity)
+        item["_source"] = activity_source_label(source, source_id)
+        merged.append(item)
+    return merged
+
+
+def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    merged = merge_activities(
+        bundle.get("activities"),
+        bundle.get("activity_details"),
+        source="deal",
+        source_id=str(bundle.get("deal_id") or ""),
+    )
+
+    source_lead = bundle.get("source_lead") or {}
+    source_lead_id = str(source_lead.get("lead_id") or "")
+    if source_lead:
+        merged.extend(
+            merge_activities(
+                source_lead.get("activities"),
+                source_lead.get("activity_details"),
+                source="source_lead",
+                source_id=source_lead_id,
+            )
+        )
     return sorted(
         merged,
         key=lambda item: (
@@ -202,8 +236,24 @@ def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 def timeline_comments(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for attempt in bundle.get("timeline_comments") or []:
-        rows.extend(result_items(attempt))
+    seen = set()
+    for source, attempts in (
+        ("deal", bundle.get("timeline_comments") or []),
+        ("source_lead", (bundle.get("source_lead") or {}).get("timeline_comments") or []),
+    ):
+        for attempt in attempts:
+            for item in result_items(attempt):
+                identity = (
+                    str(item.get("ID") or ""),
+                    str(item.get("CREATED") or item.get("DATE_CREATE") or ""),
+                    clean_text(item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION"), 500),
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                row = dict(item)
+                row["_source"] = source
+                rows.append(row)
     return sorted(rows, key=lambda item: (item.get("CREATED") or "", int(item.get("ID") or 0)))
 
 
@@ -336,7 +386,10 @@ def comments_section(comments: list[dict[str, Any]], limit: int = 10) -> list[st
         text = clean_text(item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION"), 700)
         if not text:
             continue
-        rows.append(f"- {item.get('CREATED') or '-'} comment_id={item.get('ID') or '-'} author={item.get('AUTHOR_ID') or '-'}: {text}")
+        rows.append(
+            f"- {item.get('CREATED') or '-'} source={item.get('_source') or 'deal'} "
+            f"comment_id={item.get('ID') or '-'} author={item.get('AUTHOR_ID') or '-'}: {text}"
+        )
     return rows or ["- Значимые комментарии не найдены."]
 
 
@@ -365,7 +418,8 @@ def commercial_section(bundle: dict[str, Any], activities: list[dict[str, Any]])
     for item in activities:
         if contains_keywords(item, COMMERCIAL_KEYWORDS):
             rows.append(
-                f"- {item.get('START_TIME') or item.get('CREATED') or '-'} {activity_type(item)} id={item.get('ID')}: "
+                f"- {item.get('START_TIME') or item.get('CREATED') or '-'} source={item.get('_source') or 'deal'} "
+                f"{activity_type(item)} id={item.get('ID')}: "
                 f"{clean_text(item.get('SUBJECT') or item.get('DESCRIPTION'), 260)}"
             )
     for ref in bundle.get("file_and_recording_refs") or []:
@@ -432,12 +486,12 @@ def compact_call_rows(calls: list[dict[str, Any]], transcripts_dir: Path | None 
         rows.append("- Транскрипций в workspace: 0")
     rows.append("- Последний meaningful contact: не определен автоматически; см. комментарии и транскрипт.")
     rows.append("")
-    rows.append("| Дата | ID | Тема | Статус |")
-    rows.append("|---|---:|---|---|")
-    for item in calls[-5:]:
+    rows.append("| Дата | Источник | ID | Тема | Статус |")
+    rows.append("|---|---|---:|---|---|")
+    for item in calls[-8:]:
         status = "завершено" if str(item.get("COMPLETED", "")).upper() in ("Y", "1", "TRUE") else "открыто/неясно"
         rows.append(
-            f"| {md_escape(item.get('START_TIME') or item.get('CREATED'))} | {md_escape(item.get('ID'))} | "
+            f"| {md_escape(item.get('START_TIME') or item.get('CREATED'))} | {md_escape(item.get('_source') or 'deal')} | {md_escape(item.get('ID'))} | "
             f"{md_escape(item.get('SUBJECT'))} | {status} |"
         )
     return rows
@@ -454,12 +508,12 @@ def significant_activities(activities: list[dict[str, Any]], limit: int = 10) ->
 
 
 def activity_rows(items: list[dict[str, Any]]) -> list[str]:
-    rows = ["| Дата | Тип | ID | Тема | Статус |", "|---|---|---:|---|---|"]
+    rows = ["| Дата | Источник | Тип | ID | Тема | Статус |", "|---|---|---|---:|---|---|"]
     for item in items:
         status = "завершено" if str(item.get("COMPLETED", "")).upper() in ("Y", "1", "TRUE") else "открыто/неясно"
         rows.append(
             f"| {md_escape(item.get('START_TIME') or item.get('CREATED') or item.get('DEADLINE'))} | "
-            f"{activity_type(item)} | {md_escape(item.get('ID'))} | "
+            f"{md_escape(item.get('_source') or 'deal')} | {activity_type(item)} | {md_escape(item.get('ID'))} | "
             f"{md_escape(clean_text(item.get('SUBJECT') or item.get('DESCRIPTION'), 180))} | {status} |"
         )
     return rows if len(rows) > 2 else ["- Значимые активности не найдены."]
@@ -519,6 +573,7 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
         "",
         f"- Название: {clean_text(deal.get('TITLE')) or '-'}",
         f"- ID сделки: {deal_id}",
+        f"- Исходный лид: {deal.get('LEAD_ID') or '-'}",
         f"- Воронка: {pipeline.get('name') or deal.get('CATEGORY_ID') or '-'}",
         f"- Этап: {stage.get('name') or deal.get('STAGE_ID') or '-'} (`{deal.get('STAGE_ID') or '-'}`)",
         f"- Сумма: {deal.get('OPPORTUNITY') or '-'} {deal.get('CURRENCY_ID') or ''}".rstrip(),

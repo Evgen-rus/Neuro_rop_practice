@@ -124,14 +124,49 @@ def activity_type(activity: dict[str, Any]) -> str:
     return "activity"
 
 
-def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    activities = result_items(bundle.get("activities"))
-    details = bundle.get("activity_details", {})
+def activity_source_label(source: str, source_id: str | None = None) -> str:
+    return f"{source}:{source_id}" if source_id else source
+
+
+def merge_activities(
+    activities_response: dict[str, Any] | None,
+    details: dict[str, Any] | None,
+    *,
+    source: str,
+    source_id: str | None = None,
+) -> list[dict[str, Any]]:
+    activities = result_items(activities_response)
+    details = details or {}
     merged = []
     for activity in activities:
         activity_id = str(activity.get("ID") or "")
-        detail = result_item(details.get(activity_id, {}).get("response") if isinstance(details.get(activity_id), dict) else None)
-        merged.append({**activity, **detail} if detail else activity)
+        detail_container = details.get(activity_id)
+        detail = result_item(detail_container) if isinstance(detail_container, dict) else {}
+        item = {**activity, **detail} if detail else dict(activity)
+        item["_source"] = activity_source_label(source, source_id)
+        merged.append(item)
+    return merged
+
+
+def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    merged = merge_activities(
+        bundle.get("activities"),
+        bundle.get("activity_details"),
+        source="deal",
+        source_id=str(bundle.get("deal_id") or ""),
+    )
+
+    source_lead = bundle.get("source_lead") or {}
+    source_lead_id = str(source_lead.get("lead_id") or "")
+    if source_lead:
+        merged.extend(
+            merge_activities(
+                source_lead.get("activities"),
+                source_lead.get("activity_details"),
+                source="source_lead",
+                source_id=source_lead_id,
+            )
+        )
 
     return sorted(
         merged,
@@ -143,11 +178,26 @@ def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def timeline_comment_items(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    for attempt in bundle.get("timeline_comments", []):
-        items = result_items(attempt)
-        if items:
-            return items
-    return []
+    rows = []
+    seen = set()
+    for source, attempts in (
+        ("deal", bundle.get("timeline_comments", [])),
+        ("source_lead", (bundle.get("source_lead") or {}).get("timeline_comments", [])),
+    ):
+        for attempt in attempts or []:
+            for item in result_items(attempt):
+                identity = (
+                    str(item.get("ID") or ""),
+                    str(item.get("CREATED") or item.get("DATE_CREATE") or ""),
+                    clean_text(item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION"), 500),
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                row = dict(item)
+                row["_source"] = source
+                rows.append(row)
+    return sorted(rows, key=lambda item: (item.get("CREATED") or item.get("DATE_CREATE") or "", int(item.get("ID") or 0)))
 
 
 def extract_urls_from_text(value: Any) -> list[str]:
@@ -242,6 +292,13 @@ def find_audio_refs(bundle: dict[str, Any]) -> list[dict[str, Any]]:
         path = str(ref.get("path") or "")
         if "ССЫЛКА НА ЗАПИСЬ" in context or "ЗАПИС" in context or ("COMMENTS" in path and "disk.yandex.ru" in url):
             refs.append({"path": ref.get("path"), "summary": readable_value(ref.get("url"), 300), "raw": ref})
+    source_lead_item = (bundle.get("source_lead") or {}).get("lead", {}).get("item", {})
+    for ref in walk_text_urls(source_lead_item, "source_lead.lead.item"):
+        context = clean_text(ref.get("context")).upper()
+        url = str(ref.get("url") or "")
+        path = str(ref.get("path") or "")
+        if "ССЫЛКА НА ЗАПИСЬ" in context or "ЗАПИС" in context or ("COMMENTS" in path and "disk.yandex.ru" in url):
+            refs.append({"path": ref.get("path"), "summary": readable_value(ref.get("url"), 300), "raw": ref})
     return refs
 
 
@@ -274,16 +331,16 @@ def choose_next_step(bundle: dict[str, Any]) -> str:
 
 
 def activity_table(items: list[dict[str, Any]], max_description: int = 180) -> list[str]:
-    lines = ["| Дата | Тип | ID | Тема | Статус |", "|---|---:|---:|---|---|"]
+    lines = ["| Дата | Источник | Тип | ID | Тема | Статус |", "|---|---|---:|---:|---|---|"]
     for item in items:
         when = item.get("START_TIME") or item.get("CREATED") or item.get("DEADLINE") or "-"
         status = "завершено" if str(item.get("COMPLETED", "")).upper() in ("Y", "1", "TRUE") else "открыто/неясно"
         subject = item.get("SUBJECT") or item.get("DESCRIPTION") or ""
         lines.append(
-            f"| {md_escape(when)} | {activity_type(item)} | {md_escape(item.get('ID'))} | {md_escape(clean_text(subject, max_description))} | {status} |"
+            f"| {md_escape(when)} | {md_escape(item.get('_source') or 'deal')} | {activity_type(item)} | {md_escape(item.get('ID'))} | {md_escape(clean_text(subject, max_description))} | {status} |"
         )
     if len(lines) == 2:
-        lines.append("| - | - | - | Не найдено | - |")
+        lines.append("| - | - | - | - | Не найдено | - |")
     return lines
 
 
@@ -339,7 +396,7 @@ def audio_status_label(status: str) -> str:
 
 def call_table(items: list[dict[str, Any]], manifest: dict[str, Any]) -> list[str]:
     audio_by_id = audio_status_by_activity(manifest)
-    lines = ["| Дата | Тип | ID | Тема | Статус | Аудио |", "|---|---:|---:|---|---|---|"]
+    lines = ["| Дата | Источник | Тип | ID | Тема | Статус | Аудио |", "|---|---|---:|---:|---|---|---|"]
     for item in items:
         when = item.get("START_TIME") or item.get("CREATED") or item.get("DEADLINE") or "-"
         status = "завершено" if str(item.get("COMPLETED", "")).upper() in ("Y", "1", "TRUE") else "открыто/неясно"
@@ -347,28 +404,31 @@ def call_table(items: list[dict[str, Any]], manifest: dict[str, Any]) -> list[st
         activity_id = str(item.get("ID") or "")
         audio_status = audio_by_id.get(activity_id, "не проверено")
         lines.append(
-            f"| {md_escape(when)} | {activity_type(item)} | {md_escape(activity_id)} | {md_escape(clean_text(subject, 180))} | {status} | {md_escape(audio_status)} |"
+            f"| {md_escape(when)} | {md_escape(item.get('_source') or 'deal')} | {activity_type(item)} | {md_escape(activity_id)} | {md_escape(clean_text(subject, 180))} | {status} | {md_escape(audio_status)} |"
         )
     if len(lines) == 2:
-        lines.append("| - | - | - | Не найдено | - | - |")
+        lines.append("| - | - | - | - | Не найдено | - | - |")
     return lines
 
 
 def audio_section(manifest: dict[str, Any]) -> list[str]:
-    lines = ["| Звонок | Статус | Файл / причина |", "|---:|---|---|"]
+    lines = ["| Звонок | Источник | Статус | Файл / причина |", "|---:|---|---|---|"]
     for call in manifest.get("calls", []):
         activity_id = call.get("activity_id") or "-"
+        source = call.get("source_label") or (
+            f"{call.get('source')}:{call.get('owner_id')}" if call.get("source") and call.get("owner_id") else call.get("source")
+        ) or "-"
         downloads = call.get("downloads") or []
         if not downloads:
-            lines.append(f"| {activity_id} | {md_escape(audio_status_label(call.get('status') or ''))} | - |")
+            lines.append(f"| {activity_id} | {md_escape(source)} | {md_escape(audio_status_label(call.get('status') or ''))} | - |")
             continue
         for item in downloads:
             detail = item.get("local_path") or item.get("disk_file_get_error") or item.get("error") or "-"
             if item.get("url"):
                 detail = f"{detail}; вручную: [скачать]({item.get('url')})"
-            lines.append(f"| {activity_id} | {md_escape(audio_status_label(item.get('status') or ''))} | {md_escape(detail)} |")
+            lines.append(f"| {activity_id} | {md_escape(source)} | {md_escape(audio_status_label(item.get('status') or ''))} | {md_escape(detail)} |")
     if len(lines) == 2:
-        lines.append("| - | не проверено | Манифест скачивания аудио не найден |")
+        lines.append("| - | - | не проверено | Манифест скачивания аудио не найден |")
     return lines
 
 
@@ -404,14 +464,14 @@ def email_text_section(items: list[dict[str, Any]]) -> list[str]:
 
 
 def comments_section(comments: list[dict[str, Any]]) -> list[str]:
-    lines = ["| Дата | Автор | Комментарий |", "|---|---:|---|"]
+    lines = ["| Дата | Источник | Автор | Комментарий |", "|---|---|---:|---|"]
     for item in comments:
         text = item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION") or item.get("FILES")
         lines.append(
-            f"| {md_escape(item.get('CREATED') or item.get('DATE_CREATE'))} | {md_escape(item.get('AUTHOR_ID') or item.get('CREATED_BY'))} | {md_escape(clean_text(text, 300))} |"
+            f"| {md_escape(item.get('CREATED') or item.get('DATE_CREATE'))} | {md_escape(item.get('_source') or 'deal')} | {md_escape(item.get('AUTHOR_ID') or item.get('CREATED_BY'))} | {md_escape(clean_text(text, 300))} |"
         )
     if len(lines) == 2:
-        lines.append("| - | - | Комментарии таймлайна не найдены или метод недоступен текущему вебхуку |")
+        lines.append("| - | - | - | Комментарии таймлайна не найдены или метод недоступен текущему вебхуку |")
     return lines
 
 
@@ -452,6 +512,7 @@ def build_report(bundle: dict[str, Any], audio_manifest: dict[str, Any] | None =
         "",
         f"- Название: {clean_text(deal.get('TITLE')) or '-'}",
         f"- ID сделки: {deal.get('ID') or bundle.get('deal_id')}",
+        f"- Исходный лид: {deal.get('LEAD_ID') or '-'}",
         f"- Воронка: {pipeline.get('name') or deal.get('CATEGORY_ID') or '-'}",
         f"- Этап: {stage.get('name') or deal.get('STAGE_ID') or '-'} (`{deal.get('STAGE_ID') or '-'}`)",
         f"- Сумма: {deal.get('OPPORTUNITY') or '-'} {deal.get('CURRENCY_ID') or ''}".rstrip(),

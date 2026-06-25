@@ -1,4 +1,4 @@
-"""
+r"""
 Test helper. Try to download call audio files referenced by Bitrix24 CRM call activities.
 
 This script is read-only for Bitrix24. It writes local audio files and a JSON
@@ -62,25 +62,51 @@ def is_call_activity(activity: dict[str, Any]) -> bool:
 
 def detail_for(bundle: dict[str, Any], activity_id: str) -> dict[str, Any]:
     detail_container = bundle.get("activity_details", {}).get(activity_id, {})
-    return result_item(detail_container.get("response") if isinstance(detail_container, dict) else None)
+    return result_item(detail_container) if isinstance(detail_container, dict) else {}
 
 
-def call_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+def call_activities_from_bundle(bundle: dict[str, Any], *, source: str, owner_type_id: str, owner_id: str) -> list[dict[str, Any]]:
     rows = []
     for activity in bundle.get("activities", {}).get("items", []):
         if not is_call_activity(activity):
             continue
         activity_id = str(activity.get("ID") or "")
         detail = detail_for(bundle, activity_id)
-        rows.append({**activity, **detail} if detail else activity)
+        row = {**activity, **detail} if detail else dict(activity)
+        row["_source"] = source
+        row["_owner_type_id"] = owner_type_id
+        row["_owner_id"] = owner_id
+        rows.append(row)
     return rows
+
+
+def call_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = call_activities_from_bundle(
+        bundle,
+        source="deal",
+        owner_type_id="2",
+        owner_id=str(bundle.get("deal_id") or ""),
+    )
+    source_lead = bundle.get("source_lead") or {}
+    source_lead_id = str(source_lead.get("lead_id") or "")
+    if source_lead:
+        rows.extend(
+            call_activities_from_bundle(
+                source_lead,
+                source="source_lead",
+                owner_type_id="1",
+                owner_id=source_lead_id,
+            )
+        )
+    return sorted(rows, key=lambda item: (item.get("START_TIME") or item.get("CREATED") or "", int(item.get("ID") or 0)))
 
 
 def timeline_items(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for attempt in bundle.get("timeline_comments", []):
-        if isinstance(attempt, dict):
-            rows.extend(item for item in attempt.get("items", []) if isinstance(item, dict))
+    for current in [bundle, bundle.get("source_lead") or {}]:
+        for attempt in current.get("timeline_comments", []):
+            if isinstance(attempt, dict):
+                rows.extend(item for item in attempt.get("items", []) if isinstance(item, dict))
     return rows
 
 
@@ -294,6 +320,10 @@ def process_call(
     candidates = call_id_candidates(activity, timeline)
     row: dict[str, Any] = {
         "activity_id": activity_id,
+        "source": activity.get("_source") or "deal",
+        "source_label": f"{activity.get('_source') or 'deal'}:{activity.get('_owner_id')}" if activity.get("_owner_id") else activity.get("_source") or "deal",
+        "owner_type_id": activity.get("_owner_type_id"),
+        "owner_id": activity.get("_owner_id"),
         "subject": activity.get("SUBJECT"),
         "start_time": activity.get("START_TIME") or activity.get("CREATED"),
         "origin_id": activity.get("ORIGIN_ID"),
