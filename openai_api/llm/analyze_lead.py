@@ -76,7 +76,18 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
     okf_text = "\n\n".join(f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections)
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
-Проанализируй лид и текущее состояние обработки. Главный вопрос: является ли лид рабочим, что уже сделано, есть ли риск потери лида и что нужно сделать менеджеру дальше.
+Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
+Главный результат анализа — управленческое действие РОПа:
+1. что проверить;
+2. какое поручение отправить менеджеру;
+3. какой факт должен появиться в CRM;
+4. до какого срока проверить выполнение.
+
+Не делай общий AI-отчет.
+Не ограничивайся советами вроде "проконтролировать", "обратить внимание", "связаться с клиентом".
+Каждая рекомендация должна иметь срок, ожидаемый CRM-факт, критерий выполнения и evidence из истории.
+
+Проанализируй лид и текущее состояние обработки. Главный вопрос: является ли лид рабочим, что уже сделано, есть ли риск потери лида и какое поручение РОП должен отправить менеджеру.
 
 Верни только валидный JSON без markdown.
 
@@ -111,6 +122,9 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
 5. Готовые тексты должны быть деловыми, конкретными и готовыми к отправке.
 6. Не используй служебные пометки и плейсхолдеры вроде "ДОБАВИТЬ", "{{данные}}", "todo", "tbd" в готовых текстах.
 7. Если содержательного контакта не было, обязательно примени рекомендацию по дозвону из OKF и заполни call_attempt_recommendation.
+8. Не пиши "лид плохой", если не было нормального дозвона, альтернативного канала или следующего шага. В таком случае отделяй проблему обработки от качества лида.
+9. Квалификацию A/B/C/D/E давай только по фактам BANT, сроку, ЛПР, производству и техническим данным. Если данных мало, ставь unknown и фиксируй data_gap в loss_diagnosis.
+10. Рекомендация должна быть управленческой: что РОП поручает менеджеру и какой факт должен появиться в CRM.
 
 <verification_loop>
 Перед финальным JSON проверь:
@@ -136,10 +150,30 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
     "meaningful_contact": true,
     "summary": "что уже произошло по коммуникациям"
   }},
+  "rop_manager_message_block": {{
+    "check_for_rop": "что конкретно РОПу проверить по лиду",
+    "why_it_matters": "почему это влияет на потерю лида, скорость обработки или деньги",
+    "message_to_manager": "готовый текст поручения, который РОП может отправить менеджеру",
+    "expected_crm_update": "какой факт должен появиться в CRM после действия менеджера",
+    "deadline": "YYYY-MM-DD или null",
+    "success_condition": "как понять, что поручение выполнено",
+    "evidence": [
+      "факт из истории, звонка, комментария, задачи, статуса или CRM"
+    ]
+  }},
   "main_risk": {{
     "risk_level": "low|medium|medium_high|high",
     "risk_type": "тип риска",
     "description": "описание риска"
+  }},
+  "loss_diagnosis": {{
+    "lead_quality": "good|weak|bad|unknown",
+    "processing_quality": "good|weak|bad|unknown",
+    "source_signal": "good_source|weak_source|unknown",
+    "call_attempt_quality": "enough|not_enough|wrong_channel|unknown",
+    "next_step_quality": "clear|missing|too_generic|unknown",
+    "final_verdict": "bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|unknown",
+    "evidence": []
   }},
   "manager_quality": {{
     "what_done_well": [],
@@ -160,11 +194,11 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
   "manager_action_block": {{
     "recommended_channel": "phone|email|messenger|crm_task",
     "channel_reason": "почему выбран канал",
-    "goal": "цель касания",
+    "goal": "цель клиентского касания, если менеджеру нужно обратиться к клиенту",
     "primary_text": {{
       "type": "call_script|messenger|email",
       "subject": "тема, если письмо",
-      "text": "готовый текст"
+      "text": "черновик текста клиенту для менеджера"
     }},
     "backup_texts": [
       {{"type": "messenger", "title": "Короткое сообщение", "text": "текст"}},
@@ -231,7 +265,9 @@ def render_cost_section(metadata: dict[str, Any] | None) -> str:
 def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
     lead_state = analysis.get("lead_state", {}) or {}
     activity = analysis.get("activity_summary", {}) or {}
+    rop_manager = analysis.get("rop_manager_message_block", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
+    loss = analysis.get("loss_diagnosis", {}) or {}
     manager_quality = analysis.get("manager_quality", {}) or {}
     call_recommendation = analysis.get("call_attempt_recommendation", {}) or {}
     manager = analysis.get("manager_action_block", {}) or {}
@@ -246,6 +282,17 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     return f"""# Отчет РОПу по лиду {lead_id}
 
 Ссылка в Bitrix: {bitrix_url or 'не указана'}
+
+## Что сделать РОПу сейчас
+
+- Проверить: {rop_manager.get('check_for_rop') or rop.get('text', 'не указано')}
+- Почему это важно: {rop_manager.get('why_it_matters', 'не указано')}
+- Сообщение менеджеру: {rop_manager.get('message_to_manager', 'не указано')}
+- Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
+- Срок контроля: {human_value(rop_manager.get('deadline'))}
+- Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
+- Основание:
+{bullet_list(rop_manager.get('evidence'))}
 
 ## Состояние лида
 
@@ -266,6 +313,19 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 - Уровень: {risk.get('risk_level', 'не указано')}
 - Тип: {risk.get('risk_type', 'не указано')}
 - Описание: {risk.get('description', 'не указано')}
+
+## Диагностика потери лида
+
+- Качество лида: {loss.get('lead_quality', 'не указано')}
+- Качество обработки: {loss.get('processing_quality', 'не указано')}
+- Сигнал источника: {loss.get('source_signal', 'не указано')}
+- Качество дозвона: {loss.get('call_attempt_quality', 'не указано')}
+- Качество следующего шага: {loss.get('next_step_quality', 'не указано')}
+- Вердикт: {loss.get('final_verdict', 'не указано')}
+
+Основание:
+
+{bullet_list(loss.get('evidence'))}
 
 ## Качество работы менеджера
 
@@ -292,7 +352,15 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 
 {bullet_list(call_recommendation.get('next_call_plan'))}
 
-## Что сделать менеджеру
+## Сообщение менеджеру от РОПа
+
+{rop_manager.get('message_to_manager', 'не указано')}
+
+- Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
+- Срок контроля: {human_value(rop_manager.get('deadline'))}
+- Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
+
+## Черновик текста клиенту для менеджера
 
 - Канал: {manager.get('recommended_channel', 'не указано')}
 - Почему: {manager.get('channel_reason', 'не указано')}

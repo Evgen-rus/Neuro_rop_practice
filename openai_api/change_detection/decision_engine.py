@@ -474,6 +474,12 @@ def last_primary_text(last_analysis: dict[str, Any] | None) -> dict[str, Any]:
     return primary if isinstance(primary, dict) else {}
 
 
+def last_rop_manager_message(last_analysis: dict[str, Any] | None) -> dict[str, Any]:
+    analysis = extract_analysis(last_analysis)
+    rop_manager = analysis.get("rop_manager_message_block", {}) if isinstance(analysis, dict) else {}
+    return rop_manager if isinstance(rop_manager, dict) else {}
+
+
 def deal_management_summary(last_analysis: dict[str, Any] | None) -> dict[str, Any]:
     analysis = extract_analysis(last_analysis)
     if not isinstance(analysis, dict):
@@ -497,6 +503,7 @@ def render_mini_recommendation(
     previous_state = previous_state or {}
     last_analysis = previous_state.get("last_analysis")
     primary = last_primary_text(last_analysis)
+    rop_manager = last_rop_manager_message(last_analysis)
     management = deal_management_summary(last_analysis)
     deal_mode = management.get("deal_mode") or {}
     resource_control = management.get("resource_control") or {}
@@ -548,6 +555,18 @@ def render_mini_recommendation(
             ]
         )
 
+    reused_manager_message = "Сохраненного сообщения менеджеру от РОПа нет."
+    if rop_manager.get("message_to_manager"):
+        reused_manager_message = "\n".join(
+            [
+                str(rop_manager.get("message_to_manager") or ""),
+                "",
+                f"Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update') or 'не указан'}",
+                f"Срок контроля: {rop_manager.get('deadline') or 'не указан'}",
+                f"Критерий выполнения: {rop_manager.get('success_condition') or 'не указан'}",
+            ]
+        )
+
     return f"""# Мини-рекомендация по сделке {deal_id}
 
 Статус: {decision.status}
@@ -583,6 +602,10 @@ def render_mini_recommendation(
 
 {bullet_list(rop_checks)}
 
+## Последнее сообщение менеджеру от РОПа
+
+{reused_manager_message}
+
 ## Последний сохраненный текст клиенту
 
 {reused_text}
@@ -599,6 +622,7 @@ def render_lead_mini_recommendation(
     previous_state = previous_state or {}
     last_analysis = previous_state.get("last_analysis")
     primary = last_primary_text(last_analysis)
+    rop_manager = last_rop_manager_message(last_analysis)
     last_report = previous_state.get("last_report_path") or "не указан"
     risk_level = previous_state.get("last_risk_level") or analysis_risk_level(last_analysis, previous_state) or "не указан"
 
@@ -640,6 +664,18 @@ def render_lead_mini_recommendation(
             ]
         )
 
+    reused_manager_message = "Сохраненного сообщения менеджеру от РОПа нет."
+    if rop_manager.get("message_to_manager"):
+        reused_manager_message = "\n".join(
+            [
+                str(rop_manager.get("message_to_manager") or ""),
+                "",
+                f"Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update') or 'не указан'}",
+                f"Срок контроля: {rop_manager.get('deadline') or 'не указан'}",
+                f"Критерий выполнения: {rop_manager.get('success_condition') or 'не указан'}",
+            ]
+        )
+
     return f"""# Мини-рекомендация по лиду {lead_id}
 
 Статус: {decision.status}
@@ -666,6 +702,10 @@ def render_lead_mini_recommendation(
 ## Что проверить РОПу
 
 {bullet_list(rop_checks)}
+
+## Последнее сообщение менеджеру от РОПа
+
+{reused_manager_message}
 
 ## Последний сохраненный текст клиенту
 

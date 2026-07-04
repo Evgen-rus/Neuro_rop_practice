@@ -28,6 +28,7 @@ COMMON_REQUIRED_FIELDS = {
     "manager_quality",
     "call_attempt_recommendation",
     "manager_action_block",
+    "rop_manager_message_block",
     "rop_action",
     "memory_update",
 }
@@ -42,6 +43,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "what_changed",
     "deal_progress",
     "payment_blocker",
+    "money_path_diagnosis",
     "resource_control",
     "shaker_question",
     "competitor_defense_checklist",
@@ -52,6 +54,7 @@ LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "lead_id",
     "lead_state",
     "activity_summary",
+    "loss_diagnosis",
 }
 
 
@@ -130,6 +133,36 @@ def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None
     _expect_dict(analysis.get("call_attempt_recommendation"), "call_attempt_recommendation", errors)
     _expect_dict(analysis.get("rop_action"), "rop_action", errors)
     _expect_dict(analysis.get("memory_update"), "memory_update", errors)
+
+    rop_manager = _expect_dict(
+        analysis.get("rop_manager_message_block"),
+        "rop_manager_message_block",
+        errors,
+    )
+    if rop_manager:
+        for field in (
+            "check_for_rop",
+            "why_it_matters",
+            "message_to_manager",
+            "expected_crm_update",
+            "success_condition",
+        ):
+            _expect_non_empty_text_without_markers(
+                rop_manager.get(field),
+                f"rop_manager_message_block.{field}",
+                errors,
+            )
+        deadline = rop_manager.get("deadline")
+        if deadline is not None and (not isinstance(deadline, str) or not deadline.strip()):
+            errors.append("expected rop_manager_message_block.deadline to be non-empty string or null")
+        evidence = _expect_max_list_length(
+            rop_manager.get("evidence"),
+            "rop_manager_message_block.evidence",
+            7,
+            errors,
+        )
+        if not evidence:
+            errors.append("rop_manager_message_block.evidence must not be empty")
 
     manager_action = _expect_dict(analysis.get("manager_action_block"), "manager_action_block", errors)
     if manager_action:
@@ -296,6 +329,35 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
             if not next_actions:
                 errors.append("payment_blocker.next_actions must not be empty when applicable=true")
 
+    money_path = _expect_dict(analysis.get("money_path_diagnosis"), "money_path_diagnosis", errors)
+    if money_path:
+        _expect_enum(
+            money_path.get("stuck_point"),
+            "money_path_diagnosis.stuck_point",
+            {
+                "source",
+                "call_attempt",
+                "manager",
+                "next_step",
+                "stage",
+                "payment",
+                "client_pause",
+                "unknown",
+            },
+            errors,
+        )
+        _expect_enum(
+            money_path.get("current_owner_of_next_step"),
+            "money_path_diagnosis.current_owner_of_next_step",
+            {"manager", "client", "rop", "finance", "leasing", "unknown"},
+            errors,
+        )
+        for field in ("why_money_is_at_risk", "next_required_fact"):
+            _expect_non_empty_string(money_path.get(field), f"money_path_diagnosis.{field}", errors)
+        evidence = _expect_max_list_length(money_path.get("evidence"), "money_path_diagnosis.evidence", 7, errors)
+        if not evidence:
+            errors.append("money_path_diagnosis.evidence must not be empty")
+
     objection_handling = _expect_dict(analysis.get("objection_handling"), "objection_handling", errors)
     if objection_handling:
         applicable = objection_handling.get("applicable")
@@ -404,6 +466,42 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _require_fields(analysis, LEAD_REQUIRED_FIELDS, "", errors)
     _expect_dict(analysis.get("lead_state"), "lead_state", errors)
     _expect_dict(analysis.get("activity_summary"), "activity_summary", errors)
+    loss = _expect_dict(analysis.get("loss_diagnosis"), "loss_diagnosis", errors)
+    if loss:
+        _expect_enum(loss.get("lead_quality"), "loss_diagnosis.lead_quality", {"good", "weak", "bad", "unknown"}, errors)
+        _expect_enum(
+            loss.get("processing_quality"),
+            "loss_diagnosis.processing_quality",
+            {"good", "weak", "bad", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            loss.get("source_signal"),
+            "loss_diagnosis.source_signal",
+            {"good_source", "weak_source", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            loss.get("call_attempt_quality"),
+            "loss_diagnosis.call_attempt_quality",
+            {"enough", "not_enough", "wrong_channel", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            loss.get("next_step_quality"),
+            "loss_diagnosis.next_step_quality",
+            {"clear", "missing", "too_generic", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            loss.get("final_verdict"),
+            "loss_diagnosis.final_verdict",
+            {"bad_lead", "bad_processing", "data_gap", "needs_nurture", "ready_for_deal", "unknown"},
+            errors,
+        )
+        evidence = _expect_max_list_length(loss.get("evidence"), "loss_diagnosis.evidence", 7, errors)
+        if not evidence:
+            errors.append("loss_diagnosis.evidence must not be empty")
     _validate_common_shapes(analysis, errors)
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

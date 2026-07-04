@@ -136,7 +136,18 @@ def build_prompt(
     stage_policy_text = json.dumps(stage_policy, ensure_ascii=False, indent=2)
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
-Проанализируй сделку и новое событие, если оно есть. Если транскрибация не предоставлена, анализируй текущее состояние сделки по истории, активностям и комментариям. Главный вопрос: продвинулся ли клиент к оплате, КП, договору, передаче данных или следующему конкретному шагу.
+Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
+Главный результат анализа — управленческое действие РОПа:
+1. что проверить;
+2. какое поручение отправить менеджеру;
+3. какой факт должен появиться в CRM;
+4. до какого срока проверить выполнение.
+
+Не делай общий AI-отчет.
+Не ограничивайся советами вроде "проконтролировать", "обратить внимание", "связаться с клиентом".
+Каждая рекомендация должна иметь срок, ожидаемый CRM-факт, критерий выполнения и evidence из истории.
+
+Проанализируй сделку и новое событие, если оно есть. Если транскрибация не предоставлена, анализируй текущее состояние сделки по истории, активностям и комментариям. Главный вопрос: продвинулся ли клиент к оплате, КП, договору, передаче данных или следующему конкретному шагу, и какое поручение РОП должен отправить менеджеру.
 
 Верни только валидный JSON без markdown.
 
@@ -230,6 +241,13 @@ def build_prompt(
 - next_actions - 1-5 действий, которые ведут к статусу "оплачено", дате оплаты или причине задержки.
 - escalation_condition - когда РОПу нужно подключиться или усилить контроль.
 
+Заполни money_path_diagnosis:
+- stuck_point выбирай по фактическому месту застревания пути к деньгам: источник, дозвон, менеджер, следующий шаг, стадия, оплата, пауза клиента или unknown.
+- why_money_is_at_risk объясняет, почему деньги могут быть потеряны или задержаны.
+- current_owner_of_next_step показывает, у кого сейчас действие: менеджер, клиент, РОП, финансы, лизинг или unknown.
+- next_required_fact — какой один факт нужен в CRM, чтобы сделка реально двинулась к деньгам.
+- evidence — только факты из истории, транскрипта или CRM_STAGE_POLICY.
+
 Заполни objection_handling:
 - applicable=true только если в истории сделки есть фактические сигналы вероятного возражения: цена, бюджет, Китай, конкурент, пауза, неясный ЛПР, технические сомнения, сроки, внутреннее согласование или задержка оплаты.
 - Выбирай 1-3 наиболее вероятных возражения по фактам сделки, не перечисляй весь справочник.
@@ -254,6 +272,8 @@ def build_prompt(
 14. В live call script не предлагай время будущего созвона: если менеджер дозвонился, разговор уже идет. Завершай скрипт вопросом о следующем шаге, сроке решения, правках, договоре/счете или внутреннем согласовании.
 15. Если сделка в паузе, не превращай рекомендацию в агрессивный дожим: зафиксируй контрольную дату, критерии сравнения и следующий шаг после паузы.
 16. Если есть конкурент/Китай, защита предложения должна сравнивать не только цену, но и комплектацию, сроки запуска, гарантию, сервис, обучение, ответственность поставщика и риски внедрения.
+17. Если сделка у оплаты, поручение РОПа менеджеру должно требовать точную дату аванса/оплаты, ответственного за платеж и причину задержки, если дата не подтверждена.
+18. Если сделка закрыта как lost / неверный квал, сначала дай решение для РОПа: проверять возврат или оставить закрытой. Клиентский текст допустим только после решения РОПа.
 
 <verification_loop>
 Перед финальным JSON проверь:
@@ -273,6 +293,17 @@ def build_prompt(
     "stage": "этап, если есть",
     "client": "клиент/контакт, если есть"
   }},
+  "rop_manager_message_block": {{
+    "check_for_rop": "что конкретно РОПу проверить по сделке",
+    "why_it_matters": "почему это влияет на деньги, потерю сделки или движение к оплате",
+    "message_to_manager": "готовый текст поручения, который РОП может отправить менеджеру",
+    "expected_crm_update": "какой факт должен появиться в CRM после действия менеджера",
+    "deadline": "YYYY-MM-DD или null",
+    "success_condition": "как понять, что поручение выполнено",
+    "evidence": [
+      "факт из истории, звонка, комментария, задачи, стадии или CRM"
+    ]
+  }},
   "new_event": {{
     "type": "call|missed_call|email|unknown",
     "summary": "что произошло",
@@ -282,6 +313,13 @@ def build_prompt(
   "deal_progress": {{
     "progressed": true,
     "reason": "почему сделка продвинулась или нет"
+  }},
+  "money_path_diagnosis": {{
+    "stuck_point": "source|call_attempt|manager|next_step|stage|payment|client_pause|unknown",
+    "why_money_is_at_risk": "почему деньги могут быть потеряны или задержаны",
+    "current_owner_of_next_step": "manager|client|rop|finance|leasing|unknown",
+    "next_required_fact": "какой факт нужен для движения к деньгам",
+    "evidence": []
   }},
   "main_risk": {{
     "risk_level": "low|medium|medium_high|high",
@@ -381,11 +419,11 @@ def build_prompt(
   "manager_action_block": {{
     "recommended_channel": "email|phone|messenger|crm_task",
     "channel_reason": "почему выбран канал",
-    "goal": "цель касания",
+    "goal": "цель клиентского касания, если менеджеру нужно обратиться к клиенту",
     "primary_text": {{
       "type": "email|messenger|call_script",
       "subject": "тема, если письмо",
-      "text": "готовый текст"
+      "text": "черновик текста клиенту для менеджера"
     }},
     "backup_texts": [
       {{"type": "messenger", "title": "Короткое сообщение", "text": "текст"}},
@@ -441,10 +479,12 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
     deal_state = analysis.get("deal_state", {}) or {}
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
+    rop_manager = analysis.get("rop_manager_message_block", {}) or {}
     deal_mode = analysis.get("deal_mode", {}) or {}
     closed_review = analysis.get("closed_deal_review", {}) or {}
     resource_control = analysis.get("resource_control", {}) or {}
     payment_blocker = analysis.get("payment_blocker", {}) or {}
+    money_path = analysis.get("money_path_diagnosis", {}) or {}
     objection_handling = analysis.get("objection_handling", {}) or {}
     shaker_question = analysis.get("shaker_question", {}) or {}
     competitor = analysis.get("competitor_defense_checklist", {}) or {}
@@ -556,6 +596,17 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 
 Ссылка в Bitrix: {bitrix_url or 'не указана'}
 
+## Что сделать РОПу сейчас
+
+- Проверить: {rop_manager.get('check_for_rop') or rop.get('text', 'не указано')}
+- Почему это важно: {rop_manager.get('why_it_matters', 'не указано')}
+- Сообщение менеджеру: {rop_manager.get('message_to_manager', 'не указано')}
+- Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
+- Срок контроля: {human_value(rop_manager.get('deadline'))}
+- Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
+- Основание:
+{bullet_list(rop_manager.get('evidence'))}
+
 ## Состояние сделки
 
 - Клиент: {deal_state.get('client', 'не указано')}
@@ -577,6 +628,17 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 
 - Продвинулась: {human_value(progress.get('progressed'))}
 - Причина: {progress.get('reason', 'не указано')}
+
+## Диагностика пути к деньгам
+
+- Где застряли: {money_path.get('stuck_point', 'не указано')}
+- Почему деньги под риском: {money_path.get('why_money_is_at_risk', 'не указано')}
+- У кого следующий шаг: {money_path.get('current_owner_of_next_step', 'не указано')}
+- Следующий нужный факт: {money_path.get('next_required_fact', 'не указано')}
+
+Основание:
+
+{bullet_list(money_path.get('evidence'))}
 
 ## Главный риск
 
@@ -683,7 +745,15 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 
 {bullet_list(call_recommendation.get('next_call_plan'))}
 
-## Что сделать менеджеру
+## Сообщение менеджеру от РОПа
+
+{rop_manager.get('message_to_manager', 'не указано')}
+
+- Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
+- Срок контроля: {human_value(rop_manager.get('deadline'))}
+- Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
+
+## Черновик текста клиенту для менеджера
 
 - Канал: {manager.get('recommended_channel', 'не указано')}
 - Почему: {manager.get('channel_reason', 'не указано')}
