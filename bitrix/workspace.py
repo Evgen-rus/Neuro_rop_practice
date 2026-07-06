@@ -22,6 +22,7 @@ DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEFAULT_AUDIO_MANIFEST_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "audio"
 DEFAULT_LEAD_HISTORY_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "markdown"
 DEFAULT_LEAD_RAW_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "raw"
+DEFAULT_LEAD_AUDIO_MANIFEST_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "audio"
 
 
 def safe_slug(value: str, max_length: int = 90) -> str:
@@ -110,6 +111,7 @@ def ensure_lead_workspace(
     workspace_root: Path = DEFAULT_LEAD_WORKSPACE_ROOT,
     history_dir: Path = DEFAULT_LEAD_HISTORY_DIR,
     raw_dir: Path = DEFAULT_LEAD_RAW_DIR,
+    audio_manifest_dir: Path = DEFAULT_LEAD_AUDIO_MANIFEST_DIR,
 ) -> Path:
     lead_dir = entity_workspace_dir(lead_id, entity_type="lead", workspace_root=workspace_root)
     for child in ("history", "raw", "audio", "transcripts", "analysis", "diagnostics"):
@@ -126,6 +128,10 @@ def ensure_lead_workspace(
     copy_if_exists(
         raw_dir / f"lead_{lead_id}_customer_history_bundle.json",
         lead_dir / "raw" / f"lead_{lead_id}_customer_history_bundle.json",
+    )
+    copy_if_exists(
+        audio_manifest_dir / f"lead_{lead_id}_call_audio_manifest.json",
+        lead_dir / "audio" / f"lead_{lead_id}_call_audio_manifest.json",
     )
     write_workspace_index(lead_id, lead_dir, entity_type="lead")
     return lead_dir

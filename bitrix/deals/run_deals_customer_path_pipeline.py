@@ -4,8 +4,9 @@ Run the local read-only deal customer-path pipeline.
 Steps:
 1. Fetch raw Bitrix deal context.
 2. Build a readable Markdown customer-path report.
-3. Prepare the per-deal ROP assistant workspace.
-4. Build compact LLM context in the deal workspace.
+3. Download missing call audio files.
+4. Prepare the per-deal ROP assistant workspace.
+5. Build context diagnostics and compact LLM context.
 """
 
 from __future__ import annotations
@@ -39,6 +40,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--markdown-dir", default=str(DEFAULT_MD_DIR), help="Markdown output dir")
     parser.add_argument("--audio-dir", default=str(DEFAULT_AUDIO_DIR), help="Existing call audio manifest dir")
     parser.add_argument("--workspace-root", default=str(DEFAULT_WORKSPACE_ROOT), help="Deal workspace root")
+    parser.add_argument(
+        "--skip-audio-download",
+        action="store_true",
+        help="Do not download missing call audio before workspace preparation.",
+    )
+    parser.add_argument(
+        "--redownload-audio",
+        action="store_true",
+        help="Redownload call audio even if manifest already has existing local files.",
+    )
     parser.add_argument(
         "--history-days",
         type=int,
@@ -112,6 +123,20 @@ def main() -> None:
                 str(audio_dir),
                 "--deal-ids",
                 *args.deal_ids,
+            ]
+        )
+    if not args.skip_audio_download:
+        run_step(
+            [
+                sys.executable,
+                "bitrix/deals/download_deals_call_audio.py",
+                "--deal-ids",
+                *args.deal_ids,
+                "--raw-dir",
+                str(raw_dir),
+                "--audio-dir",
+                str(audio_dir),
+                *(["--redownload"] if args.redownload_audio else []),
             ]
         )
     run_step(

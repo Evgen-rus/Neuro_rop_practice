@@ -4,7 +4,8 @@ Run the local read-only lead customer-path pipeline.
 Steps:
 1. Fetch raw Bitrix lead context.
 2. Build a readable Markdown customer-path report.
-3. Prepare the per-lead ROP assistant workspace.
+3. Download missing call audio files.
+4. Prepare the per-lead ROP assistant workspace.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from bitrix.customer_history import DEFAULT_HISTORY_DAYS
 
 DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "raw"
 DEFAULT_MD_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "markdown"
+DEFAULT_AUDIO_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "audio"
 DEFAULT_WORKSPACE_ROOT = BASE_DIR / "reports" / "rop_assistant" / "leads"
 
 logger = get_logger(__file__)
@@ -34,7 +36,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lead-ids", nargs="+", required=True, help="Lead IDs to process")
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR), help="Raw JSON output dir")
     parser.add_argument("--markdown-dir", default=str(DEFAULT_MD_DIR), help="Markdown output dir")
+    parser.add_argument("--audio-dir", default=str(DEFAULT_AUDIO_DIR), help="Lead call audio manifest dir")
     parser.add_argument("--workspace-root", default=str(DEFAULT_WORKSPACE_ROOT), help="Lead workspace root")
+    parser.add_argument(
+        "--skip-audio-download",
+        action="store_true",
+        help="Do not download missing call audio before workspace preparation.",
+    )
+    parser.add_argument(
+        "--redownload-audio",
+        action="store_true",
+        help="Redownload call audio even if manifest already has existing local files.",
+    )
     parser.add_argument(
         "--history-days",
         type=int,
@@ -63,6 +76,7 @@ def main() -> None:
     args = parse_args()
     raw_dir = Path(args.raw_dir)
     markdown_dir = Path(args.markdown_dir)
+    audio_dir = Path(args.audio_dir)
     workspace_root = Path(args.workspace_root)
 
     run_step(
@@ -105,6 +119,20 @@ def main() -> None:
                 str(markdown_dir),
                 "--lead-ids",
                 *args.lead_ids,
+            ]
+        )
+    if not args.skip_audio_download:
+        run_step(
+            [
+                sys.executable,
+                "bitrix/leads/download_leads_call_audio.py",
+                "--lead-ids",
+                *args.lead_ids,
+                "--raw-dir",
+                str(raw_dir),
+                "--audio-dir",
+                str(audio_dir),
+                *(["--redownload"] if args.redownload_audio else []),
             ]
         )
     run_step(
