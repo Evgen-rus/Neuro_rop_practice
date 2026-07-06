@@ -3,7 +3,15 @@
 Короткий контекст проекта для старта нового чата с ИИ.
 Цель: быстро дать модели рабочую карту проекта без перегруза деталями.
 
-Last updated: 2026-07-04
+## How AI Should Use This File
+
+- Используй этот файл как карту проекта перед изменениями кода: сначала сверяй контуры, source-of-truth файлы и critical invariants.
+- Если документ конфликтует с кодом, доверяй коду и явно отмечай расхождение в ответе пользователю.
+- Не превращай этот файл в runbook, changelog или подробную спецификацию. Подробные команды держать в `Docs/*_runbook.md`, практические результаты — в отдельных notes.
+- Обновляй `ARCHITECTURE.md` только когда пользователь прямо просит обновить архитектуру или явно просит зафиксировать новое архитектурное состояние. Не обновляй его автоматически после каждой правки кода.
+- При обновлении сохраняй средний размер и убирай явное дублирование: здесь должны быть стабильные правила, карта потоков и ссылки на подробные документы.
+
+Last updated: 2026-07-06
 
 ## 1) System At A Glance
 
@@ -23,6 +31,12 @@ Last updated: 2026-07-04
 Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON -> ROP markdown report
 ```
 
+Расширенный контур истории клиента:
+
+```text
+lead/deal -> contact -> related contact deals -> duplicate leads by phone/email -> unified customer_history_bundle -> customer_path.md / LLM context
+```
+
 Продуктовый сценарий отчёта: `система -> РОП -> менеджер`. Отчёт читает только РОП; менеджер получает от РОПа отдельное поручение или сообщение, а не доступ к отчёту.
 
 ## 2) Source Of Truth
@@ -34,6 +48,8 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Публичные ссылки на карточки Bitrix: `openai_api/bitrix_links.py`
 - Расчёт стоимости OpenAI: `openai_api/pricing.py`
 - Bitrix REST client: `bitrix/client.py`
+- Полная история клиента / fallback-связки: `bitrix/customer_history.py`
+- Markdown полной истории клиента: `bitrix/customer_history_report.py`
 - Структура рабочих папок лидов/сделок: `bitrix/workspace.py`
 - Deal pipeline: `bitrix/deals/run_deals_customer_path_pipeline.py`
 - Deal raw fetch: `bitrix/deals/1_fetch_deals_context.py`
@@ -57,6 +73,8 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 - Deal orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_deal_if_changed.py`
 - Lead orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_lead_if_changed.py`
 - Инструкция ручного запуска change detection: `Docs/change_detection_runbook.md`
+- Инструкция запуска полной истории клиента: `Docs/customer_history_runbook.md`
+- Практические заметки по проверке customer history: `Docs/customer_history_experiment.md`
 - Обработанная OKF-база ПрактикМ: `knowledge/clients/praktikm/index.md`
 - Ручная проверка проекта: `Docs/ручная проверка проекта.md`
 - Целевая MVP-спека: `Docs/rop_assistant_spec.md`
@@ -92,13 +110,29 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 27. Deal-анализ обязан возвращать `money_path_diagnosis`: где застрял путь к деньгам, почему деньги под риском, у кого следующий шаг, какой факт нужен для движения и evidence.
 28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence.
 29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict.
+30. Полная история клиента строится read-only: `customer_history_bundle` может читать root lead/deal, контакты, связанные сделки контакта, duplicate leads по телефону/email, активности и timeline comments, но не пишет в Bitrix.
+31. `CONTACT_ID` — базовая связка клиента. Если `CONTACT_ID` отсутствует, fallback по телефону/email должен подтверждать совпадение через `crm.contact.get` или `crm.lead.get`; неподтвержденные кандидаты остаются только в diagnostics.
+32. Если fallback нашел несколько подтвержденных контактов, автосклейка не применяется: такие совпадения считаются ambiguous и требуют ручной проверки.
+33. Если fallback нашел дубль-лид по телефону/email, его история включается в `related_leads`, но контакт не считается найденным, пока нет подтвержденного contact link.
+34. Внутренний контекст (`timeline comments`, заметки, служебные комментарии) должен храниться отдельно от клиентских касаний и не должен трактоваться как слова клиента.
+35. Открытые линии не являются обязательным источником для ПрактикМ; события openline/chat не должны ломать выгрузку и могут быть проигнорированы с diagnostics.
+36. `customer_history_bundle` сохраняет diagnostics: missing contact, fallback candidates/matches, unavailable sources, access denied и предупреждения. Эти diagnostics нужны для ручной проверки прав и связок.
 
 ## 4) Key Domain Objects
 
 - `Lead` — лид Bitrix24, локально представлен raw JSON, markdown history, workspace и analysis.
 - `Deal` — сделка Bitrix24, локально представлена raw JSON, markdown history, audio manifest, workspace и analysis.
+- `Customer history bundle` — единый raw JSON `*_customer_history_bundle.json` вокруг root lead/deal: root entity, период, контакты, связанные сделки, дубль-лиды, активности по сущностям, timeline comments, tasks, unified timeline и diagnostics.
+- `Related deal` — сделка контакта, найденная через `CONTACT_ID`/`crm.deal.contact.items.get` и `crm.deal.list` по контакту; попадает в общий контекст даже из другой воронки.
+- `Related lead` — подтвержденный дубль-лид, найденный fallback-поиском по телефону/email, когда у root lead нет `CONTACT_ID`.
+- `Fallback candidate` — телефон/email/company из root lead/deal, сохраненный в diagnostics для ручной проверки; автоматически применяется только после подтверждения.
+- `Fallback match` — подтвержденная fallback-связка с contact или duplicate lead через read-only Bitrix методы.
 - `Activity` — CRM-активность: звонок, письмо, сообщение, задача или другое событие.
 - `Timeline comment` — комментарий/событие таймлайна Bitrix.
+- `Client touchpoint` — клиентское касание в customer history: звонок, письмо, сообщение, без смешивания с внутренними комментариями.
+- `Internal context` — внутренние комментарии/заметки/таймлайн, используемые как контекст работы менеджера, но не как факт клиентского общения.
+- `Tasks and control` — задачи и контрольные активности из CRM activities.
+- `System event` — состояние/изменение сущности, например текущий статус связанной сделки или дубль-лида.
 - `Transcript` — результат транскрибации звонка, обычно хранится в `transcripts/` в `.md`, `.txt`, `.json`.
 - `Knowledge file` — обработанное правило ПрактикМ из `knowledge/clients/praktikm/`.
 - `Analysis JSON` — структурированный ответ модели в `analysis/*_analysis.json`.
@@ -112,237 +146,77 @@ Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON 
 
 ## 5) Runtime Flows
 
-### A) Deal Customer Path
+Этот раздел держит только карту основных потоков. Подробные команды и проверки: `Docs/customer_history_runbook.md` и `Docs/change_detection_runbook.md`.
 
-Команда:
+### A) Build Customer History
 
-```powershell
-.\venv\Scripts\python.exe .\bitrix\deals\run_deals_customer_path_pipeline.py --deal-ids 18507
-```
-
-Поток:
+Основной read-only путь подготовки контекста:
 
 ```text
-1_fetch_deals_context.py
-  -> reports/bitrix_customer_path/raw/deal_18507_context.json
-2_build_deals_customer_path_report.py
-  -> reports/bitrix_customer_path/markdown/deal_18507_customer_path.md
-3_prepare_deals_workspace.py
-  -> reports/rop_assistant/deals/deal_18507/
-4_build_deals_llm_context.py
-  -> reports/rop_assistant/deals/deal_18507/history/deal_18507_llm_context.md
+Bitrix24 -> raw context/customer_history_bundle -> customer_path.md -> workspace -> LLM context
 ```
 
-Deal-контур также использует audio manifest из `reports/bitrix_customer_path/audio/`, если он уже есть.
-
-Компактный LLM context также можно пересобрать отдельно:
+Главные команды:
 
 ```powershell
-.\venv\Scripts\python.exe .\bitrix\deals\4_build_deals_llm_context.py --deal-ids 18507
+.\venv\Scripts\python.exe .\bitrix\deals\run_deals_customer_path_pipeline.py --deal-ids 18507 --history-days 365 --include-related-contact-deals --include-internal-context
+.\venv\Scripts\python.exe .\bitrix\leads\run_leads_customer_path_pipeline.py --lead-ids 227661 --history-days 365 --include-related-contact-deals --include-internal-context
 ```
 
-Выход:
+Без `--include-related-contact-deals` pipeline сохраняет старый режим одиночной карточки. С флагом строится `*_customer_history_bundle.json`, где есть root entity, contact resolution, related deals, related duplicate leads, activities by entity, unified timeline и diagnostics.
 
-```text
-reports/rop_assistant/deals/deal_18507/history/deal_18507_llm_context.md
-```
+Ключевые файлы в workspace:
 
-Этот файл удаляет email quotes, подписи, длинные ссылки и технические повторы, но сохраняет ID/даты источников для grounding.
+- `history/*_customer_path.md` — аудитный человекочитаемый контекст;
+- `raw/*_context.json` — старый raw context root-сущности;
+- `raw/*_customer_history_bundle.json` — полный raw context клиента;
+- `history/deal_<id>_llm_context.md` — compact context для deal LLM, если построен.
 
-### B) Lead Customer Path
+### B) Audio And Transcripts
 
-Команда:
+Ручная транскрибация локального аудио сохраняет transcript bundle в workspace `transcripts/`.
 
 ```powershell
-.\venv\Scripts\python.exe .\bitrix\leads\run_leads_customer_path_pipeline.py --lead-ids 227661
+.\venv\Scripts\python.exe .\openai_api\audio\local_file_transcribe.py --deal-id 18507 --audio "C:\path\call.mp3" --activity-id 123
 ```
 
-Поток:
+Для лида используется тот же CLI с `--lead-id`. Внешние зависимости: `ffmpeg` и `ffprobe`.
 
-```text
-1_fetch_leads_context.py
-  -> reports/bitrix_lead_path/raw/lead_227661_context.json
-2_build_leads_customer_path_report.py
-  -> reports/bitrix_lead_path/markdown/lead_227661_customer_path.md
-3_prepare_leads_workspace.py
-  -> reports/rop_assistant/leads/lead_227661/
-```
+### C) LLM Analysis
 
-Lead-контур может анализироваться без транскрипта: `analyze_lead.py` умеет работать с историей лида и `--transcript none`.
-
-### C) Local Audio Transcription
-
-Команда для сделки:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\audio\local_file_transcribe.py --deal-id 18507 --audio "C:\path\call.mp3" --activity-id 123 --call-start "2026-06-23T10:00:00+03:00"
-```
-
-Команда для лида:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\audio\local_file_transcribe.py --lead-id 227661 --audio "C:\path\call.mp3" --activity-id 123 --call-start "2026-06-23T10:00:00+03:00"
-```
-
-Что происходит:
-
-- аудио при необходимости копируется в workspace;
-- `ffmpeg` конвертирует файл в WAV 16 кГц mono;
-- длинное аудио режется на сегменты;
-- каждый сегмент отправляется в OpenAI transcription;
-- итоговый transcript сохраняется в workspace `transcripts/`.
-
-### D) Deal Analysis
-
-Команда:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_deal.py --deal-id 18507
-```
-
-Входы:
-
-- `reports/rop_assistant/deals/deal_18507/history/deal_18507_customer_path.md`
-- latest transcript из `reports/rop_assistant/deals/deal_18507/transcripts/`, если не указан `--transcript none`
-- CRM stage policy из `reports/rop_assistant/deals/deal_18507/raw/deal_18507_context.json`
-- OKF-файлы из `knowledge/clients/praktikm/`
-
-Выходы:
-
-- `deal_18507_request_prompt.txt`
-- `deal_18507_analysis.json`
-- `deal_18507_rop_report.md`
-- `deal_18507_raw_model_output.txt`
-
-Deal JSON дополнительно содержит управленческие блоки:
-
-- `rop_manager_message_block` — главное поручение РОПа менеджеру: что проверить, готовый текст менеджеру, ожидаемый CRM-факт, срок, критерий выполнения, evidence;
-- `money_path_diagnosis` — диагностика пути сделки к деньгам: точка застревания, риск денег, владелец следующего шага, следующий нужный факт;
-- `deal_mode` — режим ведения сделки;
-- `closed_deal_review` — проверка закрытой провальной сделки: корректно ли закрытие, есть ли основания вернуть в воронку, можно ли использовать реактивационный текст;
-- `resource_control` — стоит ли тратить инженерные/технические ресурсы;
-- `payment_blocker` — узкое место оплаты/аванса/лизинга для сделок около денег;
-- `objection_handling` — вероятные возражения клиента и мягкая отработка для следующего контакта;
-- `shaker_question` — ключевой квалифицирующий вопрос клиенту;
-- `competitor_defense_checklist` — защита от конкурента/альтернативы;
-- `priority_recommendation` — приоритет сделки для менеджера и РОПа.
-
-Markdown-отчёт по сделке первым выводит `## Что сделать РОПу сейчас`, затем состояние сделки и диагностику пути к деньгам. Раздел `## Сообщение менеджеру от РОПа` содержит текст поручения менеджеру. Раздел `## Черновик текста клиенту для менеджера` — вспомогательный и строится из `manager_action_block`.
-
-### D2) Deal Analysis With Change Detection
-
-Команда:
+Штатно запускать через change detection, чтобы не тратить LLM без смысловых изменений:
 
 ```powershell
 .\venv\Scripts\python.exe .\openai_api\llm\analyze_deal_if_changed.py --deal-id 18507
-```
-
-Что происходит:
-
-- читается prepared workspace сделки и raw JSON из `raw/deal_<id>_context.json`;
-- строится normalized snapshot сделки;
-- считается fingerprint без технического шума вроде `generated_at` и без использования `DATE_MODIFY` как главного триггера;
-- snapshot сравнивается с последним состоянием в SQLite;
-- если это первый запуск или есть смысловые изменения, вызывается текущий `analyze_deal.py`;
-- если изменений нет, но есть deterministic trigger, сохраняется mini recommendation без LLM;
-- если изменений и триггеров нет, сделка получает статус `SKIPPED_NO_CHANGES`.
-- `new_activity` сам по себе не запускает LLM: активность сначала классифицируется как звонок, задача, письмо, сообщение или другое событие.
-- Hard diff запускает LLM: новый звонок, новый email/message, новая транскрибация, новый timeline-комментарий, смена стадии, коммерческое изменение по КП/счету/договору.
-- Soft diff ведет к mini recommendation или skip: новая/измененная задача, смена дедлайна, завершение задачи, смена ответственного, изменение некоммерческих файлов/ссылок, технический `DATE_MODIFY`.
-- Mini recommendation имеет daily anti-spam: один и тот же `trigger_type` по одной сделке не создается повторно в тот же день.
-
-Статусы:
-
-- `FIRST_FULL_ANALYSIS`
-- `SKIPPED_NO_CHANGES`
-- `MINI_RECOMMENDATION_NO_LLM`
-- `FULL_LLM_ANALYSIS`
-- `ERROR`
-
-Mini recommendation не генерирует новый клиентский текст. Она может переиспользовать последний `rop_manager_message_block.message_to_manager` как сохранённое поручение РОПа менеджеру и последний `manager_action_block.primary_text` как сохранённый клиентский текст.
-
-Принудительный полный анализ:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_deal_if_changed.py --deal-id 18507 --force-llm
-```
-
-### E) Lead Analysis
-
-Команда:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227661
-```
-
-Если транскрипта нет:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227661 --transcript none
-```
-
-Входы:
-
-- `reports/rop_assistant/leads/lead_227661/history/lead_227661_customer_path.md`
-- optional transcript из `transcripts/`
-- OKF-файлы из `knowledge/clients/praktikm/`
-
-Выходы:
-
-- `lead_227661_request_prompt.txt`
-- `lead_227661_analysis.json`
-- `lead_227661_rop_report.md`
-- `lead_227661_raw_model_output.txt`
-
-Lead JSON дополнительно содержит:
-
-- `rop_manager_message_block` — главное поручение РОПа менеджеру: что проверить, готовый текст менеджеру, ожидаемый CRM-факт, срок, критерий выполнения, evidence;
-- `loss_diagnosis` — диагностика качества лида и обработки: `lead_quality`, `processing_quality`, `source_signal`, `call_attempt_quality`, `next_step_quality`, `final_verdict`, `evidence`;
-- `manager_action_block` — совместимый черновик клиентского касания для менеджера, выводится ниже управленческого блока.
-
-Markdown-отчёт по лиду первым выводит `## Что сделать РОПу сейчас`. Раздел `## Сообщение менеджеру от РОПа` содержит поручение менеджеру. Раздел `## Черновик текста клиенту для менеджера` — вспомогательный.
-
-### E2) Lead Analysis With Change Detection
-
-Команда:
-
-```powershell
 .\venv\Scripts\python.exe .\openai_api\llm\analyze_lead_if_changed.py --lead-id 227661 --transcript none
 ```
 
-Что происходит:
+Прямые `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокированы, но `--dry-run` можно использовать для проверки prompt без вызова OpenAI.
 
-- читается prepared workspace лида и raw JSON из `raw/lead_<id>_context.json`;
-- строится normalized snapshot лида;
-- fingerprint считается без технического шума и без самостоятельного триггера по `DATE_MODIFY`;
-- hard diff запускает `analyze_lead.py --allow-direct-llm`;
-- soft diff или контрольные триггеры создают mini recommendation без LLM;
-- повторные mini recommendation по одному `trigger_type` подавляются в течение дня.
+Основные LLM входы:
 
-Принудительный полный анализ:
+- deal: `history/deal_<id>_llm_context.md`, fallback на `history/deal_<id>_customer_path.md`, transcript, OKF, CRM stage policy;
+- lead: `history/lead_<id>_customer_path.md`, optional transcript, OKF;
+- если full customer history включен, prompt должен учитывать связанные сделки/дубль-лиды и не трактовать тишину в root-карточке как отсутствие работы.
 
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead_if_changed.py --lead-id 227661 --transcript none --force-llm
-```
+Основные LLM выходы:
 
-### F) Dry Run
-
-Для проверки промпта без траты токенов:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_deal.py --deal-id 18507 --dry-run
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead.py --lead-id 227661 --dry-run
-```
-
-Dry-run сохраняет prompt в `analysis/`, но не вызывает OpenAI.
+- `analysis/*_request_prompt.txt`;
+- `analysis/*_analysis.json`;
+- `analysis/*_rop_report.md`;
+- `analysis/*_raw_model_output.txt`.
 
 ## 6) Where To Change Code By Task Type
 
 - Новый Bitrix-метод или изменение REST-обработки: `bitrix/client.py` и конкретный `1_fetch_*_context.py`.
+- Изменение полной истории клиента, fallback по телефону/email, duplicate leads, diagnostics или разделения событий: `bitrix/customer_history.py`.
+- Изменение Markdown полной истории клиента: `bitrix/customer_history_report.py`.
+- Изменение CLI полного customer history: `bitrix/deals/run_deals_customer_path_pipeline.py`, `bitrix/leads/run_leads_customer_path_pipeline.py`, `1_fetch_*_context.py`.
 - Изменение состава raw bundle по сделкам: `bitrix/deals/1_fetch_deals_context.py`.
 - Изменение состава raw bundle по лидам: `bitrix/leads/1_fetch_leads_context.py`.
 - Изменение Markdown-истории сделки: `bitrix/deals/2_build_deals_customer_path_report.py`.
 - Изменение Markdown-истории лида: `bitrix/leads/2_build_leads_customer_path_report.py`.
+- Изменение compact LLM context сделки, включая чтение `customer_history_bundle`: `bitrix/deals/4_build_deals_llm_context.py`.
 - Изменение папок, имён файлов и workspace: `bitrix/workspace.py` плюс `3_prepare_*_workspace.py`.
 - Изменение транскрибации, chunking, `ffmpeg`: `openai_api/audio/transcribe_core.py`.
 - Изменение CLI выбора аудио и сохранения transcript bundle: `openai_api/audio/local_file_transcribe.py`.
@@ -358,6 +232,7 @@ Dry-run сохраняет prompt в `analysis/`, но не вызывает Ope
 - Изменение приоритетного набора OKF-файлов: `knowledge_files()` в `openai_api/llm/analyze_deal.py`.
 - Изменение правил клиента ПрактикМ: файлы в `knowledge/clients/praktikm/`.
 - Обновление ручной инструкции проверки: `Docs/ручная проверка проекта.md`.
+- Обновление инструкции по полной истории клиента: `Docs/customer_history_runbook.md`.
 - Изменение целевой архитектуры MVP: `Docs/rop_assistant_spec.md`.
 
 ## 7) Env Groups (Quick)
@@ -399,32 +274,25 @@ ROP assistant state:
 
 ## 9) Known Pitfalls
 
-1. Не запускать анализ до подготовки workspace: `analyze_*` ожидает файлы в `reports/rop_assistant/...`.
-2. Не путать старые и новые точки входа: сейчас основные pipeline-файлы имеют имена `run_deals_customer_path_pipeline.py` и `run_leads_customer_path_pipeline.py`.
-3. Не считать `reports/` исходным кодом: это рабочие артефакты и чувствительные данные.
-4. Не полагаться на `latest` transcript, если в папке несколько звонков. Для точности передавать `--transcript`.
-5. Если модель вернула обрезанный JSON, сначала проверить `ANALYSIS_MAX_OUTPUT_TOKENS`.
-6. Если OpenAI вернул JSON с плейсхолдерами в клиентском тексте, это не runtime-ошибка, а ошибка качества: нужна пост-валидация или повторный запрос.
-7. `text={"format": {"type": "json_object"}}` помогает получить JSON, но не гарантирует бизнес-валидность полей.
-8. При ошибке JSON-парсинга текущий код может не сохранить raw output, потому что сохранение происходит после успешного `call_analysis_json`.
-9. Для длинных аудио нельзя повышать параллельность бездумно: `max_segment_concurrency` влияет на нагрузку и возможные rate limits.
-10. `ffmpeg` должен быть доступен в `PATH`; иначе транскрибация упадёт до вызова OpenAI.
-11. Lead и deal похожи, но JSON-структуры анализа разные. Не копировать поля между ними без проверки prompt/report.
-12. `ensure_entity_workspace()` исторически deal-oriented; для лидов лучше использовать `ensure_lead_workspace()`, где явно заданы lead history/raw paths.
-13. OKF-файлы являются правилами анализа, а не доказательством фактов. Нельзя писать в отчёте, что клиент что-то сказал, если это есть только в OKF.
-14. После отправки КП не писать клиенту “направляю КП”, если КП уже было отправлено. Использовать формулировку “возвращаюсь к направленному КП”.
-15. Не делать отчёт похожим на интерфейс для менеджера: менеджер не читает отчёт, он получает поручение от РОПа из `rop_manager_message_block.message_to_manager`.
-16. Для старых JSON без `rop_manager_message_block`, `money_path_diagnosis` или `loss_diagnosis` renderer должен показывать fallback, но новые LLM-запуски проходят через validation с обязательными новыми полями.
-17. При доработке Telegram, FastAPI или расширенной SQLite-памяти сначала сверяться с `Docs/rop_assistant_spec.md`: эти части описаны как целевая архитектура, но в runtime пока не реализованы полностью.
-18. `crm_pipeline_map.json` — выгрузка CRM-карты, ее не нужно править руками для продуктовой логики. Интерпретация закрытых стадий находится в `openai_api/change_detection/stage_policy.py`.
+1. Перед анализом всегда готовить workspace через lead/deal pipeline; `analyze_*` ожидает файлы в `reports/rop_assistant/...`.
+2. `reports/` содержит чувствительные рабочие артефакты, а не исходный код.
+3. `latest` transcript выбирается по mtime; если звонков несколько, передавать конкретный `--transcript` или использовать `--transcript all`.
+4. Deal и lead похожи по pipeline, но имеют разные JSON contracts, prompts и renderer requirements.
+5. OKF-файлы — правила оценки, а не evidence фактов сделки/лида.
+6. `customer_history_bundle.related_leads` без контакта означает найденную продолженную историю по телефону/email, но не найденный контакт.
+7. `fallback_match_used=false` при `fallback_related_leads_used=true` — нормальная ситуация: дубль-лид найден, contact link отсутствует.
+8. `crm.timeline.comment.list` по contact может вернуть `Access denied`, даже если timeline по сделкам доступен; это права webhook/user, не ошибка renderer.
+9. `crm_pipeline_map.json` — локальная выгрузка CRM-карты; продуктовую классификацию закрытых стадий менять в `stage_policy.py`.
+10. Если JSON модели обрезан, первым делом проверять `ANALYSIS_MAX_OUTPUT_TOKENS`; JSON mode не заменяет бизнес-валидацию.
+11. `ffmpeg`/`ffprobe` должны быть в `PATH`; длинные аудио не ускорять параллельностью без учета rate limits.
+12. При доработке Telegram, FastAPI или расширенной памяти сначала сверяться с `Docs/rop_assistant_spec.md`.
 
 ## 10) Current Gaps
 
-- SQLite для deal/lead change detection добавлен как локальное MVP-хранилище `storage/rop_db.py`, но полноценная портфельная `deal_memory` / `lead_memory` пока не реализована.
-- Нет Telegram Bot API отправки отчётов.
-- Нет FastAPI/backend сервиса.
-- Нет frontend или личного кабинета.
-- Нет автоматического end-to-end сценария `Bitrix -> audio download -> transcribe -> analyze -> send`.
-- Нет Pydantic-схем для строгой валидации LLM JSON.
-- Нет тестового набора для raw JSON parsing, markdown rendering и report rendering.
-- Автоматическое скачивание аудио из Bitrix ограничено: часть сценариев остаётся ручной.
+- Нет Telegram Bot API, backend/FastAPI, frontend и кабинета.
+- Нет автоматического end-to-end `Bitrix -> audio download -> transcribe -> analyze -> send`.
+- SQLite change detection есть, но полноценная портфельная `deal_memory` / `lead_memory` пока не реализована.
+- Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.
+- Автоматическое скачивание аудио и contact timeline зависят от прав Bitrix webhook/user; часть сценариев остается ручной.
+- Комментарии к задачам не выгружаются отдельным API-методом.
+- Company fallback пока только diagnostic candidate, без автосклейки.
