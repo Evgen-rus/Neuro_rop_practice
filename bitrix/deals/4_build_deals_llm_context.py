@@ -539,6 +539,9 @@ def risks_section(comments: list[dict[str, Any]], emails: list[dict[str, Any]], 
 
 
 def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
+    if bundle.get("bundle_type") == "customer_history_bundle":
+        return build_customer_history_llm_context(bundle)
+
     deal = bundle.get("deal", {}).get("item", {}) or {}
     deal_id = str(deal.get("ID") or bundle.get("deal_id") or "")
     stage_info = bundle.get("stage_info") or {}
@@ -642,10 +645,168 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def compact_history_rows(items: list[dict[str, Any]], limit: int = 20) -> list[str]:
+    rows: list[str] = []
+    for item in items[-limit:]:
+        entity = f"{item.get('entity_type')}:{item.get('entity_id')}"
+        text = clean_text(item.get("subject") or item.get("text"), 500)
+        rows.append(
+            f"- {item.get('when') or '-'} source={entity} type={item.get('event_type') or '-'} "
+            f"id={item.get('id') or '-'}: {text or '-'}"
+        )
+    return rows or ["- Не найдено."]
+
+
+def related_deal_rows(deals: list[dict[str, Any]]) -> list[str]:
+    if not deals:
+        return ["- Связанные сделки не найдены."]
+    rows = ["| ID | Название | Воронка | Стадия | Сумма | Даты | Статус |", "|---:|---|---|---|---:|---|---|"]
+    for deal in deals:
+        pipeline = (deal.get("pipeline") or {}).get("name") or deal.get("category_id") or "-"
+        amount = f"{deal.get('opportunity') or '-'} {deal.get('currency_id') or ''}".strip()
+        dates = f"created={deal.get('date_create') or '-'}; modified={deal.get('date_modify') or '-'}; closed={deal.get('closedate') or '-'}"
+        status = "closed" if deal.get("is_closed") else "open_or_unknown"
+        rows.append(
+            f"| {md_escape(deal.get('id'))} | {md_escape(deal.get('title'))} | {md_escape(pipeline)} | "
+            f"{md_escape(deal.get('stage_name') or deal.get('stage_id'))} | {md_escape(amount)} | "
+            f"{md_escape(dates)} | {status} |"
+        )
+    return rows
+
+
+def related_lead_rows(leads: list[dict[str, Any]]) -> list[str]:
+    if not leads:
+        return ["- Связанные дубль-лиды не найдены."]
+    rows = ["| ID | Название | Статус | Сумма | Даты |", "|---:|---|---|---:|---|"]
+    for lead in leads:
+        amount = f"{lead.get('opportunity') or '-'} {lead.get('currency_id') or ''}".strip()
+        dates = f"created={lead.get('date_create') or '-'}; modified={lead.get('date_modify') or '-'}; closed={lead.get('date_closed') or '-'}"
+        rows.append(
+            f"| {md_escape(lead.get('id'))} | {md_escape(lead.get('title'))} | "
+            f"{md_escape(lead.get('status_id'))} | {md_escape(amount)} | {md_escape(dates)} |"
+        )
+    return rows
+
+
+def build_customer_history_llm_context(bundle: dict[str, Any]) -> str:
+    root = bundle.get("root_entity") or {}
+    period = bundle.get("history_period") or {}
+    contacts = []
+    for contact_id, response in (bundle.get("contacts") or {}).items():
+        contact = result_item(response)
+        name = " ".join(
+            part for part in (contact.get("NAME"), contact.get("SECOND_NAME"), contact.get("LAST_NAME")) if part
+        )
+        phone = ", ".join(item.get("VALUE", "") for item in contact.get("PHONE", []) if isinstance(item, dict))
+        email = ", ".join(item.get("VALUE", "") for item in contact.get("EMAIL", []) if isinstance(item, dict))
+        contacts.append(f"- {name or '-'} (ID: {contact_id}), phone={phone or '-'}, email={email or '-'}")
+
+    diagnostics = bundle.get("diagnostics") or {}
+    warnings = diagnostics.get("warnings") or []
+    unavailable = diagnostics.get("unavailable_sources") or []
+    fallback_candidates = diagnostics.get("fallback_candidates") or []
+    fallback_matches = diagnostics.get("fallback_matches") or []
+    fallback_lead_matches = diagnostics.get("fallback_lead_matches") or []
+
+    lines = [
+        f"# Compact LLM context полной истории клиента по {root.get('type')} {root.get('id')}",
+        "",
+        "## Правило чтения истории",
+        "",
+        "- Не считай отсутствие действия в текущей карточке отсутствием работы, если продолжение есть в другой сделке того же контакта.",
+        "- Внутренний контекст отделен от клиентских касаний: не считать комментарии менеджера словами клиента.",
+        "- OKF и этот context не заменяют факты CRM: используй даты, ID и источники событий как evidence.",
+        "",
+        "## 1. Корневая сущность",
+        "",
+        f"- Тип: {root.get('type') or '-'}",
+        f"- ID: {root.get('id') or '-'}",
+        f"- Название: {clean_text(root.get('title')) or '-'}",
+        f"- Период истории: {period.get('days')} дней, с {period.get('date_from')} по {period.get('date_to')}",
+        "",
+        "## 2. Контакты",
+        "",
+        *(contacts or ["- Контакт по CONTACT_ID не найден."]),
+        "",
+        "## 3. Связанные сделки контакта",
+        "",
+        *related_deal_rows(bundle.get("related_deals") or []),
+        "",
+        "## 4. Связанные дубль-лиды",
+        "",
+        *related_lead_rows(bundle.get("related_leads") or []),
+        "",
+        "## 5. Клиентские касания",
+        "",
+        *compact_history_rows(bundle.get("client_touchpoints") or [], limit=30),
+        "",
+        "## 6. Задачи и контроль",
+        "",
+        *compact_history_rows(bundle.get("tasks_and_control") or [], limit=20),
+        "",
+        "## 7. Внутренний контекст",
+        "",
+        "Не считать этот блок словами клиента.",
+        "",
+        *compact_history_rows(bundle.get("internal_context") or [], limit=20),
+        "",
+        "## 8. Системные события и состояния",
+        "",
+        *compact_history_rows(bundle.get("system_events") or [], limit=20),
+        "",
+        "## 9. Диагностика выгрузки",
+        "",
+        f"- missing_contact: {diagnostics.get('missing_contact')}",
+        f"- contact_id_missing: {diagnostics.get('contact_id_missing')}",
+        f"- fallback_match_used: {diagnostics.get('fallback_match_used')}",
+        f"- fallback_related_leads_used: {diagnostics.get('fallback_related_leads_used')}",
+    ]
+    if fallback_matches:
+        lines.append("- fallback_verified_matches:")
+        for item in fallback_matches:
+            if isinstance(item, dict):
+                lines.append(f"  - contact_id={item.get('contact_id')} by={item.get('matched_by')} source={item.get('source')}")
+            else:
+                lines.append(f"  - {clean_text(item)}")
+    if fallback_lead_matches:
+        lines.append("- fallback_verified_lead_matches:")
+        for item in fallback_lead_matches:
+            if isinstance(item, dict):
+                lines.append(f"  - lead_id={item.get('lead_id')} by={item.get('matched_by')} source={item.get('source')}")
+            else:
+                lines.append(f"  - {clean_text(item)}")
+    if fallback_candidates:
+        lines.append("- fallback_candidates_for_manual_check:")
+        for item in fallback_candidates:
+            if isinstance(item, dict):
+                lines.append(f"  - {item.get('type')}: {item.get('value')} ({item.get('source')})")
+            else:
+                lines.append(f"  - {clean_text(item)}")
+    if warnings:
+        lines.extend(["- warnings:", *[f"  - {clean_text(item)}" for item in warnings]])
+    if unavailable:
+        lines.append("- unavailable_sources:")
+        for item in unavailable:
+            if isinstance(item, dict):
+                lines.append(f"  - {item.get('source')}: {item.get('reason') or item.get('note') or '-'}")
+            else:
+                lines.append(f"  - {clean_text(item)}")
+    return "\n".join(lines) + "\n"
+
+
 def input_files(input_dir: Path, deal_ids: list[str] | None) -> list[Path]:
     if deal_ids:
-        return [input_dir / f"deal_{deal_id}_context.json" for deal_id in deal_ids]
-    return sorted(input_dir.glob("deal_*_context.json"))
+        paths = []
+        for deal_id in deal_ids:
+            history_bundle = input_dir / f"deal_{deal_id}_customer_history_bundle.json"
+            paths.append(history_bundle if history_bundle.exists() else input_dir / f"deal_{deal_id}_context.json")
+        return paths
+    paths = []
+    for context_path in sorted(input_dir.glob("deal_*_context.json")):
+        deal_id = context_path.stem.replace("deal_", "").replace("_context", "")
+        history_bundle = input_dir / f"deal_{deal_id}_customer_history_bundle.json"
+        paths.append(history_bundle if history_bundle.exists() else context_path)
+    return paths
 
 
 def main() -> None:
@@ -657,7 +818,8 @@ def main() -> None:
             logger.warning("Raw bundle not found: %s", raw_path)
             continue
         bundle = load_json(raw_path)
-        deal_id = str(bundle.get("deal_id") or raw_path.stem.replace("deal_", "").replace("_context", ""))
+        root = bundle.get("root_entity") or {}
+        deal_id = str(root.get("id") or bundle.get("deal_id") or raw_path.stem.replace("deal_", "").replace("_context", ""))
         output_path = workspace_root / f"deal_{deal_id}" / "history" / f"deal_{deal_id}_llm_context.md"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(build_llm_context(bundle, workspace_root), encoding="utf-8")

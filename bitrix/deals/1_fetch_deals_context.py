@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
+from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -50,6 +51,22 @@ def parse_args() -> argparse.Namespace:
         "--pipeline-map",
         default=str(BASE_DIR / "crm_pipeline_map.json"),
         help="Optional local crm_pipeline_map.json for stage names",
+    )
+    parser.add_argument(
+        "--history-days",
+        type=int,
+        default=DEFAULT_HISTORY_DAYS,
+        help=f"Customer history period in days. Default: {DEFAULT_HISTORY_DAYS}",
+    )
+    parser.add_argument(
+        "--include-related-contact-deals",
+        action="store_true",
+        help="Also save *_customer_history_bundle.json with contact and related deals history.",
+    )
+    parser.add_argument(
+        "--include-internal-context",
+        action="store_true",
+        help="Include timeline comments/internal notes in customer history bundle.",
     )
     return parser.parse_args()
 
@@ -326,12 +343,26 @@ def main() -> None:
         deal = bundle.get("deal", {}).get("item", {})
         output_path = output_dir / f"deal_{deal_id}_context.json"
         save_json(output_path, bundle)
+        customer_history_path = None
+        if args.include_related_contact_deals:
+            customer_history = build_customer_history_bundle(
+                client,
+                root_type="deal",
+                root_id=str(deal_id),
+                history_days=args.history_days,
+                include_internal_context=args.include_internal_context,
+                pipeline_map_path=Path(args.pipeline_map),
+            )
+            customer_history_path = output_dir / f"deal_{deal_id}_customer_history_bundle.json"
+            save_json(customer_history_path, customer_history)
+            logger.info("Saved customer history bundle: %s", customer_history_path)
         index.append(
             {
                 "deal_id": str(deal_id),
                 "title": deal.get("TITLE"),
                 "stage_id": deal.get("STAGE_ID"),
                 "output_path": str(output_path),
+                "customer_history_path": str(customer_history_path) if customer_history_path else None,
             }
         )
         logger.info("Saved raw deal context: %s", output_path)

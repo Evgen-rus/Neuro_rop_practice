@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from setup import BASE_DIR, get_logger
+from bitrix.customer_history import DEFAULT_HISTORY_DAYS
 
 
 DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "raw"
@@ -34,6 +35,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR), help="Raw JSON output dir")
     parser.add_argument("--markdown-dir", default=str(DEFAULT_MD_DIR), help="Markdown output dir")
     parser.add_argument("--workspace-root", default=str(DEFAULT_WORKSPACE_ROOT), help="Lead workspace root")
+    parser.add_argument(
+        "--history-days",
+        type=int,
+        default=DEFAULT_HISTORY_DAYS,
+        help=f"Customer history period in days. Default: {DEFAULT_HISTORY_DAYS}",
+    )
+    parser.add_argument(
+        "--include-related-contact-deals",
+        action="store_true",
+        help="Build full customer history through contact and related deals.",
+    )
+    parser.add_argument(
+        "--include-internal-context",
+        action="store_true",
+        help="Include timeline comments/internal notes in full customer history.",
+    )
     return parser.parse_args()
 
 
@@ -56,20 +73,40 @@ def main() -> None:
             *args.lead_ids,
             "--output-dir",
             str(raw_dir),
+            "--history-days",
+            str(args.history_days),
+            *(["--include-related-contact-deals"] if args.include_related_contact_deals else []),
+            *(["--include-internal-context"] if args.include_internal_context else []),
         ]
     )
-    run_step(
-        [
-            sys.executable,
-            "bitrix/leads/2_build_leads_customer_path_report.py",
-            "--input-dir",
-            str(raw_dir),
-            "--output-dir",
-            str(markdown_dir),
-            "--lead-ids",
-            *args.lead_ids,
-        ]
-    )
+    if args.include_related_contact_deals:
+        run_step(
+            [
+                sys.executable,
+                "bitrix/customer_history_report.py",
+                "--entity-type",
+                "lead",
+                "--input-dir",
+                str(raw_dir),
+                "--output-dir",
+                str(markdown_dir),
+                "--entity-ids",
+                *args.lead_ids,
+            ]
+        )
+    else:
+        run_step(
+            [
+                sys.executable,
+                "bitrix/leads/2_build_leads_customer_path_report.py",
+                "--input-dir",
+                str(raw_dir),
+                "--output-dir",
+                str(markdown_dir),
+                "--lead-ids",
+                *args.lead_ids,
+            ]
+        )
     run_step(
         [
             sys.executable,

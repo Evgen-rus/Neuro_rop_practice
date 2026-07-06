@@ -73,6 +73,10 @@ def ensure_entity_workspace(
         entity_dir / "raw" / f"{entity_type}_{entity_id}_context.json",
     )
     copy_if_exists(
+        raw_dir / f"deal_{entity_id}_customer_history_bundle.json",
+        entity_dir / "raw" / f"{entity_type}_{entity_id}_customer_history_bundle.json",
+    )
+    copy_if_exists(
         audio_manifest_dir / f"deal_{entity_id}_call_audio_manifest.json",
         entity_dir / "audio" / f"{entity_type}_{entity_id}_call_audio_manifest.json",
     )
@@ -118,6 +122,10 @@ def ensure_lead_workspace(
     copy_if_exists(
         raw_dir / f"lead_{lead_id}_context.json",
         lead_dir / "raw" / f"lead_{lead_id}_context.json",
+    )
+    copy_if_exists(
+        raw_dir / f"lead_{lead_id}_customer_history_bundle.json",
+        lead_dir / "raw" / f"lead_{lead_id}_customer_history_bundle.json",
     )
     write_workspace_index(lead_id, lead_dir, entity_type="lead")
     return lead_dir
