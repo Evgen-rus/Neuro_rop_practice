@@ -117,6 +117,18 @@ def main() -> None:
             str(workspace_root),
         ]
     )
+    run_step(
+        [
+            sys.executable,
+            "bitrix/context_diagnostics.py",
+            "--entity-type",
+            "lead",
+            "--entity-ids",
+            *args.lead_ids,
+            "--workspace-root",
+            str(workspace_root),
+        ]
+    )
     logger.info("Lead pipeline finished. Workspace root: %s", workspace_root)
 
 

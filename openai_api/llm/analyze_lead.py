@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
+from bitrix.context_diagnostics import ensure_context_diagnostics
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_lead_transcript_context import build_all_lead_transcript_context
 from openai_api.config import ANALYSIS_MODEL, logger
@@ -72,7 +73,13 @@ def resolve_transcript(value: str, lead_dir: Path) -> Path | None:
     return path
 
 
-def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sections: list[tuple[Path, str]]) -> str:
+def build_prompt(
+    lead_id: str,
+    history_text: str,
+    transcript_text: str,
+    context_diagnostics_text: str,
+    okf_sections: list[tuple[Path, str]],
+) -> str:
     okf_text = "\n\n".join(f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections)
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
@@ -104,6 +111,7 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
 - OKF-база — это правила оценки и рекомендации, а не источник фактов о конкретном клиенте.
 - Если факт есть только в OKF-базе, не записывай его как факт лида.
 - Если нужного факта нет в истории или транскрибации, прямо укажи, каких данных не хватает.
+- Если диагностика полноты контекста показывает пробелы, не делай выводы по отсутствующим звонкам/источникам и явно отрази ограничение в выводах.
 - Если в истории есть связанные сделки того же контакта, не считай отсутствие действия в текущей карточке лида отсутствием работы с клиентом.
 - Внутренний контекст, комментарии менеджеров и diagnostics не считай словами клиента.
 </grounding_rules>
@@ -229,6 +237,10 @@ def build_prompt(lead_id: str, history_text: str, transcript_text: str, okf_sect
 
 {transcript_text.strip()}
 
+## ДИАГНОСТИКА ПОЛНОТЫ КОНТЕКСТА
+
+{context_diagnostics_text.strip()}
+
 ## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
 
 {okf_text}
@@ -264,7 +276,27 @@ def render_cost_section(metadata: dict[str, Any] | None) -> str:
 - Курс: 1 USD = {cost.get('usd_rub_rate', 'не указан')} руб."""
 
 
-def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+def render_context_limitations_section(context_diagnostics: dict[str, Any] | None) -> str:
+    if not context_diagnostics:
+        return ""
+    summary = context_diagnostics.get("summary") or {}
+    gaps = context_diagnostics.get("gaps") or []
+    if not gaps:
+        return ""
+    manual_actions_path = context_diagnostics.get("manual_actions_path")
+    return f"""## Ограничения анализа
+
+- Контекст: {context_diagnostics.get('context_completeness', 'не указано')}
+- Критичные пробелы: {summary.get('critical_gaps', 0)}
+- Звонков без транскрипта: {summary.get('calls_without_transcript', 0)}
+- Подробный список для добора: {manual_actions_path or 'diagnostics/manual_actions.md'}"""
+
+
+def render_report(
+    analysis: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    context_diagnostics: dict[str, Any] | None = None,
+) -> str:
     lead_state = analysis.get("lead_state", {}) or {}
     activity = analysis.get("activity_summary", {}) or {}
     rop_manager = analysis.get("rop_manager_message_block", {}) or {}
@@ -280,10 +312,13 @@ def render_report(analysis: dict[str, Any], metadata: dict[str, Any] | None = No
 
     lead_id = analysis.get("lead_id", "")
     bitrix_url = bitrix_entity_url("lead", lead_id)
+    limitations = render_context_limitations_section(context_diagnostics)
+    limitations_section = f"\n\n{limitations}\n" if limitations else ""
 
     return f"""# Отчет РОПу по лиду {lead_id}
 
 Ссылка в Bitrix: {bitrix_url or 'не указана'}
+{limitations_section}
 
 ## Что сделать РОПу сейчас
 
@@ -396,6 +431,27 @@ def save_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_context_diagnostics_for_analysis(
+    *,
+    entity_type: str,
+    entity_id: str,
+    workspace_root: Path,
+) -> tuple[str, dict[str, Any] | None, dict[str, str]]:
+    try:
+        paths = ensure_context_diagnostics(entity_type, entity_id, workspace_root)
+        llm_text = read_text(paths["llm_context"])
+        payload = json.loads(paths["context_gaps"].read_text(encoding="utf-8"))
+        payload["manual_actions_path"] = str(paths["manual_actions_md"])
+        return llm_text, payload, {key: str(value) for key, value in paths.items()}
+    except Exception as error:
+        logger.warning("Could not build context diagnostics for %s %s: %s", entity_type, entity_id, error)
+        return (
+            "Диагностика полноты контекста не построена. Не считай это доказательством полной истории.",
+            None,
+            {},
+        )
+
+
 def main() -> None:
     args = parse_args()
     if not args.allow_direct_llm and not args.dry_run:
@@ -409,6 +465,13 @@ def main() -> None:
     transcript_path = resolve_transcript(args.transcript, lead_dir)
     knowledge_dir = Path(args.knowledge_dir)
     analysis_dir = lead_dir / "analysis"
+    context_diagnostics_text, context_diagnostics_payload, context_diagnostics_paths = (
+        load_context_diagnostics_for_analysis(
+            entity_type="lead",
+            entity_id=str(args.lead_id),
+            workspace_root=Path(args.lead_root),
+        )
+    )
 
     if not history_path.exists():
         raise FileNotFoundError(f"Lead history file not found: {history_path}")
@@ -427,7 +490,7 @@ def main() -> None:
         log_model_file_payload(logger, title="OKF knowledge input", model=args.model, path=path)
         okf_sections.append((path, read_text(path)))
 
-    prompt = build_prompt(args.lead_id, read_text(history_path), transcript_text, okf_sections)
+    prompt = build_prompt(args.lead_id, read_text(history_path), transcript_text, context_diagnostics_text, okf_sections)
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"lead_{args.lead_id}_request_prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
@@ -495,6 +558,7 @@ def main() -> None:
         "input_files": {
             "history": str(history_path),
             "transcript": str(transcript_path) if transcript_path else None,
+            "context_diagnostics": context_diagnostics_paths,
             "knowledge": [str(path) for path, _text in okf_sections],
         },
         "model_metadata": {key: value for key, value in metadata.items() if key != "raw_output_text"},
@@ -502,7 +566,7 @@ def main() -> None:
     }
 
     save_json(analysis_path, output_payload)
-    report_path.write_text(render_report(analysis, metadata), encoding="utf-8")
+    report_path.write_text(render_report(analysis, metadata, context_diagnostics_payload), encoding="utf-8")
     raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
 
     logger.info("Saved lead analysis JSON: %s", analysis_path)

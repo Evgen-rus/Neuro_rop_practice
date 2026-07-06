@@ -15,3 +15,13 @@ def bitrix_entity_url(entity_type: str, entity_id: str | int | None) -> str:
         return ""
     return f"{BITRIX_PORTAL_URL}/crm/{entity_type}/details/{entity_id}/"
 
+
+def bitrix_entity_activity_url(
+    entity_type: str,
+    entity_id: str | int | None,
+    activity_id: str | int | None,
+) -> str:
+    entity_url = bitrix_entity_url(entity_type, entity_id)
+    if not entity_url or not activity_id:
+        return entity_url
+    return f"{entity_url}?activity_id={activity_id}"

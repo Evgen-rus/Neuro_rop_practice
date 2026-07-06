@@ -61,7 +61,7 @@ def ensure_entity_workspace(
 ) -> Path:
     entity_type = safe_slug(entity_type.lower())
     entity_dir = entity_workspace_dir(entity_id, entity_type=entity_type, workspace_root=workspace_root)
-    for child in ("history", "raw", "audio", "transcripts", "analysis"):
+    for child in ("history", "raw", "audio", "transcripts", "analysis", "diagnostics"):
         (entity_dir / child).mkdir(parents=True, exist_ok=True)
 
     copy_if_exists(
@@ -112,7 +112,7 @@ def ensure_lead_workspace(
     raw_dir: Path = DEFAULT_LEAD_RAW_DIR,
 ) -> Path:
     lead_dir = entity_workspace_dir(lead_id, entity_type="lead", workspace_root=workspace_root)
-    for child in ("history", "raw", "audio", "transcripts", "analysis"):
+    for child in ("history", "raw", "audio", "transcripts", "analysis", "diagnostics"):
         (lead_dir / child).mkdir(parents=True, exist_ok=True)
 
     copy_if_exists(
@@ -155,6 +155,7 @@ def write_workspace_index(
         "audio_dir": str(entity_dir / "audio"),
         "transcripts_dir": str(entity_dir / "transcripts"),
         "analysis_dir": str(entity_dir / "analysis"),
+        "diagnostics_dir": str(entity_dir / "diagnostics"),
         "updated_at": datetime.now(MSK_TZ).isoformat(),
     }
     if extra:

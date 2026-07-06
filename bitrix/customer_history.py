@@ -737,11 +737,14 @@ def unavailable_sources(bundle: dict[str, Any]) -> list[dict[str, Any]]:
         activities = history.get("activities") or {}
         if not activities.get("ok"):
             unavailable.append({"source": "crm.activity.list", "entity": entity_key, "reason": activities.get("error")})
-        for attempt in history.get("timeline_comments") or []:
-            if not attempt.get("ok"):
-                unavailable.append(
-                    {"source": "crm.timeline.comment.list", "entity": entity_key, "reason": attempt.get("error")}
-                )
+        timeline_attempts = history.get("timeline_comments") or []
+        timeline_has_success = any(attempt.get("ok") for attempt in timeline_attempts)
+        if not timeline_has_success:
+            for attempt in timeline_attempts:
+                if not attempt.get("ok"):
+                    unavailable.append(
+                        {"source": "crm.timeline.comment.list", "entity": entity_key, "reason": attempt.get("error")}
+                    )
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for item in unavailable:

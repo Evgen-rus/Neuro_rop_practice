@@ -127,6 +127,18 @@ def main() -> None:
     run_step(
         [
             sys.executable,
+            "bitrix/context_diagnostics.py",
+            "--entity-type",
+            "deal",
+            "--entity-ids",
+            *args.deal_ids,
+            "--workspace-root",
+            str(workspace_root),
+        ]
+    )
+    run_step(
+        [
+            sys.executable,
             "bitrix/deals/4_build_deals_llm_context.py",
             "--input-dir",
             str(raw_dir),
