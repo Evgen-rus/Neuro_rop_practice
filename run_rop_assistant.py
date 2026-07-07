@@ -11,7 +11,7 @@ import argparse
 import json
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,10 @@ def rel(path: Path | str) -> str:
 
 def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_date_sort_value(value: Any) -> str:
+    return str(value or "")
 
 
 def parse_ids(value: str) -> list[str]:
@@ -275,6 +279,19 @@ def pipeline_command(options: WorkflowOptions) -> list[str]:
     return command
 
 
+def options_for_entity(options: WorkflowOptions, entity_type: str, entity_ids: list[str]) -> WorkflowOptions:
+    return replace(options, entity_type=entity_type, entity_ids=[str(item) for item in entity_ids])
+
+
+def options_for_converted_deals(options: WorkflowOptions, deal_ids: list[str]) -> WorkflowOptions:
+    return replace(
+        options,
+        entity_type="deal",
+        entity_ids=[str(item) for item in deal_ids],
+        include_related_contact_deals=False,
+    )
+
+
 def workspace_root(entity_type: str) -> Path:
     folder = "deals" if entity_type == "deal" else "leads"
     return PROJECT_ROOT / "reports" / "rop_assistant" / folder
@@ -282,6 +299,92 @@ def workspace_root(entity_type: str) -> Path:
 
 def workspace_dir(entity_type: str, entity_id: str) -> Path:
     return workspace_root(entity_type) / f"{entity_type}_{entity_id}"
+
+
+def lead_history_bundle_path(lead_id: str) -> Path:
+    return workspace_dir("lead", lead_id) / "raw" / f"lead_{lead_id}_customer_history_bundle.json"
+
+
+def result_item(call_container: dict[str, Any] | None) -> dict[str, Any]:
+    if not call_container or not call_container.get("ok"):
+        return {}
+    result = call_container.get("response", {}).get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def is_converted_lead(bundle: dict[str, Any]) -> bool:
+    lead = result_item(bundle.get("lead"))
+    status_id = str(lead.get("STATUS_ID") or "").upper()
+    semantic_id = str(lead.get("STATUS_SEMANTIC_ID") or "").upper()
+    return status_id == "CONVERTED" or semantic_id == "S"
+
+
+def freshest_related_deal(bundle: dict[str, Any], lead_id: str) -> dict[str, Any] | None:
+    deals = [deal for deal in bundle.get("related_deals") or [] if isinstance(deal, dict) and deal.get("id")]
+    direct_deals = [deal for deal in deals if str(deal.get("lead_id") or "") == str(lead_id)]
+    candidates = direct_deals or deals
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            parse_date_sort_value(item.get("date_modify") or item.get("date_create") or item.get("closedate")),
+            int(str(item.get("id") or "0")) if str(item.get("id") or "").isdigit() else 0,
+        ),
+        reverse=True,
+    )[0]
+
+
+def converted_lead_deals(lead_ids: list[str]) -> dict[str, dict[str, Any]]:
+    converted: dict[str, dict[str, Any]] = {}
+    for lead_id in lead_ids:
+        bundle_path = lead_history_bundle_path(str(lead_id))
+        if not bundle_path.exists():
+            continue
+        try:
+            bundle = load_json(bundle_path)
+        except ValueError:
+            continue
+        if not is_converted_lead(bundle):
+            continue
+        deal = freshest_related_deal(bundle, str(lead_id))
+        if deal:
+            converted[str(lead_id)] = deal
+            continue
+        print(
+            f"Лид {lead_id} сконвертирован, но сделка не найдена в related_deals. "
+            f"Проверь историю: {rel(bundle_path)}"
+        )
+    return converted
+
+
+def unique_ordered(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def print_converted_switch(converted: dict[str, dict[str, Any]]) -> None:
+    if not converted:
+        return
+    print("")
+    print("=== Переключение лидов в сделки ===")
+    for lead_id, deal in converted.items():
+        pipeline = (deal.get("pipeline") or {}).get("name") or deal.get("category_id") or "-"
+        status = "закрыта" if deal.get("is_closed") else "открыта/неясно"
+        amount = f"{deal.get('opportunity') or '-'} {deal.get('currency_id') or ''}".strip()
+        print(
+            f"Лид {lead_id} сконвертирован -> сделка {deal.get('id')} "
+            f"({pipeline}, стадия: {deal.get('stage_name') or deal.get('stage_id')}, "
+            f"сумма: {amount}, {status})."
+        )
+    print("Lead-анализ для этих лидов пропущен; основной управленческий анализ будет выполнен по сделке.")
 
 
 def diagnostics_path(entity_type: str, entity_id: str) -> Path:
@@ -466,11 +569,18 @@ def run_analysis(options: WorkflowOptions) -> None:
         run_command(analyze_command(options, entity_id), f"LLM-анализ {options.entity_type}_{entity_id}")
 
 
+def run_post_pipeline_steps(options: WorkflowOptions) -> None:
+    if options.transcribe_audio:
+        transcribe_missing_audio(options)
+    if options.analyze:
+        run_analysis(options)
+
+
 def report_path(entity_type: str, entity_id: str) -> Path:
     return workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
 
 
-def print_final_status(options: WorkflowOptions) -> None:
+def print_final_status(options: WorkflowOptions, *, show_report: bool = True) -> None:
     print("")
     print("=== Итог ===")
     for entity_id in options.entity_ids:
@@ -495,7 +605,7 @@ def print_final_status(options: WorkflowOptions) -> None:
         if int(critical or 0) or int(medium or 0):
             print("  Важно: анализ можно читать, но он обязан учитывать, что контекст неполный.")
         path = report_path(options.entity_type, entity_id)
-        if path.exists():
+        if show_report and path.exists():
             print(f"  ROP-отчет: {rel(path)}")
         print("")
 
@@ -505,11 +615,29 @@ def main() -> None:
     args = parse_args()
     options = options_from_args(args)
     run_command(pipeline_command(options), "Сбор истории, аудио и диагностики")
-    if options.transcribe_audio:
-        transcribe_missing_audio(options)
-    if options.analyze:
-        run_analysis(options)
-    print_final_status(options)
+    if options.entity_type != "lead":
+        run_post_pipeline_steps(options)
+        print_final_status(options)
+        return
+
+    converted = converted_lead_deals(options.entity_ids)
+    converted_lead_ids = set(converted)
+    remaining_lead_ids = [lead_id for lead_id in options.entity_ids if lead_id not in converted_lead_ids]
+
+    if remaining_lead_ids:
+        run_post_pipeline_steps(options_for_entity(options, "lead", remaining_lead_ids))
+
+    if converted:
+        print_converted_switch(converted)
+        deal_ids = unique_ordered([str(deal.get("id")) for deal in converted.values() if deal.get("id")])
+        deal_options = options_for_converted_deals(options, deal_ids)
+        run_command(pipeline_command(deal_options), "Сбор истории, аудио и диагностики по сделкам сконвертированных лидов")
+        run_post_pipeline_steps(deal_options)
+
+    print_final_status(options_for_entity(options, "lead", remaining_lead_ids), show_report=True) if remaining_lead_ids else None
+    if converted:
+        print_final_status(options_for_entity(options, "lead", list(converted_lead_ids)), show_report=False)
+        print_final_status(options_for_entity(options, "deal", unique_ordered([str(deal.get("id")) for deal in converted.values() if deal.get("id")])))
 
 
 if __name__ == "__main__":

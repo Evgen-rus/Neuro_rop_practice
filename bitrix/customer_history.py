@@ -470,6 +470,15 @@ def fetch_contact_deals(client: BitrixReadOnlyClient, contact_id: str) -> dict[s
     return client.safe_list_all("crm.deal.list", payload)
 
 
+def fetch_deals_by_lead_id(client: BitrixReadOnlyClient, lead_id: str) -> dict[str, Any]:
+    payload = {
+        "order": {"DATE_MODIFY": "DESC", "ID": "DESC"},
+        "filter": {"LEAD_ID": str(lead_id)},
+        "select": ["*", "UF_*"],
+    }
+    return client.safe_list_all("crm.deal.list", payload)
+
+
 def deal_summary(deal: dict[str, Any], stage_lookup: dict[str, dict[str, Any]]) -> dict[str, Any]:
     stage_id = str(deal.get("STAGE_ID") or "")
     stage_info = stage_lookup.get(stage_id) or {}
@@ -491,6 +500,7 @@ def deal_summary(deal: dict[str, Any], stage_lookup: dict[str, dict[str, Any]]) 
         "closedate": deal.get("CLOSEDATE"),
         "assigned_by_id": deal.get("ASSIGNED_BY_ID"),
         "source_id": deal.get("SOURCE_ID"),
+        "lead_id": deal.get("LEAD_ID"),
         "contact_id": deal.get("CONTACT_ID"),
         "company_id": deal.get("COMPANY_ID"),
         "is_closed": str(deal.get("CLOSED") or "").upper() in ("Y", "1", "TRUE"),
@@ -869,6 +879,33 @@ def build_customer_history_bundle(
 
     related_deals_by_id: dict[str, dict[str, Any]] = {}
     contact_deal_responses: dict[str, Any] = {}
+    lead_deal_responses: dict[str, Any] = {}
+    if root_type == "lead" and root_item.get("ID"):
+        lead_id = str(root_item["ID"])
+        response = fetch_deals_by_lead_id(client, lead_id)
+        lead_deal_responses[lead_id] = response
+        if not response.get("ok"):
+            diagnostics["warnings"].append(f"Не удалось получить сделки лида {lead_id}: {response.get('error')}")
+        for deal in result_items(response):
+            if not in_period_by_any_date(deal, period, ("DATE_CREATE", "DATE_MODIFY", "CLOSEDATE", "BEGINDATE")):
+                continue
+            deal_id = str(deal.get("ID") or "")
+            if deal_id:
+                related_deals_by_id[deal_id] = deal
+
+    for lead_id, response in related_lead_responses.items():
+        lead_deal_response = fetch_deals_by_lead_id(client, str(lead_id))
+        lead_deal_responses[str(lead_id)] = lead_deal_response
+        if not lead_deal_response.get("ok"):
+            diagnostics["warnings"].append(f"Не удалось получить сделки дубль-лида {lead_id}: {lead_deal_response.get('error')}")
+            continue
+        for deal in result_items(lead_deal_response):
+            if not in_period_by_any_date(deal, period, ("DATE_CREATE", "DATE_MODIFY", "CLOSEDATE", "BEGINDATE")):
+                continue
+            deal_id = str(deal.get("ID") or "")
+            if deal_id:
+                related_deals_by_id[deal_id] = deal
+
     for contact_id in contact_ids:
         response = fetch_contact_deals(client, contact_id)
         contact_deal_responses[contact_id] = response
@@ -947,6 +984,7 @@ def build_customer_history_bundle(
         "contact": contacts.get(primary_contact_id) if primary_contact_id else None,
         "companies": companies,
         "contact_deal_responses": contact_deal_responses,
+        "lead_deal_responses": lead_deal_responses,
         "related_leads": related_leads,
         "related_lead_responses": related_lead_responses,
         "related_deals": related_deals,

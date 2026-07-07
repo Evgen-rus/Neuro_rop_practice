@@ -222,6 +222,44 @@ def unavailable_source_gaps(context: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def result_item(call_container: dict[str, Any] | None) -> dict[str, Any]:
+    if not call_container or not call_container.get("ok"):
+        return {}
+    result = call_container.get("response", {}).get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def converted_lead_deal_gaps(context: dict[str, Any], entity_type: str, entity_id: str) -> list[dict[str, Any]]:
+    if entity_type != "lead":
+        return []
+
+    lead = result_item(context.get("lead"))
+    status_id = str(lead.get("STATUS_ID") or "").upper()
+    semantic_id = str(lead.get("STATUS_SEMANTIC_ID") or "").upper()
+    if status_id != "CONVERTED" and semantic_id != "S":
+        return []
+
+    related_deals = [item for item in context.get("related_deals") or [] if isinstance(item, dict)]
+    direct_deals = [item for item in related_deals if str(item.get("lead_id") or "") == str(entity_id)]
+    if direct_deals:
+        return []
+
+    return [
+        {
+            "severity": "critical",
+            "source": "converted_lead_deal_missing",
+            "entity": f"lead:{entity_id}",
+            "bitrix_entity_url": bitrix_entity_url("lead", entity_id),
+            "reason": "Лид сконвертирован, но связанная сделка не найдена автоматически в related_deals.",
+            "impact": "Основной ROP-анализ должен выполняться по сделке; без нее история после конвертации может быть упущена.",
+            "manual_action": (
+                "Открыть карточку лида в Bitrix24 и найти созданную сделку. "
+                "Если сделка есть, проверить, что crm.deal.list по фильтру LEAD_ID возвращает ее через REST."
+            ),
+        }
+    ]
+
+
 def build_transcribe_command(entity_type: str, entity_id: str, audio_path: Path, call: dict[str, Any]) -> str:
     entity_arg = "--deal-id" if entity_type == "deal" else "--lead-id"
     parts = [
@@ -289,6 +327,7 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
         audio_ids.setdefault(activity_id, []).extend(paths)
 
     gaps = unavailable_source_gaps(context)
+    gaps.extend(converted_lead_deal_gaps(context, entity_type, entity_id))
     for call in calls:
         activity_id = str(call.get("activity_id") or "")
         if not activity_id or activity_id in transcript_ids:
@@ -387,6 +426,19 @@ def render_manual_actions(payload: dict[str, Any]) -> str:
     if other:
         lines.extend(["## Остальные ограничения контекста", ""])
         for item in other:
+            if item.get("source") == "converted_lead_deal_missing":
+                lines.extend(
+                    [
+                        f"### Сконвертированный лид без найденной сделки: {item.get('entity') or ''}",
+                        "",
+                        f"Причина: {item.get('reason')}",
+                        f"Влияние: {item.get('impact')}",
+                        f"Карточка Bitrix: {item.get('bitrix_entity_url') or 'не указана'}",
+                        f"Что сделать: {item.get('manual_action')}",
+                        "",
+                    ]
+                )
+                continue
             lines.append(
                 f"- `{item.get('source')}`"
                 f"{' по ' + str(item.get('entity')) if item.get('entity') else ''}: "
