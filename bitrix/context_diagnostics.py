@@ -142,6 +142,44 @@ def collect_calls(context: dict[str, Any], root_type: str, root_id: str) -> list
     return dedupe_calls(calls_from_single_context(context, root_type, root_id))
 
 
+def deal_lead_id_from_context(context: dict[str, Any]) -> str:
+    result = (((context.get("deal") or {}).get("response") or {}).get("response") or {}).get("result")
+    if isinstance(result, dict) and result.get("LEAD_ID"):
+        return str(result["LEAD_ID"])
+    return ""
+
+
+def diagnostic_core_entity_keys(context: dict[str, Any], entity_type: str, entity_id: str) -> set[str]:
+    keys = {f"{entity_type}:{entity_id}"}
+    if entity_type == "deal":
+        lead_id = deal_lead_id_from_context(context)
+        if lead_id:
+            keys.add(f"lead:{lead_id}")
+    if entity_type == "lead":
+        for deal in context.get("related_deals") or []:
+            if isinstance(deal, dict) and str(deal.get("lead_id") or "") == str(entity_id) and deal.get("id"):
+                keys.add(f"deal:{deal['id']}")
+    return keys
+
+
+def split_core_and_related_calls(
+    calls: list[dict[str, Any]],
+    context: dict[str, Any],
+    entity_type: str,
+    entity_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    core_keys = diagnostic_core_entity_keys(context, entity_type, entity_id)
+    core: list[dict[str, Any]] = []
+    related: list[dict[str, Any]] = []
+    for call in calls:
+        key = f"{call.get('source_entity_type')}:{call.get('source_entity_id')}"
+        if key in core_keys:
+            core.append(call)
+        else:
+            related.append(call)
+    return core, related
+
+
 def local_audio_by_activity(entity_dir: Path) -> dict[str, list[str]]:
     audio_dir = entity_dir / "audio"
     rows: dict[str, list[str]] = {}
@@ -320,7 +358,20 @@ def call_gap(
 
 def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path, context_path: Path) -> dict[str, Any]:
     context = load_json(context_path)
-    calls = collect_calls(context, entity_type, entity_id)
+    all_calls = collect_calls(context, entity_type, entity_id)
+    calls, related_calls = split_core_and_related_calls(all_calls, context, entity_type, entity_id)
+    if not calls and context.get("bundle_type") == "customer_history_bundle":
+        single_context_path = context_path.parent / f"{entity_type}_{entity_id}_context.json"
+        if single_context_path.exists():
+            single_context = load_json(single_context_path)
+            single_calls, single_related_calls = split_core_and_related_calls(
+                collect_calls(single_context, entity_type, entity_id),
+                single_context,
+                entity_type,
+                entity_id,
+            )
+            calls = single_calls
+            related_calls.extend(single_related_calls)
     transcript_ids = transcript_activity_ids(entity_dir, entity_type, entity_id)
     audio_ids = local_audio_by_activity(entity_dir)
     for activity_id, paths in downloaded_audio_from_manifest(entity_dir, entity_type, entity_id).items():
@@ -341,6 +392,22 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
                 has_local_audio=activity_id in audio_ids,
             )
         )
+    related_calls_without_transcript = [
+        call for call in related_calls if str(call.get("activity_id") or "") not in transcript_ids
+    ]
+    if related_calls_without_transcript:
+        gaps.append(
+            {
+                "severity": "warning",
+                "source": "related_call_transcript_optional",
+                "entity": "related_entities",
+                "reason": (
+                    f"{len(related_calls_without_transcript)} звонков связанных сущностей не имеют локального transcript. "
+                    "Они не считаются критичными для анализа текущей сделки."
+                ),
+                "impact": "Дальняя история клиента может быть неполной, но отчет по текущей сделке строится по root deal/source lead.",
+            }
+        )
 
     critical_count = sum(1 for item in gaps if item.get("severity") == "critical")
     medium_count = sum(1 for item in gaps if item.get("severity") == "medium")
@@ -355,8 +422,10 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
         "critical_missing": critical_count > 0,
         "summary": {
             "crm_calls_found": len(calls),
+            "related_crm_calls_found": len(related_calls),
             "transcript_activity_ids_found": sorted(transcript_ids),
             "calls_without_transcript": sum(1 for call in calls if str(call.get("activity_id") or "") not in transcript_ids),
+            "related_calls_without_transcript": len(related_calls_without_transcript),
             "critical_gaps": critical_count,
             "medium_gaps": medium_count,
             "warning_gaps": sum(1 for item in gaps if item.get("severity") == "warning"),

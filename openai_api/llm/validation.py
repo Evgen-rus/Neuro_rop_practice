@@ -43,6 +43,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "what_changed",
     "deal_progress",
     "payment_blocker",
+    "price_comparability_check",
     "money_path_diagnosis",
     "resource_control",
     "shaker_question",
@@ -357,6 +358,44 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
         evidence = _expect_max_list_length(money_path.get("evidence"), "money_path_diagnosis.evidence", 7, errors)
         if not evidence:
             errors.append("money_path_diagnosis.evidence must not be empty")
+
+    price_check = _expect_dict(analysis.get("price_comparability_check"), "price_comparability_check", errors)
+    if price_check:
+        applicable = price_check.get("applicable")
+        _expect_bool(applicable, "price_comparability_check.applicable", errors)
+        _expect_enum(
+            price_check.get("price_gap_signal"),
+            "price_comparability_check.price_gap_signal",
+            {"none", "minor", "substantial", "unknown"},
+            errors,
+        )
+        for field in ("summary", "when_closing_is_valid", "when_to_return_to_pipeline"):
+            _expect_non_empty_string(price_check.get(field), f"price_comparability_check.{field}", errors)
+        unclear = _expect_max_list_length(
+            price_check.get("what_is_unclear"),
+            "price_comparability_check.what_is_unclear",
+            5,
+            errors,
+        )
+        checks = _expect_max_list_length(
+            price_check.get("what_rop_should_check"),
+            "price_comparability_check.what_rop_should_check",
+            5,
+            errors,
+        )
+        evidence = _expect_max_list_length(
+            price_check.get("evidence"),
+            "price_comparability_check.evidence",
+            7,
+            errors,
+        )
+        if applicable is True:
+            if not unclear:
+                errors.append("price_comparability_check.what_is_unclear must not be empty when applicable=true")
+            if not checks:
+                errors.append("price_comparability_check.what_rop_should_check must not be empty when applicable=true")
+            if not evidence:
+                errors.append("price_comparability_check.evidence must not be empty when applicable=true")
 
     objection_handling = _expect_dict(analysis.get("objection_handling"), "objection_handling", errors)
     if objection_handling:

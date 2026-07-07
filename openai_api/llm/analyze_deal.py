@@ -176,9 +176,12 @@ def build_prompt(
 Если CRM_STAGE_POLICY.is_closed_lost=true:
 - Не анализируй сделку как обычную открытую сделку.
 - Сначала оцени корректность закрытия в closed_deal_review.
-- Если в истории есть признаки потенциала: потребность, бюджетный ориентир, срок, ЛПР/путь к ЛПР, запрос КП/ТЗ или коммерческий интерес, ставь reopen_candidate=true и rop_decision="needs_manual_review" или "return_to_pipeline".
+- Если в истории есть признаки потенциала: потребность, бюджетный ориентир, срок, ЛПР/путь к ЛПР, запрос КП/ТЗ или коммерческий интерес, не делай автоматический вывод "вернуть в работу". Сначала проверь, нет ли стоп-факторов: существенный ценовой разрыв, несопоставимая комплектация, отсутствие реалистичного бюджета, технический стоп или явный отказ.
+- Если признаки потенциала есть, но ценовой/бюджетный разрыв выглядит существенным или кратным, ставь rop_decision="needs_manual_review", а не "return_to_pipeline", пока не подтверждена сопоставимость КП и реалистичный следующий шаг.
+- reopen_candidate=true ставь только если по фактам уже есть основание для возврата: клиент подтвердил интерес к обсуждению, есть реалистичная этапность/альтернативная комплектация, или видно, что сравнивались несопоставимые предложения.
 - Если закрытие выглядит обоснованным, ставь reopen_candidate=false и rop_decision="keep_closed".
 - Текст клиенту можно дать только как реактивационный сценарий и только если client_reactivation_allowed=true.
+- Если rop_decision="needs_manual_review", rop_manager_message_block.message_to_manager должен быть внутренним поручением менеджеру: какие факты проверить в CRM/КП/расчете и что внести в CRM. Не поручай менеджеру писать или звонить клиенту до решения РОПа вернуть/реанимировать сделку.
 - В manager_action_block.manager_checklist обязательно добавь, что текст использовать только после решения РОПа вернуть/реанимировать сделку.
 
 Правила по типам закрытия:
@@ -187,13 +190,22 @@ def build_prompt(
 - integration_blocker: проверить, это реальный технический стоп или решаемая интеграция.
 - price_lost: проверить защиту ценности, комплектацию, сроки, сервис, лизинг или альтернативный состав.
 - postponed: нужна контрольная дата и прогрев, не считать окончательной потерей без даты возврата.
-- wrong_qualification: искать спорное закрытие, если есть потребность, сумма, срок или путь к ЛПР.
+- wrong_qualification: искать спорное закрытие, если есть потребность, сумма, срок или путь к ЛПР, но при существенном ценовом разрыве сначала требовать проверки состава КП, финальной цены и того, что именно клиент сравнивает.
 - cannot_produce: не давать клиентский текст без проверки производства/аналога.
 - not_relevant: проверить реальную причину неактуальности.
 - no_response: проверить качество дозвона и альтернативные каналы.
 
 Если CRM_STAGE_POLICY.is_closed_lost=false, closed_deal_review.applicable=false.
 </crm_stage_rules>
+
+<price_comparability_rules>
+- Заполни price_comparability_check, если в истории есть цена нашего предложения, бюджет клиента, цена конкурента, "дорого", "не проходит по цене", "предложили дешевле", "Китай", локальный поставщик или другой ценовой ориентир.
+- Не используй жесткие числовые пороги и не принимай решение только по коэффициенту разницы. Существенная или кратная разница в цене — это красный флаг проверки, а не автоматическое доказательство ошибочного закрытия или окончательной неквалификации.
+- Главный вопрос: сравниваются ли одинаковые решения? Проверь, что входит в наше КП, что входит в альтернативу/ожидание клиента, какие узлы обязательны, какие опциональны, возможна ли этапность, что с сервисом, запуском, гарантией, обучением и ответственностью поставщика.
+- Если состав предложений не ясен, РОПу нужно не давить на клиента и не возвращать сделку автоматически, а запросить у менеджера/клиента факты сопоставимости.
+- Если после проверки понятно, что состав сопоставим, а бюджет клиента реально не позволяет покупку, закрытие может быть обосновано.
+- Если выясняется, что предложения несопоставимы или есть реалистичная этапность/урезанная комплектация, сделку можно возвращать в рабочую стадию.
+</price_comparability_rules>
 
 <length_limits>
 - summary/reason/description: максимум 2-3 коротких предложения.
@@ -351,6 +363,22 @@ def build_prompt(
     "recommended_pipeline_action": "что сделать со стадией/сделкой в CRM",
     "client_reactivation_allowed": true,
     "client_text_usage_note": "использовать текст клиенту только если РОП решил вернуть или реанимировать сделку"
+  }},
+  "price_comparability_check": {{
+    "applicable": true,
+    "price_gap_signal": "none|minor|substantial|unknown",
+    "summary": "кратко: что известно о цене/бюджете/альтернативе и почему это важно",
+    "what_is_unclear": [
+      "что не ясно в сопоставимости нашего предложения и ожидания/альтернативы клиента"
+    ],
+    "what_rop_should_check": [
+      "какой факт РОП должен запросить у менеджера или проверить в CRM"
+    ],
+    "when_closing_is_valid": "при каких фактах закрытие по цене/квалу можно подтвердить",
+    "when_to_return_to_pipeline": "при каких фактах сделку стоит вернуть в работу",
+    "evidence": [
+      "факт из истории, транскрипта или комментария CRM"
+    ]
   }},
   "resource_control": {{
     "should_spend_engineering_time": false,
@@ -514,6 +542,7 @@ def render_report(
     resource_control = analysis.get("resource_control", {}) or {}
     payment_blocker = analysis.get("payment_blocker", {}) or {}
     money_path = analysis.get("money_path_diagnosis", {}) or {}
+    price_check = analysis.get("price_comparability_check", {}) or {}
     objection_handling = analysis.get("objection_handling", {}) or {}
     shaker_question = analysis.get("shaker_question", {}) or {}
     competitor = analysis.get("competitor_defense_checklist", {}) or {}
@@ -611,12 +640,79 @@ def render_report(
     closed_review_md = render_closed_deal_review(closed_review)
     closed_review_section = f"\n\n{closed_review_md}\n" if closed_review_md else ""
 
+    def render_price_comparability_check(value: dict[str, Any]) -> str:
+        if not value.get("applicable"):
+            return ""
+        return f"""## Проверка сопоставимости цены
+
+- Сигнал ценового разрыва: {value.get('price_gap_signal', 'не указано')}
+- Кратко: {value.get('summary', 'не указано')}
+
+Что не ясно:
+
+{bullet_list(value.get('what_is_unclear'))}
+
+Что проверить РОПу:
+
+{bullet_list(value.get('what_rop_should_check'))}
+
+Когда закрытие можно подтвердить: {value.get('when_closing_is_valid', 'не указано')}
+
+Когда возвращать в работу: {value.get('when_to_return_to_pipeline', 'не указано')}
+
+Основание:
+
+{bullet_list(value.get('evidence'))}"""
+
+    price_check_md = render_price_comparability_check(price_check)
+    price_check_section = f"\n\n{price_check_md}\n" if price_check_md else ""
+
+    rop_decision = str(closed_review.get("rop_decision") or "")
+    is_closed_review = bool(closed_review.get("applicable"))
+    client_reactivation_allowed = bool(closed_review.get("client_reactivation_allowed"))
+    is_conditional_client_text = is_closed_review and rop_decision == "needs_manual_review"
+    show_client_text = not (is_closed_review and (rop_decision == "keep_closed" or not client_reactivation_allowed))
+    manager_action_title = (
+        "## Условный черновик клиентского касания"
+        if is_conditional_client_text
+        else "## Черновик текста клиенту для менеджера"
+    )
     manager_action_warning = ""
-    if closed_review.get("applicable") and closed_review.get("client_reactivation_allowed"):
+    if is_conditional_client_text:
+        manager_action_warning = (
+            "\nВажно: это заготовка для РОПа, а не поручение менеджеру писать клиенту. "
+            "Использовать только после решения РОПа вернуть или реанимировать сделку.\n"
+        )
+    elif is_closed_review and client_reactivation_allowed:
         manager_action_warning = (
             "\nВажно: текст ниже использовать только если РОП решил вернуть "
             "или реанимировать сделку. Сейчас сделка закрыта как проваленная.\n"
         )
+    if show_client_text:
+        manager_action_section = f"""{manager_action_title}
+
+- Канал: {manager.get('recommended_channel', 'не указано')}
+- Почему: {manager.get('channel_reason', 'не указано')}
+- Цель: {manager.get('goal', 'не указано')}
+{manager_action_warning}
+
+### Основной текст
+
+Тема: {primary.get('subject', '')}
+
+{primary.get('text', '')}
+
+### Запасные варианты
+
+{backup_md}
+
+### Чеклист менеджера
+
+{bullet_list(manager.get('manager_checklist'))}"""
+    else:
+        manager_action_section = f"""## Клиентский текст
+
+Не выводится, потому что решение по закрытой сделке `{closed_review.get('rop_decision', 'не указано')}`. Отчет предназначен для РОПа; менеджеру нужно передать поручение из раздела `Сообщение менеджеру от РОПа`."""
 
     deal_id = analysis.get("deal_id", "")
     bitrix_url = bitrix_entity_url("deal", deal_id)
@@ -678,6 +774,7 @@ def render_report(
 - Тип: {risk.get('risk_type', 'не указано')}
 - Описание: {risk.get('description', 'не указано')}
 {closed_review_section}
+{price_check_section}
 
 ## Режим сделки
 
@@ -785,26 +882,7 @@ def render_report(
 - Срок контроля: {human_value(rop_manager.get('deadline'))}
 - Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
 
-## Черновик текста клиенту для менеджера
-
-- Канал: {manager.get('recommended_channel', 'не указано')}
-- Почему: {manager.get('channel_reason', 'не указано')}
-- Цель: {manager.get('goal', 'не указано')}
-{manager_action_warning}
-
-### Основной текст
-
-Тема: {primary.get('subject', '')}
-
-{primary.get('text', '')}
-
-### Запасные варианты
-
-{backup_md}
-
-### Чеклист менеджера
-
-{bullet_list(manager.get('manager_checklist'))}
+{manager_action_section}
 
 ## Контроль РОПа
 
