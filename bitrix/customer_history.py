@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from bitrix.client import BitrixReadOnlyClient, as_list, load_json
+from bitrix.internal_im_chat import append_internal_chat_events, fetch_internal_im_chats, internal_chat_events
 from setup import BASE_DIR, MSK_TZ
 
 
@@ -137,9 +138,18 @@ def build_stage_lookup(pipeline_map_path: Path | None = None) -> dict[str, dict[
 
 
 def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any) -> dict[str, Any]:
-    if not entity_id:
+    if not is_real_id(entity_id):
         return {"ok": False, "method": method, "payload": {"id": entity_id}, "error": "empty id"}
     return client.safe_call(method, {"id": entity_id})
+
+
+def is_real_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.isdigit() and int(text) == 0:
+        return False
+    return True
 
 
 def fetch_activities_for_owner(client: BitrixReadOnlyClient, owner_type_id: int, owner_id: str) -> dict[str, Any]:
@@ -191,18 +201,18 @@ def fetch_timeline_comments(
 
 
 def contact_ids_from_deal(client: BitrixReadOnlyClient, deal_id: str, deal: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
-    contact_ids = {str(item) for item in as_list(deal.get("CONTACT_ID")) if item}
+    contact_ids = {str(item).strip() for item in as_list(deal.get("CONTACT_ID")) if is_real_id(item)}
     contact_items_response = client.safe_call("crm.deal.contact.items.get", {"id": deal_id})
     contact_items = get_result(contact_items_response)
     if isinstance(contact_items, list):
         for item in contact_items:
-            if isinstance(item, dict) and item.get("CONTACT_ID"):
-                contact_ids.add(str(item["CONTACT_ID"]))
+            if isinstance(item, dict) and is_real_id(item.get("CONTACT_ID")):
+                contact_ids.add(str(item["CONTACT_ID"]).strip())
     return sorted(contact_ids), contact_items_response
 
 
 def contact_ids_from_lead(lead: dict[str, Any]) -> list[str]:
-    return sorted({str(item) for item in as_list(lead.get("CONTACT_ID")) if item})
+    return sorted({str(item).strip() for item in as_list(lead.get("CONTACT_ID")) if is_real_id(item)})
 
 
 def multifield_values(entity: dict[str, Any], field: str) -> list[str]:
@@ -242,7 +252,7 @@ def fallback_candidates_from_root(root_type: str, root_item: dict[str, Any]) -> 
     for email in multifield_values(root_item, "EMAIL"):
         candidates.append({"type": "email", "value": email, "source": f"{root_type}.EMAIL"})
     company_id = root_item.get("COMPANY_ID")
-    if company_id:
+    if is_real_id(company_id):
         candidates.append({"type": "company_id", "value": str(company_id), "source": f"{root_type}.COMPANY_ID"})
     company_title = root_item.get("COMPANY_TITLE")
     if company_title:
@@ -453,12 +463,12 @@ def resolve_lead_ids_by_fallback(
 def fetch_contacts(client: BitrixReadOnlyClient, contact_ids: list[str]) -> dict[str, Any]:
     return {
         contact_id: fetch_entity_by_id(client, "crm.contact.get", contact_id)
-        for contact_id in sorted({str(item) for item in contact_ids if item})
+        for contact_id in sorted({str(item).strip() for item in contact_ids if is_real_id(item)})
     }
 
 
 def fetch_company(client: BitrixReadOnlyClient, company_id: Any) -> dict[str, Any] | None:
-    return fetch_entity_by_id(client, "crm.company.get", company_id) if company_id else None
+    return fetch_entity_by_id(client, "crm.company.get", company_id) if is_real_id(company_id) else None
 
 
 def fetch_contact_deals(client: BitrixReadOnlyClient, contact_id: str) -> dict[str, Any]:
@@ -735,6 +745,68 @@ def build_history_sections(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def internal_im_chat_targets(
+    *,
+    root_type: str,
+    root_id: str,
+    root_item: dict[str, Any],
+    related_deals: list[dict[str, Any]],
+    related_leads: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    targets: dict[str, dict[str, str]] = {}
+
+    def add(entity_type: str, entity_id: Any, title: Any) -> None:
+        if not is_real_id(entity_id):
+            return
+        normalized_type = str(entity_type).lower().strip()
+        if normalized_type not in {"deal", "lead"}:
+            return
+        key = f"{normalized_type}:{str(entity_id).strip()}"
+        targets[key] = {
+            "entity_type": normalized_type,
+            "entity_id": str(entity_id).strip(),
+            "title": clean_text(title, 300),
+        }
+
+    add(root_type, root_id, root_item.get("TITLE") or root_item.get("NAME") or root_item.get("COMPANY_TITLE"))
+    for deal in related_deals:
+        add("deal", deal.get("id"), deal.get("title"))
+    for lead in related_leads:
+        add("lead", lead.get("id"), lead.get("title"))
+    return list(targets.values())
+
+
+def internal_im_unavailable_sources(internal_chats_by_entity: dict[str, Any]) -> list[dict[str, Any]]:
+    unavailable: list[dict[str, Any]] = []
+    for entity_key, chat_bundle in internal_chats_by_entity.items():
+        for response in chat_bundle.get("search_responses") or []:
+            if not response.get("ok"):
+                unavailable.append(
+                    {
+                        "source": "im.search.chat.list",
+                        "entity": entity_key,
+                        "reason": response.get("error") or "unknown_error",
+                    }
+                )
+        for chat in chat_bundle.get("chats") or []:
+            for source, response_key in (
+                ("im.chat.get", "chat_response"),
+                ("im.dialog.messages.get", "messages_response"),
+                ("im.dialog.users.list", "users_response"),
+            ):
+                response = chat.get(response_key) or {}
+                if not response.get("ok"):
+                    unavailable.append(
+                        {
+                            "source": source,
+                            "entity": entity_key,
+                            "chat_id": chat.get("chat_id"),
+                            "reason": response.get("error") or "unknown_error",
+                        }
+                    )
+    return unavailable
+
+
 def unavailable_sources(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     unavailable: list[dict[str, Any]] = [
         {
@@ -841,7 +913,7 @@ def build_customer_history_bundle(
             for response in related_lead_responses.values():
                 related_contact_ids.extend(contact_ids_from_lead(result_item(response)))
             if related_contact_ids:
-                contact_ids = sorted({str(item) for item in related_contact_ids if item})
+                contact_ids = sorted({str(item).strip() for item in related_contact_ids if is_real_id(item)})
                 diagnostics["fallback_match_used"] = True
                 diagnostics["fallback_related_leads_used"] = True
                 diagnostics["warnings"].append(
@@ -934,10 +1006,10 @@ def build_customer_history_bundle(
         )
     ]
 
-    company_ids = {str(item.get("company_id")) for item in related_deals if item.get("company_id")}
-    company_ids.update(str(item.get("company_id")) for item in related_leads if item.get("company_id"))
-    if root_type == "lead" and root_item.get("COMPANY_ID"):
-        company_ids.add(str(root_item["COMPANY_ID"]))
+    company_ids = {str(item.get("company_id")).strip() for item in related_deals if is_real_id(item.get("company_id"))}
+    company_ids.update(str(item.get("company_id")).strip() for item in related_leads if is_real_id(item.get("company_id")))
+    if root_type == "lead" and is_real_id(root_item.get("COMPANY_ID")):
+        company_ids.add(str(root_item["COMPANY_ID"]).strip())
     companies = {company_id: fetch_company(client, company_id) for company_id in sorted(company_ids)}
 
     activities_by_entity: dict[str, Any] = {}
@@ -1001,10 +1073,47 @@ def build_customer_history_bundle(
     if not include_internal_context:
         sections["internal_context"] = []
         sections["unified_timeline"] = [
-            item for item in sections["unified_timeline"] if item.get("category") != "timeline_comment"
+            item
+            for item in sections["unified_timeline"]
+            if item.get("category") not in {"timeline_comment", "internal_im_chat"}
         ]
     bundle.update(sections)
+    internal_chats_by_entity: dict[str, Any] = {}
+    internal_chat_rows: list[dict[str, Any]] = []
+    if include_internal_context:
+        for target in internal_im_chat_targets(
+            root_type=root_type,
+            root_id=root_id,
+            root_item=root_item,
+            related_deals=related_deals,
+            related_leads=related_leads,
+        ):
+            entity_key = f"{target['entity_type']}:{target['entity_id']}"
+            chat_bundle = fetch_internal_im_chats(
+                client,
+                entity_type=target["entity_type"],
+                entity_id=target["entity_id"],
+                title=target.get("title") or "",
+            )
+            internal_chats_by_entity[entity_key] = chat_bundle
+            internal_chat_rows.extend(
+                internal_chat_events(
+                    chat_bundle,
+                    source_entity_type=target["entity_type"],
+                    source_entity_id=target["entity_id"],
+                )
+            )
+
+    bundle["internal_im_chats_by_entity"] = internal_chats_by_entity
+    append_internal_chat_events(bundle, internal_chat_rows)
+    bundle["diagnostics"]["internal_im_chat"] = {
+        "enabled": bool(include_internal_context),
+        "entities_checked": sorted(internal_chats_by_entity.keys()),
+        "events_added": len(internal_chat_rows),
+        "chat_ids": sorted({str(event.get("chat_id")) for event in internal_chat_rows if event.get("chat_id")}),
+    }
     bundle["diagnostics"]["unavailable_sources"] = unavailable_sources(bundle)
+    bundle["diagnostics"]["unavailable_sources"].extend(internal_im_unavailable_sources(internal_chats_by_entity))
     if sections.get("ignored_openline_events"):
         bundle["diagnostics"]["warnings"].append(
             f"Открытые линии не использовались: проигнорировано событий {len(sections['ignored_openline_events'])}."

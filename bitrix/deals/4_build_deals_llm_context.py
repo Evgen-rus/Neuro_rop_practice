@@ -645,11 +645,12 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def compact_history_rows(items: list[dict[str, Any]], limit: int = 20) -> list[str]:
+def compact_history_rows(items: list[dict[str, Any]], limit: int = 20, text_limit: int = 500) -> list[str]:
     rows: list[str] = []
     for item in items[-limit:]:
         entity = f"{item.get('entity_type')}:{item.get('entity_id')}"
-        text = clean_text(item.get("subject") or item.get("text"), 500)
+        value = item.get("text") if item.get("category") == "internal_im_chat" else item.get("subject") or item.get("text")
+        text = clean_text(value, text_limit)
         rows.append(
             f"- {item.get('when') or '-'} source={entity} type={item.get('event_type') or '-'} "
             f"id={item.get('id') or '-'}: {text or '-'}"
@@ -748,7 +749,7 @@ def build_customer_history_llm_context(bundle: dict[str, Any]) -> str:
         "",
         "Не считать этот блок словами клиента.",
         "",
-        *compact_history_rows(bundle.get("internal_context") or [], limit=20),
+        *compact_history_rows(bundle.get("internal_context") or [], limit=20, text_limit=1200),
         "",
         "## 8. Системные события и состояния",
         "",

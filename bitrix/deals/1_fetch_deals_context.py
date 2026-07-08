@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
-from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle
+from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle, is_real_id
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -104,7 +104,7 @@ def build_stage_lookup(pipeline_map_path: Path) -> dict[str, dict[str, Any]]:
 
 
 def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any) -> dict[str, Any]:
-    if not entity_id:
+    if not is_real_id(entity_id):
         return {"ok": False, "method": method, "payload": {"id": entity_id}, "error": "empty id"}
     return client.safe_call(method, {"id": entity_id})
 
@@ -232,21 +232,21 @@ def fetch_deal_bundle(
     deal_response = fetch_entity_by_id(client, "crm.deal.get", deal_id)
     deal = get_result(deal_response) or {}
 
-    contact_ids = set(str(item) for item in as_list(deal.get("CONTACT_ID")) if item)
+    contact_ids = {str(item).strip() for item in as_list(deal.get("CONTACT_ID")) if is_real_id(item)}
     contact_items_response = client.safe_call("crm.deal.contact.items.get", {"id": deal_id})
     contact_items = get_result(contact_items_response)
     if isinstance(contact_items, list):
         for item in contact_items:
             contact_id = item.get("CONTACT_ID") if isinstance(item, dict) else None
-            if contact_id:
-                contact_ids.add(str(contact_id))
+            if is_real_id(contact_id):
+                contact_ids.add(str(contact_id).strip())
 
     company_id = deal.get("COMPANY_ID")
     contacts = {
         contact_id: fetch_entity_by_id(client, "crm.contact.get", contact_id)
         for contact_id in sorted(contact_ids)
     }
-    company = fetch_entity_by_id(client, "crm.company.get", company_id) if company_id else None
+    company = fetch_entity_by_id(client, "crm.company.get", company_id) if is_real_id(company_id) else None
 
     activities_response = fetch_activities(client, deal_id)
     activities = activities_response.get("items", [])

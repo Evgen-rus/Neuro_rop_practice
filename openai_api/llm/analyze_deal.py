@@ -22,7 +22,7 @@ from openai_api.audio.build_deal_transcript_context import build_all_deal_transc
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
-from openai_api.llm.validation import AnalysisValidationError, validate_deal_analysis
+from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
 from setup import MSK_TZ
@@ -169,7 +169,8 @@ def build_prompt(
 - Если нужного факта нет в истории или транскрибации, прямо укажи, каких данных не хватает.
 - Если диагностика полноты контекста показывает пробелы, не делай выводы по отсутствующим звонкам/источникам и явно отрази ограничение в выводах.
 - Если в истории есть связанные сделки того же контакта, не считай отсутствие действия в текущей карточке отсутствием работы с клиентом.
-- Внутренний контекст, комментарии менеджеров и diagnostics не считай словами клиента.
+- Внутренний контекст и комментарии менеджеров можно использовать как evidence для контроля РОПа, но не считай их словами клиента.
+- Diagnostics используй только как сведения о полноте/ограничениях выгрузки, не как факты сделки.
 </grounding_rules>
 
 <crm_stage_rules>
@@ -213,6 +214,8 @@ def build_prompt(
 - Списки allowed_work, blocked_work, defense_points, questions_to_client: максимум 5 пунктов.
 - Списки missing_confirmation, next_actions: максимум 5 пунктов.
 - Список likely_objections: максимум 3 пункта.
+- Любой массив evidence: максимум 7 пунктов. Если фактов больше 7, выбери самые важные и объединяй близкие факты в один пункт.
+- При выборе evidence приоритет такой: клиентские факты и транскрипт, затем CRM-стадия/задачи/комментарии, затем внутренний чат как источник управленческого контекста.
 - Готовый email или messenger text: максимум 1200 символов.
 - call_script: максимум 900 символов.
 - Не повторяй одну и ту же мысль в нескольких полях.
@@ -318,7 +321,7 @@ def build_prompt(
     "deadline": "YYYY-MM-DD или null",
     "success_condition": "как понять, что поручение выполнено",
     "evidence": [
-      "факт из истории, звонка, комментария, задачи, стадии или CRM"
+      "1-7 самых важных фактов из истории, звонка, комментария, задачи, стадии, CRM или внутреннего чата"
     ]
   }},
   "new_event": {{
@@ -336,7 +339,7 @@ def build_prompt(
     "why_money_is_at_risk": "почему деньги могут быть потеряны или задержаны",
     "current_owner_of_next_step": "manager|client|rop|finance|leasing|unknown",
     "next_required_fact": "какой факт нужен для движения к деньгам",
-    "evidence": []
+    "evidence": ["1-7 самых важных фактов"]
   }},
   "main_risk": {{
     "risk_level": "low|medium|medium_high|high",
@@ -377,7 +380,7 @@ def build_prompt(
     "when_closing_is_valid": "при каких фактах закрытие по цене/квалу можно подтвердить",
     "when_to_return_to_pipeline": "при каких фактах сделку стоит вернуть в работу",
     "evidence": [
-      "факт из истории, транскрипта или комментария CRM"
+      "1-7 фактов из истории, транскрипта, комментария CRM или внутреннего чата"
     ]
   }},
   "resource_control": {{
@@ -1006,6 +1009,11 @@ def main() -> None:
         print(f"Model returned invalid JSON. Raw output saved: {raw_path}")
         print(f"Error details saved: {error_path}")
         raise
+
+    normalization_changes = normalize_analysis_for_validation(analysis)
+    if normalization_changes:
+        metadata["normalization_changes"] = normalization_changes
+        logger.warning("Normalized deal analysis before validation: %s", normalization_changes)
 
     try:
         validate_deal_analysis(analysis)

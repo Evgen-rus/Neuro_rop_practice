@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, save_json
-from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle
+from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle, is_real_id
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -66,7 +66,7 @@ def get_result(call_result: dict[str, Any]) -> Any:
 
 
 def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any) -> dict[str, Any]:
-    if not entity_id:
+    if not is_real_id(entity_id):
         return {"ok": False, "method": method, "payload": {"id": entity_id}, "error": "empty id"}
     return client.safe_call(method, {"id": entity_id})
 
@@ -128,8 +128,8 @@ def fetch_lead_bundle(client: BitrixReadOnlyClient, lead_id: str) -> dict[str, A
     lead_response = fetch_entity_by_id(client, "crm.lead.get", lead_id)
     lead = get_result(lead_response) or {}
 
-    contact_ids = set(str(item) for item in as_list(lead.get("CONTACT_ID")) if item)
-    company_ids = set(str(item) for item in as_list(lead.get("COMPANY_ID")) if item)
+    contact_ids = {str(item).strip() for item in as_list(lead.get("CONTACT_ID")) if is_real_id(item)}
+    company_ids = {str(item).strip() for item in as_list(lead.get("COMPANY_ID")) if is_real_id(item)}
 
     activities = fetch_activities(client, lead_id)
     activity_items = activities.get("items", [])

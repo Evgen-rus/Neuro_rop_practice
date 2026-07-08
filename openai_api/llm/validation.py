@@ -58,9 +58,68 @@ LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "loss_diagnosis",
 }
 
+MAX_LIST_LIMITS = {
+    "rop_manager_message_block.evidence": 7,
+    "closed_deal_review.why_closed_questionable": 5,
+    "closed_deal_review.why_closed_may_be_valid": 5,
+    "resource_control.allowed_work": 5,
+    "resource_control.blocked_work": 5,
+    "payment_blocker.missing_confirmation": 5,
+    "payment_blocker.next_actions": 5,
+    "money_path_diagnosis.evidence": 7,
+    "price_comparability_check.what_is_unclear": 5,
+    "price_comparability_check.what_rop_should_check": 5,
+    "price_comparability_check.evidence": 7,
+    "objection_handling.likely_objections": 3,
+    "competitor_defense_checklist.defense_points": 5,
+    "competitor_defense_checklist.questions_to_client": 5,
+    "loss_diagnosis.evidence": 7,
+}
+
 
 def _field_path(parent: str, child: str) -> str:
     return f"{parent}.{child}" if parent else child
+
+
+def _value_at_path(value: dict[str, Any], path: str) -> Any:
+    current: Any = value
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _set_value_at_path(value: dict[str, Any], path: str, new_value: Any) -> None:
+    current: Any = value
+    parts = path.split(".")
+    for part in parts[:-1]:
+        if not isinstance(current, dict):
+            return
+        current = current.get(part)
+    if isinstance(current, dict):
+        current[parts[-1]] = new_value
+
+
+def normalize_analysis_for_validation(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    """Clamp long model lists to validator limits without changing input context."""
+
+    changes: list[dict[str, Any]] = []
+    for path, limit in MAX_LIST_LIMITS.items():
+        value = _value_at_path(analysis, path)
+        if not isinstance(value, list) or len(value) <= limit:
+            continue
+        _set_value_at_path(analysis, path, value[:limit])
+        changes.append(
+            {
+                "path": path,
+                "action": "truncated_list",
+                "max_items": limit,
+                "original_items": len(value),
+                "removed_items": len(value) - limit,
+            }
+        )
+    return changes
 
 
 def _require_fields(value: dict[str, Any], required_fields: set[str], parent: str, errors: list[str]) -> None:

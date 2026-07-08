@@ -115,6 +115,8 @@ def related_leads_table(bundle: dict[str, Any]) -> list[str]:
 
 
 def event_text(item: dict[str, Any], limit: int = 260) -> str:
+    if item.get("category") == "internal_im_chat":
+        return clean_text(item.get("text") or item.get("subject") or "", 700)
     value = item.get("subject") or item.get("text") or ""
     return clean_text(value, limit)
 
