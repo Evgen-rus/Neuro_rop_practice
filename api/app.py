@@ -86,7 +86,9 @@ class OutcomeRequest(BaseModel):
 
 class CandidatesSearchRequest(BaseModel):
     entity_type: Literal["all", "lead", "deal"] = "all"
-    days: int = Field(default=DEFAULT_DAYS, ge=0)
+    created_days: int = Field(default=DEFAULT_DAYS, ge=0)
+    modified_days: int = Field(default=DEFAULT_DAYS, ge=0)
+    days: int | None = Field(default=None, ge=0, description="Устаревший alias для created_days")
     limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=100)
     priority: Literal["high", "medium", "low"] | None = None
 
@@ -103,12 +105,21 @@ def health() -> dict[str, Any]:
 @app.get("/api/candidates")
 def candidates(
     entity_type: Literal["all", "lead", "deal"] = "all",
-    days: int = Query(default=DEFAULT_DAYS, ge=0),
+    created_days: int = Query(default=DEFAULT_DAYS, ge=0),
+    modified_days: int = Query(default=DEFAULT_DAYS, ge=0),
+    days: int | None = Query(default=None, ge=0),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=100),
     priority: Literal["high", "medium", "low"] | None = None,
 ) -> dict[str, Any]:
     try:
-        return search_candidates(entity_type=entity_type, days=days, limit=limit, priority=priority)
+        return search_candidates(
+            entity_type=entity_type,
+            created_days=created_days,
+            modified_days=modified_days,
+            days=days,
+            limit=limit,
+            priority=priority,
+        )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -118,6 +129,8 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
     try:
         return search_candidates(
             entity_type=body.entity_type,
+            created_days=body.created_days,
+            modified_days=body.modified_days,
             days=body.days,
             limit=body.limit,
             priority=body.priority,

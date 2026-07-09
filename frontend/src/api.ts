@@ -23,6 +23,8 @@ export type Candidate = {
 }
 
 export type CandidatesResponse = {
+  created_days?: number
+  modified_days?: number
   days: number
   limit: number
   entity_type: string
@@ -130,12 +132,16 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchCandidates(params: {
   entity_type?: string
+  created_days?: number
+  modified_days?: number
   days?: number
   limit?: number
   priority?: string
 }) {
   const query = new URLSearchParams()
   if (params.entity_type) query.set('entity_type', params.entity_type)
+  if (params.created_days !== undefined) query.set('created_days', String(params.created_days))
+  if (params.modified_days !== undefined) query.set('modified_days', String(params.modified_days))
   if (params.days !== undefined) query.set('days', String(params.days))
   if (params.limit !== undefined) query.set('limit', String(params.limit))
   if (params.priority) query.set('priority', params.priority)

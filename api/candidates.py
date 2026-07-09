@@ -128,16 +128,29 @@ def load_status_map(client: BitrixReadOnlyClient, entity_id: str) -> dict[str, s
     return result
 
 
-def fetch_recent_leads(client: BitrixReadOnlyClient, *, days: int) -> list[dict[str, Any]]:
-    if days <= 0:
-        start = datetime(1970, 1, 1, tzinfo=MSK_TZ)
-    else:
-        start = datetime.now(MSK_TZ) - timedelta(days=days)
+def fetch_recent_leads(
+    client: BitrixReadOnlyClient,
+    *,
+    created_days: int,
+    modified_days: int,
+) -> list[dict[str, Any]]:
+    """
+    Кандидаты-лиды: фильтр по DATE_CREATE и/или DATE_MODIFY.
+    0 = без ограничения по этому полю.
+    """
+    filter_payload: dict[str, Any] = {}
+    if created_days > 0:
+        start_create = datetime.now(MSK_TZ) - timedelta(days=created_days)
+        filter_payload[">=DATE_CREATE"] = date_for_bitrix(start_create)
+    if modified_days > 0:
+        start_modify = datetime.now(MSK_TZ) - timedelta(days=modified_days)
+        filter_payload[">=DATE_MODIFY"] = date_for_bitrix(start_modify)
+
     return client.list_all(
         "crm.lead.list",
         {
-            "order": {"DATE_MODIFY": "DESC", "ID": "DESC"},
-            "filter": {">=DATE_MODIFY": date_for_bitrix(start)},
+            "order": {"DATE_CREATE": "DESC", "ID": "DESC"},
+            "filter": filter_payload,
             "select": [
                 "ID",
                 "TITLE",
@@ -156,16 +169,29 @@ def fetch_recent_leads(client: BitrixReadOnlyClient, *, days: int) -> list[dict[
     )
 
 
-def fetch_recent_deals(client: BitrixReadOnlyClient, *, days: int) -> list[dict[str, Any]]:
-    if days <= 0:
-        start = datetime(1970, 1, 1, tzinfo=MSK_TZ)
-    else:
-        start = datetime.now(MSK_TZ) - timedelta(days=days)
+def fetch_recent_deals(
+    client: BitrixReadOnlyClient,
+    *,
+    created_days: int,
+    modified_days: int,
+) -> list[dict[str, Any]]:
+    """
+    Кандидаты-сделки: фильтр по DATE_CREATE и/или DATE_MODIFY.
+    0 = без ограничения по этому полю.
+    """
+    filter_payload: dict[str, Any] = {}
+    if created_days > 0:
+        start_create = datetime.now(MSK_TZ) - timedelta(days=created_days)
+        filter_payload[">=DATE_CREATE"] = date_for_bitrix(start_create)
+    if modified_days > 0:
+        start_modify = datetime.now(MSK_TZ) - timedelta(days=modified_days)
+        filter_payload[">=DATE_MODIFY"] = date_for_bitrix(start_modify)
+
     return client.list_all(
         "crm.deal.list",
         {
-            "order": {"DATE_MODIFY": "DESC", "ID": "DESC"},
-            "filter": {">=DATE_MODIFY": date_for_bitrix(start)},
+            "order": {"DATE_CREATE": "DESC", "ID": "DESC"},
+            "filter": filter_payload,
             "select": [
                 "ID",
                 "TITLE",
@@ -370,11 +396,18 @@ def mark_analyzed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def search_candidates(
     *,
     entity_type: str = "all",
-    days: int = DEFAULT_DAYS,
+    created_days: int = DEFAULT_DAYS,
+    modified_days: int = DEFAULT_DAYS,
+    days: int | None = None,
     limit: int = DEFAULT_LIMIT,
     priority: str | None = None,
 ) -> dict[str, Any]:
-    days = max(0, int(days))
+    # Обратная совместимость: старый параметр days задаёт окно CREATE.
+    if days is not None:
+        created_days = max(0, int(days))
+    else:
+        created_days = max(0, int(created_days))
+    modified_days = max(0, int(modified_days))
     limit = max(1, min(int(limit), 100))
     client = make_client()
     stage_names = load_pipeline_stage_names()
@@ -382,12 +415,20 @@ def search_candidates(
 
     scored: list[dict[str, Any]] = []
     if entity_type in {"all", "deal"}:
-        for deal in fetch_recent_deals(client, days=days):
+        for deal in fetch_recent_deals(
+            client,
+            created_days=created_days,
+            modified_days=modified_days,
+        ):
             item = score_deal(deal, stage_names)
             if item:
                 scored.append(item)
     if entity_type in {"all", "lead"}:
-        for lead in fetch_recent_leads(client, days=days):
+        for lead in fetch_recent_leads(
+            client,
+            created_days=created_days,
+            modified_days=modified_days,
+        ):
             item = score_lead(lead, lead_status_names)
             if item:
                 scored.append(item)
@@ -400,6 +441,7 @@ def search_candidates(
         key=lambda item: (
             {"high": 3, "medium": 2, "low": 1}.get(str(item.get("priority")), 0),
             int(item.get("score") or 0),
+            str(item.get("date_create") or ""),
             str(item.get("date_modify") or ""),
         ),
         reverse=True,
@@ -414,7 +456,9 @@ def search_candidates(
         "already_analyzed": sum(1 for item in top if item.get("analyzed")),
     }
     return {
-        "days": days,
+        "created_days": created_days,
+        "modified_days": modified_days,
+        "days": created_days,  # совместимость со старым UI/клиентом
         "limit": limit,
         "entity_type": entity_type,
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),

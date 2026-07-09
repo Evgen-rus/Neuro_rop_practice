@@ -557,6 +557,35 @@ ul.facts.bad li:before {
   margin-bottom: 14px;
 }
 
+.filters-compact {
+  grid-template-columns: 64px 64px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.filters-compact .field-days input {
+  width: 100%;
+  padding: 8px 6px;
+  text-align: center;
+}
+
+.filters-compact .field label {
+  font-size: 12px;
+}
+
+.filters-compact .field input,
+.filters-compact .field select {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.filters-refresh {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 10px 12px;
+  margin-top: 2px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -659,6 +688,10 @@ ul.facts.bad li:before {
   .filters,
   .checks {
     grid-template-columns: 1fr;
+  }
+
+  .filters-compact {
+    grid-template-columns: 1fr 1fr;
   }
 
   .panel {

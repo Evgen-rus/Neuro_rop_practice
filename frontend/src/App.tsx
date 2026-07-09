@@ -144,7 +144,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('dashboard')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
-  const [days, setDays] = useState(15)
+  const [createdDays, setCreatedDays] = useState(15)
+  const [modifiedDays, setModifiedDays] = useState(15)
   const [entityFilter, setEntityFilter] = useState<'all' | 'lead' | 'deal'>('all')
   const [priorityFilter, setPriorityFilter] = useState<string>('')
   const [candidatesData, setCandidatesData] = useState<CandidatesResponse | null>(null)
@@ -230,7 +231,8 @@ export default function App() {
     try {
       const data = await fetchCandidates({
         entity_type: entityFilter,
-        days,
+        created_days: createdDays,
+        modified_days: modifiedDays,
         limit: 20,
         priority: priorityFilter || undefined,
       })
@@ -274,7 +276,8 @@ export default function App() {
         const [candidates, reports] = await Promise.all([
           fetchCandidates({
             entity_type: 'all',
-            days: 15,
+            created_days: 15,
+            modified_days: 15,
             limit: 20,
           }),
           fetchReports(50),
@@ -423,15 +426,24 @@ export default function App() {
         <div className="grid">
           <aside className="panel">
             <h3>Сегодня требуют внимания</h3>
-            <p>Топ-20 кандидатов по Bitrix-фильтру и scoring без LLM.</p>
-            <div className="filters" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <div className="field">
-                <label>Дней</label>
+            <p>Топ-20. Созданы / изменены за N дней.</p>
+            <div className="filters filters-compact">
+              <div className="field field-days">
+                <label>Созданы</label>
                 <input
                   type="number"
                   min={0}
-                  value={days}
-                  onChange={(e) => setDays(Math.max(0, Number(e.target.value) || 0))}
+                  value={createdDays}
+                  onChange={(e) => setCreatedDays(Math.max(0, Number(e.target.value) || 0))}
+                />
+              </div>
+              <div className="field field-days">
+                <label>Изменены</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={modifiedDays}
+                  onChange={(e) => setModifiedDays(Math.max(0, Number(e.target.value) || 0))}
                 />
               </div>
               <div className="field">
@@ -451,12 +463,13 @@ export default function App() {
                   <option value="low">low</option>
                 </select>
               </div>
-              <div className="field">
-                <label>&nbsp;</label>
-                <button className="btn secondary" onClick={() => void loadCandidates()} disabled={candidatesLoading}>
-                  {candidatesLoading ? 'Загрузка…' : 'Обновить'}
-                </button>
-              </div>
+              <button
+                className="btn secondary filters-refresh"
+                onClick={() => void loadCandidates()}
+                disabled={candidatesLoading}
+              >
+                {candidatesLoading ? 'Загрузка…' : 'Обновить'}
+              </button>
             </div>
             {candidatesError && (
               <div className="alert error">
