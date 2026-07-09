@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import DEFAULT_DB_PATH, save_ui_report
 
@@ -299,6 +300,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 "risk_level": summary.get("risk_level"),
                 "attention_reason": summary.get("attention_reason"),
                 "recommended_action": summary.get("recommended_action"),
+                "bitrix_url": bitrix_entity_url(entity_type, entity_id),
                 "analysis": analysis,
             }
         )

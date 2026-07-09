@@ -24,6 +24,7 @@ from api.jobs import (
     unwrap_analysis_payload,
     workspace_dir,
 )
+from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -162,10 +163,14 @@ def job_status(job_id: str) -> dict[str, Any]:
 def _enrich_report_row(item: dict[str, Any]) -> dict[str, Any]:
     """Normalize stored envelope/unwrapped JSON and fill empty summary fields for old rows."""
     row = dict(item)
+    entity_type = str(row.get("entity_type") or "")
+    entity_id = str(row.get("entity_id") or "")
+    if entity_type in {"lead", "deal"} and entity_id:
+        row["bitrix_url"] = bitrix_entity_url(entity_type, entity_id)
     analysis = unwrap_analysis_payload(row.get("report_json") if isinstance(row.get("report_json"), dict) else {})
     if analysis:
         row["report_json"] = analysis
-        summary = extract_summary_fields(analysis, str(row.get("entity_type") or "deal"))
+        summary = extract_summary_fields(analysis, entity_type or "deal")
         if not row.get("risk_level"):
             row["risk_level"] = summary.get("risk_level")
         if not row.get("attention_reason"):

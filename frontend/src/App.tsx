@@ -169,6 +169,7 @@ export default function App() {
         risk_level: selectedReport.risk_level,
         attention_reason: selectedReport.attention_reason,
         recommended_action: selectedReport.recommended_action,
+        bitrix_url: selectedReport.bitrix_url || null,
       }
     }
     if (selectedCandidate && !activeAnalysis) {
@@ -179,6 +180,7 @@ export default function App() {
         risk_level: selectedCandidate.priority,
         attention_reason: selectedCandidate.attention_reason,
         recommended_action: 'Запустить анализ и получить поручение менеджеру',
+        bitrix_url: selectedCandidate.bitrix_url || null,
       }
     }
     const result = job?.results?.[selectedResultIndex]
@@ -190,6 +192,7 @@ export default function App() {
         risk_level: result.risk_level,
         attention_reason: result.attention_reason,
         recommended_action: result.recommended_action,
+        bitrix_url: result.bitrix_url || null,
       }
     }
     return null
@@ -234,26 +237,59 @@ export default function App() {
     }
   }
 
+  // Первая загрузка экрана: один раз при монтировании.
   useEffect(() => {
-    void loadCandidates()
-    void loadHistory()
+    let cancelled = false
+    void (async () => {
+      setCandidatesLoading(true)
+      setCandidatesError(null)
+      setHistoryError(null)
+      try {
+        const [candidates, reports] = await Promise.all([
+          fetchCandidates({
+            entity_type: 'all',
+            days: 15,
+            limit: 20,
+          }),
+          fetchReports(50),
+        ])
+        if (cancelled) return
+        setCandidatesData(candidates)
+        setSelectedCandidate(candidates.candidates[0] || null)
+        setHistory(reports.items)
+      } catch (error) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : String(error)
+        setCandidatesError(message)
+        setHistoryError(message)
+      } finally {
+        if (!cancelled) setCandidatesLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
+  const jobId = job?.job_id
+  const jobStatus = job?.status
   useEffect(() => {
-    if (!job || job.status === 'done' || job.status === 'error') return
+    if (!jobId || jobStatus === 'done' || jobStatus === 'error') return
     const timer = window.setInterval(() => {
-      void fetchJob(job.job_id)
+      void fetchJob(jobId)
         .then((next) => {
           setJob(next)
           if (next.status === 'done') {
-            void loadHistory()
+            void fetchReports(50)
+              .then((data) => setHistory(data.items))
+              .catch((error) => setHistoryError(error instanceof Error ? error.message : String(error)))
             toast('Анализ завершён', setToastMessage)
           }
         })
         .catch((error) => setJobError(error instanceof Error ? error.message : String(error)))
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [job?.job_id, job?.status])
+  }, [jobId, jobStatus])
 
   async function runAnalyze(ids: string, entityType: AnalyzeOptions['entity_type'] = options.entity_type) {
     setJobError(null)
@@ -701,6 +737,7 @@ function ReportPanels(props: {
     risk_level?: string | null
     attention_reason?: string | null
     recommended_action?: string | null
+    bitrix_url?: string | null
   } | null
   analysis: Record<string, unknown> | null
   facts: string[]
@@ -717,17 +754,19 @@ function ReportPanels(props: {
   outcomes?: Array<Record<string, unknown>>
 }) {
   const { meta, analysis, facts, unknowns, recommendations, copyText } = props
+  const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
   const leadState = asRecord(analysis?.lead_state)
   const mainRisk = asRecord(analysis?.main_risk)
+  const loss = asRecord(analysis?.loss_diagnosis)
   const rop = asRecord(analysis?.rop_manager_message_block)
-  const amount = asString(dealState.amount) || asString(leadState.amount) || '—'
-  const status =
-    asString(dealState.stage) ||
-    asString(leadState.status) ||
-    asString(mainRisk.risk_level) ||
-    asString(meta?.risk_level) ||
-    '—'
+
+  const riskLevel = asString(mainRisk.risk_level) || asString(meta?.risk_level) || '—'
+  const verdict = asString(loss.final_verdict)
+  const client = asString(leadState.client) || asString(dealState.client) || '—'
+  const qualification = asString(leadState.qualification) || '—'
+  const amount = asString(dealState.amount) || '—'
+  const stage = asString(dealState.stage) || '—'
   const attention =
     asString(meta?.attention_reason) ||
     asString(mainRisk.description) ||
@@ -743,28 +782,46 @@ function ReportPanels(props: {
   const title = meta
     ? `${meta.entity_type === 'deal' ? 'Сделка' : meta.entity_type === 'lead' ? 'Лид' : meta.entity_type} ${meta.entity_id}`
     : 'Выберите кандидата или запустите анализ'
+  const bitrixUrl = meta?.bitrix_url || ''
+
+  // Короткие метрики в ряд; длинное действие — на всю ширину ниже.
+  const metricCards = isLead
+    ? [
+        { label: 'Клиент', value: client },
+        { label: 'Риск / вердикт', value: verdict ? `${riskLevel} · ${verdict}` : riskLevel },
+        { label: 'Квалификация', value: qualification },
+      ]
+    : [
+        { label: 'Сумма', value: amount },
+        { label: 'Стадия / риск', value: stage !== '—' ? `${stage} · ${riskLevel}` : riskLevel },
+        { label: 'Риск', value: riskLevel },
+      ]
 
   return (
     <>
       <section className="section" id="report">
-        <h2>{title}</h2>
-        <div className="cards">
-          <div className="card">
-            <div className="label">Потенциал / сумма</div>
-            <div className="value">{amount}</div>
-          </div>
-          <div className="card">
-            <div className="label">Статус / риск</div>
-            <div className="value">{status}</div>
-          </div>
-          <div className="card">
-            <div className="label">Причина внимания</div>
-            <div className="value">{attention}</div>
-          </div>
-          <div className="card">
-            <div className="label">Что сделать</div>
-            <div className="value">{nextAction}</div>
-          </div>
+        <div className="report-title-row">
+          <h2 style={{ margin: 0 }}>{title}</h2>
+          {bitrixUrl ? (
+            <a className="btn secondary bitrix-link" href={bitrixUrl} target="_blank" rel="noreferrer">
+              Открыть в Bitrix
+            </a>
+          ) : null}
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>
+          {attention}
+        </p>
+        <div className="cards cards-metrics" style={{ marginTop: 14 }}>
+          {metricCards.map((card) => (
+            <div className="card" key={card.label}>
+              <div className="label">{card.label}</div>
+              <div className="value">{card.value}</div>
+            </div>
+          ))}
+        </div>
+        <div className="action-banner">
+          <div className="label">Что сделать</div>
+          <div className="value">{nextAction}</div>
         </div>
       </section>
 

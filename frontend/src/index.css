@@ -193,6 +193,24 @@ h2 {
   letter-spacing: -0.3px;
 }
 
+.report-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bitrix-link {
+  width: auto !important;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
 h3 {
   font-size: 19px;
   margin: 0 0 8px;
@@ -315,6 +333,10 @@ p {
   gap: 12px;
 }
 
+.cards-metrics {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .card {
   background: #f8fbff;
   border: 1px solid var(--line);
@@ -333,6 +355,28 @@ p {
   font-size: 20px;
   font-weight: 900;
   line-height: 1.15;
+  color: var(--dark);
+}
+
+.action-banner {
+  margin-top: 12px;
+  background: linear-gradient(135deg, #eef7ff, #effdf4);
+  border: 1px solid #bfe0ff;
+  border-radius: 18px;
+  padding: 16px 18px;
+}
+
+.action-banner .label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.action-banner .value {
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.35;
   color: var(--dark);
 }
 
