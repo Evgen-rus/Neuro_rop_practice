@@ -7,17 +7,21 @@ import {
   unwrapAnalysis,
   type AnalyzeOptions,
   type Candidate,
+  type CandidateFilter,
   type CandidatesResponse,
+  type CrmPipeline,
   type JobState,
   type UiReportDetail,
   type UiReportListItem,
-  fetchCandidates,
+  fetchCandidateFilter,
   fetchJob,
+  fetchPipelines,
   fetchReport,
   fetchReportMarkdown,
   fetchReports,
   saveDecision,
   saveOutcome,
+  searchCandidates,
   startAnalyze,
 } from './api'
 
@@ -146,12 +150,17 @@ export default function App() {
 
   const [createdDays, setCreatedDays] = useState(15)
   const [modifiedDays, setModifiedDays] = useState(15)
-  const [entityFilter, setEntityFilter] = useState<'all' | 'lead' | 'deal'>('all')
+  const [entityFilter, setEntityFilter] = useState<'lead' | 'deal'>('lead')
   const [priorityFilter, setPriorityFilter] = useState<string>('')
+  const [pipelineIds, setPipelineIds] = useState<string[]>([])
+  const [stageIds, setStageIds] = useState<string[]>([])
+  const [dealPipelines, setDealPipelines] = useState<CrmPipeline[]>([])
+  const [leadPipeline, setLeadPipeline] = useState<CrmPipeline | null>(null)
   const [candidatesData, setCandidatesData] = useState<CandidatesResponse | null>(null)
   const [candidatesLoading, setCandidatesLoading] = useState(false)
   const [candidatesError, setCandidatesError] = useState<string | null>(null)
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
+  const [filtersReady, setFiltersReady] = useState(false)
 
   const [manualIds, setManualIds] = useState('')
   const [options, setOptions] = useState<AnalyzeOptions>({
@@ -225,16 +234,57 @@ export default function App() {
     return null
   }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex])
 
-  async function loadCandidates() {
+  function applyFilterState(filter: CandidateFilter) {
+    setEntityFilter(filter.entity_type === 'deal' ? 'deal' : 'lead')
+    setCreatedDays(Number(filter.created_days) || 15)
+    setModifiedDays(Number(filter.modified_days) || 15)
+    setPriorityFilter(filter.priority || '')
+    setPipelineIds(Array.isArray(filter.pipeline_ids) ? filter.pipeline_ids.map(String) : [])
+    setStageIds(Array.isArray(filter.stage_ids) ? filter.stage_ids.map(String) : [])
+  }
+
+  function availableStages(): { id: string; name: string }[] {
+    if (entityFilter === 'lead') {
+      return leadPipeline?.stages || []
+    }
+    const selected = new Set(pipelineIds)
+    const stages: { id: string; name: string }[] = []
+    const seen = new Set<string>()
+    for (const pipeline of dealPipelines) {
+      if (!selected.has(pipeline.id)) continue
+      for (const stage of pipeline.stages || []) {
+        if (!stage.id || seen.has(stage.id)) continue
+        seen.add(stage.id)
+        stages.push(stage)
+      }
+    }
+    return stages
+  }
+
+  function toggleId(list: string[], id: string): string[] {
+    return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
+  }
+
+  async function loadCandidates(overrides?: {
+    entity_type?: 'lead' | 'deal'
+    created_days?: number
+    modified_days?: number
+    priority?: string
+    pipeline_ids?: string[]
+    stage_ids?: string[]
+  }) {
     setCandidatesLoading(true)
     setCandidatesError(null)
     try {
-      const data = await fetchCandidates({
-        entity_type: entityFilter,
-        created_days: createdDays,
-        modified_days: modifiedDays,
+      const data = await searchCandidates({
+        entity_type: overrides?.entity_type ?? entityFilter,
+        created_days: overrides?.created_days ?? createdDays,
+        modified_days: overrides?.modified_days ?? modifiedDays,
         limit: 20,
-        priority: priorityFilter || undefined,
+        priority: (overrides?.priority ?? priorityFilter) || null,
+        pipeline_ids: overrides?.pipeline_ids ?? pipelineIds,
+        stage_ids: overrides?.stage_ids ?? stageIds,
+        save: true,
       })
       setCandidatesData(data)
       if (data.candidates.length) {
@@ -265,7 +315,7 @@ export default function App() {
     }
   }
 
-  // Первая загрузка экрана: один раз при монтировании.
+  // Первая загрузка: справочник воронок + сохранённый фильтр из БД.
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -273,24 +323,40 @@ export default function App() {
       setCandidatesError(null)
       setHistoryError(null)
       try {
-        const [candidates, reports] = await Promise.all([
-          fetchCandidates({
-            entity_type: 'all',
-            created_days: 15,
-            modified_days: 15,
-            limit: 20,
-          }),
+        const [pipelines, savedFilter, reports] = await Promise.all([
+          fetchPipelines(),
+          fetchCandidateFilter(),
           fetchReports(50),
         ])
         if (cancelled) return
-        setCandidatesData(candidates)
-        setSelectedCandidate(candidates.candidates[0] || null)
+        setDealPipelines(pipelines.deal_pipelines || [])
+        setLeadPipeline(pipelines.lead_pipeline || null)
         setHistory(reports.items)
+
+        const filter = savedFilter.filter
+        applyFilterState(filter)
+        setFiltersReady(true)
+
+        // Ищем только если в сохранённом фильтре уже выбраны этапы (и воронки для сделок).
+        const data = await searchCandidates({
+          entity_type: filter.entity_type === 'deal' ? 'deal' : 'lead',
+          created_days: Number(filter.created_days) || 15,
+          modified_days: Number(filter.modified_days) || 15,
+          limit: Number(filter.limit) || 20,
+          priority: filter.priority || null,
+          pipeline_ids: filter.pipeline_ids || [],
+          stage_ids: filter.stage_ids || [],
+          save: false,
+        })
+        if (cancelled) return
+        setCandidatesData(data)
+        setSelectedCandidate(data.candidates[0] || null)
       } catch (error) {
         if (cancelled) return
         const message = error instanceof Error ? error.message : String(error)
         setCandidatesError(message)
         setHistoryError(message)
+        setFiltersReady(true)
       } finally {
         if (!cancelled) setCandidatesLoading(false)
       }
@@ -448,10 +514,20 @@ export default function App() {
               </div>
               <div className="field">
                 <label>Тип</label>
-                <select value={entityFilter} onChange={(e) => setEntityFilter(e.target.value as typeof entityFilter)}>
-                  <option value="all">Все</option>
-                  <option value="deal">Сделки</option>
+                <select
+                  value={entityFilter}
+                  onChange={(e) => {
+                    const next = e.target.value as 'lead' | 'deal'
+                    setEntityFilter(next)
+                    // При смене типа сбрасываем воронки/этапы — иначе можно искать «не то».
+                    setPipelineIds([])
+                    setStageIds([])
+                    setCandidatesData(null)
+                    setSelectedCandidate(null)
+                  }}
+                >
                   <option value="lead">Лиды</option>
+                  <option value="deal">Сделки</option>
                 </select>
               </div>
               <div className="field">
@@ -463,10 +539,63 @@ export default function App() {
                   <option value="low">low</option>
                 </select>
               </div>
+
+              {entityFilter === 'deal' && (
+                <div className="field field-multi">
+                  <label>Воронки</label>
+                  <div className="multi-check">
+                    {dealPipelines.map((pipeline) => (
+                      <label key={pipeline.id} className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={pipelineIds.includes(pipeline.id)}
+                          onChange={() => {
+                            const nextPipelines = toggleId(pipelineIds, pipeline.id)
+                            setPipelineIds(nextPipelines)
+                            // Убираем этапы из снятых воронок.
+                            const allowed = new Set(
+                              dealPipelines
+                                .filter((item) => nextPipelines.includes(item.id))
+                                .flatMap((item) => (item.stages || []).map((stage) => stage.id)),
+                            )
+                            setStageIds((prev) => prev.filter((id) => allowed.has(id)))
+                          }}
+                        />
+                        <span>{pipeline.name}</span>
+                      </label>
+                    ))}
+                    {!dealPipelines.length && <span className="muted">Справочник воронок пуст</span>}
+                  </div>
+                </div>
+              )}
+
+              <div className="field field-multi">
+                <label>Этапы</label>
+                <div className="multi-check">
+                  {availableStages().map((stage) => (
+                    <label key={stage.id} className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={stageIds.includes(stage.id)}
+                        onChange={() => setStageIds((prev) => toggleId(prev, stage.id))}
+                      />
+                      <span>{stage.name}</span>
+                    </label>
+                  ))}
+                  {!availableStages().length && (
+                    <span className="muted">
+                      {entityFilter === 'deal' && !pipelineIds.length
+                        ? 'Сначала выберите воронку'
+                        : 'Этапы не найдены'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <button
                 className="btn secondary filters-refresh"
                 onClick={() => void loadCandidates()}
-                disabled={candidatesLoading}
+                disabled={candidatesLoading || !filtersReady}
               >
                 {candidatesLoading ? 'Загрузка…' : 'Обновить'}
               </button>
@@ -474,6 +603,11 @@ export default function App() {
             {candidatesError && (
               <div className="alert error">
                 <strong>Не удалось загрузить кандидатов:</strong> {candidatesError}
+              </div>
+            )}
+            {!candidatesError && candidatesData && candidatesData.ready === false && (
+              <div className="alert">
+                {candidatesData.ready_message || 'Выберите воронку и этапы, затем нажмите «Обновить».'}
               </div>
             )}
             {(candidatesData?.candidates || []).map((item) => (
@@ -495,8 +629,12 @@ export default function App() {
                 {item.analyzed ? <span className="priority low">уже есть анализ</span> : null}
               </button>
             ))}
-            {!candidatesLoading && !candidatesData?.candidates?.length && !candidatesError && (
-              <p className="muted">Кандидатов за выбранный период не найдено.</p>
+            {!candidatesLoading &&
+              candidatesData?.ready !== false &&
+              !candidatesData?.candidates?.length &&
+              !candidatesError && <p className="muted">Кандидатов за выбранный период не найдено.</p>}
+            {!candidatesLoading && !candidatesData && !candidatesError && (
+              <p className="muted">Выберите этапы и нажмите «Обновить».</p>
             )}
             <button
               className="btn"

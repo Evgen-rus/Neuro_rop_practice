@@ -28,6 +28,10 @@ export type CandidatesResponse = {
   days: number
   limit: number
   entity_type: string
+  pipeline_ids?: string[]
+  stage_ids?: string[]
+  ready?: boolean
+  ready_message?: string
   generated_at: string
   summary: {
     total_scored: number
@@ -38,6 +42,32 @@ export type CandidatesResponse = {
     already_analyzed: number
   }
   candidates: Candidate[]
+}
+
+export type PipelineStage = {
+  id: string
+  name: string
+}
+
+export type CrmPipeline = {
+  id: string
+  name: string
+  stages: PipelineStage[]
+}
+
+export type PipelinesResponse = {
+  deal_pipelines: CrmPipeline[]
+  lead_pipeline: CrmPipeline
+}
+
+export type CandidateFilter = {
+  entity_type: 'lead' | 'deal'
+  created_days: number
+  modified_days: number
+  limit: number
+  priority: Priority | null
+  pipeline_ids: string[]
+  stage_ids: string[]
 }
 
 export type AnalyzeOptions = {
@@ -130,13 +160,30 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export function fetchPipelines() {
+  return api<PipelinesResponse>('/api/pipelines')
+}
+
+export function fetchCandidateFilter() {
+  return api<{ filter: CandidateFilter }>('/api/candidate-filters')
+}
+
+export function saveCandidateFilter(body: CandidateFilter) {
+  return api<{ ok: boolean; filter: CandidateFilter }>('/api/candidate-filters', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
 export function fetchCandidates(params: {
-  entity_type?: string
+  entity_type?: 'lead' | 'deal'
   created_days?: number
   modified_days?: number
   days?: number
   limit?: number
   priority?: string
+  pipeline_ids?: string[]
+  stage_ids?: string[]
 }) {
   const query = new URLSearchParams()
   if (params.entity_type) query.set('entity_type', params.entity_type)
@@ -145,7 +192,25 @@ export function fetchCandidates(params: {
   if (params.days !== undefined) query.set('days', String(params.days))
   if (params.limit !== undefined) query.set('limit', String(params.limit))
   if (params.priority) query.set('priority', params.priority)
+  for (const id of params.pipeline_ids || []) query.append('pipeline_ids', id)
+  for (const id of params.stage_ids || []) query.append('stage_ids', id)
   return api<CandidatesResponse>(`/api/candidates?${query.toString()}`)
+}
+
+export function searchCandidates(body: {
+  entity_type: 'lead' | 'deal'
+  created_days: number
+  modified_days: number
+  limit?: number
+  priority?: string | null
+  pipeline_ids: string[]
+  stage_ids: string[]
+  save?: boolean
+}) {
+  return api<CandidatesResponse>('/api/candidates/search', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export function startAnalyze(body: AnalyzeOptions) {

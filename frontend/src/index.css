@@ -579,6 +579,37 @@ ul.facts.bad li:before {
   font-size: 13px;
 }
 
+.filters-compact .field-multi {
+  grid-column: 1 / -1;
+  align-self: stretch;
+}
+
+.multi-check {
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.check-row input {
+  margin-top: 2px;
+}
+
 .filters-refresh {
   grid-column: 1 / -1;
   width: 100%;

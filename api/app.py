@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from api.candidates import DEFAULT_DAYS, DEFAULT_LIMIT, search_candidates
+from api.candidates import DEFAULT_DAYS, DEFAULT_LIMIT, list_crm_pipelines, search_candidates
 from api.jobs import (
     AnalyzeOptions,
     extract_summary_fields,
@@ -28,11 +28,13 @@ from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    get_candidate_filter,
     get_ui_report,
     init_db,
     list_outcomes,
     list_rop_decisions,
     list_ui_reports,
+    save_candidate_filter,
     save_outcome,
     save_rop_decision,
 )
@@ -85,12 +87,25 @@ class OutcomeRequest(BaseModel):
 
 
 class CandidatesSearchRequest(BaseModel):
-    entity_type: Literal["all", "lead", "deal"] = "all"
+    entity_type: Literal["lead", "deal"] = "lead"
     created_days: int = Field(default=DEFAULT_DAYS, ge=0)
     modified_days: int = Field(default=DEFAULT_DAYS, ge=0)
     days: int | None = Field(default=None, ge=0, description="Устаревший alias для created_days")
     limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=100)
     priority: Literal["high", "medium", "low"] | None = None
+    pipeline_ids: list[str] = Field(default_factory=list)
+    stage_ids: list[str] = Field(default_factory=list)
+    save: bool = True
+
+
+class CandidateFilterSaveRequest(BaseModel):
+    entity_type: Literal["lead", "deal"] = "lead"
+    created_days: int = Field(default=DEFAULT_DAYS, ge=0)
+    modified_days: int = Field(default=DEFAULT_DAYS, ge=0)
+    limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=100)
+    priority: Literal["high", "medium", "low"] | None = None
+    pipeline_ids: list[str] = Field(default_factory=list)
+    stage_ids: list[str] = Field(default_factory=list)
 
 
 @app.get("/api/health")
@@ -102,14 +117,43 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/pipelines")
+def pipelines() -> dict[str, Any]:
+    return list_crm_pipelines()
+
+
+@app.get("/api/candidate-filters")
+def candidate_filters_get() -> dict[str, Any]:
+    return {"filter": get_candidate_filter(DEFAULT_DB_PATH)}
+
+
+@app.put("/api/candidate-filters")
+def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
+    saved = save_candidate_filter(
+        DEFAULT_DB_PATH,
+        {
+            "entity_type": body.entity_type,
+            "created_days": body.created_days,
+            "modified_days": body.modified_days,
+            "limit": body.limit,
+            "priority": body.priority,
+            "pipeline_ids": body.pipeline_ids,
+            "stage_ids": body.stage_ids,
+        },
+    )
+    return {"ok": True, "filter": saved}
+
+
 @app.get("/api/candidates")
 def candidates(
-    entity_type: Literal["all", "lead", "deal"] = "all",
+    entity_type: Literal["lead", "deal"] = "lead",
     created_days: int = Query(default=DEFAULT_DAYS, ge=0),
     modified_days: int = Query(default=DEFAULT_DAYS, ge=0),
     days: int | None = Query(default=None, ge=0),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=100),
     priority: Literal["high", "medium", "low"] | None = None,
+    pipeline_ids: list[str] = Query(default=[]),
+    stage_ids: list[str] = Query(default=[]),
 ) -> dict[str, Any]:
     try:
         return search_candidates(
@@ -119,6 +163,8 @@ def candidates(
             days=days,
             limit=limit,
             priority=priority,
+            pipeline_ids=pipeline_ids,
+            stage_ids=stage_ids,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -127,6 +173,19 @@ def candidates(
 @app.post("/api/candidates/search")
 def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
     try:
+        if body.save:
+            save_candidate_filter(
+                DEFAULT_DB_PATH,
+                {
+                    "entity_type": body.entity_type,
+                    "created_days": body.created_days,
+                    "modified_days": body.modified_days,
+                    "limit": body.limit,
+                    "priority": body.priority,
+                    "pipeline_ids": body.pipeline_ids,
+                    "stage_ids": body.stage_ids,
+                },
+            )
         return search_candidates(
             entity_type=body.entity_type,
             created_days=body.created_days,
@@ -134,6 +193,8 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
             days=body.days,
             limit=body.limit,
             priority=body.priority,
+            pipeline_ids=body.pipeline_ids,
+            stage_ids=body.stage_ids,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error

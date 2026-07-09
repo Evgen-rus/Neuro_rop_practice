@@ -65,42 +65,115 @@ def days_since(value: Any, *, now: datetime | None = None) -> int | None:
     return max(0, int((current - dt.astimezone(MSK_TZ)).total_seconds() // 86400))
 
 
-def load_pipeline_stage_names() -> dict[str, str]:
+def load_pipeline_map() -> dict[str, Any]:
     if not PIPELINE_MAP_PATH.exists():
         return {}
     try:
         payload = json.loads(PIPELINE_MAP_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return payload if isinstance(payload, dict) else {}
 
-    names: dict[str, str] = {}
 
-    def add_stage(stage: dict[str, Any]) -> None:
-        status_id = str(stage.get("STATUS_ID") or stage.get("status_id") or "")
-        name = str(stage.get("NAME") or stage.get("name") or "")
-        if status_id and name:
-            names[status_id] = name
-
-    # Current map shape: deal_pipelines[].stages[]
+def list_crm_pipelines() -> dict[str, Any]:
+    """Справочник воронок/этапов для UI-фильтров кандидатов."""
+    payload = load_pipeline_map()
+    deal_pipelines = []
     for pipeline in payload.get("deal_pipelines") or []:
         if not isinstance(pipeline, dict):
             continue
-        for stage in pipeline.get("stages") or []:
-            if isinstance(stage, dict):
-                add_stage(stage)
-
-    # Fallback shapes from older dumps / raw block.
-    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    for category in list(payload.get("deal_categories") or []) + list(raw.get("deal_categories") or []):
-        if not isinstance(category, dict):
+        pipeline_id = str(pipeline.get("id") or "")
+        if not pipeline_id:
             continue
-        for stage in category.get("stages") or []:
-            if isinstance(stage, dict):
-                add_stage(stage)
-    for stage in payload.get("deal_stages") or []:
-        if isinstance(stage, dict):
-            add_stage(stage)
+        stages = []
+        for stage in pipeline.get("stages") or []:
+            if not isinstance(stage, dict):
+                continue
+            status_id = str(stage.get("status_id") or stage.get("STATUS_ID") or "")
+            name = str(stage.get("name") or stage.get("NAME") or status_id)
+            if status_id:
+                stages.append({"id": status_id, "name": name})
+        deal_pipelines.append(
+            {
+                "id": pipeline_id,
+                "name": str(pipeline.get("name") or f"Воронка {pipeline_id}"),
+                "stages": stages,
+            }
+        )
+
+    lead_pipeline = payload.get("lead_pipeline") if isinstance(payload.get("lead_pipeline"), dict) else {}
+    lead_stages = []
+    for stage in lead_pipeline.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        status_id = str(stage.get("status_id") or stage.get("STATUS_ID") or "")
+        name = str(stage.get("name") or stage.get("NAME") or status_id)
+        if status_id:
+            lead_stages.append({"id": status_id, "name": name})
+
+    return {
+        "deal_pipelines": deal_pipelines,
+        "lead_pipeline": {
+            "id": "lead",
+            "name": str(lead_pipeline.get("name") or "Лиды"),
+            "stages": lead_stages,
+        },
+    }
+
+
+def load_pipeline_stage_names() -> dict[str, str]:
+    names: dict[str, str] = {}
+    catalog = list_crm_pipelines()
+    for pipeline in catalog.get("deal_pipelines") or []:
+        for stage in pipeline.get("stages") or []:
+            status_id = str(stage.get("id") or "")
+            name = str(stage.get("name") or "")
+            if status_id and name:
+                names[status_id] = name
+    for stage in (catalog.get("lead_pipeline") or {}).get("stages") or []:
+        status_id = str(stage.get("id") or "")
+        name = str(stage.get("name") or "")
+        if status_id and name:
+            names[status_id] = name
     return names
+
+
+def _normalize_id_list(values: list[Any] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def candidates_filter_ready(
+    *,
+    entity_type: str,
+    pipeline_ids: list[str] | None,
+    stage_ids: list[str] | None,
+) -> tuple[bool, str]:
+    """
+    Пока воронка/этапы не выбраны — не ищем.
+    Лиды: нужны этапы.
+    Сделки: нужны воронка(и) и этапы.
+    """
+    stages = _normalize_id_list(stage_ids)
+    pipelines = _normalize_id_list(pipeline_ids)
+    if entity_type == "lead":
+        if not stages:
+            return False, "Выберите этап(ы) лида — без этого поиск не запускаем"
+        return True, ""
+    if entity_type == "deal":
+        if not pipelines:
+            return False, "Выберите воронку(и) сделки"
+        if not stages:
+            return False, "Выберите этап(ы) в выбранных воронках"
+        return True, ""
+    return False, "Выберите тип: лиды или сделки"
 
 
 def closed_reason_from_stage(stage_id: str, stage_name: str) -> str | None:
@@ -133,10 +206,10 @@ def fetch_recent_leads(
     *,
     created_days: int,
     modified_days: int,
+    stage_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Кандидаты-лиды: фильтр по DATE_CREATE и/или DATE_MODIFY.
-    0 = без ограничения по этому полю.
+    Кандидаты-лиды: DATE_CREATE / DATE_MODIFY + обязательные STATUS_ID.
     """
     filter_payload: dict[str, Any] = {}
     if created_days > 0:
@@ -145,6 +218,9 @@ def fetch_recent_leads(
     if modified_days > 0:
         start_modify = datetime.now(MSK_TZ) - timedelta(days=modified_days)
         filter_payload[">=DATE_MODIFY"] = date_for_bitrix(start_modify)
+    stages = _normalize_id_list(stage_ids)
+    if stages:
+        filter_payload["STATUS_ID"] = stages
 
     return client.list_all(
         "crm.lead.list",
@@ -174,10 +250,11 @@ def fetch_recent_deals(
     *,
     created_days: int,
     modified_days: int,
+    pipeline_ids: list[str] | None = None,
+    stage_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Кандидаты-сделки: фильтр по DATE_CREATE и/или DATE_MODIFY.
-    0 = без ограничения по этому полю.
+    Кандидаты-сделки: DATE_CREATE / DATE_MODIFY + CATEGORY_ID + STAGE_ID.
     """
     filter_payload: dict[str, Any] = {}
     if created_days > 0:
@@ -186,6 +263,12 @@ def fetch_recent_deals(
     if modified_days > 0:
         start_modify = datetime.now(MSK_TZ) - timedelta(days=modified_days)
         filter_payload[">=DATE_MODIFY"] = date_for_bitrix(start_modify)
+    pipelines = _normalize_id_list(pipeline_ids)
+    stages = _normalize_id_list(stage_ids)
+    if pipelines:
+        filter_payload["CATEGORY_ID"] = pipelines
+    if stages:
+        filter_payload["STAGE_ID"] = stages
 
     return client.list_all(
         "crm.deal.list",
@@ -395,12 +478,14 @@ def mark_analyzed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def search_candidates(
     *,
-    entity_type: str = "all",
+    entity_type: str = "lead",
     created_days: int = DEFAULT_DAYS,
     modified_days: int = DEFAULT_DAYS,
     days: int | None = None,
     limit: int = DEFAULT_LIMIT,
     priority: str | None = None,
+    pipeline_ids: list[str] | None = None,
+    stage_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     # Обратная совместимость: старый параметр days задаёт окно CREATE.
     if days is not None:
@@ -409,25 +494,61 @@ def search_candidates(
         created_days = max(0, int(created_days))
     modified_days = max(0, int(modified_days))
     limit = max(1, min(int(limit), 100))
+    pipelines = _normalize_id_list(pipeline_ids)
+    stages = _normalize_id_list(stage_ids)
+
+    ready, ready_message = candidates_filter_ready(
+        entity_type=entity_type,
+        pipeline_ids=pipelines,
+        stage_ids=stages,
+    )
+    empty_summary = {
+        "total_scored": 0,
+        "returned": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "already_analyzed": 0,
+    }
+    base_response = {
+        "created_days": created_days,
+        "modified_days": modified_days,
+        "days": created_days,
+        "limit": limit,
+        "entity_type": entity_type,
+        "pipeline_ids": pipelines,
+        "stage_ids": stages,
+        "ready": ready,
+        "ready_message": ready_message,
+        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
+        "summary": empty_summary,
+        "candidates": [],
+    }
+    if not ready:
+        return base_response
+
     client = make_client()
     stage_names = load_pipeline_stage_names()
-    lead_status_names = load_status_map(client, "STATUS") if entity_type in {"all", "lead"} else {}
+    lead_status_names = load_status_map(client, "STATUS") if entity_type == "lead" else {}
 
     scored: list[dict[str, Any]] = []
-    if entity_type in {"all", "deal"}:
+    if entity_type == "deal":
         for deal in fetch_recent_deals(
             client,
             created_days=created_days,
             modified_days=modified_days,
+            pipeline_ids=pipelines,
+            stage_ids=stages,
         ):
             item = score_deal(deal, stage_names)
             if item:
                 scored.append(item)
-    if entity_type in {"all", "lead"}:
+    elif entity_type == "lead":
         for lead in fetch_recent_leads(
             client,
             created_days=created_days,
             modified_days=modified_days,
+            stage_ids=stages,
         ):
             item = score_lead(lead, lead_status_names)
             if item:
@@ -447,7 +568,7 @@ def search_candidates(
         reverse=True,
     )
     top = scored[:limit]
-    summary = {
+    base_response["summary"] = {
         "total_scored": len(scored),
         "returned": len(top),
         "high": sum(1 for item in top if item.get("priority") == "high"),
@@ -455,13 +576,5 @@ def search_candidates(
         "low": sum(1 for item in top if item.get("priority") == "low"),
         "already_analyzed": sum(1 for item in top if item.get("analyzed")),
     }
-    return {
-        "created_days": created_days,
-        "modified_days": modified_days,
-        "days": created_days,  # совместимость со старым UI/клиентом
-        "limit": limit,
-        "entity_type": entity_type,
-        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
-        "summary": summary,
-        "candidates": top,
-    }
+    base_response["candidates"] = top
+    return base_response

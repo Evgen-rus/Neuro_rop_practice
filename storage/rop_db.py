@@ -131,6 +131,12 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 checked_at TEXT NOT NULL,
                 FOREIGN KEY(report_id) REFERENCES ui_reports(id)
             );
+
+            CREATE TABLE IF NOT EXISTS ui_candidate_filters (
+                profile_key TEXT NOT NULL PRIMARY KEY,
+                filter_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -526,3 +532,64 @@ def list_outcomes(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
             (int(report_id),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+DEFAULT_CANDIDATE_FILTER_PROFILE = "default"
+
+
+def default_candidate_filter() -> dict[str, Any]:
+    """Стартовый фильтр UI: лиды, даты 15/15, воронка/этапы пустые — поиск ещё не готов."""
+    return {
+        "entity_type": "lead",
+        "created_days": 15,
+        "modified_days": 15,
+        "priority": None,
+        "pipeline_ids": [],
+        "stage_ids": [],
+        "limit": 20,
+    }
+
+
+def get_candidate_filter(
+    db_path: str | Path,
+    profile_key: str = DEFAULT_CANDIDATE_FILTER_PROFILE,
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT filter_json FROM ui_candidate_filters
+            WHERE profile_key = ?
+            """,
+            (profile_key,),
+        ).fetchone()
+    if not row:
+        return default_candidate_filter()
+    saved = loads_json(row["filter_json"], {})
+    if not isinstance(saved, dict):
+        return default_candidate_filter()
+    base = default_candidate_filter()
+    base.update(saved)
+    return base
+
+
+def save_candidate_filter(
+    db_path: str | Path,
+    filter_payload: dict[str, Any],
+    profile_key: str = DEFAULT_CANDIDATE_FILTER_PROFILE,
+) -> dict[str, Any]:
+    init_db(db_path)
+    payload = default_candidate_filter()
+    payload.update(filter_payload or {})
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO ui_candidate_filters (profile_key, filter_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(profile_key) DO UPDATE SET
+                filter_json = excluded.filter_json,
+                updated_at = excluded.updated_at
+            """,
+            (profile_key, dumps_json(payload), utcish_now()),
+        )
+    return payload
