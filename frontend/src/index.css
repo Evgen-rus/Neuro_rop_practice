@@ -195,10 +195,57 @@ h2 {
 
 .report-title-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.attention-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fdba74;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.attention-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+.reason-box {
+  border: 1px solid #bcd8ff;
+  background: #f5f9ff;
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.reason-box .label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.reason-text {
+  color: var(--dark);
+  font-weight: 700;
+  line-height: 1.4;
+  font-size: 15px;
 }
 
 .bitrix-link {
@@ -356,6 +403,14 @@ p {
   font-weight: 900;
   line-height: 1.15;
   color: var(--dark);
+}
+
+.card .hint {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .action-banner {

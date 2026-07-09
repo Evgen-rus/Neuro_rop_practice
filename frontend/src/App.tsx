@@ -42,6 +42,32 @@ const OUTCOMES = [
   'нужна повторная проверка',
 ]
 
+const RISK_LEVEL_RU: Record<string, string> = {
+  high: 'Высокий',
+  medium_high: 'Средне-высокий',
+  medium: 'Средний',
+  low: 'Низкий',
+}
+
+const VERDICT_RU: Record<string, string> = {
+  bad_processing: 'плохая обработка',
+  bad_lead: 'плохой лид',
+  data_gap: 'не хватает данных',
+  needs_nurture: 'нужен прогрев',
+  ready_for_deal: 'готов к сделке',
+  unknown: 'неясно',
+}
+
+function riskLabelRu(value: string): string {
+  const key = value.trim().toLowerCase()
+  return RISK_LEVEL_RU[key] || value || '—'
+}
+
+function verdictLabelRu(value: string): string {
+  const key = value.trim().toLowerCase()
+  return VERDICT_RU[key] || value.replaceAll('_', ' ')
+}
+
 function toast(message: string, setter: (value: string | null) => void) {
   setter(message)
   window.setTimeout(() => setter(null), 2200)
@@ -761,10 +787,13 @@ function ReportPanels(props: {
   const loss = asRecord(analysis?.loss_diagnosis)
   const rop = asRecord(analysis?.rop_manager_message_block)
 
-  const riskLevel = asString(mainRisk.risk_level) || asString(meta?.risk_level) || '—'
+  const riskLevel = asString(mainRisk.risk_level) || asString(meta?.risk_level) || ''
+  const riskRu = riskLabelRu(riskLevel)
+  const riskType = asString(mainRisk.risk_type)
   const verdict = asString(loss.final_verdict)
   const client = asString(leadState.client) || asString(dealState.client) || '—'
   const qualification = asString(leadState.qualification) || '—'
+  const qualificationReason = asString(leadState.qualification_reason)
   const amount = asString(dealState.amount) || '—'
   const stage = asString(dealState.stage) || '—'
   const attention =
@@ -783,42 +812,74 @@ function ReportPanels(props: {
     ? `${meta.entity_type === 'deal' ? 'Сделка' : meta.entity_type === 'lead' ? 'Лид' : meta.entity_type} ${meta.entity_id}`
     : 'Выберите кандидата или запустите анализ'
   const bitrixUrl = meta?.bitrix_url || ''
+  const needsAttention = Boolean(meta && (riskLevel === 'high' || riskLevel === 'medium_high' || attention !== '—'))
 
-  // Короткие метрики в ряд; длинное действие — на всю ширину ниже.
   const metricCards = isLead
     ? [
-        { label: 'Клиент', value: client },
-        { label: 'Риск / вердикт', value: verdict ? `${riskLevel} · ${verdict}` : riskLevel },
-        { label: 'Квалификация', value: qualification },
+        {
+          label: 'Клиент',
+          value: client,
+          hint: asString(leadState.need) || undefined,
+        },
+        {
+          label: 'Риск',
+          value: riskRu,
+          hint: riskType || (verdict ? verdictLabelRu(verdict) : undefined),
+        },
+        {
+          label: 'Квалификация',
+          value: qualification,
+          hint: qualificationReason || undefined,
+        },
       ]
     : [
-        { label: 'Сумма', value: amount },
-        { label: 'Стадия / риск', value: stage !== '—' ? `${stage} · ${riskLevel}` : riskLevel },
-        { label: 'Риск', value: riskLevel },
+        {
+          label: 'Сумма',
+          value: amount,
+          hint: asString(dealState.client) || undefined,
+        },
+        {
+          label: 'Стадия',
+          value: stage,
+          hint: riskType || undefined,
+        },
+        {
+          label: 'Риск',
+          value: riskRu,
+          hint: riskType || undefined,
+        },
       ]
 
   return (
     <>
       <section className="section" id="report">
         <div className="report-title-row">
-          <h2 style={{ margin: 0 }}>{title}</h2>
+          <div>
+            <h2 style={{ margin: 0 }}>{title}</h2>
+            {needsAttention ? <span className="attention-badge">Требует внимания РОПа</span> : null}
+          </div>
           {bitrixUrl ? (
             <a className="btn secondary bitrix-link" href={bitrixUrl} target="_blank" rel="noreferrer">
               Открыть в Bitrix
             </a>
           ) : null}
         </div>
-        <p className="muted" style={{ marginTop: 10 }}>
-          {attention}
-        </p>
-        <div className="cards cards-metrics" style={{ marginTop: 14 }}>
+
+        <div className="reason-box">
+          <div className="label">Причина внимания</div>
+          <div className="reason-text">{attention}</div>
+        </div>
+
+        <div className="cards cards-metrics">
           {metricCards.map((card) => (
             <div className="card" key={card.label}>
               <div className="label">{card.label}</div>
               <div className="value">{card.value}</div>
+              {card.hint ? <div className="hint">{card.hint}</div> : null}
             </div>
           ))}
         </div>
+
         <div className="action-banner">
           <div className="label">Что сделать</div>
           <div className="value">{nextAction}</div>
