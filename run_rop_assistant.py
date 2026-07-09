@@ -469,10 +469,42 @@ def diagnostic_payload(entity_type: str, entity_id: str) -> dict[str, Any]:
         return {}
 
 
+def short_no_answer_activity_ids(entity_type: str, entity_id: str) -> set[str]:
+    """Activity IDs whose local audio is shorter than 20s (недозвон / автоответчик)."""
+    path = manifest_path(entity_type, entity_id)
+    if not path.exists():
+        return set()
+    try:
+        from openai_api.audio.short_call import enrich_manifest_calls, is_short_no_answer_audio
+
+        manifest = enrich_manifest_calls(load_json(path))
+    except ValueError:
+        return set()
+
+    ids: set[str] = set()
+    for call in manifest.get("calls") or []:
+        if not isinstance(call, dict):
+            continue
+        activity_id = str(call.get("activity_id") or "")
+        if not activity_id:
+            continue
+        if call.get("skip_transcribe") or call.get("call_quality") == "short_no_answer":
+            ids.add(activity_id)
+            continue
+        for item in call.get("downloads") or []:
+            if not isinstance(item, dict) or not item.get("ok") or not item.get("local_path"):
+                continue
+            if item.get("is_short_no_answer") or is_short_no_answer_audio(item["local_path"]):
+                ids.add(activity_id)
+                break
+    return ids
+
+
 def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]:
     payload = diagnostic_payload(entity_type, entity_id)
     transcript_ids = existing_transcript_activity_ids(entity_type, entity_id)
     audio_paths = audio_by_activity(entity_type, entity_id)
+    short_ids = short_no_answer_activity_ids(entity_type, entity_id)
     rows: list[dict[str, Any]] = []
     for gap in payload.get("gaps") or []:
         if not isinstance(gap, dict):
@@ -480,8 +512,23 @@ def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]
         activity_id = str(gap.get("activity_id") or "")
         if not activity_id or activity_id in transcript_ids:
             continue
+        if activity_id in short_ids:
+            print(
+                f"Пропуск транскрибации activity_id={activity_id}: "
+                "звонок короче 20 сек (недозвон/автоответчик)."
+            )
+            continue
         candidates = audio_paths.get(activity_id) or []
         if not candidates:
+            continue
+        # Extra safety if manifest has no duration yet.
+        from openai_api.audio.short_call import is_short_no_answer_audio
+
+        if is_short_no_answer_audio(candidates[0]):
+            print(
+                f"Пропуск транскрибации activity_id={activity_id}: "
+                "звонок короче 20 сек (недозвон/автоответчик)."
+            )
             continue
         rows.append({**gap, "audio_path": str(candidates[0])})
     return rows

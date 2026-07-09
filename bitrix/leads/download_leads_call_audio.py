@@ -31,6 +31,7 @@ from bitrix.deals.download_deals_call_audio import (
     process_call,
     summarize_manifest,
 )
+from openai_api.audio.short_call import enrich_manifest_calls
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -172,13 +173,15 @@ def main() -> None:
 
         manifest_path = audio_dir / f"lead_{lead_id}_call_audio_manifest.json"
         existing_manifest = load_existing_manifest(manifest_path)
-        manifest = build_manifest(
-            client=client,
-            lead_id=str(lead_id),
-            raw_path=raw_path,
-            lead_audio_dir=audio_dir / f"lead_{lead_id}",
-            existing_manifest=existing_manifest,
-            missing_only=missing_only,
+        manifest = enrich_manifest_calls(
+            build_manifest(
+                client=client,
+                lead_id=str(lead_id),
+                raw_path=raw_path,
+                lead_audio_dir=audio_dir / f"lead_{lead_id}",
+                existing_manifest=existing_manifest,
+                missing_only=missing_only,
+            )
         )
         save_json(manifest_path, manifest)
         manifest["manifest_path"] = str(manifest_path)

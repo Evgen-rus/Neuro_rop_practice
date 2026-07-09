@@ -95,6 +95,42 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 fingerprint TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ui_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                risk_level TEXT,
+                attention_reason TEXT,
+                recommended_action TEXT,
+                analysis_path TEXT,
+                report_path TEXT,
+                report_json TEXT,
+                job_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS rop_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL,
+                decision TEXT NOT NULL,
+                comment TEXT,
+                next_control_date TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL,
+                outcome_type TEXT NOT NULL,
+                deal_stage_after TEXT,
+                payment_status TEXT,
+                manager_action_done INTEGER,
+                notes TEXT,
+                checked_at TEXT NOT NULL,
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
             """
         )
 
@@ -325,3 +361,168 @@ def get_today_mini_trigger_types(
             (entity_type, str(entity_id), today),
         ).fetchall()
     return {str(row["trigger_type"]) for row in rows}
+
+
+def _row_to_ui_report(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["report_json"] = loads_json(value.get("report_json"), None)
+    return value
+
+
+def save_ui_report(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    risk_level: str | None = None,
+    attention_reason: str | None = None,
+    recommended_action: str | None = None,
+    analysis_path: str | None = None,
+    report_path: str | None = None,
+    report_json: dict[str, Any] | None = None,
+    job_id: str | None = None,
+) -> int:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO ui_reports (
+                entity_type,
+                entity_id,
+                created_at,
+                risk_level,
+                attention_reason,
+                recommended_action,
+                analysis_path,
+                report_path,
+                report_json,
+                job_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entity_type,
+                str(entity_id),
+                utcish_now(),
+                risk_level,
+                attention_reason,
+                recommended_action,
+                analysis_path,
+                report_path,
+                dumps_json(report_json) if report_json is not None else None,
+                job_id,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_ui_reports(db_path: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ui_reports
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [_row_to_ui_report(row) for row in rows if row is not None]
+
+
+def get_ui_report(db_path: str | Path, report_id: int) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM ui_reports WHERE id = ?", (int(report_id),)).fetchone()
+    return _row_to_ui_report(row)
+
+
+def save_rop_decision(
+    db_path: str | Path,
+    *,
+    report_id: int,
+    decision: str,
+    comment: str | None = None,
+    next_control_date: str | None = None,
+) -> int:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO rop_decisions (
+                report_id, decision, comment, next_control_date, created_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (int(report_id), decision, comment, next_control_date, utcish_now()),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_rop_decisions(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM rop_decisions
+            WHERE report_id = ?
+            ORDER BY id DESC
+            """,
+            (int(report_id),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_outcome(
+    db_path: str | Path,
+    *,
+    report_id: int,
+    outcome_type: str,
+    deal_stage_after: str | None = None,
+    payment_status: str | None = None,
+    manager_action_done: bool | None = None,
+    notes: str | None = None,
+) -> int:
+    init_db(db_path)
+    done_value = None if manager_action_done is None else (1 if manager_action_done else 0)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO outcomes (
+                report_id,
+                outcome_type,
+                deal_stage_after,
+                payment_status,
+                manager_action_done,
+                notes,
+                checked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(report_id),
+                outcome_type,
+                deal_stage_after,
+                payment_status,
+                done_value,
+                notes,
+                utcish_now(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_outcomes(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM outcomes
+            WHERE report_id = ?
+            ORDER BY id DESC
+            """,
+            (int(report_id),),
+        ).fetchall()
+    return [dict(row) for row in rows]

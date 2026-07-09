@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, save_json
+from openai_api.audio.short_call import enrich_download_with_duration, enrich_manifest_calls
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -299,15 +300,17 @@ def try_download_url(url: str, output_dir: Path, fallback_name: str) -> dict[str
     output_path = deterministic_output_path(output_dir, response, fallback_name)
 
     if output_path.exists():
-        return {
-            "ok": True,
-            "status": "already_downloaded",
-            "http_status": response.status_code,
-            "content_type": content_type,
-            "url": url,
-            "local_path": str(output_path),
-            "size_bytes": output_path.stat().st_size,
-        }
+        return enrich_download_with_duration(
+            {
+                "ok": True,
+                "status": "already_downloaded",
+                "http_status": response.status_code,
+                "content_type": content_type,
+                "url": url,
+                "local_path": str(output_path),
+                "size_bytes": output_path.stat().st_size,
+            }
+        )
 
     with output_path.open("wb") as file:
         if first_chunk:
@@ -316,15 +319,17 @@ def try_download_url(url: str, output_dir: Path, fallback_name: str) -> dict[str
             if chunk:
                 file.write(chunk)
 
-    return {
-        "ok": True,
-        "status": "downloaded",
-        "http_status": response.status_code,
-        "content_type": content_type,
-        "url": url,
-        "local_path": str(output_path),
-        "size_bytes": output_path.stat().st_size,
-    }
+    return enrich_download_with_duration(
+        {
+            "ok": True,
+            "status": "downloaded",
+            "http_status": response.status_code,
+            "content_type": content_type,
+            "url": url,
+            "local_path": str(output_path),
+            "size_bytes": output_path.stat().st_size,
+        }
+    )
 
 
 def load_existing_manifest(path: Path) -> dict[str, Any]:
@@ -533,13 +538,15 @@ def main() -> None:
 
         manifest_path = audio_dir / f"deal_{deal_id}_call_audio_manifest.json"
         existing_manifest = load_existing_manifest(manifest_path)
-        manifest = build_manifest(
-            client=client,
-            deal_id=str(deal_id),
-            raw_path=raw_path,
-            deal_audio_dir=audio_dir / f"deal_{deal_id}",
-            existing_manifest=existing_manifest,
-            missing_only=missing_only,
+        manifest = enrich_manifest_calls(
+            build_manifest(
+                client=client,
+                deal_id=str(deal_id),
+                raw_path=raw_path,
+                deal_audio_dir=audio_dir / f"deal_{deal_id}",
+                existing_manifest=existing_manifest,
+                missing_only=missing_only,
+            )
         )
         save_json(manifest_path, manifest)
         manifest["manifest_path"] = str(manifest_path)
