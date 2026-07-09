@@ -63,6 +63,7 @@ Docs/
 reports/
 knowledge/
 downloads/
+tmp/
 
 # Local media and generated transcripts/analysis exports
 *.mp3
