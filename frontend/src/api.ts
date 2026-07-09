@@ -199,3 +199,29 @@ export function asStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.map((item) => String(item)).filter(Boolean)
 }
+
+/** LLM files may be saved as { analysis: {...} }; UI needs the inner object. */
+export function unwrapAnalysis(value: unknown): Record<string, unknown> | null {
+  const payload = asRecord(value)
+  if (!Object.keys(payload).length) return null
+  const inner = asRecord(payload.analysis)
+  if (
+    inner.rop_manager_message_block ||
+    inner.main_risk ||
+    inner.lead_state ||
+    inner.deal_state ||
+    inner.loss_diagnosis ||
+    inner.money_path_diagnosis
+  ) {
+    return inner
+  }
+  if (
+    payload.rop_manager_message_block ||
+    payload.main_risk ||
+    payload.lead_state ||
+    payload.deal_state
+  ) {
+    return payload
+  }
+  return payload
+}

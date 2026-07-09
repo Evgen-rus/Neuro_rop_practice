@@ -146,7 +146,38 @@ def analysis_paths(entity_type: str, entity_id: str) -> dict[str, Path]:
     }
 
 
+def unwrap_analysis_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    LLM files are saved as envelope:
+    {generated_at, input_files, model_metadata, analysis: {...real fields...}}.
+
+    UI/API need the inner analysis object. If payload is already unwrapped, return as is.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    inner = payload.get("analysis")
+    if isinstance(inner, dict) and (
+        "rop_manager_message_block" in inner
+        or "main_risk" in inner
+        or "lead_state" in inner
+        or "deal_state" in inner
+        or "loss_diagnosis" in inner
+        or "money_path_diagnosis" in inner
+    ):
+        return inner
+    # Already a flat analysis object.
+    if (
+        "rop_manager_message_block" in payload
+        or "main_risk" in payload
+        or "lead_state" in payload
+        or "deal_state" in payload
+    ):
+        return payload
+    return payload
+
+
 def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[str, str | None]:
+    analysis = unwrap_analysis_payload(analysis)
     risk = None
     attention = None
     action = None
@@ -163,6 +194,13 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         loss = analysis.get("loss_diagnosis") if isinstance(analysis.get("loss_diagnosis"), dict) else {}
         if loss and not attention:
             attention = str(loss.get("final_verdict") or "") or None
+        lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
+        if lead_state and not attention:
+            attention = str(lead_state.get("summary") or "") or None
+    else:
+        deal_state = analysis.get("deal_state") if isinstance(analysis.get("deal_state"), dict) else {}
+        if deal_state and not attention:
+            attention = str(deal_state.get("summary") or "") or None
     priority = analysis.get("priority_recommendation") if isinstance(analysis.get("priority_recommendation"), dict) else {}
     if priority and not risk:
         risk = str(priority.get("level") or "") or None
@@ -226,12 +264,14 @@ def build_cli_command(options: AnalyzeOptions, entity_type: str, ids: list[str])
 def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
     for entity_id in ids:
         paths = analysis_paths(entity_type, entity_id)
-        analysis = None
+        envelope: dict[str, Any] | None = None
         if paths["analysis_json"].exists():
             try:
-                analysis = json.loads(paths["analysis_json"].read_text(encoding="utf-8"))
+                loaded = json.loads(paths["analysis_json"].read_text(encoding="utf-8"))
+                envelope = loaded if isinstance(loaded, dict) else None
             except (OSError, json.JSONDecodeError):
-                analysis = None
+                envelope = None
+        analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
         summary = extract_summary_fields(analysis or {}, entity_type)
         report_id = None
         if analysis is not None:
@@ -244,6 +284,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 recommended_action=summary.get("recommended_action"),
                 analysis_path=str(paths["analysis_json"]) if paths["analysis_json"].exists() else None,
                 report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
+                # Store unwrapped analysis so UI history works without extra mapping.
                 report_json=analysis,
                 job_id=job.job_id,
             )

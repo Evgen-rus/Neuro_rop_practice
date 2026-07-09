@@ -14,7 +14,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from api.candidates import DEFAULT_DAYS, DEFAULT_LIMIT, search_candidates
-from api.jobs import AnalyzeOptions, get_job, list_jobs, parse_ids, start_analyze_job, workspace_dir
+from api.jobs import (
+    AnalyzeOptions,
+    extract_summary_fields,
+    get_job,
+    list_jobs,
+    parse_ids,
+    start_analyze_job,
+    unwrap_analysis_payload,
+    workspace_dir,
+)
 from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -150,13 +159,29 @@ def job_status(job_id: str) -> dict[str, Any]:
     return job
 
 
+def _enrich_report_row(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize stored envelope/unwrapped JSON and fill empty summary fields for old rows."""
+    row = dict(item)
+    analysis = unwrap_analysis_payload(row.get("report_json") if isinstance(row.get("report_json"), dict) else {})
+    if analysis:
+        row["report_json"] = analysis
+        summary = extract_summary_fields(analysis, str(row.get("entity_type") or "deal"))
+        if not row.get("risk_level"):
+            row["risk_level"] = summary.get("risk_level")
+        if not row.get("attention_reason"):
+            row["attention_reason"] = summary.get("attention_reason")
+        if not row.get("recommended_action"):
+            row["recommended_action"] = summary.get("recommended_action")
+    return row
+
+
 @app.get("/api/reports")
 def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     items = list_ui_reports(DEFAULT_DB_PATH, limit=limit)
     # Keep list payload light: drop full analysis JSON.
     light = []
     for item in items:
-        row = dict(item)
+        row = _enrich_report_row(item)
         row.pop("report_json", None)
         light.append(row)
     return {"items": light}
@@ -167,7 +192,7 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     report = get_ui_report(DEFAULT_DB_PATH, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    payload = dict(report)
+    payload = _enrich_report_row(report)
     payload["decisions"] = list_rop_decisions(DEFAULT_DB_PATH, report_id)
     payload["outcomes"] = list_outcomes(DEFAULT_DB_PATH, report_id)
     if include_markdown:
@@ -235,9 +260,10 @@ def entity_analysis(entity_type: Literal["lead", "deal"], entity_id: str) -> dic
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis JSON not found")
     try:
-        analysis = json.loads(path.read_text(encoding="utf-8"))
+        envelope = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=500, detail=f"Cannot read analysis: {error}") from error
+    analysis = unwrap_analysis_payload(envelope if isinstance(envelope, dict) else {})
     md_path = workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
     return {
         "entity_type": entity_type,

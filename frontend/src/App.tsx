@@ -4,6 +4,7 @@ import {
   asRecord,
   asString,
   asStringList,
+  unwrapAnalysis,
   type AnalyzeOptions,
   type Candidate,
   type CandidatesResponse,
@@ -151,10 +152,10 @@ export default function App() {
 
   const activeAnalysis = useMemo(() => {
     if (tab === 'history' && selectedReport?.report_json) {
-      return asRecord(selectedReport.report_json)
+      return unwrapAnalysis(selectedReport.report_json)
     }
     if (job?.results?.[selectedResultIndex]?.analysis) {
-      return asRecord(job.results[selectedResultIndex].analysis)
+      return unwrapAnalysis(job.results[selectedResultIndex].analysis)
     }
     return null
   }, [tab, selectedReport, job, selectedResultIndex])
@@ -718,8 +719,27 @@ function ReportPanels(props: {
   const { meta, analysis, facts, unknowns, recommendations, copyText } = props
   const dealState = asRecord(analysis?.deal_state)
   const leadState = asRecord(analysis?.lead_state)
+  const mainRisk = asRecord(analysis?.main_risk)
+  const rop = asRecord(analysis?.rop_manager_message_block)
   const amount = asString(dealState.amount) || asString(leadState.amount) || '—'
-  const status = asString(dealState.stage) || asString(leadState.status) || asString(meta?.risk_level) || '—'
+  const status =
+    asString(dealState.stage) ||
+    asString(leadState.status) ||
+    asString(mainRisk.risk_level) ||
+    asString(meta?.risk_level) ||
+    '—'
+  const attention =
+    asString(meta?.attention_reason) ||
+    asString(mainRisk.description) ||
+    asString(rop.why_it_matters) ||
+    asString(leadState.summary) ||
+    asString(dealState.summary) ||
+    '—'
+  const nextAction =
+    asString(meta?.recommended_action) ||
+    asString(rop.check_for_rop) ||
+    asString(rop.message_to_manager) ||
+    '—'
   const title = meta
     ? `${meta.entity_type === 'deal' ? 'Сделка' : meta.entity_type === 'lead' ? 'Лид' : meta.entity_type} ${meta.entity_id}`
     : 'Выберите кандидата или запустите анализ'
@@ -739,11 +759,11 @@ function ReportPanels(props: {
           </div>
           <div className="card">
             <div className="label">Причина внимания</div>
-            <div className="value">{meta?.attention_reason || '—'}</div>
+            <div className="value">{attention}</div>
           </div>
           <div className="card">
             <div className="label">Что сделать</div>
-            <div className="value">{meta?.recommended_action || '—'}</div>
+            <div className="value">{nextAction}</div>
           </div>
         </div>
       </section>
