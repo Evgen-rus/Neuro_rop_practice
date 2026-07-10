@@ -304,6 +304,7 @@ p {
   color: var(--muted);
   font-size: 13px;
   margin-bottom: 12px;
+  line-height: 1.4;
 }
 
 .deal {
@@ -390,6 +391,38 @@ p {
   background: transparent;
   color: var(--dark);
   border: 1px solid var(--line);
+}
+
+.advanced-toggle,
+.picker-toggle {
+  margin-top: 8px;
+  padding: 9px 12px;
+}
+
+.picker-summary {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.saved-analysis-box {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #bcd8ff;
+  border-radius: 8px;
+  background: #f5f9ff;
+}
+
+.saved-analysis-box strong {
+  color: var(--dark);
+}
+
+.saved-analysis-box span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .alert {
@@ -635,6 +668,11 @@ ul.facts.bad li:before {
   align-self: stretch;
 }
 
+.manual-basic,
+.manual-advanced {
+  grid-template-columns: 1fr;
+}
+
 .multi-check {
   max-height: 140px;
   overflow: auto;
@@ -708,6 +746,12 @@ ul.facts.bad li:before {
   align-items: center;
   color: var(--dark);
   font-size: 14px;
+}
+
+.job-panel {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
 }
 
 .markdown {

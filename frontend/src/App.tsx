@@ -170,8 +170,11 @@ export default function App() {
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
   const [filtersReady, setFiltersReady] = useState(false)
   const [showCandidateFilters, setShowCandidateFilters] = useState(false)
+  const [showPipelinePicker, setShowPipelinePicker] = useState(false)
+  const [showStagePicker, setShowStagePicker] = useState(false)
 
   const [manualIds, setManualIds] = useState('')
+  const [showManualAdvanced, setShowManualAdvanced] = useState(false)
   const [options, setOptions] = useState<AnalyzeOptions>({
     entity_type: 'auto',
     ids: '',
@@ -188,12 +191,25 @@ export default function App() {
   const [job, setJob] = useState<JobState | null>(null)
   const [jobError, setJobError] = useState<string | null>(null)
   const [selectedResultIndex, setSelectedResultIndex] = useState(0)
+  const [pendingAnalyzeMeta, setPendingAnalyzeMeta] = useState<{
+    entity_type: AnalyzeOptions['entity_type']
+    entity_id: string
+  } | null>(null)
 
   const [history, setHistory] = useState<UiReportListItem[]>([])
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedReport, setSelectedReport] = useState<UiReportDetail | null>(null)
   const [markdown, setMarkdown] = useState<string | null>(null)
   const [showMarkdown, setShowMarkdown] = useState(false)
+
+  const selectedCandidateReport = useMemo(() => {
+    if (!selectedCandidate) return null
+    return history.find(
+      (item) =>
+        item.entity_type === selectedCandidate.entity_type &&
+        String(item.entity_id) === String(selectedCandidate.entity_id),
+    ) || null
+  }, [history, selectedCandidate])
 
   const activeAnalysis = useMemo(() => {
     if (tab === 'history' && selectedReport?.report_json) {
@@ -217,17 +233,6 @@ export default function App() {
         bitrix_url: selectedReport.bitrix_url || null,
       }
     }
-    if (selectedCandidate && !activeAnalysis) {
-      return {
-        entity_type: selectedCandidate.entity_type,
-        entity_id: selectedCandidate.entity_id,
-        report_id: null as number | null,
-        risk_level: selectedCandidate.priority,
-        attention_reason: selectedCandidate.attention_reason,
-        recommended_action: 'Запустить анализ и получить поручение менеджеру',
-        bitrix_url: selectedCandidate.bitrix_url || null,
-      }
-    }
     const result = job?.results?.[selectedResultIndex]
     if (result) {
       return {
@@ -240,8 +245,33 @@ export default function App() {
         bitrix_url: result.bitrix_url || null,
       }
     }
+    if (tab === 'manual' && job && pendingAnalyzeMeta) {
+      return {
+        entity_type: pendingAnalyzeMeta.entity_type,
+        entity_id: pendingAnalyzeMeta.entity_id,
+        report_id: null as number | null,
+        risk_level: null,
+        attention_reason: 'Анализ выполняется: собираем CRM, аудио, транскрипты и LLM-вывод.',
+        recommended_action: 'Дождитесь завершения job — после этого здесь появится поручение менеджеру.',
+        bitrix_url: null,
+      }
+    }
+    if (selectedCandidate && !activeAnalysis) {
+      const hasOldAnalysis = Boolean(selectedCandidate.analyzed)
+      return {
+        entity_type: selectedCandidate.entity_type,
+        entity_id: selectedCandidate.entity_id,
+        report_id: null as number | null,
+        risk_level: selectedCandidate.priority,
+        attention_reason: selectedCandidate.attention_reason,
+        recommended_action: hasOldAnalysis
+          ? 'Откройте прошлый отчёт для контекста или обновите анализ, если данные в CRM изменились'
+          : 'Запустить анализ и получить поручение менеджеру',
+        bitrix_url: selectedCandidate.bitrix_url || null,
+      }
+    }
     return null
-  }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex])
+  }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex, pendingAnalyzeMeta])
 
   function applyFilterState(filter: CandidateFilter) {
     setEntityFilter(filter.entity_type === 'deal' ? 'deal' : 'lead')
@@ -272,6 +302,29 @@ export default function App() {
 
   function toggleId(list: string[], id: string): string[] {
     return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
+  }
+
+  function selectedPipelineNames(): string[] {
+    const selected = new Set(pipelineIds)
+    return dealPipelines.filter((pipeline) => selected.has(pipeline.id)).map((pipeline) => pipeline.name)
+  }
+
+  function selectedStageNames(): string[] {
+    const selected = new Set(stageIds)
+    return availableStages().filter((stage) => selected.has(stage.id)).map((stage) => stage.name)
+  }
+
+  function shortListSummary(items: string[], empty: string): string {
+    if (!items.length) return empty
+    const preview = items.slice(0, 2).join(', ')
+    return items.length > 2 ? `${preview} +${items.length - 2}` : preview
+  }
+
+  function reportPreview(item: UiReportListItem): string {
+    const action = item.recommended_action || item.attention_reason || 'без краткого вывода'
+    const date = item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : ''
+    const risk = item.risk_level ? `${riskLabelRu(item.risk_level)} риск` : 'риск не указан'
+    return `${date} · ${risk} · ${action}`
   }
 
   async function loadCandidates(overrides?: {
@@ -314,11 +367,17 @@ export default function App() {
     }
   }
 
-  async function loadHistory() {
+  async function loadHistory(selectLatest = false) {
     setHistoryError(null)
     try {
       const data = await fetchReports(50)
       setHistory(data.items)
+      if (selectLatest && data.items[0]) {
+        setShowMarkdown(false)
+        setMarkdown(null)
+        const detail = await fetchReport(data.items[0].id, false)
+        setSelectedReport(detail)
+      }
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : String(error))
     }
@@ -385,7 +444,12 @@ export default function App() {
           setJob(next)
           if (next.status === 'done') {
             void fetchReports(50)
-              .then((data) => setHistory(data.items))
+              .then((data) => {
+                setHistory(data.items)
+                const result = next.results?.[0]
+                const reportId = result?.report_id || next.report_ids?.[0]
+                if (reportId) void openHistoryReport(Number(reportId))
+              })
               .catch((error) => setHistoryError(error instanceof Error ? error.message : String(error)))
             toast('Анализ завершён', setToastMessage)
           }
@@ -400,6 +464,8 @@ export default function App() {
     setSelectedResultIndex(0)
     setShowMarkdown(false)
     setMarkdown(null)
+    const firstId = ids.split(/[\s,;]+/).find(Boolean) || ids.trim()
+    setPendingAnalyzeMeta({ entity_type: entityType, entity_id: firstId || '—' })
     try {
       const started = await startAnalyze({ ...options, ids, entity_type: entityType })
       setJob(started)
@@ -479,7 +545,7 @@ export default function App() {
           <button className={tab === 'manual' ? 'active' : ''} onClick={() => setTab('manual')}>
             Ручной запуск
           </button>
-          <button className={tab === 'history' ? 'active' : ''} onClick={() => { setTab('history'); void loadHistory() }}>
+          <button className={tab === 'history' ? 'active' : ''} onClick={() => { setTab('history'); void loadHistory(true) }}>
             История
           </button>
         </div>
@@ -527,6 +593,8 @@ export default function App() {
             <div className="filter-summary">
               {entityFilter === 'deal' ? 'Сделки' : 'Лиды'} · создано {createdDays} дн. · изменено {modifiedDays} дн.
               {priorityFilter ? ` · ${riskLabelRu(priorityFilter)}` : ''}
+              {entityFilter === 'deal' ? ` · ${shortListSummary(selectedPipelineNames(), 'воронки не выбраны')}` : ''}
+              {` · ${shortListSummary(selectedStageNames(), 'этапы не выбраны')}`}
             </div>
             {showCandidateFilters && (
               <div className="filters filters-compact">
@@ -558,6 +626,8 @@ export default function App() {
                     // При смене типа сбрасываем воронки/этапы — иначе можно искать «не то».
                     setPipelineIds([])
                     setStageIds([])
+                    setShowPipelinePicker(false)
+                    setShowStagePicker(false)
                     setCandidatesData(null)
                     setSelectedCandidate(null)
                   }}
@@ -579,53 +649,79 @@ export default function App() {
               {entityFilter === 'deal' && (
                 <div className="field field-multi">
                   <label>Воронки</label>
-                  <div className="multi-check">
-                    {dealPipelines.map((pipeline) => (
-                      <label key={pipeline.id} className="check-row">
-                        <input
-                          type="checkbox"
-                          checked={pipelineIds.includes(pipeline.id)}
-                          onChange={() => {
-                            const nextPipelines = toggleId(pipelineIds, pipeline.id)
-                            setPipelineIds(nextPipelines)
-                            // Убираем этапы из снятых воронок.
-                            const allowed = new Set(
-                              dealPipelines
-                                .filter((item) => nextPipelines.includes(item.id))
-                                .flatMap((item) => (item.stages || []).map((stage) => stage.id)),
-                            )
-                            setStageIds((prev) => prev.filter((id) => allowed.has(id)))
-                          }}
-                        />
-                        <span>{pipeline.name}</span>
-                      </label>
-                    ))}
-                    {!dealPipelines.length && <span className="muted">Справочник воронок пуст</span>}
+                  <button
+                    className="btn ghost picker-toggle"
+                    type="button"
+                    onClick={() => setShowPipelinePicker((value) => !value)}
+                  >
+                    {pipelineIds.length ? `Выбрано воронок: ${pipelineIds.length}` : 'Выбрать воронки'}
+                  </button>
+                  <div className="picker-summary">
+                    {shortListSummary(selectedPipelineNames(), 'Выберите одну или несколько воронок')}
                   </div>
+                  {showPipelinePicker && (
+                    <div className="multi-check">
+                      {dealPipelines.map((pipeline) => (
+                        <label key={pipeline.id} className="check-row">
+                          <input
+                            type="checkbox"
+                            checked={pipelineIds.includes(pipeline.id)}
+                            onChange={() => {
+                              const nextPipelines = toggleId(pipelineIds, pipeline.id)
+                              setPipelineIds(nextPipelines)
+                              // Убираем этапы из снятых воронок.
+                              const allowed = new Set(
+                                dealPipelines
+                                  .filter((item) => nextPipelines.includes(item.id))
+                                  .flatMap((item) => (item.stages || []).map((stage) => stage.id)),
+                              )
+                              setStageIds((prev) => prev.filter((id) => allowed.has(id)))
+                            }}
+                          />
+                          <span>{pipeline.name}</span>
+                        </label>
+                      ))}
+                      {!dealPipelines.length && <span className="muted">Справочник воронок пуст</span>}
+                    </div>
+                  )}
                 </div>
               )}
 
               <div className="field field-multi">
                 <label>Этапы</label>
-                <div className="multi-check">
-                  {availableStages().map((stage) => (
-                    <label key={stage.id} className="check-row">
-                      <input
-                        type="checkbox"
-                        checked={stageIds.includes(stage.id)}
-                        onChange={() => setStageIds((prev) => toggleId(prev, stage.id))}
-                      />
-                      <span>{stage.name}</span>
-                    </label>
-                  ))}
-                  {!availableStages().length && (
-                    <span className="muted">
-                      {entityFilter === 'deal' && !pipelineIds.length
-                        ? 'Сначала выберите воронку'
-                        : 'Этапы не найдены'}
-                    </span>
-                  )}
-                </div>
+                <button
+                  className="btn ghost picker-toggle"
+                  type="button"
+                  onClick={() => setShowStagePicker((value) => !value)}
+                >
+                  {stageIds.length
+                    ? `Выбрано этапов: ${stageIds.length}`
+                    : entityFilter === 'deal' && !pipelineIds.length
+                      ? 'Сначала выберите воронку'
+                      : 'Выбрать этапы'}
+                </button>
+                <div className="picker-summary">{shortListSummary(selectedStageNames(), 'Этапы ещё не выбраны')}</div>
+                {showStagePicker && (
+                  <div className="multi-check">
+                    {availableStages().map((stage) => (
+                      <label key={stage.id} className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={stageIds.includes(stage.id)}
+                          onChange={() => setStageIds((prev) => toggleId(prev, stage.id))}
+                        />
+                        <span>{stage.name}</span>
+                      </label>
+                    ))}
+                    {!availableStages().length && (
+                      <span className="muted">
+                        {entityFilter === 'deal' && !pipelineIds.length
+                          ? 'Сначала выберите воронку'
+                          : 'Этапы не найдены'}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               <button
@@ -673,16 +769,31 @@ export default function App() {
             {!candidatesLoading && !candidatesData && !candidatesError && (
               <p className="muted">Откройте фильтры, выберите этапы и нажмите «Обновить».</p>
             )}
+            {selectedCandidate?.analyzed && (
+              <div className="saved-analysis-box">
+                <strong>Есть прошлый анализ</strong>
+                <span>Он может быть устаревшим, если CRM или звонки изменились.</span>
+                <button
+                  className="btn secondary"
+                  disabled={!selectedCandidateReport}
+                  onClick={() => {
+                    if (selectedCandidateReport) void openHistoryReport(selectedCandidateReport.id)
+                  }}
+                >
+                  Открыть прошлый отчёт
+                </button>
+              </div>
+            )}
             <button
               className="btn"
               style={{ marginTop: 10 }}
-              disabled={!selectedCandidate}
+              disabled={!selectedCandidate || (job?.status === 'running' || job?.status === 'queued')}
               onClick={() => {
                 if (!selectedCandidate) return
                 void runAnalyze(selectedCandidate.entity_id, selectedCandidate.entity_type)
               }}
             >
-              Запустить анализ выбранного
+              {selectedCandidate?.analyzed ? 'Обновить анализ выбранного' : 'Запустить анализ выбранного'}
             </button>
           </aside>
 
@@ -735,7 +846,7 @@ export default function App() {
         <div className="grid">
           <aside className="panel">
             <h3>Ручной запуск</h3>
-            <p>ID через запятую или столбиком. Опции как в CLI.</p>
+            <p>Для срочной проверки конкретного лида или сделки.</p>
             <div className="field">
               <label>ID лидов/сделок</label>
               <textarea
@@ -744,7 +855,7 @@ export default function App() {
                 placeholder={'18457, 18533\nили столбиком'}
               />
             </div>
-            <div className="filters" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <div className="filters manual-basic">
               <div className="field">
                 <label>Тип</label>
                 <select
@@ -758,6 +869,24 @@ export default function App() {
                   <option value="deal">Сделка</option>
                 </select>
               </div>
+            </div>
+            <button
+              className="btn"
+              onClick={() => void runAnalyze(manualIds, options.entity_type)}
+              disabled={!manualIds.trim() || (job?.status === 'running' || job?.status === 'queued')}
+            >
+              Запустить анализ
+            </button>
+            <button
+              className="btn ghost advanced-toggle"
+              type="button"
+              onClick={() => setShowManualAdvanced((value) => !value)}
+            >
+              {showManualAdvanced ? 'Скрыть параметры запуска' : 'Параметры запуска'}
+            </button>
+            {showManualAdvanced && (
+              <>
+                <div className="filters manual-advanced">
               <div className="field">
                 <label>История, дней</label>
                 <input
@@ -785,46 +914,43 @@ export default function App() {
                   <option value="none">none</option>
                 </select>
               </div>
-            </div>
-            <div className="checks">
-              {(
-                [
-                  ['include_related', 'Связанные сделки контакта'],
-                  ['include_internal', 'Внутренний контекст'],
-                  ['download_audio', 'Скачать недостающие аудио'],
-                  ['redownload_audio', 'Перекачать аудио'],
-                  ['transcribe_audio', 'Транскрибировать (кроме <20 сек)'],
-                  ['analyze', 'Запустить LLM-анализ'],
-                  ['force_llm', 'Принудительный полный LLM'],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(options[key])}
-                    onChange={(e) => setOptions((prev) => ({ ...prev, [key]: e.target.checked }))}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <button
-              className="btn"
-              onClick={() => void runAnalyze(manualIds, options.entity_type)}
-              disabled={!manualIds.trim() || (job?.status === 'running' || job?.status === 'queued')}
-            >
-              Запустить анализ
-            </button>
+                </div>
+                <div className="checks">
+                  {(
+                    [
+                      ['include_related', 'Связанные сделки контакта'],
+                      ['include_internal', 'Внутренний контекст'],
+                      ['download_audio', 'Скачать недостающие аудио'],
+                      ['redownload_audio', 'Перекачать аудио'],
+                      ['transcribe_audio', 'Транскрибировать (кроме <20 сек)'],
+                      ['analyze', 'Запустить LLM-анализ'],
+                      ['force_llm', 'Принудительный полный LLM'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(options[key])}
+                        onChange={(e) => setOptions((prev) => ({ ...prev, [key]: e.target.checked }))}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
             {jobError && (
               <div className="alert error" style={{ marginTop: 12 }}>
                 <strong>Ошибка:</strong> {jobError}
               </div>
             )}
             {job && (
-              <div style={{ marginTop: 16 }}>
+              <div className="job-panel">
                 <h3>Прогресс</h3>
                 <p className="muted">
-                  job {job.job_id} · {job.status}
+                  {job.status === 'running' || job.status === 'queued'
+                    ? 'Анализ может занять несколько минут: скачиваются аудио, собирается история и запускается LLM.'
+                    : `job ${job.job_id} · ${job.status}`}
                 </p>
                 <div className="pipeline" style={{ gridTemplateColumns: '1fr' }}>
                   {job.stages.map((stage) => (
@@ -882,7 +1008,7 @@ export default function App() {
           <aside className="panel">
             <h3>История отчётов</h3>
             <p>Сохранённые анализы и решения РОПа.</p>
-            <button className="btn secondary" onClick={() => void loadHistory()}>
+            <button className="btn secondary" onClick={() => void loadHistory(true)}>
               Обновить
             </button>
             {historyError && (
@@ -900,11 +1026,7 @@ export default function App() {
                   <strong>
                     #{item.id} · {item.entity_type} {item.entity_id}
                   </strong>
-                  <small>
-                    {item.created_at}
-                    <br />
-                    {item.attention_reason || item.recommended_action || '—'}
-                  </small>
+                  <small>{reportPreview(item)}</small>
                 </button>
               ))}
               {!history.length && !historyError && <p className="muted">Пока нет сохранённых отчётов.</p>}
@@ -1082,21 +1204,23 @@ function ReportPanels(props: {
         )}
       </section>
 
-      <section className="section">
-        <h2>Решение РОПа</h2>
-        <div className="actions">
-          {DECISIONS.map((item) => (
-            <button key={item} onClick={() => props.onDecision(item)}>
-              {item}
-            </button>
-          ))}
-        </div>
-        {!!props.decisions?.length && (
-          <p className="muted" style={{ marginTop: 12 }}>
-            Последнее: {asString(props.decisions[0].decision)} ({asString(props.decisions[0].created_at)})
-          </p>
-        )}
-      </section>
+      {meta?.report_id ? (
+        <section className="section">
+          <h2>Решение РОПа</h2>
+          <div className="actions">
+            {DECISIONS.map((item) => (
+              <button key={item} onClick={() => props.onDecision(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
+          {!!props.decisions?.length && (
+            <p className="muted" style={{ marginTop: 12 }}>
+              Последнее: {asString(props.decisions[0].decision)} ({asString(props.decisions[0].created_at)})
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <section className="section context-section">
         <h2>Контекст решения</h2>
@@ -1142,21 +1266,23 @@ function ReportPanels(props: {
         </ul>
       </section>
 
-      <section className="section">
-        <h2>Исход после рекомендации</h2>
-        <div className="actions">
-          {OUTCOMES.map((item) => (
-            <button key={item} onClick={() => props.onOutcome(item)}>
-              {item}
-            </button>
-          ))}
-        </div>
-        {!!props.outcomes?.length && (
-          <p className="muted" style={{ marginTop: 12 }}>
-            Последний исход: {asString(props.outcomes[0].outcome_type)} ({asString(props.outcomes[0].checked_at)})
-          </p>
-        )}
-      </section>
+      {meta?.report_id ? (
+        <section className="section">
+          <h2>Исход после рекомендации</h2>
+          <div className="actions">
+            {OUTCOMES.map((item) => (
+              <button key={item} onClick={() => props.onOutcome(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
+          {!!props.outcomes?.length && (
+            <p className="muted" style={{ marginTop: 12 }}>
+              Последний исход: {asString(props.outcomes[0].outcome_type)} ({asString(props.outcomes[0].checked_at)})
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <section className="section">
         <h2>Полный markdown-отчёт</h2>
