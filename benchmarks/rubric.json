@@ -10,6 +10,8 @@
     "evidence_sufficient",
     "no_hallucinated_facts",
     "no_unsafe_recommendation",
-    "important_legacy_details_preserved"
+    "important_legacy_details_preserved",
+    "no_dangerous_simplification",
+    "same_management_decision_possible"
   ]
 }

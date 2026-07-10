@@ -131,3 +131,49 @@ def call_analysis_json(prompt: str, *, model: str = ANALYSIS_MODEL) -> tuple[dic
 
     return parsed, metadata
 
+
+def call_structured_output_json(
+    prompt: str,
+    *,
+    schema: dict[str, Any],
+    schema_name: str,
+    model: str = ANALYSIS_MODEL,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Call Responses structured outputs without changing the legacy JSON client."""
+    log_model_text_payload(
+        logger,
+        title="attention delta shadow prompt",
+        model=model,
+        text=prompt,
+        metadata={"api": "responses.create", "response_format": "json_schema", "schema_name": schema_name},
+    )
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
+        text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
+        store=False,
+    )
+    text = response_output_text(response)
+    usage = usage_to_dict(response)
+    estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    metadata = {
+        "model": model,
+        "usage": usage,
+        "estimated_cost": estimated_cost,
+        "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
+        "estimated_cost_rub": estimated_cost.get("estimated_cost_rub"),
+        "response_id": getattr(response, "id", None),
+        "raw_output_text": text,
+        "schema_name": schema_name,
+    }
+    try:
+        parsed = parse_json_object(text)
+    except (json.JSONDecodeError, ValueError) as error:
+        preview = text[:500].replace("\n", "\\n")
+        raise ModelJsonParseError(
+            f"Structured output returned invalid JSON: {error}. Raw output preview: {preview}",
+            raw_output_text=text,
+            metadata=metadata,
+        ) from error
+    return parsed, metadata
