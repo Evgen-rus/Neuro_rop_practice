@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from benchmarks.compare_attention_delta import compare_case
-from benchmarks.run_attention_delta_shadow import run_shadow_case
+from benchmarks.run_attention_delta_shadow import run_shadow_case, verify_api_limits
+from openai_api.config import ATTENTION_DELTA_MAX_OUTPUT_TOKENS
 from openai_api.llm.attention_delta import (
     build_deal_attention_delta_prompt,
     build_lead_attention_delta_prompt,
@@ -156,6 +157,7 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
             self.assertEqual(before, analysis.read_bytes())
             self.assertTrue((output / "deal-01" / "attention_delta_prompt_budget.json").exists())
             self.assertFalse((output / "deal-01" / "attention_delta.json").exists())
+            self.assertTrue(result["prompt_metrics"]["uses_real_transcript"])
 
     def test_usage_is_saved_when_response_fails_local_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -185,6 +187,32 @@ class StructuredOutputClientTests(unittest.TestCase):
         self.assertEqual(metadata["usage"]["output_tokens"], 2)
         self.assertTrue(create.call_args.kwargs["text"]["format"]["strict"])
         self.assertEqual(create.call_args.kwargs["text"]["format"]["type"], "json_schema")
+        self.assertEqual(create.call_args.kwargs["max_output_tokens"], ATTENTION_DELTA_MAX_OUTPUT_TOKENS)
+
+
+class AttentionDeltaSafetyLimitTests(unittest.TestCase):
+    def test_api_limits_require_explicit_caps_and_reject_excess(self) -> None:
+        prepared = [
+            {
+                "case": {"case_id": "deal-01"},
+                "ready_for_api": True,
+                "not_ready_reasons": [],
+                "upper_estimated_cost": {"estimated_cost_rub": 2.5},
+            },
+            {
+                "case": {"case_id": "lead-01"},
+                "ready_for_api": True,
+                "not_ready_reasons": [],
+                "upper_estimated_cost": {"estimated_cost_rub": 2.5},
+            },
+        ]
+        with self.assertRaisesRegex(ValueError, "requires a positive --max-cases"):
+            verify_api_limits(prepared, max_cases=None, max_estimated_cost_rub=10)
+        with self.assertRaisesRegex(ValueError, "exceeding --max-cases"):
+            verify_api_limits(prepared, max_cases=1, max_estimated_cost_rub=10)
+        with self.assertRaisesRegex(ValueError, "Expected upper cost"):
+            verify_api_limits(prepared, max_cases=2, max_estimated_cost_rub=4)
+        self.assertEqual(verify_api_limits(prepared, max_cases=2, max_estimated_cost_rub=5), 5.0)
 
 
 class AttentionDeltaComparatorTests(unittest.TestCase):

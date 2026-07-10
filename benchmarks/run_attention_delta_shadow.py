@@ -19,10 +19,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai_api.config import (
+    ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
     CONTEXT_MEMORY_OPTIMIZATION_ENABLED,
     CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK,
     CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE,
+    USD_RUB_RATE,
 )
 from openai_api.llm.attention_delta import (
     build_deal_attention_delta_prompt,
@@ -35,6 +37,7 @@ from openai_api.llm.attention_delta import (
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
 from openai_api.llm.llm_client import ModelJsonParseError, call_structured_output_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
+from openai_api.pricing import estimate_analysis_cost
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +46,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None, help="Ignored shadow output directory")
     parser.add_argument("--case-id", default=None, help="Run only one neutral benchmark case ID")
     parser.add_argument("--model", default=ANALYSIS_MODEL, help="Explicit model override for the compact call")
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="Required API safety cap: selected case count must not exceed this value.",
+    )
+    parser.add_argument(
+        "--max-estimated-cost-rub",
+        type=float,
+        default=None,
+        help="Required API safety cap for the combined no-cache upper cost estimate in RUB.",
+    )
     parser.add_argument(
         "--allow-api",
         action="store_true",
@@ -73,6 +88,10 @@ def _read_required_text(path_value: Any, label: str) -> tuple[Path, str]:
 def _read_diagnostics(paths: Any) -> tuple[list[str], str]:
     if paths is None:
         return [], "Diagnostics were not saved with the legacy baseline."
+    if isinstance(paths, str):
+        paths = [paths]
+    elif isinstance(paths, dict):
+        paths = [paths[key] for key in sorted(paths)]
     if not isinstance(paths, list):
         raise ValueError("Legacy input_files.context_diagnostics must be a list")
     used_paths: list[str] = []
@@ -109,8 +128,13 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Case {case.get('case_id')!r} has no legacy knowledge input paths")
     okf_sections = [_read_required_text(value, "OKF knowledge input") for value in knowledge_paths]
     stage_policy = payload.get("crm_stage_policy") if isinstance(payload.get("crm_stage_policy"), dict) else None
+    baseline_gaps: list[str] = []
     if entity_type == "deal" and stage_policy is None:
-        raise ValueError(f"Case {case.get('case_id')!r} has no crm_stage_policy in the legacy baseline")
+        baseline_gaps.append("no crm_stage_policy in the legacy baseline")
+    if transcript_path is None:
+        baseline_gaps.append("no real transcript input in the legacy baseline")
+    if baseline_gaps:
+        raise ValueError(f"Case {case.get('case_id')!r} is not ready: {'; '.join(baseline_gaps)}")
     return {
         "entity_type": entity_type,
         "entity_id": entity_id,
@@ -156,12 +180,10 @@ def _case_output_dir(output_root: Path, case_id: Any) -> Path:
     return output_root / value
 
 
-def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool, model: str) -> dict[str, Any]:
-    """Run one case without writing any path named by the legacy baseline."""
+def prepare_shadow_case(case: dict[str, Any], *, output_root: Path, model: str) -> dict[str, Any]:
+    """Build local inputs and a no-cache upper cost estimate without calling OpenAI."""
     inputs = load_shadow_inputs(case)
     prompt, schema, schema_name, validator = build_shadow_request(inputs)
-    output_dir = _case_output_dir(output_root, case.get("case_id"))
-    output_dir.mkdir(parents=True, exist_ok=True)
     budget = build_prompt_budget(
         prompt=prompt,
         model=model,
@@ -172,6 +194,120 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         stage_policy=inputs["stage_policy"],
     )
     budget["mode"] = "attention_delta_shadow"
+    schema_chars = len(json.dumps(schema, ensure_ascii=False, separators=(",", ":")))
+    approx_input_tokens = budget["total"]["approx_tokens"]
+    upper_estimated_cost = estimate_analysis_cost(
+        model,
+        {"input_tokens": approx_input_tokens, "output_tokens": ATTENTION_DELTA_MAX_OUTPUT_TOKENS},
+        USD_RUB_RATE,
+    )
+    transcript_is_fallback = inputs["transcript_path"] is None
+    not_ready_reasons = ["legacy baseline has no real transcript input"] if transcript_is_fallback else []
+    prompt_metrics = {
+        "history_chars": len(inputs["history_text"].strip()),
+        "transcript_chars": len(inputs["transcript_text"].strip()),
+        "okf_chars": budget["blocks"]["okf_knowledge"]["chars"],
+        "instructions_chars": budget["blocks"]["instructions"]["chars"],
+        "schema_chars": schema_chars,
+        "total_chars": budget["total"]["chars"],
+        "approx_input_tokens": approx_input_tokens,
+        "uses_real_transcript": not transcript_is_fallback,
+    }
+    return {
+        "case": case,
+        "inputs": inputs,
+        "prompt": prompt,
+        "schema": schema,
+        "schema_name": schema_name,
+        "validator": validator,
+        "budget": budget,
+        "output_dir": _case_output_dir(output_root, case.get("case_id")),
+        "prompt_metrics": prompt_metrics,
+        "max_output_tokens": ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
+        "upper_estimated_cost": upper_estimated_cost,
+        "ready_for_api": not not_ready_reasons,
+        "not_ready_reasons": not_ready_reasons,
+    }
+
+
+def verify_api_limits(
+    prepared_cases: list[dict[str, Any]],
+    *,
+    max_cases: int | None,
+    max_estimated_cost_rub: float | None,
+) -> float:
+    """Fail before any API call when an explicit local budget is not respected."""
+    if max_cases is None or max_cases <= 0:
+        raise ValueError("--allow-api requires a positive --max-cases safety cap")
+    if max_estimated_cost_rub is None or max_estimated_cost_rub <= 0:
+        raise ValueError("--allow-api requires a positive --max-estimated-cost-rub safety cap")
+    if len(prepared_cases) > max_cases:
+        raise ValueError(f"Selected {len(prepared_cases)} case(s), exceeding --max-cases={max_cases}")
+    not_ready = [
+        f"{prepared['case'].get('case_id')}: {', '.join(prepared['not_ready_reasons'])}"
+        for prepared in prepared_cases
+        if not prepared["ready_for_api"]
+    ]
+    if not_ready:
+        raise ValueError("Refusing API call for incomplete benchmark inputs: " + "; ".join(not_ready))
+    costs = [prepared["upper_estimated_cost"].get("estimated_cost_rub") for prepared in prepared_cases]
+    if any(cost is None for cost in costs):
+        raise ValueError("Cannot establish API safety cap: model is absent from the local pricing table")
+    total_cost_rub = round(sum(float(cost) for cost in costs), 2)
+    if total_cost_rub > max_estimated_cost_rub:
+        raise ValueError(
+            f"Expected upper cost {total_cost_rub:.2f} RUB exceeds --max-estimated-cost-rub={max_estimated_cost_rub:.2f}"
+        )
+    return total_cost_rub
+
+
+def print_api_confirmation(prepared_cases: list[dict[str, Any]], total_cost_rub: float) -> None:
+    """Print a deterministic, non-interactive acknowledgement before requests."""
+    for prepared in prepared_cases:
+        cost = prepared["upper_estimated_cost"].get("estimated_cost_rub")
+        print(
+            "API shadow preflight: "
+            f"model={prepared['upper_estimated_cost'].get('model')} "
+            f"case_id={prepared['case'].get('case_id')} "
+            f"approx_input_tokens={prepared['prompt_metrics']['approx_input_tokens']} "
+            f"max_output_tokens={prepared['max_output_tokens']} "
+            f"max_estimated_cost_rub={float(cost):.2f} "
+            f"output_dir={prepared['output_dir']}"
+        )
+    print(f"API shadow preflight total upper cost: {total_cost_rub:.2f} RUB")
+
+
+def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool, model: str) -> dict[str, Any]:
+    """Run one case without writing any path named by the legacy baseline."""
+    try:
+        prepared = prepare_shadow_case(case, output_root=output_root, model=model)
+    except (FileNotFoundError, ValueError) as error:
+        if allow_api:
+            raise
+        output_dir = _case_output_dir(output_root, case.get("case_id"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "case_id": case.get("case_id"),
+            "entity_type": case.get("entity_type"),
+            "model": model,
+            "allow_api": False,
+            "status": "inputs_not_ready_no_api_call",
+            "ready_for_api": False,
+            "not_ready_reasons": [str(error)],
+            "usage": None,
+            "estimated_cost": None,
+        }
+        write_json(output_dir / "attention_delta_metadata.json", metadata)
+        return metadata
+    inputs = prepared["inputs"]
+    prompt = prepared["prompt"]
+    schema = prepared["schema"]
+    schema_name = prepared["schema_name"]
+    validator = prepared["validator"]
+    output_dir = prepared["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    budget = prepared["budget"]
     budget_path = output_dir / "attention_delta_prompt_budget.json"
     write_prompt_budget(budget_path, budget)
     metadata_path = output_dir / "attention_delta_metadata.json"
@@ -182,6 +318,11 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         "entity_id": inputs["entity_id"],
         "model": model,
         "allow_api": allow_api,
+        "prompt_metrics": prepared["prompt_metrics"],
+        "max_output_tokens": prepared["max_output_tokens"],
+        "upper_estimated_cost": prepared["upper_estimated_cost"],
+        "ready_for_api": prepared["ready_for_api"],
+        "not_ready_reasons": prepared["not_ready_reasons"],
         "feature_flags": {
             "context_memory_optimization_enabled": CONTEXT_MEMORY_OPTIMIZATION_ENABLED,
             "context_memory_optimization_shadow_mode": CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE,
@@ -196,9 +337,13 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         },
     }
     if not allow_api:
-        metadata = {**common_metadata, "status": "inputs_ready_no_api_call", "usage": None, "estimated_cost": None}
+        status = "inputs_ready_no_api_call" if prepared["ready_for_api"] else "inputs_not_ready_no_api_call"
+        metadata = {**common_metadata, "status": status, "usage": None, "estimated_cost": None}
         write_json(metadata_path, metadata)
         return metadata
+
+    if not prepared["ready_for_api"]:
+        raise ValueError("Refusing API call for incomplete benchmark inputs: " + "; ".join(prepared["not_ready_reasons"]))
 
     try:
         delta, response_metadata = call_structured_output_json(
@@ -206,6 +351,7 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             schema=schema,
             schema_name=schema_name,
             model=model,
+            max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
         )
     except ModelJsonParseError as error:
         write_prompt_budget(budget_path, attach_response_metadata(budget, error.metadata))
@@ -260,6 +406,17 @@ def main() -> None:
     if not cases:
         raise SystemExit("Manifest has no matching cases.")
     output_root = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "benchmarks" / "results" / "attention_delta"
+    if args.allow_api:
+        try:
+            prepared_cases = [prepare_shadow_case(case, output_root=output_root, model=args.model) for case in cases if isinstance(case, dict)]
+            total_cost_rub = verify_api_limits(
+                prepared_cases,
+                max_cases=args.max_cases,
+                max_estimated_cost_rub=args.max_estimated_cost_rub,
+            )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        print_api_confirmation(prepared_cases, total_cost_rub)
     completed = [
         run_shadow_case(case, output_root=output_root, allow_api=args.allow_api, model=args.model)
         for case in cases

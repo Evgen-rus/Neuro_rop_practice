@@ -11,6 +11,7 @@ from typing import Any
 from openai import OpenAI
 
 from openai_api.config import (
+    ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
     OPENAI_API_KEY,
@@ -138,6 +139,7 @@ def call_structured_output_json(
     schema: dict[str, Any],
     schema_name: str,
     model: str = ANALYSIS_MODEL,
+    max_output_tokens: int = ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call Responses structured outputs without changing the legacy JSON client."""
     log_model_text_payload(
@@ -150,7 +152,7 @@ def call_structured_output_json(
     response = client.responses.create(
         model=model,
         input=prompt,
-        max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
+        max_output_tokens=max_output_tokens,
         text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
         store=False,
     )
