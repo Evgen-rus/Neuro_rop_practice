@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +16,7 @@ from openai_api.llm.attention_delta import (
     build_lead_attention_delta_prompt,
     deal_attention_delta_schema,
     lead_attention_delta_schema,
+    materialize_lead_attention_delta,
     validate_deal_attention_delta,
     validate_lead_attention_delta,
 )
@@ -57,7 +59,31 @@ def lead_delta() -> dict:
     value["entity_type"] = "lead"
     value["entity_id"] = "99"
     value.pop("deal_review")
-    value["lead_review"] = {"qualification": "B", "final_verdict": "bad_processing"}
+    value["lead_review"] = {
+        "qualification": "B",
+        "lead_quality": "good",
+        "processing_quality": "good",
+        "final_verdict": "ready_for_deal",
+        "meaningful_contact": True,
+        "action_playbook": "qualification_followup",
+    }
+    return value
+
+
+def no_contact_bad_processing_delta() -> dict:
+    value = lead_delta()
+    value["lead_review"] = {
+        "qualification": "unknown",
+        "lead_quality": "unknown",
+        "processing_quality": "bad",
+        "final_verdict": "bad_processing",
+        "meaningful_contact": False,
+        "action_playbook": "restore_no_contact_processing",
+    }
+    value["reason"] = "Подтверждённого содержательного контакта и CRM-следа обработки нет; связка контакта неполна."
+    value["rop_action"]["check"] = "Проверить отсутствие подтверждённой обработки."
+    value["rop_action"]["deadline"] = None
+    value["rop_action"]["evidence_ids"] = ["lead:99", "diag:contact_resolution", "diag:task_comments"]
     return value
 
 
@@ -90,6 +116,60 @@ class AttentionDeltaSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too many items"):
             validate_deal_attention_delta(too_many_evidence)
 
+    def test_no_contact_bad_processing_requires_restore_playbook(self) -> None:
+        delta = materialize_lead_attention_delta(no_contact_bad_processing_delta(), today=date(2031, 2, 3))
+        validate_lead_attention_delta(delta)
+        self.assertEqual(delta["lead_review"]["action_playbook"], "restore_no_contact_processing")
+        self.assertIn("3 попытки звонка", delta["rop_action"]["message_to_manager"])
+
+    def test_bad_lead_without_meaningful_contact_is_rejected(self) -> None:
+        delta = no_contact_bad_processing_delta()
+        delta["lead_review"]["final_verdict"] = "bad_lead"
+        with self.assertRaisesRegex(ValueError, "bad_lead requires"):
+            validate_lead_attention_delta(materialize_lead_attention_delta(delta, today=date(2031, 2, 3)))
+
+    def test_invalid_number_and_meaningful_contact_paths_do_not_force_three_calls(self) -> None:
+        invalid_number = lead_delta()
+        invalid_number["lead_review"] = {
+            "qualification": "unknown",
+            "lead_quality": "unknown",
+            "processing_quality": "unknown",
+            "final_verdict": "data_gap",
+            "meaningful_contact": False,
+            "action_playbook": "verify_invalid_number",
+        }
+        validate_lead_attention_delta(invalid_number)
+        confirmed_contact = lead_delta()
+        self.assertNotEqual(confirmed_contact["lead_review"]["action_playbook"], "restore_no_contact_processing")
+        validate_lead_attention_delta(confirmed_contact)
+
+    def test_null_lead_review_is_rejected(self) -> None:
+        delta = lead_delta()
+        delta["lead_review"] = None
+        with self.assertRaisesRegex(ValueError, "lead_review must be an object"):
+            validate_lead_attention_delta(delta)
+
+    def test_playbook_uses_provided_date_and_preserves_case_specific_fields(self) -> None:
+        delta = no_contact_bad_processing_delta()
+        delta["reason"] = "Case-specific reason must remain intact."
+        delta["severity"] = "high"
+        delta["rop_action"]["check"] = "Проверить доступную историю и карточку."
+        delta["rop_action"]["deadline"] = "2032-04-05"
+        delta["rop_action"]["evidence_ids"] = ["lead:99", "diag:custom"]
+        review_before = dict(delta["lead_review"])
+        result = materialize_lead_attention_delta(delta, today=date(2031, 2, 3))
+        self.assertEqual(result["reason"], "Case-specific reason must remain intact.")
+        self.assertEqual(result["severity"], "high")
+        self.assertIn("Проверить доступную историю и карточку.", result["rop_action"]["check"])
+        self.assertEqual(result["rop_action"]["deadline"], "2032-04-05")
+        self.assertEqual(result["rop_action"]["evidence_ids"], ["lead:99", "diag:custom"])
+        self.assertEqual(result["lead_review"], review_before)
+
+    def test_playbook_calculates_deadline_from_supplied_run_date(self) -> None:
+        delta = no_contact_bad_processing_delta()
+        result = materialize_lead_attention_delta(delta, today=date(2033, 6, 7))
+        self.assertEqual(result["rop_action"]["deadline"], "2033-06-07")
+
 
 class AttentionDeltaPromptTests(unittest.TestCase):
     def test_compact_prompt_keeps_grounding_without_legacy_contract(self) -> None:
@@ -116,6 +196,35 @@ class AttentionDeltaPromptTests(unittest.TestCase):
         self.assertEqual(first, render_attention_delta_preview(deal_delta()))
         self.assertIn("## Что требует внимания", first)
         self.assertIn("activity:42:1", first)
+
+    def test_lead_preview_contains_restore_playbook_rules(self) -> None:
+        preview = render_attention_delta_preview(
+            materialize_lead_attention_delta(no_contact_bad_processing_delta(), today=date(2031, 2, 3))
+        )
+        for fragment in ("Три попытки", "2 часов", "мессенджер", "результат каждой попытки", "следующим шагом", "2031-02-03"):
+            self.assertIn(fragment, preview)
+
+    def test_lead_prompt_has_clean_section_boundaries_and_spacing(self) -> None:
+        prompt = build_lead_attention_delta_prompt(
+            "99",
+            "CRM facts.",
+            "Transcript facts.",
+            "Diagnostics facts.",
+            [(Path("index.md"), "OKF facts.")],
+        )
+        self.assertNotIn("анализ" + ":" + "верни", prompt)
+        self.assertNotIn("фактов" + "о клиенте", prompt)
+        self.assertIn("shadow-анализ: верни", prompt)
+        self.assertIn("фактов о клиенте", prompt)
+        self.assertIn("## CRM HISTORY\nCRM facts.\n\n## TRANSCRIPT OR NEW EVENT\nTranscript facts.", prompt)
+        self.assertIn("## CONTEXT DIAGNOSTICS\nDiagnostics facts.\n\n## OKF RULES", prompt)
+
+    def test_deal_contract_and_prompt_do_not_gain_lead_playbooks(self) -> None:
+        prompt = build_deal_attention_delta_prompt(
+            "42", "history", "transcript", "diagnostics", [(Path("index.md"), "OKF")], {"is_closed_lost": False}
+        )
+        self.assertNotIn("restore_no_contact_processing", prompt)
+        self.assertNotIn("action_playbook", deal_attention_delta_schema()["properties"])
 
 
 class AttentionDeltaShadowRunnerTests(unittest.TestCase):

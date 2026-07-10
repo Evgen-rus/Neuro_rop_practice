@@ -12,6 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, materialize_lead_playbook_action
 from openai_api.llm.prompt_budget import render_okf_sections
 
 
@@ -34,6 +35,7 @@ DEAL_REVIEW_DECISIONS = (
     "manager_action_required",
 )
 LEAD_QUALIFICATIONS = ("A", "B", "C", "D", "E", "unknown")
+LEAD_QUALITIES = ("good", "weak", "bad", "unknown")
 LEAD_FINAL_VERDICTS = (
     "bad_lead",
     "bad_processing",
@@ -151,18 +153,24 @@ def lead_attention_delta_schema() -> dict[str, Any]:
     schema = _base_schema("lead")
     schema["required"] = (*schema["required"], "lead_review")
     schema["properties"]["lead_review"] = {
-        "anyOf": [
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ("qualification", "final_verdict"),
-                "properties": {
-                    "qualification": {"type": "string", "enum": list(LEAD_QUALIFICATIONS)},
-                    "final_verdict": {"type": "string", "enum": list(LEAD_FINAL_VERDICTS)},
-                },
-            },
-            {"type": "null"},
-        ]
+        "type": "object",
+        "additionalProperties": False,
+        "required": (
+            "qualification",
+            "lead_quality",
+            "processing_quality",
+            "final_verdict",
+            "meaningful_contact",
+            "action_playbook",
+        ),
+        "properties": {
+            "qualification": {"type": "string", "enum": list(LEAD_QUALIFICATIONS)},
+            "lead_quality": {"type": "string", "enum": list(LEAD_QUALITIES)},
+            "processing_quality": {"type": "string", "enum": list(LEAD_QUALITIES)},
+            "final_verdict": {"type": "string", "enum": list(LEAD_FINAL_VERDICTS)},
+            "meaningful_contact": {"type": "boolean"},
+            "action_playbook": {"type": "string", "enum": list(LEAD_ACTION_PLAYBOOKS)},
+        },
     }
     return schema
 
@@ -271,18 +279,85 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                 if special_obj.get("decision") not in DEAL_REVIEW_DECISIONS:
                     errors.append(f"invalid enum at {special_key}.decision")
         else:
-            special_obj = _strict_object(special, special_key, ("qualification", "final_verdict"), errors)
+            special_obj = _strict_object(
+                special,
+                special_key,
+                (
+                    "qualification",
+                    "lead_quality",
+                    "processing_quality",
+                    "final_verdict",
+                    "meaningful_contact",
+                    "action_playbook",
+                ),
+                errors,
+            )
             if special_obj is not None:
                 if special_obj.get("qualification") not in LEAD_QUALIFICATIONS:
                     errors.append(f"invalid enum at {special_key}.qualification")
+                if special_obj.get("lead_quality") not in LEAD_QUALITIES:
+                    errors.append(f"invalid enum at {special_key}.lead_quality")
+                if special_obj.get("processing_quality") not in LEAD_QUALITIES:
+                    errors.append(f"invalid enum at {special_key}.processing_quality")
                 if special_obj.get("final_verdict") not in LEAD_FINAL_VERDICTS:
                     errors.append(f"invalid enum at {special_key}.final_verdict")
+                if not isinstance(special_obj.get("meaningful_contact"), bool):
+                    errors.append(f"expected boolean at {special_key}.meaningful_contact")
+                playbook = special_obj.get("action_playbook")
+                if playbook not in LEAD_ACTION_PLAYBOOKS:
+                    errors.append(f"invalid enum at {special_key}.action_playbook")
+                meaningful_contact = special_obj.get("meaningful_contact")
+                verdict = special_obj.get("final_verdict")
+                if meaningful_contact is False and verdict == "bad_lead":
+                    errors.append("lead_review.final_verdict=bad_lead requires a separately confirmed basis")
+                if root.get("attention_required") is True and playbook == "none":
+                    errors.append("attention_required lead needs a non-none action_playbook")
+                if root.get("attention_required") is True and action is None:
+                    errors.append("attention_required lead needs a concrete rop_action")
+                if verdict == "bad_processing" and meaningful_contact is False and playbook not in {
+                    RESTORE_NO_CONTACT_PROCESSING,
+                    "retry_busy_number",
+                    "verify_invalid_number",
+                }:
+                    errors.append("bad_processing without meaningful contact needs a concrete recovery playbook")
+                if playbook == RESTORE_NO_CONTACT_PROCESSING and action is not None:
+                    action_text = " ".join(
+                        str(action.get(field) or "")
+                        for field in ("message_to_manager", "expected_crm_fact", "success_condition")
+                    ).lower()
+                    for marker in ("3 попыт", "2 часов", "11:00", "10 минут", "мессендж", "задач"):
+                        if marker not in action_text:
+                            errors.append(f"restore_no_contact_processing action misses required rule: {marker}")
+                if meaningful_contact is False and verdict in {"bad_processing", "data_gap"}:
+                    claim_text = " ".join(
+                        str(root.get("reason") or "")
+                        + " "
+                        + str(action.get("message_to_manager") or "")
+                        + " "
+                        + str(action.get("expected_crm_fact") or "")
+                    ).lower()
+                    for forbidden in ("клиент отказался", "клиент нецелевой", "лид нецелевой"):
+                        if forbidden in claim_text:
+                            errors.append(f"diagnostics-only lead must not assert: {forbidden}")
+    elif entity_type == "lead":
+        errors.append("lead_review must be an object, not null")
     if errors:
         raise ValueError("Invalid attention delta: " + "; ".join(errors))
 
 
 def validate_deal_attention_delta(value: dict[str, Any]) -> None:
     _validate_attention_delta(value, "deal")
+
+
+def materialize_lead_attention_delta(value: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
+    """Apply the selected deterministic lead playbook before business validation."""
+    result = dict(value)
+    review = result.get("lead_review")
+    action = result.get("rop_action")
+    if not isinstance(review, dict) or not isinstance(action, dict):
+        return result
+    result["rop_action"] = materialize_lead_playbook_action(review, action, today=today)
+    return result
 
 
 def validate_lead_attention_delta(value: dict[str, Any]) -> None:
@@ -365,11 +440,20 @@ def build_lead_attention_delta_prompt(
     context_diagnostics_text: str,
     okf_sections: list[tuple[Path, str]],
 ) -> str:
-    return _build_shadow_prompt(
+    prompt = _build_shadow_prompt(
         entity_type="lead",
         entity_id=str(lead_id),
         history_text=history_text,
         transcript_text=transcript_text,
         diagnostics_text=context_diagnostics_text,
         okf_sections=okf_sections,
+    )
+    return prompt.replace(
+        "- Специальный review-блок верни null, если он не нужен для управленческого решения.",
+        """- lead_review обязателен: верни qualification, lead_quality, processing_quality, final_verdict, meaningful_contact и action_playbook.
+- Различай bad_lead, bad_processing и data_gap. Отсутствие активности или неполная выгрузка сами по себе не доказывают bad_lead.
+- Если содержательный контакт не подтверждён и обработка не подтверждена, выбирай restore_no_contact_processing, если нет более точного сценария retry_busy_number или verify_invalid_number.
+- Diagnostics честно отражай как ограничение, но не заменяй ими безопасное восстановление обработки: действие должно одновременно проверить ситуацию и создать CRM-след.
+- Для restore_no_contact_processing верни краткий case-specific check, deadline и evidence IDs. Код детерминированно развернёт регламент дозвона; не пересказывай его полностью в JSON.
+- Не утверждай, что клиент отказался или лид нецелевой, если это подтверждено только diagnostic gaps.""",
     )
