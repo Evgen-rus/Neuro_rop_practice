@@ -65,6 +65,12 @@ def days_since(value: Any, *, now: datetime | None = None) -> int | None:
     return max(0, int((current - dt.astimezone(MSK_TZ)).total_seconds() // 86400))
 
 
+def format_candidate_amount(value: Any, currency: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return f"{value} {str(currency or 'RUB').strip()}".strip()
+
+
 def load_pipeline_map() -> dict[str, Any]:
     if not PIPELINE_MAP_PATH.exists():
         return {}
@@ -351,10 +357,7 @@ def score_deal(deal: dict[str, Any], stage_names: dict[str, str]) -> dict[str, A
     if not reasons:
         return None
 
-    amount_label = ""
-    if amount not in (None, ""):
-        currency = str(deal.get("CURRENCY_ID") or "RUB")
-        amount_label = f"{amount} {currency}".strip()
+    amount_label = format_candidate_amount(amount, deal.get("CURRENCY_ID"))
 
     return {
         "entity_type": "deal",
@@ -401,7 +404,7 @@ def score_lead(lead: dict[str, Any], status_names: dict[str, str]) -> dict[str, 
             or str(lead.get("TITLE") or ""),
             "status": status_name,
             "stage_id": status_id,
-            "amount": str(lead.get("OPPORTUNITY") or ""),
+            "amount": format_candidate_amount(lead.get("OPPORTUNITY"), lead.get("CURRENCY_ID")),
             "manager_id": str(lead.get("ASSIGNED_BY_ID") or ""),
             "date_modify": str(lead.get("DATE_MODIFY") or ""),
             "date_create": str(lead.get("DATE_CREATE") or ""),
@@ -449,7 +452,7 @@ def score_lead(lead: dict[str, Any], status_names: dict[str, str]) -> dict[str, 
         "client_name": client_name or str(lead.get("TITLE") or ""),
         "status": status_name,
         "stage_id": status_id,
-        "amount": str(lead.get("OPPORTUNITY") or ""),
+        "amount": format_candidate_amount(lead.get("OPPORTUNITY"), lead.get("CURRENCY_ID")),
         "manager_id": str(lead.get("ASSIGNED_BY_ID") or ""),
         "date_modify": str(lead.get("DATE_MODIFY") or ""),
         "date_create": str(lead.get("DATE_CREATE") or ""),

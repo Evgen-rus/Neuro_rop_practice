@@ -80,37 +80,80 @@ function verdictLabelRu(value: string): string {
   return VERDICT_RU[key] || value.replaceAll('_', ' ')
 }
 
+function formatMoney(value: unknown): string {
+  const raw = asString(value).trim()
+  if (!raw || raw === '—') return raw || '—'
+
+  const hasRuble = /(?:RUB|руб(?:\.|лей|ля|ль)?|₽)/i.test(raw)
+  const numeric = Number(
+    raw
+      .replace(/(?:RUB|руб(?:\.|лей|ля|ль)?|₽)/gi, '')
+      .replace(/[\s\u00a0]/g, '')
+      .replace(',', '.'),
+  )
+  if (!Number.isFinite(numeric)) return raw
+
+  const fractionDigits = Number.isInteger(numeric) ? 0 : 2
+  const formatted = new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: fractionDigits,
+  }).format(numeric)
+  return hasRuble ? `${formatted} ₽` : formatted
+}
+
+function formatMoneyText(value: string): string {
+  return value.replace(
+    /(?:\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:RUB|руб(?:\.|лей|ля|ль)?|₽)/gi,
+    (amount) => formatMoney(amount),
+  )
+}
+
 function toast(message: string, setter: (value: string | null) => void) {
   setter(message)
   window.setTimeout(() => setter(null), 2200)
 }
 
-function buildManagerCopy(analysis: Record<string, unknown> | null | undefined): string {
+type ManagerBrief = {
+  task: string
+  goal: string
+  clientText: string
+  clientChannel: string
+  crm: string
+}
+
+function getManagerBrief(analysis: Record<string, unknown> | null | undefined): ManagerBrief {
   const rop = asRecord(analysis?.rop_manager_message_block)
   const manager = asRecord(analysis?.manager_action_block)
   const primary = asRecord(manager.primary_text)
-  const task = asString(rop.message_to_manager) || asString(rop.check_for_rop) || '—'
-  const goal = asString(rop.success_condition) || asString(rop.expected_crm_update) || '—'
-  const clientText =
+  return {
+    task: formatMoneyText(asString(rop.message_to_manager) || asString(rop.check_for_rop) || '—'),
+    goal: formatMoneyText(asString(rop.success_condition) || asString(rop.expected_crm_update) || '—'),
+    clientText: formatMoneyText(
     asString(primary.email_or_messenger) ||
     asString(primary.call_script) ||
     asString(primary.text) ||
-    'Текст клиенту не сформирован (возможно, сначала нужна проверка РОПа).'
-  const crm =
-    asString(rop.expected_crm_update) ||
-    asStringList(manager.manager_checklist).join('\n') ||
-    '—'
+    'Текст клиенту не сформирован.',
+    ),
+    clientChannel: asString(manager.recommended_channel),
+    crm: formatMoneyText(
+      asString(rop.expected_crm_update) || asStringList(manager.manager_checklist).join('\n') || '—',
+    ),
+  }
+}
+
+function buildManagerCopy(brief: ManagerBrief): string {
+  const channel = brief.clientChannel ? ` (${brief.clientChannel})` : ''
   return `Задача:
-${task}
+${brief.task}
 
 Цель:
-${goal}
+${brief.goal}
 
-Текст клиенту:
-${clientText}
+Текст клиенту${channel}:
+${brief.clientText}
 
 Что зафиксировать в CRM:
-${crm}`
+${brief.crm}`
 }
 
 function evidenceList(analysis: Record<string, unknown> | null | undefined): string[] {
@@ -120,7 +163,7 @@ function evidenceList(analysis: Record<string, unknown> | null | undefined): str
   const fromRop = asStringList(rop.evidence)
   const fromMoney = asStringList(money.evidence)
   const fromLoss = asStringList(loss.evidence)
-  return [...fromRop, ...fromMoney, ...fromLoss].slice(0, 8)
+  return [...fromRop, ...fromMoney, ...fromLoss].slice(0, 8).map(formatMoneyText)
 }
 
 function unknownsList(analysis: Record<string, unknown> | null | undefined): string[] {
@@ -136,7 +179,7 @@ function unknownsList(analysis: Record<string, unknown> | null | undefined): str
     const risk = asRecord(analysis?.main_risk)
     if (risk.description) items.push(asString(risk.description))
   }
-  return items.slice(0, 8)
+  return items.slice(0, 8).map(formatMoneyText)
 }
 
 function ropRecommendations(analysis: Record<string, unknown> | null | undefined): string[] {
@@ -149,7 +192,7 @@ function ropRecommendations(analysis: Record<string, unknown> | null | undefined
     asString(closed.recommended_pipeline_action),
     asString(mode.rop_focus),
   ].filter(Boolean)
-  return items.slice(0, 6)
+  return items.slice(0, 6).map(formatMoneyText)
 }
 
 export default function App() {
@@ -201,15 +244,6 @@ export default function App() {
   const [selectedReport, setSelectedReport] = useState<UiReportDetail | null>(null)
   const [markdown, setMarkdown] = useState<string | null>(null)
   const [showMarkdown, setShowMarkdown] = useState(false)
-
-  const selectedCandidateReport = useMemo(() => {
-    if (!selectedCandidate) return null
-    return history.find(
-      (item) =>
-        item.entity_type === selectedCandidate.entity_type &&
-        String(item.entity_id) === String(selectedCandidate.entity_id),
-    ) || null
-  }, [history, selectedCandidate])
 
   const activeAnalysis = useMemo(() => {
     if (tab === 'history' && selectedReport?.report_json) {
@@ -484,6 +518,24 @@ export default function App() {
     setTab('history')
   }
 
+  async function openCandidateReport(candidate: Candidate) {
+    let report = history.find(
+      (item) => item.entity_type === candidate.entity_type && String(item.entity_id) === String(candidate.entity_id),
+    )
+    if (!report) {
+      const data = await fetchReports(50)
+      setHistory(data.items)
+      report = data.items.find(
+        (item) => item.entity_type === candidate.entity_type && String(item.entity_id) === String(candidate.entity_id),
+      )
+    }
+    if (!report) {
+      toast('Сохранённый отчёт пока не найден', setToastMessage)
+      return
+    }
+    await openHistoryReport(report.id)
+  }
+
   async function toggleMarkdown() {
     if (!activeMeta?.report_id) return
     if (showMarkdown) {
@@ -522,7 +574,8 @@ export default function App() {
   }
 
   const summary = candidatesData?.summary
-  const copyText = buildManagerCopy(activeAnalysis)
+  const managerBrief = getManagerBrief(activeAnalysis)
+  const copyText = buildManagerCopy(managerBrief)
   const facts = activeAnalysis ? evidenceList(activeAnalysis) : selectedCandidate?.reasons || []
   const unknowns = activeAnalysis ? unknownsList(activeAnalysis) : ['Полный разбор появится после LLM-анализа']
   const recommendations = activeAnalysis
@@ -553,14 +606,10 @@ export default function App() {
       </div>
 
       <section className="hero">
-        <div>
-          <div className="hero-label">Контроль пути лида до денег</div>
-          <h1>Что РОПу проверить сегодня и какую задачу передать менеджеру</h1>
-        </div>
-        <div className="hero-points">
-          <span>очередь вмешательств</span>
-          <span>причина риска</span>
-          <span>поручение менеджеру</span>
+        <div className="hero-copy">
+          <div className="hero-label">Контроль пути от лида до денег</div>
+          <h1>Что РОПу проверить сегодня</h1>
+          <p>Риск в сделке, действие и готовое поручение менеджеру.</p>
         </div>
       </section>
 
@@ -587,7 +636,7 @@ export default function App() {
                 onClick={() => setShowCandidateFilters((value) => !value)}
                 type="button"
               >
-                {showCandidateFilters ? 'Скрыть фильтры' : 'Фильтры'}
+                {showCandidateFilters ? 'Скрыть' : 'Фильтры'}
               </button>
             </div>
             <div className="filter-summary">
@@ -724,13 +773,6 @@ export default function App() {
                 )}
               </div>
 
-              <button
-                className="btn secondary filters-refresh"
-                onClick={() => void loadCandidates()}
-                disabled={candidatesLoading || !filtersReady}
-              >
-                {candidatesLoading ? 'Загрузка…' : 'Обновить'}
-              </button>
               </div>
             )}
             {candidatesError && (
@@ -744,23 +786,31 @@ export default function App() {
               </div>
             )}
             {(candidatesData?.candidates || []).map((item) => (
-              <button
+              <article
                 key={`${item.entity_type}-${item.entity_id}`}
                 className={`deal ${selectedCandidate?.entity_id === item.entity_id && selectedCandidate.entity_type === item.entity_type ? 'active' : ''}`}
-                onClick={() => setSelectedCandidate(item)}
               >
-                <strong>
-                  {item.entity_type === 'deal' ? 'Сделка' : 'Лид'} {item.entity_id} · {item.client_name || item.title}
-                </strong>
-                <small>
-                  {item.status}
-                  {item.amount ? ` · ${item.amount}` : ''}
-                  <br />
-                  {item.attention_reason}
-                </small>
-                <span className={`priority ${item.priority}`}>{priorityLabelRu(item.priority)}</span>
-                {item.analyzed ? <span className="priority low">уже есть анализ</span> : null}
-              </button>
+                <button className="deal-select" onClick={() => setSelectedCandidate(item)}>
+                  <span className="deal-title-row">
+                    <strong>
+                      {item.entity_type === 'deal' ? 'Сделка' : 'Лид'} {item.entity_id} · {item.client_name || item.title}
+                    </strong>
+                    {item.analyzed ? <span className="analysis-marker">Есть анализ</span> : null}
+                  </span>
+                  <small>
+                    {formatMoneyText(item.status)}
+                    {item.amount ? ` · ${formatMoney(item.amount)}` : ''}
+                    <br />
+                    {formatMoneyText(item.attention_reason)}
+                  </small>
+                  <span className={`priority ${item.priority}`}>{priorityLabelRu(item.priority)}</span>
+                </button>
+                {item.analyzed ? (
+                  <button className="deal-report" onClick={() => void openCandidateReport(item)}>
+                    Отчёт
+                  </button>
+                ) : null}
+              </article>
             ))}
             {!candidatesLoading &&
               candidatesData?.ready !== false &&
@@ -768,21 +818,6 @@ export default function App() {
               !candidatesError && <p className="muted">Кандидатов за выбранный период не найдено.</p>}
             {!candidatesLoading && !candidatesData && !candidatesError && (
               <p className="muted">Откройте фильтры, выберите этапы и нажмите «Обновить».</p>
-            )}
-            {selectedCandidate?.analyzed && (
-              <div className="saved-analysis-box">
-                <strong>Есть прошлый анализ</strong>
-                <span>Он может быть устаревшим, если CRM или звонки изменились.</span>
-                <button
-                  className="btn secondary"
-                  disabled={!selectedCandidateReport}
-                  onClick={() => {
-                    if (selectedCandidateReport) void openHistoryReport(selectedCandidateReport.id)
-                  }}
-                >
-                  Открыть прошлый отчёт
-                </button>
-              </div>
             )}
             <button
               className="btn"
@@ -825,7 +860,7 @@ export default function App() {
               facts={facts}
               unknowns={unknowns}
               recommendations={recommendations}
-              copyText={copyText}
+              managerBrief={managerBrief}
               showMarkdown={showMarkdown}
               markdown={markdown}
               onCopy={() => {
@@ -988,7 +1023,7 @@ export default function App() {
               facts={facts}
               unknowns={unknowns}
               recommendations={recommendations}
-              copyText={copyText}
+              managerBrief={managerBrief}
               showMarkdown={showMarkdown}
               markdown={markdown}
               onCopy={() => {
@@ -1039,7 +1074,7 @@ export default function App() {
               facts={facts}
               unknowns={unknowns}
               recommendations={recommendations}
-              copyText={copyText}
+              managerBrief={managerBrief}
               showMarkdown={showMarkdown}
               markdown={markdown}
               onCopy={() => {
@@ -1075,7 +1110,7 @@ function ReportPanels(props: {
   facts: string[]
   unknowns: string[]
   recommendations: string[]
-  copyText: string
+  managerBrief: ManagerBrief
   showMarkdown: boolean
   markdown: string | null
   onCopy: () => void
@@ -1085,7 +1120,7 @@ function ReportPanels(props: {
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
 }) {
-  const { meta, analysis, facts, unknowns, recommendations, copyText } = props
+  const { meta, analysis, facts, unknowns, recommendations, managerBrief } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
   const leadState = asRecord(analysis?.lead_state)
@@ -1100,20 +1135,24 @@ function ReportPanels(props: {
   const client = asString(leadState.client) || asString(dealState.client) || '—'
   const qualification = asString(leadState.qualification) || '—'
   const qualificationReason = asString(leadState.qualification_reason)
-  const amount = asString(dealState.amount) || '—'
+  const amount = formatMoney(dealState.amount)
   const stage = asString(dealState.stage) || '—'
   const attention =
-    asString(meta?.attention_reason) ||
-    asString(mainRisk.description) ||
-    asString(rop.why_it_matters) ||
-    asString(leadState.summary) ||
-    asString(dealState.summary) ||
-    '—'
+    formatMoneyText(
+      asString(meta?.attention_reason) ||
+        asString(mainRisk.description) ||
+        asString(rop.why_it_matters) ||
+        asString(leadState.summary) ||
+        asString(dealState.summary) ||
+        '—',
+    )
   const nextAction =
-    asString(meta?.recommended_action) ||
-    asString(rop.check_for_rop) ||
-    asString(rop.message_to_manager) ||
-    '—'
+    formatMoneyText(
+      asString(meta?.recommended_action) ||
+        asString(rop.check_for_rop) ||
+        asString(rop.message_to_manager) ||
+        '—',
+    )
   const title = meta
     ? `${meta.entity_type === 'deal' ? 'Сделка' : meta.entity_type === 'lead' ? 'Лид' : meta.entity_type} ${meta.entity_id}`
     : 'Выберите кандидата или запустите анализ'
@@ -1126,7 +1165,7 @@ function ReportPanels(props: {
         {
           label: 'Клиент',
           value: client,
-          hint: asString(leadState.need) || undefined,
+          hint: formatMoneyText(asString(leadState.need)) || undefined,
         },
         {
           label: 'Риск',
@@ -1136,24 +1175,24 @@ function ReportPanels(props: {
         {
           label: 'Квалификация',
           value: qualification,
-          hint: qualificationReason || undefined,
+          hint: formatMoneyText(qualificationReason) || undefined,
         },
       ]
     : [
         {
           label: 'Сумма',
           value: amount,
-          hint: asString(dealState.client) || undefined,
+          hint: formatMoneyText(asString(dealState.client)) || undefined,
         },
         {
           label: 'Стадия',
           value: stage,
-          hint: riskType || undefined,
+          hint: formatMoneyText(riskType) || undefined,
         },
         {
           label: 'Риск',
           value: riskRu,
-          hint: riskType || undefined,
+          hint: formatMoneyText(riskType) || undefined,
         },
       ]
 
@@ -1195,7 +1234,24 @@ function ReportPanels(props: {
         </div>
         {hasAnalysis ? (
           <div className="task">
-            <div className="copybox">{copyText}</div>
+            <div className="manager-brief">
+              <div className="manager-brief-block">
+                <div className="label">Задача</div>
+                <p>{managerBrief.task}</p>
+              </div>
+              <div className="manager-brief-block">
+                <div className="label">Цель</div>
+                <p>{managerBrief.goal}</p>
+              </div>
+              <div className="manager-brief-block client-message">
+                <div className="label">Текст клиенту{managerBrief.clientChannel ? ` · ${managerBrief.clientChannel}` : ''}</div>
+                <p>{managerBrief.clientText}</p>
+              </div>
+              <div className="manager-brief-block">
+                <div className="label">Что зафиксировать в CRM</div>
+                <p>{managerBrief.crm}</p>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="empty-task">
@@ -1290,7 +1346,7 @@ function ReportPanels(props: {
         <button className="btn secondary" onClick={props.onToggleMarkdown} disabled={!meta?.report_id}>
           {props.showMarkdown ? 'Скрыть полный отчёт' : 'Показать полный отчёт'}
         </button>
-        {props.showMarkdown && props.markdown && <div className="markdown">{props.markdown}</div>}
+        {props.showMarkdown && props.markdown && <div className="markdown">{formatMoneyText(props.markdown)}</div>}
       </section>
     </>
   )

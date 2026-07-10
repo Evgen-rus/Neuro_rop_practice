@@ -110,19 +110,25 @@ textarea {
   background: #0d2342;
   color: #fff;
   border-radius: 14px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   box-shadow: var(--shadow);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+}
+
+.hero-copy {
+  max-width: 720px;
 }
 
 .hero h1 {
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1.2;
   margin: 2px 0 0;
   letter-spacing: 0;
+}
+
+.hero p {
+  color: #d7e9ff;
+  font-size: 15px;
+  margin: 7px 0 0;
 }
 
 .hero-label {
@@ -130,22 +136,6 @@ textarea {
   font-size: 13px;
   font-weight: 800;
   text-transform: uppercase;
-}
-
-.hero-points {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.hero-points span {
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  padding: 6px 9px;
-  font-size: 13px;
-  font-weight: 800;
-  color: #eaf4ff;
 }
 
 .grid {
@@ -310,13 +300,10 @@ p {
 .deal {
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 13px;
   margin-bottom: 10px;
-  cursor: pointer;
   background: #fff;
   transition: 0.15s;
-  text-align: left;
-  width: 100%;
+  position: relative;
 }
 
 .deal:hover,
@@ -325,14 +312,59 @@ p {
   box-shadow: 0 8px 24px rgba(23, 113, 241, 0.12);
 }
 
+.deal-select {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 13px;
+  text-align: left;
+  width: 100%;
+}
+
 .deal strong {
   display: block;
   font-size: 16px;
   color: var(--dark);
+  padding-right: 66px;
 }
 
 .deal small {
   color: var(--muted);
+}
+
+.deal-title-row {
+  display: block;
+  min-width: 0;
+}
+
+.analysis-marker {
+  display: inline-flex;
+  margin-top: 7px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 8px;
+}
+
+.deal-report {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border: 1px solid #bcd8ff;
+  border-radius: 7px;
+  background: #eef5ff;
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 5px 8px;
+}
+
+.deal-report:hover {
+  background: #dcecff;
 }
 
 .priority {
@@ -400,26 +432,6 @@ p {
 }
 
 .picker-summary {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.saved-analysis-box {
-  display: grid;
-  gap: 7px;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #bcd8ff;
-  border-radius: 8px;
-  background: #f5f9ff;
-}
-
-.saved-analysis-box strong {
-  color: var(--dark);
-}
-
-.saved-analysis-box span {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.35;
@@ -556,14 +568,37 @@ ul.facts.bad li:before {
   padding: 14px;
 }
 
-.copybox {
-  white-space: pre-wrap;
-  background: #0d2342;
-  color: #ecf5ff;
+.manager-brief {
+  display: grid;
+  gap: 10px;
+}
+
+.manager-brief-block {
+  border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
-  margin: 0;
+  background: #fff;
+  padding: 12px;
+}
+
+.manager-brief-block .label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.manager-brief-block p {
+  color: var(--text);
   font-size: 15px;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.manager-brief-block.client-message {
+  background: #eefcf5;
+  border-color: #86efac;
 }
 
 .actions {
@@ -696,13 +731,6 @@ ul.facts.bad li:before {
 }
 
 .check-row input {
-  margin-top: 2px;
-}
-
-.filters-refresh {
-  grid-column: 1 / -1;
-  width: 100%;
-  padding: 10px 12px;
   margin-top: 2px;
 }
 
