@@ -34,6 +34,15 @@ class ModelJsonParseError(ValueError):
         self.metadata = metadata
 
 
+class ModelResponseIncompleteError(ValueError):
+    """Raised before parsing when a Responses output was truncated."""
+
+    def __init__(self, message: str, raw_output_text: str, metadata: dict[str, Any]):
+        super().__init__(message)
+        self.raw_output_text = raw_output_text
+        self.metadata = metadata
+
+
 def response_output_text(response: Any) -> str:
     output_text = getattr(response, "output_text", None)
     if output_text:
@@ -57,6 +66,20 @@ def usage_to_dict(response: Any) -> dict[str, Any]:
     if isinstance(usage, dict):
         return usage
     return dict(getattr(usage, "__dict__", {}))
+
+
+def response_status(response: Any) -> str | None:
+    value = getattr(response, "status", None)
+    return str(value) if value is not None else None
+
+
+def response_incomplete_reason(response: Any) -> str | None:
+    details = getattr(response, "incomplete_details", None)
+    if isinstance(details, dict):
+        value = details.get("reason")
+    else:
+        value = getattr(details, "reason", None)
+    return str(value) if value is not None else None
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -168,7 +191,17 @@ def call_structured_output_json(
         "response_id": getattr(response, "id", None),
         "raw_output_text": text,
         "schema_name": schema_name,
+        "response_status": response_status(response),
+        "incomplete_reason": response_incomplete_reason(response),
+        "max_output_tokens": max_output_tokens,
     }
+    if metadata["response_status"] == "incomplete":
+        reason = metadata["incomplete_reason"] or "unknown"
+        raise ModelResponseIncompleteError(
+            f"Structured output is incomplete: {reason}",
+            raw_output_text=text,
+            metadata=metadata,
+        )
     try:
         parsed = parse_json_object(text)
     except (json.JSONDecodeError, ValueError) as error:

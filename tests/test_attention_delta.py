@@ -19,7 +19,7 @@ from openai_api.llm.attention_delta import (
     validate_lead_attention_delta,
 )
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import ModelResponseIncompleteError, call_structured_output_json
 from openai_api.llm.prompt_budget import build_prompt_budget
 
 
@@ -171,6 +171,34 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
             budget = json.loads((output / "deal-01" / "attention_delta_prompt_budget.json").read_text(encoding="utf-8"))
             self.assertEqual(budget["actual_usage"]["output_tokens"], 2)
 
+    def test_incomplete_output_limit_saves_usage_without_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            case, _analysis, output = self._case(Path(directory))
+            response_metadata = {
+                "model": "test-model",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
+                    "output_tokens_details": {"reasoning_tokens": 1200},
+                },
+                "estimated_cost": {"estimated_cost_rub": 1},
+                "raw_output_text": "{\"partial\": true",
+                "response_status": "incomplete",
+                "incomplete_reason": "max_output_tokens",
+            }
+            error = ModelResponseIncompleteError("Structured output is incomplete", response_metadata["raw_output_text"], response_metadata)
+            with patch("benchmarks.run_attention_delta_shadow.call_structured_output_json", side_effect=error):
+                result = run_shadow_case(case, output_root=output, allow_api=True, model="test-model")
+            self.assertEqual(result["status"], "output_limit_exceeded")
+            self.assertFalse((output / "deal-01" / "attention_delta.json").exists())
+            self.assertFalse((output / "deal-01" / "attention_delta_preview.md").exists())
+            metrics = result["response_metrics"]
+            self.assertEqual(metrics["output_tokens"], ATTENTION_DELTA_MAX_OUTPUT_TOKENS)
+            self.assertEqual(metrics["reasoning_tokens"], 1200)
+            self.assertEqual(metrics["incomplete_reason"], "max_output_tokens")
+            budget = json.loads((output / "deal-01" / "attention_delta_prompt_budget.json").read_text(encoding="utf-8"))
+            self.assertEqual(budget["actual_usage"]["output_tokens"], ATTENTION_DELTA_MAX_OUTPUT_TOKENS)
+
 
 class StructuredOutputClientTests(unittest.TestCase):
     def test_uses_responses_strict_json_schema(self) -> None:
@@ -188,6 +216,22 @@ class StructuredOutputClientTests(unittest.TestCase):
         self.assertTrue(create.call_args.kwargs["text"]["format"]["strict"])
         self.assertEqual(create.call_args.kwargs["text"]["format"]["type"], "json_schema")
         self.assertEqual(create.call_args.kwargs["max_output_tokens"], ATTENTION_DELTA_MAX_OUTPUT_TOKENS)
+
+    def test_incomplete_response_is_not_parsed_as_attention_delta(self) -> None:
+        response = SimpleNamespace(
+            id="resp_incomplete",
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output_text="{\"entity_type\": \"deal\"",
+            usage={"input_tokens": 10, "output_tokens": ATTENTION_DELTA_MAX_OUTPUT_TOKENS},
+        )
+        with patch("openai_api.llm.llm_client.client.responses.create", return_value=response):
+            with self.assertRaises(ModelResponseIncompleteError) as captured:
+                call_structured_output_json(
+                    "compact prompt", schema=deal_attention_delta_schema(), schema_name="deal_attention_delta", model="test-model"
+                )
+        self.assertEqual(captured.exception.metadata["incomplete_reason"], "max_output_tokens")
+        self.assertEqual(captured.exception.metadata["usage"]["output_tokens"], ATTENTION_DELTA_MAX_OUTPUT_TOKENS)
 
 
 class AttentionDeltaSafetyLimitTests(unittest.TestCase):

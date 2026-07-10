@@ -113,10 +113,12 @@ def attach_response_metadata(budget: dict[str, Any], metadata: dict[str, Any]) -
     result = dict(budget)
     usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
     input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
     result["actual_usage"] = {
         "input_tokens": usage.get("input_tokens"),
         "cached_input_tokens": input_details.get("cached_tokens", usage.get("cached_input_tokens")),
         "output_tokens": usage.get("output_tokens"),
+        "reasoning_tokens": output_details.get("reasoning_tokens", usage.get("reasoning_tokens")),
         "total_tokens": usage.get("total_tokens"),
     }
     result["cost"] = metadata.get("estimated_cost")

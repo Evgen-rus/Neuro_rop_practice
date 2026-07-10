@@ -50,3 +50,5 @@ After an API run, generate a comparison sheet for manual review:
 ```powershell
 .\venv\Scripts\python.exe .\benchmarks\compare_attention_delta.py --manifest .\benchmarks\local\cases.json
 ```
+
+`ATTENTION_DELTA_MAX_OUTPUT_TOKENS` is an isolated compact-output cap; it includes reasoning and visible JSON. Its final value will be chosen only after benchmarking, targeting p95 actual usage plus a 25–30% safety margin. The runner's preflight price is deliberately a no-cache worst-case estimate using this cap, not a prediction of actual spend.

@@ -35,7 +35,11 @@ from openai_api.llm.attention_delta import (
     validate_lead_attention_delta,
 )
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
-from openai_api.llm.llm_client import ModelJsonParseError, call_structured_output_json
+from openai_api.llm.llm_client import (
+    ModelJsonParseError,
+    ModelResponseIncompleteError,
+    call_structured_output_json,
+)
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.pricing import estimate_analysis_cost
 
@@ -277,6 +281,25 @@ def print_api_confirmation(prepared_cases: list[dict[str, Any]], total_cost_rub:
     print(f"API shadow preflight total upper cost: {total_cost_rub:.2f} RUB")
 
 
+def response_metrics(metadata: dict[str, Any], *, max_output_tokens: int) -> dict[str, Any]:
+    """Store response-limit telemetry separately from the attention delta."""
+    usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
+    output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
+    output_tokens = usage.get("output_tokens")
+    reasoning_tokens = output_details.get("reasoning_tokens", usage.get("reasoning_tokens"))
+    output_limit_usage_ratio = None
+    if isinstance(output_tokens, (int, float)) and max_output_tokens > 0:
+        output_limit_usage_ratio = round(float(output_tokens) / max_output_tokens, 4)
+    return {
+        "output_tokens": output_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "max_output_tokens": max_output_tokens,
+        "output_limit_usage_ratio": output_limit_usage_ratio,
+        "response_status": metadata.get("response_status"),
+        "incomplete_reason": metadata.get("incomplete_reason"),
+    }
+
+
 def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool, model: str) -> dict[str, Any]:
     """Run one case without writing any path named by the legacy baseline."""
     try:
@@ -353,10 +376,30 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             model=model,
             max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
         )
+    except ModelResponseIncompleteError as error:
+        write_prompt_budget(budget_path, attach_response_metadata(budget, error.metadata))
+        (output_dir / "attention_delta_raw_model_output.txt").write_text(error.raw_output_text, encoding="utf-8")
+        metadata = {
+            **common_metadata,
+            "status": "output_limit_exceeded"
+            if error.metadata.get("incomplete_reason") == "max_output_tokens"
+            else "response_incomplete",
+            "error": str(error),
+            "response_metrics": response_metrics(error.metadata, max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS),
+            "model_metadata": {key: value for key, value in error.metadata.items() if key != "raw_output_text"},
+        }
+        write_json(metadata_path, metadata)
+        return metadata
     except ModelJsonParseError as error:
         write_prompt_budget(budget_path, attach_response_metadata(budget, error.metadata))
         (output_dir / "attention_delta_raw_model_output.txt").write_text(error.raw_output_text, encoding="utf-8")
-        metadata = {**common_metadata, "status": "invalid_json", "error": str(error), "model_metadata": error.metadata}
+        metadata = {
+            **common_metadata,
+            "status": "invalid_json",
+            "error": str(error),
+            "response_metrics": response_metrics(error.metadata, max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS),
+            "model_metadata": error.metadata,
+        }
         write_json(metadata_path, metadata)
         raise
 
@@ -374,6 +417,7 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             "status": "validation_failed",
             "error": str(error),
             "model_metadata": {key: value for key, value in response_metadata.items() if key != "raw_output_text"},
+            "response_metrics": response_metrics(response_metadata, max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS),
         }
         write_json(metadata_path, metadata)
         write_json(output_dir / "attention_delta_error.json", {"error": str(error), "attention_delta": delta})
@@ -385,13 +429,19 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         "entity_id": inputs["entity_id"],
         "attention_delta": delta,
         "model_metadata": {key: value for key, value in response_metadata.items() if key != "raw_output_text"},
+        "response_metrics": response_metrics(response_metadata, max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS),
     }
     write_json(output_dir / "attention_delta.json", payload)
     (output_dir / "attention_delta_preview.md").write_text(render_attention_delta_preview(delta), encoding="utf-8")
     (output_dir / "attention_delta_raw_model_output.txt").write_text(
         response_metadata.get("raw_output_text", ""), encoding="utf-8"
     )
-    metadata = {**common_metadata, "status": "completed", "model_metadata": payload["model_metadata"]}
+    metadata = {
+        **common_metadata,
+        "status": "completed",
+        "model_metadata": payload["model_metadata"],
+        "response_metrics": payload["response_metrics"],
+    }
     write_json(metadata_path, metadata)
     return metadata
 

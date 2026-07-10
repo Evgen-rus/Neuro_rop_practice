@@ -26,10 +26,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
 ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
 ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500") or "3500")
-# Compact attention_delta is a strict, intentionally small shadow artifact.
-# 900 leaves room for all required schema fields in Russian without permitting
-# the several-thousand-token legacy response budget.
-ATTENTION_DELTA_MAX_OUTPUT_TOKENS = int(os.getenv("ATTENTION_DELTA_MAX_OUTPUT_TOKENS", "900") or "900")
+# Compact attention_delta is an isolated shadow artifact. The cap includes
+# both visible JSON and reasoning tokens, so it leaves quality headroom while
+# remaining below the legacy analysis budget.
+ATTENTION_DELTA_MAX_OUTPUT_TOKENS = int(os.getenv("ATTENTION_DELTA_MAX_OUTPUT_TOKENS", "1600") or "1600")
 USD_RUB_RATE = float(os.getenv("USD_RUB_RATE", "75") or "75")
 OPENAI_LOG_PREVIEW_LINES = int(os.getenv("OPENAI_LOG_PREVIEW_LINES", "25") or "25")
 OPENAI_LOG_PREVIEW_CHARS = int(os.getenv("OPENAI_LOG_PREVIEW_CHARS", "4000") or "4000")
