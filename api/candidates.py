@@ -19,6 +19,7 @@ from openai_api.change_detection.stage_policy import (
     SUCCESS_STAGE_IDS,
 )
 from setup import BASE_DIR, MSK_TZ
+from storage.rop_db import DEFAULT_DB_PATH, get_candidate_review_states
 
 
 DEFAULT_DAYS = 15
@@ -362,6 +363,7 @@ def score_deal(deal: dict[str, Any], stage_names: dict[str, str]) -> dict[str, A
     return {
         "entity_type": "deal",
         "entity_id": deal_id,
+        "pipeline_id": str(deal.get("CATEGORY_ID") or ""),
         "title": str(deal.get("TITLE") or f"Сделка {deal_id}"),
         "client_name": str(deal.get("TITLE") or ""),
         "status": stage_name,
@@ -397,6 +399,7 @@ def score_lead(lead: dict[str, Any], status_names: dict[str, str]) -> dict[str, 
         return {
             "entity_type": "lead",
             "entity_id": lead_id,
+            "pipeline_id": "lead",
             "title": str(lead.get("TITLE") or f"Лид {lead_id}"),
             "client_name": " ".join(
                 part for part in [str(lead.get("NAME") or ""), str(lead.get("LAST_NAME") or "")] if part
@@ -448,6 +451,7 @@ def score_lead(lead: dict[str, Any], status_names: dict[str, str]) -> dict[str, 
     return {
         "entity_type": "lead",
         "entity_id": lead_id,
+        "pipeline_id": "lead",
         "title": str(lead.get("TITLE") or f"Лид {lead_id}"),
         "client_name": client_name or str(lead.get("TITLE") or ""),
         "status": status_name,
@@ -479,6 +483,73 @@ def mark_analyzed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return candidates
 
 
+def apply_candidate_review_states(
+    candidates: list[dict[str, Any]],
+    *,
+    entity_type: str,
+    view: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Исключает только проверенные РОПом сущности, не целые этапы CRM."""
+    reviews = get_candidate_review_states(
+        DEFAULT_DB_PATH,
+        entity_type=entity_type,
+        entity_ids=[str(item.get("entity_id") or "") for item in candidates],
+    )
+    today = datetime.now(MSK_TZ).date().isoformat()
+    result: list[dict[str, Any]] = []
+    summary = {"reviewed_hidden": 0, "reviewed_visible": 0, "changed_after_review": 0, "crm_updated_after_review": 0}
+
+    for item in candidates:
+        review = reviews.get(str(item.get("entity_id") or ""))
+        if not review or review.get("state") == "active":
+            result.append(item)
+            continue
+
+        stage_changed = bool(
+            review.get("reviewed_stage_id")
+            and str(review.get("reviewed_stage_id")) != str(item.get("stage_id") or "")
+        )
+        pipeline_changed = bool(
+            review.get("reviewed_pipeline_id")
+            and str(review.get("reviewed_pipeline_id")) != str(item.get("pipeline_id") or "")
+        )
+        amount_changed = bool(
+            review.get("reviewed_amount")
+            and str(review.get("reviewed_amount")) != str(item.get("amount") or "")
+        )
+        control_due = bool(review.get("state") == "snoozed" and str(review.get("next_control_date") or "") <= today)
+        changed_reasons = []
+        if stage_changed or pipeline_changed:
+            changed_reasons.append("изменилась стадия")
+        if amount_changed:
+            changed_reasons.append("изменилась сумма")
+        if control_due:
+            changed_reasons.append("наступила дата контроля")
+        if changed_reasons:
+            item["review_state"] = "changed"
+            item["review_change_reason"] = ", ".join(changed_reasons)
+            summary["changed_after_review"] += 1
+            if view != "reviewed":
+                result.append(item)
+            continue
+
+        reviewed_modify = str(review.get("reviewed_date_modify") or "")
+        if reviewed_modify and str(item.get("date_modify") or "") > reviewed_modify:
+            item["crm_updated_after_review"] = True
+            summary["crm_updated_after_review"] += 1
+
+        item["review_state"] = str(review.get("state") or "reviewed")
+        item["review_decision"] = str(review.get("decision") or "Проверено РОПом")
+        item["reviewed_at"] = str(review.get("updated_at") or "")
+        if view in {"reviewed", "all"}:
+            summary["reviewed_visible"] += 1
+            result.append(item)
+        else:
+            summary["reviewed_hidden"] += 1
+
+    return result, summary
+
+
 def search_candidates(
     *,
     entity_type: str = "lead",
@@ -489,6 +560,7 @@ def search_candidates(
     priority: str | None = None,
     pipeline_ids: list[str] | None = None,
     stage_ids: list[str] | None = None,
+    review_view: str = "active",
 ) -> dict[str, Any]:
     # Обратная совместимость: старый параметр days задаёт окно CREATE.
     if days is not None:
@@ -499,6 +571,7 @@ def search_candidates(
     limit = max(1, min(int(limit), 100))
     pipelines = _normalize_id_list(pipeline_ids)
     stages = _normalize_id_list(stage_ids)
+    review_view = review_view if review_view in {"active", "reviewed", "all"} else "active"
 
     ready, ready_message = candidates_filter_ready(
         entity_type=entity_type,
@@ -512,6 +585,10 @@ def search_candidates(
         "medium": 0,
         "low": 0,
         "already_analyzed": 0,
+        "reviewed_hidden": 0,
+        "reviewed_visible": 0,
+        "changed_after_review": 0,
+        "crm_updated_after_review": 0,
     }
     base_response = {
         "created_days": created_days,
@@ -521,6 +598,7 @@ def search_candidates(
         "entity_type": entity_type,
         "pipeline_ids": pipelines,
         "stage_ids": stages,
+        "review_view": review_view,
         "ready": ready,
         "ready_message": ready_message,
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
@@ -561,6 +639,12 @@ def search_candidates(
     if priority in {"high", "medium", "low"}:
         scored = [item for item in scored if item.get("priority") == priority]
 
+    scored, review_summary = apply_candidate_review_states(
+        scored,
+        entity_type=entity_type,
+        view=review_view,
+    )
+
     scored.sort(
         key=lambda item: (
             {"high": 3, "medium": 2, "low": 1}.get(str(item.get("priority")), 0),
@@ -578,6 +662,7 @@ def search_candidates(
         "medium": sum(1 for item in top if item.get("priority") == "medium"),
         "low": sum(1 for item in top if item.get("priority") == "low"),
         "already_analyzed": sum(1 for item in top if item.get("analyzed")),
+        **review_summary,
     }
     base_response["candidates"] = top
     return base_response

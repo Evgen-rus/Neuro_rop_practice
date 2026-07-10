@@ -132,6 +132,23 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 FOREIGN KEY(report_id) REFERENCES ui_reports(id)
             );
 
+            CREATE TABLE IF NOT EXISTS candidate_review_state (
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                report_id INTEGER,
+                decision TEXT,
+                next_control_date TEXT,
+                reviewed_stage_id TEXT,
+                reviewed_pipeline_id TEXT,
+                reviewed_amount TEXT,
+                reviewed_date_modify TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (entity_type, entity_id),
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
             CREATE TABLE IF NOT EXISTS ui_candidate_filters (
                 profile_key TEXT NOT NULL PRIMARY KEY,
                 filter_json TEXT NOT NULL,
@@ -534,6 +551,79 @@ def list_outcomes(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_candidate_review_states(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Текущее решение РОПа по конкретным сущностям, без блокировки всей воронки."""
+    init_db(db_path)
+    ids = [str(item) for item in entity_ids or [] if str(item)]
+    query = "SELECT * FROM candidate_review_state WHERE entity_type = ?"
+    params: list[Any] = [entity_type]
+    if ids:
+        query += f" AND entity_id IN ({','.join('?' for _ in ids)})"
+        params.extend(ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    return {str(row["entity_id"]): dict(row) for row in rows}
+
+
+def upsert_candidate_review_state(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    state: str,
+    report_id: int | None = None,
+    decision: str | None = None,
+    next_control_date: str | None = None,
+    reviewed_stage_id: str | None = None,
+    reviewed_pipeline_id: str | None = None,
+    reviewed_amount: str | None = None,
+    reviewed_date_modify: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO candidate_review_state (
+                entity_type, entity_id, state, report_id, decision, next_control_date,
+                reviewed_stage_id, reviewed_pipeline_id, reviewed_amount, reviewed_date_modify,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                state = excluded.state,
+                report_id = COALESCE(excluded.report_id, candidate_review_state.report_id),
+                decision = COALESCE(excluded.decision, candidate_review_state.decision),
+                next_control_date = excluded.next_control_date,
+                reviewed_stage_id = COALESCE(excluded.reviewed_stage_id, candidate_review_state.reviewed_stage_id),
+                reviewed_pipeline_id = COALESCE(excluded.reviewed_pipeline_id, candidate_review_state.reviewed_pipeline_id),
+                reviewed_amount = COALESCE(excluded.reviewed_amount, candidate_review_state.reviewed_amount),
+                reviewed_date_modify = COALESCE(excluded.reviewed_date_modify, candidate_review_state.reviewed_date_modify),
+                updated_at = excluded.updated_at
+            """,
+            (
+                entity_type,
+                str(entity_id),
+                state,
+                report_id,
+                decision,
+                next_control_date,
+                reviewed_stage_id,
+                reviewed_pipeline_id,
+                reviewed_amount,
+                reviewed_date_modify,
+                now,
+                now,
+            ),
+        )
+    return get_candidate_review_states(db_path, entity_type=entity_type, entity_ids=[str(entity_id)]).get(str(entity_id), {})
+
+
 DEFAULT_CANDIDATE_FILTER_PROFILE = "default"
 
 
@@ -546,6 +636,7 @@ def default_candidate_filter() -> dict[str, Any]:
         "priority": None,
         "pipeline_ids": [],
         "stage_ids": [],
+        "review_view": "active",
         "limit": 20,
     }
 

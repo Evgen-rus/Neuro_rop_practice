@@ -349,6 +349,16 @@ p {
   padding: 3px 8px;
 }
 
+.review-marker {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.changed-marker {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .deal-report {
   position: absolute;
   top: 12px;
@@ -517,6 +527,30 @@ p {
   font-weight: 800;
   line-height: 1.35;
   color: var(--dark);
+}
+
+.internal-checks,
+.review-status {
+  margin-top: 12px;
+  border: 1px solid #d7e5f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 12px 14px;
+}
+
+.internal-checks .label,
+.review-status {
+  color: #41556f;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.internal-checks .facts {
+  margin-top: 4px;
+}
+
+.internal-checks .facts li {
+  margin: 6px 0;
 }
 
 .two {

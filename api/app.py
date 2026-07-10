@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from dotenv import load_dotenv
@@ -29,6 +30,7 @@ from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     get_candidate_filter,
+    get_candidate_review_states,
     get_ui_report,
     init_db,
     list_outcomes,
@@ -37,6 +39,7 @@ from storage.rop_db import (
     save_candidate_filter,
     save_outcome,
     save_rop_decision,
+    upsert_candidate_review_state,
 )
 
 
@@ -95,6 +98,7 @@ class CandidatesSearchRequest(BaseModel):
     priority: Literal["high", "medium", "low"] | None = None
     pipeline_ids: list[str] = Field(default_factory=list)
     stage_ids: list[str] = Field(default_factory=list)
+    review_view: Literal["active", "reviewed", "all"] = "active"
     save: bool = True
 
 
@@ -106,6 +110,7 @@ class CandidateFilterSaveRequest(BaseModel):
     priority: Literal["high", "medium", "low"] | None = None
     pipeline_ids: list[str] = Field(default_factory=list)
     stage_ids: list[str] = Field(default_factory=list)
+    review_view: Literal["active", "reviewed", "all"] = "active"
 
 
 @app.get("/api/health")
@@ -139,6 +144,7 @@ def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
             "priority": body.priority,
             "pipeline_ids": body.pipeline_ids,
             "stage_ids": body.stage_ids,
+            "review_view": body.review_view,
         },
     )
     return {"ok": True, "filter": saved}
@@ -154,6 +160,7 @@ def candidates(
     priority: Literal["high", "medium", "low"] | None = None,
     pipeline_ids: list[str] = Query(default=[]),
     stage_ids: list[str] = Query(default=[]),
+    review_view: Literal["active", "reviewed", "all"] = "active",
 ) -> dict[str, Any]:
     try:
         return search_candidates(
@@ -165,6 +172,7 @@ def candidates(
             priority=priority,
             pipeline_ids=pipeline_ids,
             stage_ids=stage_ids,
+            review_view=review_view,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -184,6 +192,7 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
                     "priority": body.priority,
                     "pipeline_ids": body.pipeline_ids,
                     "stage_ids": body.stage_ids,
+                    "review_view": body.review_view,
                 },
             )
         return search_candidates(
@@ -195,6 +204,7 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
             priority=body.priority,
             pipeline_ids=body.pipeline_ids,
             stage_ids=body.stage_ids,
+            review_view=body.review_view,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -254,6 +264,20 @@ def _enrich_report_row(item: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _candidate_review_values(report: dict[str, Any]) -> dict[str, str | None]:
+    analysis = unwrap_analysis_payload(report.get("report_json") if isinstance(report.get("report_json"), dict) else {})
+    deal_state = analysis.get("deal_state") if isinstance(analysis.get("deal_state"), dict) else {}
+    lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
+    stage_text = str(deal_state.get("stage") or lead_state.get("status") or "")
+    stage_id = stage_text.split("/", 1)[0].strip() or None
+    return {
+        "reviewed_stage_id": stage_id,
+        "reviewed_pipeline_id": None,
+        "reviewed_amount": str(deal_state.get("amount") or lead_state.get("amount") or "") or None,
+        "reviewed_date_modify": None,
+    }
+
+
 @app.get("/api/reports")
 def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     items = list_ui_reports(DEFAULT_DB_PATH, limit=limit)
@@ -274,6 +298,11 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     payload = _enrich_report_row(report)
     payload["decisions"] = list_rop_decisions(DEFAULT_DB_PATH, report_id)
     payload["outcomes"] = list_outcomes(DEFAULT_DB_PATH, report_id)
+    payload["candidate_review"] = get_candidate_review_states(
+        DEFAULT_DB_PATH,
+        entity_type=str(report.get("entity_type") or ""),
+        entity_ids=[str(report.get("entity_id") or "")],
+    ).get(str(report.get("entity_id") or ""))
     if include_markdown:
         md_path = Path(str(report.get("report_path") or ""))
         if md_path.exists():
@@ -305,7 +334,8 @@ def report_markdown(report_id: int) -> dict[str, Any]:
 
 @app.post("/api/reports/{report_id}/rop-decision")
 def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
-    if not get_ui_report(DEFAULT_DB_PATH, report_id):
+    report = get_ui_report(DEFAULT_DB_PATH, report_id)
+    if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     decision_id = save_rop_decision(
         DEFAULT_DB_PATH,
@@ -314,7 +344,45 @@ def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
         comment=body.comment,
         next_control_date=body.next_control_date,
     )
-    return {"ok": True, "decision_id": decision_id, "decisions": list_rop_decisions(DEFAULT_DB_PATH, report_id)}
+    entity_type = str(report.get("entity_type") or "")
+    entity_id = str(report.get("entity_id") or "")
+    review = None
+    if body.decision == "Закрытие обосновано":
+        review = upsert_candidate_review_state(
+            DEFAULT_DB_PATH,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            state="reviewed",
+            report_id=report_id,
+            decision=body.decision,
+            **_candidate_review_values(report),
+        )
+    elif body.decision == "Проверить через 2 дня":
+        review = upsert_candidate_review_state(
+            DEFAULT_DB_PATH,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            state="snoozed",
+            report_id=report_id,
+            decision=body.decision,
+            next_control_date=(datetime.now().date() + timedelta(days=2)).isoformat(),
+            **_candidate_review_values(report),
+        )
+    elif body.decision == "Вернуть в контроль":
+        review = upsert_candidate_review_state(
+            DEFAULT_DB_PATH,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            state="active",
+            report_id=report_id,
+            decision="Возвращено РОПом в кандидаты",
+        )
+    return {
+        "ok": True,
+        "decision_id": decision_id,
+        "decisions": list_rop_decisions(DEFAULT_DB_PATH, report_id),
+        "candidate_review": review,
+    }
 
 
 @app.post("/api/reports/{report_id}/outcome")

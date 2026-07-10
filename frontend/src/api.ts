@@ -3,6 +3,7 @@ export type Priority = 'high' | 'medium' | 'low'
 export type Candidate = {
   entity_type: 'lead' | 'deal'
   entity_id: string
+  pipeline_id?: string
   title: string
   client_name: string
   status: string
@@ -20,6 +21,11 @@ export type Candidate = {
   bitrix_url?: string
   analyzed?: boolean
   converted_handoff?: boolean
+  review_state?: 'reviewed' | 'snoozed' | 'changed'
+  review_change_reason?: string
+  review_decision?: string
+  reviewed_at?: string
+  crm_updated_after_review?: boolean
 }
 
 export type CandidatesResponse = {
@@ -30,6 +36,7 @@ export type CandidatesResponse = {
   entity_type: string
   pipeline_ids?: string[]
   stage_ids?: string[]
+  review_view?: 'active' | 'reviewed' | 'all'
   ready?: boolean
   ready_message?: string
   generated_at: string
@@ -40,6 +47,10 @@ export type CandidatesResponse = {
     medium: number
     low: number
     already_analyzed: number
+    reviewed_hidden?: number
+    reviewed_visible?: number
+    changed_after_review?: number
+    crm_updated_after_review?: number
   }
   candidates: Candidate[]
 }
@@ -68,6 +79,7 @@ export type CandidateFilter = {
   priority: Priority | null
   pipeline_ids: string[]
   stage_ids: string[]
+  review_view: 'active' | 'reviewed' | 'all'
 }
 
 export type AnalyzeOptions = {
@@ -137,6 +149,7 @@ export type UiReportDetail = UiReportListItem & {
   report_markdown?: string | null
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
+  candidate_review?: Record<string, unknown> | null
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -184,6 +197,7 @@ export function fetchCandidates(params: {
   priority?: string
   pipeline_ids?: string[]
   stage_ids?: string[]
+  review_view?: 'active' | 'reviewed' | 'all'
 }) {
   const query = new URLSearchParams()
   if (params.entity_type) query.set('entity_type', params.entity_type)
@@ -194,6 +208,7 @@ export function fetchCandidates(params: {
   if (params.priority) query.set('priority', params.priority)
   for (const id of params.pipeline_ids || []) query.append('pipeline_ids', id)
   for (const id of params.stage_ids || []) query.append('stage_ids', id)
+  if (params.review_view) query.set('review_view', params.review_view)
   return api<CandidatesResponse>(`/api/candidates?${query.toString()}`)
 }
 
@@ -205,6 +220,7 @@ export function searchCandidates(body: {
   priority?: string | null
   pipeline_ids: string[]
   stage_ids: string[]
+  review_view?: 'active' | 'reviewed' | 'all'
   save?: boolean
 }) {
   return api<CandidatesResponse>('/api/candidates/search', {
@@ -238,7 +254,7 @@ export function fetchReportMarkdown(reportId: number) {
 }
 
 export function saveDecision(reportId: number, decision: string, comment?: string) {
-  return api<{ ok: boolean; decisions: Array<Record<string, unknown>> }>(
+  return api<{ ok: boolean; decisions: Array<Record<string, unknown>>; candidate_review?: Record<string, unknown> | null }>(
     `/api/reports/${reportId}/rop-decision`,
     {
       method: 'POST',

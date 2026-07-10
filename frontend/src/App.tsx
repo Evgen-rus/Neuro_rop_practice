@@ -28,6 +28,7 @@ import {
 type Tab = 'dashboard' | 'manual' | 'history'
 
 type ManualEntityType = 'lead' | 'deal' | 'auto'
+type CandidateReviewView = 'active' | 'reviewed' | 'all'
 
 type ManualInput = {
   ids: string[]
@@ -192,7 +193,7 @@ function getManagerBrief(analysis: Record<string, unknown> | null | undefined): 
     ),
     clientChannel: asString(manager.recommended_channel),
     crm: formatMoneyText(
-      asString(rop.expected_crm_update) || asStringList(manager.manager_checklist).join('\n') || '—',
+      asStringList(manager.manager_checklist).join('\n') || asString(rop.expected_crm_update) || '—',
     ),
   }
 }
@@ -225,11 +226,9 @@ function evidenceList(analysis: Record<string, unknown> | null | undefined): str
 function unknownsList(analysis: Record<string, unknown> | null | undefined): string[] {
   const price = asRecord(analysis?.price_comparability_check)
   const payment = asRecord(analysis?.payment_blocker)
-  const closed = asRecord(analysis?.closed_deal_review)
   const items = [
     ...asStringList(price.what_is_unclear),
     ...asStringList(payment.missing_confirmation),
-    ...asStringList(closed.why_closed_questionable),
   ]
   if (!items.length) {
     const risk = asRecord(analysis?.main_risk)
@@ -238,12 +237,21 @@ function unknownsList(analysis: Record<string, unknown> | null | undefined): str
   return items.slice(0, 8).map(formatMoneyText)
 }
 
+function closureReasonsList(analysis: Record<string, unknown> | null | undefined): string[] {
+  const closed = asRecord(analysis?.closed_deal_review)
+  return asStringList(closed.why_closed_questionable).slice(0, 6).map(formatMoneyText)
+}
+
+function internalChecksList(analysis: Record<string, unknown> | null | undefined): string[] {
+  const resources = asRecord(analysis?.resource_control)
+  return asStringList(resources.allowed_work).slice(0, 4).map(formatMoneyText)
+}
+
 function ropRecommendations(analysis: Record<string, unknown> | null | undefined): string[] {
   const rop = asRecord(analysis?.rop_manager_message_block)
   const closed = asRecord(analysis?.closed_deal_review)
   const mode = asRecord(analysis?.deal_mode)
   const items = [
-    asString(rop.check_for_rop),
     asString(rop.why_it_matters),
     asString(closed.recommended_pipeline_action),
     asString(mode.rop_focus),
@@ -259,6 +267,7 @@ export default function App() {
   const [modifiedDays, setModifiedDays] = useState(15)
   const [entityFilter, setEntityFilter] = useState<'lead' | 'deal'>('lead')
   const [priorityFilter, setPriorityFilter] = useState<string>('')
+  const [reviewView, setReviewView] = useState<CandidateReviewView>('active')
   const [pipelineIds, setPipelineIds] = useState<string[]>([])
   const [stageIds, setStageIds] = useState<string[]>([])
   const [dealPipelines, setDealPipelines] = useState<CrmPipeline[]>([])
@@ -321,6 +330,7 @@ export default function App() {
         attention_reason: selectedReport.attention_reason,
         recommended_action: selectedReport.recommended_action,
         bitrix_url: selectedReport.bitrix_url || null,
+        candidate_review: selectedReport.candidate_review || null,
       }
     }
     const result = job?.results?.[selectedResultIndex]
@@ -333,6 +343,7 @@ export default function App() {
         attention_reason: result.attention_reason,
         recommended_action: result.recommended_action,
         bitrix_url: result.bitrix_url || null,
+        candidate_review: null,
       }
     }
     if (tab === 'manual' && job && pendingAnalyzeMeta) {
@@ -344,6 +355,7 @@ export default function App() {
         attention_reason: 'Анализ выполняется: собираем CRM, аудио, транскрипты и LLM-вывод.',
         recommended_action: 'Дождитесь завершения job — после этого здесь появится поручение менеджеру.',
         bitrix_url: null,
+        candidate_review: null,
       }
     }
     if (selectedCandidate && !activeAnalysis) {
@@ -358,6 +370,7 @@ export default function App() {
           ? 'Откройте прошлый отчёт для контекста или обновите анализ, если данные в CRM изменились'
           : 'Запустить анализ и получить поручение менеджеру',
         bitrix_url: selectedCandidate.bitrix_url || null,
+        candidate_review: null,
       }
     }
     return null
@@ -368,6 +381,7 @@ export default function App() {
     setCreatedDays(Number(filter.created_days) || 15)
     setModifiedDays(Number(filter.modified_days) || 15)
     setPriorityFilter(filter.priority || '')
+    setReviewView(filter.review_view || 'active')
     setPipelineIds(Array.isArray(filter.pipeline_ids) ? filter.pipeline_ids.map(String) : [])
     setStageIds(Array.isArray(filter.stage_ids) ? filter.stage_ids.map(String) : [])
   }
@@ -414,7 +428,15 @@ export default function App() {
     const action = item.recommended_action || item.attention_reason || 'без краткого вывода'
     const date = item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : ''
     const risk = item.risk_level ? `${riskLabelRu(item.risk_level)} риск` : 'риск не указан'
-    return `${date} · ${risk} · ${action}`
+    const firstSentence = action.split(/[.!?]/, 1)[0].trim()
+    const shortAction = firstSentence.length > 96 ? `${firstSentence.slice(0, 93).trim()}...` : firstSentence
+    return `${date} · ${risk} · ${shortAction}`
+  }
+
+  function reviewViewLabel(value: CandidateReviewView): string {
+    if (value === 'reviewed') return 'Проверенные РОПом'
+    if (value === 'all') return 'Все'
+    return 'На проверку'
   }
 
   async function loadCandidates(overrides?: {
@@ -422,6 +444,7 @@ export default function App() {
     created_days?: number
     modified_days?: number
     priority?: string
+    review_view?: CandidateReviewView
     pipeline_ids?: string[]
     stage_ids?: string[]
   }) {
@@ -434,6 +457,7 @@ export default function App() {
         modified_days: overrides?.modified_days ?? modifiedDays,
         limit: 20,
         priority: (overrides?.priority ?? priorityFilter) || null,
+        review_view: overrides?.review_view ?? reviewView,
         pipeline_ids: overrides?.pipeline_ids ?? pipelineIds,
         stage_ids: overrides?.stage_ids ?? stageIds,
         save: true,
@@ -502,6 +526,7 @@ export default function App() {
           modified_days: Number(filter.modified_days) || 15,
           limit: Number(filter.limit) || 20,
           priority: filter.priority || null,
+          review_view: filter.review_view || 'active',
           pipeline_ids: filter.pipeline_ids || [],
           stage_ids: filter.stage_ids || [],
           save: false,
@@ -635,6 +660,8 @@ export default function App() {
   const copyText = buildManagerCopy(managerBrief)
   const facts = activeAnalysis ? evidenceList(activeAnalysis) : selectedCandidate?.reasons || []
   const unknowns = activeAnalysis ? unknownsList(activeAnalysis) : ['Полный разбор появится после LLM-анализа']
+  const closureReasons = activeAnalysis ? closureReasonsList(activeAnalysis) : []
+  const internalChecks = activeAnalysis ? internalChecksList(activeAnalysis) : []
   const recommendations = activeAnalysis
     ? ropRecommendations(activeAnalysis)
     : selectedCandidate
@@ -699,6 +726,7 @@ export default function App() {
             <div className="filter-summary">
               {entityFilter === 'deal' ? 'Сделки' : 'Лиды'} · создано {createdDays} дн. · изменено {modifiedDays} дн.
               {priorityFilter ? ` · ${riskLabelRu(priorityFilter)}` : ''}
+              {` · ${reviewViewLabel(reviewView)}`}
               {entityFilter === 'deal' ? ` · ${shortListSummary(selectedPipelineNames(), 'воронки не выбраны')}` : ''}
               {` · ${shortListSummary(selectedStageNames(), 'этапы не выбраны')}`}
             </div>
@@ -749,6 +777,14 @@ export default function App() {
                   <option value="high">high</option>
                   <option value="medium">medium</option>
                   <option value="low">low</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Очередь</label>
+                <select value={reviewView} onChange={(e) => setReviewView(e.target.value as CandidateReviewView)}>
+                  <option value="active">На проверку</option>
+                  <option value="reviewed">Проверенные РОПом</option>
+                  <option value="all">Все</option>
                 </select>
               </div>
 
@@ -853,12 +889,19 @@ export default function App() {
                       {item.entity_type === 'deal' ? 'Сделка' : 'Лид'} {item.entity_id} · {item.client_name || item.title}
                     </strong>
                     {item.analyzed ? <span className="analysis-marker">Есть анализ</span> : null}
+                    {item.review_state === 'reviewed' || item.review_state === 'snoozed' ? (
+                      <span className="analysis-marker review-marker">Проверено РОПом</span>
+                    ) : null}
+                    {item.review_state === 'changed' ? (
+                      <span className="analysis-marker changed-marker">Повторить: {item.review_change_reason}</span>
+                    ) : null}
                   </span>
                   <small>
                     {formatMoneyText(item.status)}
                     {item.amount ? ` · ${formatMoney(item.amount)}` : ''}
                     <br />
                     {formatMoneyText(item.attention_reason)}
+                    {item.crm_updated_after_review ? <><br />CRM обновлена после решения РОПа</> : null}
                   </small>
                   <span className={`priority ${item.priority}`}>{priorityLabelRu(item.priority)}</span>
                 </button>
@@ -905,8 +948,8 @@ export default function App() {
                   <div className="value">{summary?.medium ?? '—'}</div>
                 </div>
                 <div className="card">
-                  <div className="label">Уже разобраны</div>
-                  <div className="value">{summary?.already_analyzed ?? '—'}</div>
+                  <div className="label">Скрыто РОПом</div>
+                  <div className="value">{summary?.reviewed_hidden ?? '—'}</div>
                 </div>
               </div>
             </section>
@@ -916,6 +959,8 @@ export default function App() {
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
+              closureReasons={closureReasons}
+              internalChecks={internalChecks}
               recommendations={recommendations}
               managerBrief={managerBrief}
               showMarkdown={showMarkdown}
@@ -1097,6 +1142,8 @@ export default function App() {
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
+              closureReasons={closureReasons}
+              internalChecks={internalChecks}
               recommendations={recommendations}
               managerBrief={managerBrief}
               showMarkdown={showMarkdown}
@@ -1148,6 +1195,8 @@ export default function App() {
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
+              closureReasons={closureReasons}
+              internalChecks={internalChecks}
               recommendations={recommendations}
               managerBrief={managerBrief}
               showMarkdown={showMarkdown}
@@ -1180,10 +1229,13 @@ function ReportPanels(props: {
     attention_reason?: string | null
     recommended_action?: string | null
     bitrix_url?: string | null
+    candidate_review?: Record<string, unknown> | null
   } | null
   analysis: Record<string, unknown> | null
   facts: string[]
   unknowns: string[]
+  closureReasons: string[]
+  internalChecks: string[]
   recommendations: string[]
   managerBrief: ManagerBrief
   showMarkdown: boolean
@@ -1195,7 +1247,7 @@ function ReportPanels(props: {
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
 }) {
-  const { meta, analysis, facts, unknowns, recommendations, managerBrief } = props
+  const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
   const leadState = asRecord(analysis?.lead_state)
@@ -1295,6 +1347,16 @@ function ReportPanels(props: {
           <div className="label">Что сделать</div>
           <div className="value">{nextAction}</div>
         </div>
+        {internalChecks.length ? (
+          <div className="internal-checks">
+            <div className="label">Внутренняя проверка РОПа / техспециалиста</div>
+            <ul className="facts">
+              {internalChecks.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </section>
 
       <section className="section manager-task-section">
@@ -1338,6 +1400,11 @@ function ReportPanels(props: {
       {meta?.report_id ? (
         <section className="section">
           <h2>Решение РОПа</h2>
+          {meta.candidate_review && asString(meta.candidate_review.state) !== 'active' ? (
+            <div className="review-status">
+              Проверено РОПом: {asString(meta.candidate_review.state) === 'snoozed' ? 'вернётся в контроль по дате' : 'скрыто из основной очереди до изменений'}.
+            </div>
+          ) : null}
           <div className="actions">
             {DECISIONS.map((item) => (
               <button key={item} onClick={() => props.onDecision(item)}>
@@ -1377,7 +1444,7 @@ function ReportPanels(props: {
           </ul>
         </div>
         <div>
-          <h2>Что неизвестно / не зафиксировано</h2>
+          <h2>Что неизвестно</h2>
           <ul className="facts warn">
             {unknowns.map((item) => (
               <li key={item}>{item}</li>
@@ -1387,8 +1454,19 @@ function ReportPanels(props: {
         </div>
       </section>
 
+      {closureReasons.length ? (
+        <section className="section">
+          <h2>Почему закрытие спорно</h2>
+          <ul className="facts warn">
+            {closureReasons.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section className="section">
-        <h2>Рекомендация РОПу</h2>
+        <h2>Как принять решение</h2>
         <ul className="facts bad">
           {recommendations.map((item) => (
             <li key={item}>{item}</li>

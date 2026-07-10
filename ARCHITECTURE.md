@@ -92,7 +92,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Lead LLM-анализ: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
 - Валидация LLM JSON перед отчётом: `openai_api/llm/validation.py`
-- SQLite-хранилище состояния ROP assistant + UI feedback: `storage/rop_db.py`
+- SQLite-хранилище состояния ROP assistant + UI feedback и текущего статуса проверки кандидата: `storage/rop_db.py`
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
 - Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal CRM stage policy / closed-lost classification: `openai_api/change_detection/stage_policy.py`
@@ -120,7 +120,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 12. Workspace-структура должна быть одинаковой по смыслу для `lead_*` и `deal_*`: `history/`, `raw/`, `audio/`, `transcripts/`, `analysis/`, `index.json`.
 13. `latest` transcript выбирается по времени изменения файла. Если в папке несколько транскриптов, это может повлиять на анализ.
 14. `ffmpeg` и `ffprobe` — внешние зависимости, они не ставятся через `requirements.txt`.
-15. SQLite — локальное MVP-хранилище: change detection (`entity_state`, `analysis_runs`, …) плюс UI feedback (`ui_reports`, `rop_decisions`, `outcomes`) и сохранённый фильтр кандидатов (`ui_candidate_filters`). Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
+15. SQLite — локальное MVP-хранилище: change detection (`entity_state`, `analysis_runs`, …), UI feedback (`ui_reports`, `rop_decisions`, `outcomes`), статус проверки конкретного кандидата (`candidate_review_state`) и сохранённый фильтр (`ui_candidate_filters`). Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
 16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
 17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
 18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
@@ -161,6 +161,9 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 53. Решения РОПа и outcomes сохраняются локально в SQLite (`rop_decisions`, `outcomes`) и не пишутся в Bitrix.
 54. Ручной запуск принимает числовые ID или канонические ссылки Bitrix вида `/crm/deal/details/<id>/` и `/crm/lead/details/<id>/`. Ссылка определяет тип сущности; за один запуск нельзя смешивать ссылки на лиды и сделки.
 55. Денежные суммы в UI показываются в читаемом формате: `10 000 000 ₽`, а не как техническое значение Bitrix с дробной частью и `RUB`.
+56. Решение РОПа «Закрытие обосновано» исключает только конкретный lead/deal из основной очереди кандидатов, а не целую воронку или этап. Проверенные сущности доступны в режиме `reviewed`, а `Вернуть в контроль` снимает исключение.
+57. Проверенная сущность возвращается в основную очередь при изменении стадии, воронки, суммы или наступлении даты контроля. Одно изменение `DATE_MODIFY` не является причиной автоповтора: оно отмечается только в аудите как обновление CRM после решения РОПа.
+58. В deal prompt сравнение технических показателей требует нормализации единиц. Например, `150 банок/мин` и `9 000 банок/час` должны рассматриваться как совпадение при одинаковом типе продукта; если единица не указана, модель обязана запросить уточнение, а не объявлять несоответствие.
 
 ## 4) Key Domain Objects
 
@@ -193,6 +196,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - `Workspace index` — `index.json`, фиксирует тип сущности, ID и локальные папки.
 - `Candidate` — pre-LLM карточка внимания из `api/candidates.py`: entity, статус/стадия, priority/score, attention_reason, Bitrix URL, флаг `analyzed`.
 - `Candidate filter` — сохранённый UI-фильтр кандидатов в `ui_candidate_filters`: тип lead/deal, окна дат, multi-select воронок/этапов, priority, limit.
+- `Candidate review state` — текущее локальное состояние конкретного lead/deal после решения РОПа: `reviewed`, `snoozed` или `active`, снимок стадии/суммы и дата следующего контроля. Не является записью в Bitrix и не переносит правило на похожие сущности.
 - `Manual input` — значение ручного запуска: один или несколько числовых ID либо канонических ссылок Bitrix. UI извлекает ID из ссылки и подставляет тип `lead` или `deal`.
 - `Analyze job` — фоновая задача UI/API (`api/jobs.py`): опции как в CLI, live stages, results, `report_ids`.
 - `UI report` — запись в `ui_reports`: ссылка на analysis/report paths + snapshot `report_json` для истории UI.
@@ -310,27 +314,28 @@ UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
 
 - `GET /api/health`
 - `GET /api/pipelines` — справочник воронок/этапов из `crm_pipeline_map.json`
-- `GET|PUT /api/candidate-filters` — сохранённый фильтр кандидатов в SQLite
-- `GET|POST /api/candidates` / `candidates/search` — Bitrix list + scoring без LLM; без выбранных этапов (и воронок для сделок) возвращает `ready=false`
+- `GET|PUT /api/candidate-filters` — сохранённый фильтр кандидатов в SQLite, включая режим очереди `active|reviewed|all`
+- `GET|POST /api/candidates` / `candidates/search` — Bitrix list + scoring без LLM; без выбранных этапов (и воронок для сделок) возвращает `ready=false`; применяет локальный `candidate_review_state`
 - `POST /api/analyze` — фоновый job с опциями как в CLI; auto = сначала lead, потом deal
 - `GET /api/jobs/{job_id}` — live stages/progress
 - `GET /api/reports`, `GET /api/reports/{id}` — история UI-отчётов
 - `GET /api/reports/{id}/markdown` — полный markdown по запросу
 - `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
 
-UI экраны: кандидаты (первый экран), ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
+UI экраны: кандидаты (первый экран), ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
 
 ### G) Candidates Scoring
 
 Pre-LLM слой внимания (`api/candidates.py`):
 
 ```text
-saved filter / UI multi-select -> crm_pipeline_map stages
+saved filter / UI multi-select + review view -> crm_pipeline_map stages
 -> Bitrix crm.lead.list (STATUS_ID) / crm.deal.list (CATEGORY_ID + STAGE_ID)
--> DATE_CREATE + DATE_MODIFY windows -> stage_policy codes + stale heuristics -> priority/score -> top N
+-> DATE_CREATE + DATE_MODIFY windows -> stage_policy codes + stale heuristics -> priority/score
+-> candidate_review_state: hide reviewed / return stage-or-amount changes / top N
 ```
 
-По умолчанию: `entity_type=lead`, `created_days=15`, `modified_days=15`, `limit=20`, воронка/этапы пустые (`ready=false` до выбора). High-сигналы сделок включают `wrong_qualification` (`C15:4`), `no_response`, зависание открытых сделок; medium — `price_lost`, `lost_to_competitor`, `postponed` и др. Это triage до LLM, не замена analysis JSON.
+По умолчанию: `entity_type=lead`, `created_days=15`, `modified_days=15`, `limit=20`, `review_view=active`, воронка/этапы пустые (`ready=false` до выбора). High-сигналы сделок включают `wrong_qualification` (`C15:4`), `no_response`, зависание открытых сделок; medium — `price_lost`, `lost_to_competitor`, `postponed` и др. Это triage до LLM, не замена analysis JSON. Текущая v1 не делает дорогой semantic diff активности на каждом поиске: CRM-обновление после решения видно в reviewed-аудите, но само по себе не возвращает сущность в active.
 
 ## 6) Where To Change Code By Task Type
 
@@ -364,8 +369,9 @@ saved filter / UI multi-select -> crm_pipeline_map stages
 - Изменение правил клиента ПрактикМ: файлы в `knowledge/clients/praktikm/`.
 - Изменение FastAPI routes / CORS / report endpoints: `api/app.py`.
 - Изменение analyze job, auto lead→deal resolve, progress stages: `api/jobs.py`.
-- Изменение candidates scoring / фильтров / приоритетов: `api/candidates.py`.
-- Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
+- Изменение candidates scoring / фильтров / приоритетов и применения review state: `api/candidates.py`.
+- Изменение состояния «проверено РОПом», отложенного контроля или возврата в очередь: `storage/rop_db.py` (`candidate_review_state`) и `api/app.py`.
+- Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа и режима очереди: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
 - Изменение распознавания ID и ссылок Bitrix в ручном запуске: `parseManualInput()` в `frontend/src/App.tsx`.
 - Изменение UI feedback / saved candidate filter tables: `storage/rop_db.py` (`ui_reports`, `rop_decisions`, `outcomes`, `ui_candidate_filters`).
 - Обновление краткого запуска: `README.md`.
@@ -429,13 +435,15 @@ ROP assistant state:
 15. Candidates scoring может давать много high-карточек на широком окне дней: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт.
 16. Analyze job из UI может быть долгим: это полный CLI-пайплайн, прогресс смотреть через `/api/jobs/{id}`.
 17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
+18. `candidate_review_state` применяется только к конкретной сущности. Нельзя скрывать всех кандидатов этапа после одного подтверждённого закрытия; перенос решения на похожие сущности требует отдельного накопленного feedback-паттерна.
+19. Текущий candidates scorer видит изменение стадии/воронки/суммы напрямую. Новый звонок, письмо, комментарий или внутренний чат после решения РОПа требуют semantic diff полного контекста; пока они не должны автоматически возвращать сущность только по `DATE_MODIFY`.
 
 ## 10) Current Gaps
 
 - Нет Telegram Bot API и автоматической отправки отчётов/поручений менеджеру.
 - Нет auth/multi-user кабинета: UI локальный, только localhost.
 - Candidates scoring v1 грубый: нет полноценного учёта задач/следующего шага/счетов/оплат как отдельных CRM-сигналов в scorer.
-- SQLite feedback loop есть (`ui_reports` / `rop_decisions` / `outcomes` / `ui_candidate_filters`), но нет аналитики качества рекомендаций и портфельной `deal_memory` / `lead_memory`.
+- SQLite feedback loop есть (`ui_reports` / `rop_decisions` / `outcomes` / `candidate_review_state` / `ui_candidate_filters`), но нет аналитики качества рекомендаций, semantic diff активностей для reviewed-сущностей и портфельной `deal_memory` / `lead_memory`.
 - Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.
 - Автоматическое скачивание аудио и contact timeline зависят от прав Bitrix webhook/user; часть сценариев остается ручной.
 - Комментарии к задачам не выгружаются отдельным API-методом.
