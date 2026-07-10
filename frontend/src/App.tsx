@@ -67,6 +67,14 @@ function riskLabelRu(value: string): string {
   return RISK_LEVEL_RU[key] || value || '—'
 }
 
+function priorityLabelRu(value: string): string {
+  const key = value.trim().toLowerCase()
+  if (key === 'high') return 'Высокий риск'
+  if (key === 'medium') return 'Средний риск'
+  if (key === 'low') return 'Низкий риск'
+  return value || 'Риск не указан'
+}
+
 function verdictLabelRu(value: string): string {
   const key = value.trim().toLowerCase()
   return VERDICT_RU[key] || value.replaceAll('_', ' ')
@@ -161,6 +169,7 @@ export default function App() {
   const [candidatesError, setCandidatesError] = useState<string | null>(null)
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
   const [filtersReady, setFiltersReady] = useState(false)
+  const [showCandidateFilters, setShowCandidateFilters] = useState(false)
 
   const [manualIds, setManualIds] = useState('')
   const [options, setOptions] = useState<AnalyzeOptions>({
@@ -478,22 +487,49 @@ export default function App() {
       </div>
 
       <section className="hero">
-        <span className="tag">не чат-бот</span>
-        <span className="tag">не CRM</span>
-        <span className="tag">контроль сделок и лидов</span>
-        <h1>Сегодня есть сделки и лиды, где РОПу нужно вмешаться или поставить точную задачу менеджеру</h1>
-        <p>
-          Система собирает CRM, звонки и транскрибации, затем даёт разбор: почему сущность требует внимания
-          и что сделать дальше. В Bitrix ничего не пишем.
-        </p>
+        <div>
+          <div className="hero-label">Контроль пути лида до денег</div>
+          <h1>Что РОПу проверить сегодня и какую задачу передать менеджеру</h1>
+        </div>
+        <div className="hero-points">
+          <span>очередь вмешательств</span>
+          <span>причина риска</span>
+          <span>поручение менеджеру</span>
+        </div>
       </section>
 
       {tab === 'dashboard' && (
         <div className="grid">
           <aside className="panel">
-            <h3>Сегодня требуют внимания</h3>
-            <p>Топ-20. Созданы / изменены за N дней.</p>
-            <div className="filters filters-compact">
+            <div className="panel-head">
+              <div>
+                <h3>Очередь контроля</h3>
+                <p>Топ-20 по выбранным этапам.</p>
+              </div>
+              <span className="queue-count">{summary?.returned ?? '—'}</span>
+            </div>
+            <div className="queue-actions">
+              <button
+                className="btn secondary"
+                onClick={() => void loadCandidates()}
+                disabled={candidatesLoading || !filtersReady}
+              >
+                {candidatesLoading ? 'Загрузка…' : 'Обновить'}
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => setShowCandidateFilters((value) => !value)}
+                type="button"
+              >
+                {showCandidateFilters ? 'Скрыть фильтры' : 'Фильтры'}
+              </button>
+            </div>
+            <div className="filter-summary">
+              {entityFilter === 'deal' ? 'Сделки' : 'Лиды'} · создано {createdDays} дн. · изменено {modifiedDays} дн.
+              {priorityFilter ? ` · ${riskLabelRu(priorityFilter)}` : ''}
+            </div>
+            {showCandidateFilters && (
+              <div className="filters filters-compact">
               <div className="field field-days">
                 <label>Созданы</label>
                 <input
@@ -599,7 +635,8 @@ export default function App() {
               >
                 {candidatesLoading ? 'Загрузка…' : 'Обновить'}
               </button>
-            </div>
+              </div>
+            )}
             {candidatesError && (
               <div className="alert error">
                 <strong>Не удалось загрузить кандидатов:</strong> {candidatesError}
@@ -625,7 +662,7 @@ export default function App() {
                   <br />
                   {item.attention_reason}
                 </small>
-                <span className={`priority ${item.priority}`}>{item.priority}</span>
+                <span className={`priority ${item.priority}`}>{priorityLabelRu(item.priority)}</span>
                 {item.analyzed ? <span className="priority low">уже есть анализ</span> : null}
               </button>
             ))}
@@ -634,7 +671,7 @@ export default function App() {
               !candidatesData?.candidates?.length &&
               !candidatesError && <p className="muted">Кандидатов за выбранный период не найдено.</p>}
             {!candidatesLoading && !candidatesData && !candidatesError && (
-              <p className="muted">Выберите этапы и нажмите «Обновить».</p>
+              <p className="muted">Откройте фильтры, выберите этапы и нажмите «Обновить».</p>
             )}
             <button
               className="btn"
@@ -650,18 +687,14 @@ export default function App() {
           </aside>
 
           <main>
-            <section className="section">
-              <div className="alert">
-                <strong>Первые 5 минут:</strong> сразу список контроля, без настройки pipeline. Полный markdown-отчёт
-                открывается только по запросу.
-              </div>
+            <section className="section control-strip">
               <div className="cards">
                 <div className="card">
-                  <div className="label">В топе</div>
+                  <div className="label">В очереди</div>
                   <div className="value">{summary?.returned ?? '—'}</div>
                 </div>
                 <div className="card">
-                  <div className="label">Высокий приоритет</div>
+                  <div className="label">Высокий риск</div>
                   <div className="value">{summary?.high ?? '—'}</div>
                 </div>
                 <div className="card">
@@ -964,6 +997,7 @@ function ReportPanels(props: {
     : 'Выберите кандидата или запустите анализ'
   const bitrixUrl = meta?.bitrix_url || ''
   const needsAttention = Boolean(meta && (riskLevel === 'high' || riskLevel === 'medium_high' || attention !== '—'))
+  const hasAnalysis = Boolean(analysis)
 
   const metricCards = isLead
     ? [
@@ -1021,6 +1055,51 @@ function ReportPanels(props: {
           <div className="reason-text">{attention}</div>
         </div>
 
+        <div className="action-banner">
+          <div className="label">Что сделать</div>
+          <div className="value">{nextAction}</div>
+        </div>
+      </section>
+
+      <section className="section manager-task-section">
+        <div className="section-head">
+          <div>
+            <h2>Задача менеджеру</h2>
+            <p>То, что РОП может отправить без аналитики и лишнего контекста.</p>
+          </div>
+          <button className="btn" onClick={props.onCopy} disabled={!hasAnalysis}>
+            Скопировать
+          </button>
+        </div>
+        {hasAnalysis ? (
+          <div className="task">
+            <div className="copybox">{copyText}</div>
+          </div>
+        ) : (
+          <div className="empty-task">
+            После анализа здесь появится готовое поручение менеджеру: задача, цель, текст клиенту и факт для CRM.
+          </div>
+        )}
+      </section>
+
+      <section className="section">
+        <h2>Решение РОПа</h2>
+        <div className="actions">
+          {DECISIONS.map((item) => (
+            <button key={item} onClick={() => props.onDecision(item)}>
+              {item}
+            </button>
+          ))}
+        </div>
+        {!!props.decisions?.length && (
+          <p className="muted" style={{ marginTop: 12 }}>
+            Последнее: {asString(props.decisions[0].decision)} ({asString(props.decisions[0].created_at)})
+          </p>
+        )}
+      </section>
+
+      <section className="section context-section">
+        <h2>Контекст решения</h2>
         <div className="cards cards-metrics">
           {metricCards.map((card) => (
             <div className="card" key={card.label}>
@@ -1029,11 +1108,6 @@ function ReportPanels(props: {
               {card.hint ? <div className="hint">{card.hint}</div> : null}
             </div>
           ))}
-        </div>
-
-        <div className="action-banner">
-          <div className="label">Что сделать</div>
-          <div className="value">{nextAction}</div>
         </div>
       </section>
 
@@ -1066,33 +1140,6 @@ function ReportPanels(props: {
           ))}
           {!recommendations.length && <li className="muted">Нет рекомендации</li>}
         </ul>
-      </section>
-
-      <section className="section">
-        <h2>Блок для копирования менеджеру</h2>
-        <p>Единственная часть, которую РОП отправляет менеджеру. Без обвинений и без аналитики.</p>
-        <div className="task">
-          <div className="copybox">{copyText}</div>
-          <button className="btn" onClick={props.onCopy}>
-            Скопировать задачу менеджеру
-          </button>
-        </div>
-      </section>
-
-      <section className="section">
-        <h2>Решение РОПа</h2>
-        <div className="actions">
-          {DECISIONS.map((item) => (
-            <button key={item} onClick={() => props.onDecision(item)}>
-              {item}
-            </button>
-          ))}
-        </div>
-        {!!props.decisions?.length && (
-          <p className="muted" style={{ marginTop: 12 }}>
-            Последнее: {asString(props.decisions[0].decision)} ({asString(props.decisions[0].created_at)})
-          </p>
-        )}
       </section>
 
       <section className="section">
