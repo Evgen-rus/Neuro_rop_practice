@@ -11,7 +11,7 @@
 - Обновляй `ARCHITECTURE.md` только когда пользователь прямо просит обновить архитектуру или явно просит зафиксировать новое архитектурное состояние. Не обновляй его автоматически после каждой правки кода.
 - При обновлении сохраняй средний размер и убирай явное дублирование: здесь должны быть стабильные правила, карта потоков и ссылки на подробные документы.
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 ## 1) System At A Glance
 
@@ -128,10 +128,10 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 20. Lead change detection использует `STATUS_ID` вместо `STAGE_ID`; задачи и смена ответственного считаются soft diff, новый звонок/email/message/comment/status/transcript — hard diff.
 21. Полный `customer_path.md` остается аудитным/UI-артефактом. Для deal LLM prompt используется `history/deal_<id>_llm_context.md`, если он существует; иначе fallback на полный `customer_path.md`.
 22. Закрытый провальный CRM-статус сделки определяется кодом до LLM через `stage_policy.py`, а не угадывается моделью по тексту истории.
-23. Если сделка закрыта как проваленная, deal-анализ обязан вернуть `closed_deal_review`; клиентский текст в таком случае используется только после решения РОПа вернуть или реанимировать сделку.
+23. Если сделка закрыта как проваленная, deal-анализ обязан вернуть `closed_deal_review`. Если для решения не хватает фактов, поручение менеджеру должно предусматривать один содержательный контакт с клиентом и фиксацию результата в CRM, без обещания вернуть сделку в работу.
 24. Главный action-блок нового анализа — `rop_manager_message_block`: что РОПу проверить, почему это важно, какое сообщение отправить менеджеру, какой факт должен появиться в CRM, срок контроля, критерий выполнения и evidence.
-25. `manager_action_block` сохранён для обратной совместимости и как черновик клиентского касания для менеджера, но не является главным результатом отчёта.
-26. Markdown-отчёт по сделке и лиду должен начинаться с раздела `## Что сделать РОПу сейчас`; клиентские тексты выводятся ниже как вспомогательный блок `## Черновик текста клиенту для менеджера`.
+25. `manager_action_block` сохранён для обратной совместимости: его `primary_text` — готовый текст именно клиенту, а не инструкция менеджеру. Чеклист блока содержит только факты для CRM после контакта.
+26. Markdown-отчёт по сделке и лиду должен начинаться с раздела `## Что сделать РОПу сейчас`; текст клиенту выводится ниже как готовый материал менеджеру для одного контакта.
 27. Deal-анализ обязан возвращать `money_path_diagnosis`: где застрял путь к деньгам, почему деньги под риском, у кого следующий шаг, какой факт нужен для движения и evidence.
 28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence.
 29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict.
@@ -159,6 +159,8 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 51. Звонки короче 20 секунд считаются `short_no_answer` (недозвон/автоответчик): duration через `ffprobe` пишется в audio manifest, такие файлы по умолчанию не транскрибируются.
 52. Локальный UI на первом этапе без авторизации, только localhost.
 53. Решения РОПа и outcomes сохраняются локально в SQLite (`rop_decisions`, `outcomes`) и не пишутся в Bitrix.
+54. Ручной запуск принимает числовые ID или канонические ссылки Bitrix вида `/crm/deal/details/<id>/` и `/crm/lead/details/<id>/`. Ссылка определяет тип сущности; за один запуск нельзя смешивать ссылки на лиды и сделки.
+55. Денежные суммы в UI показываются в читаемом формате: `10 000 000 ₽`, а не как техническое значение Bitrix с дробной частью и `RUB`.
 
 ## 4) Key Domain Objects
 
@@ -186,11 +188,12 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - `Deal management blocks` — управленческие поля deal-анализа: `rop_manager_message_block`, `money_path_diagnosis`, `deal_mode`, `closed_deal_review`, `resource_control`, `payment_blocker`, `objection_handling`, `shaker_question`, `competitor_defense_checklist`, `priority_recommendation`.
 - `Price comparability check` — блок deal-анализа `price_comparability_check`: проверка, сравниваются ли одинаковые КП/комплектации при существенном ценовом разрыве.
 - `Lead loss diagnosis` — блок `loss_diagnosis`, который отделяет качество лида от качества обработки и фиксирует `bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|unknown`.
-- `Manager action block` — совместимый старый блок `manager_action_block`; сейчас трактуется как черновик клиентского текста и чеклист для менеджера, а не как главный результат отчёта.
+- `Manager action block` — совместимый блок `manager_action_block`: `primary_text` содержит готовое сообщение клиенту, а `manager_checklist` — CRM-факты, которые менеджер фиксирует после контакта. Это вспомогательный материал, не главный результат отчёта.
 - `ROP report` — человекочитаемый Markdown-отчёт в `analysis/*_rop_report.md`.
 - `Workspace index` — `index.json`, фиксирует тип сущности, ID и локальные папки.
 - `Candidate` — pre-LLM карточка внимания из `api/candidates.py`: entity, статус/стадия, priority/score, attention_reason, Bitrix URL, флаг `analyzed`.
 - `Candidate filter` — сохранённый UI-фильтр кандидатов в `ui_candidate_filters`: тип lead/deal, окна дат, multi-select воронок/этапов, priority, limit.
+- `Manual input` — значение ручного запуска: один или несколько числовых ID либо канонических ссылок Bitrix. UI извлекает ID из ссылки и подставляет тип `lead` или `deal`.
 - `Analyze job` — фоновая задача UI/API (`api/jobs.py`): опции как в CLI, live stages, results, `report_ids`.
 - `UI report` — запись в `ui_reports`: ссылка на analysis/report paths + snapshot `report_json` для истории UI.
 - `ROP decision` — локальное решение РОПа по отчёту (`rop_decisions`), без записи в Bitrix.
@@ -315,7 +318,7 @@ UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
 - `GET /api/reports/{id}/markdown` — полный markdown по запросу
 - `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
 
-UI экраны: кандидаты (первый экран), ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа.
+UI экраны: кандидаты (первый экран), ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
 
 ### G) Candidates Scoring
 
@@ -363,6 +366,7 @@ saved filter / UI multi-select -> crm_pipeline_map stages
 - Изменение analyze job, auto lead→deal resolve, progress stages: `api/jobs.py`.
 - Изменение candidates scoring / фильтров / приоритетов: `api/candidates.py`.
 - Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
+- Изменение распознавания ID и ссылок Bitrix в ручном запуске: `parseManualInput()` в `frontend/src/App.tsx`.
 - Изменение UI feedback / saved candidate filter tables: `storage/rop_db.py` (`ui_reports`, `rop_decisions`, `outcomes`, `ui_candidate_filters`).
 - Обновление краткого запуска: `README.md`.
 - Обновление ручной инструкции проверки: `Docs/ручная проверка проекта.md`.
@@ -424,6 +428,7 @@ ROP assistant state:
 14. По сделке, созданной из лида, звонки могут физически лежать в source lead; deal context/diagnostics должны сохранять source entity и Bitrix-ссылку на исходную активность.
 15. Candidates scoring может давать много high-карточек на широком окне дней: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт.
 16. Analyze job из UI может быть долгим: это полный CLI-пайплайн, прогресс смотреть через `/api/jobs/{id}`.
+17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
 
 ## 10) Current Gaps
 
