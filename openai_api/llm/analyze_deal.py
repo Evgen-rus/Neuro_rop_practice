@@ -22,6 +22,7 @@ from openai_api.audio.build_deal_transcript_context import build_all_deal_transc
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
+from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
@@ -948,9 +949,10 @@ def main() -> None:
         log_model_file_payload(logger, title="OKF knowledge input", model=args.model, path=path)
         okf_sections.append((path, read_text(path)))
 
+    history_text = read_text(history_path)
     prompt = build_prompt(
         args.deal_id,
-        read_text(history_path),
+        history_text,
         transcript_text,
         context_diagnostics_text,
         okf_sections,
@@ -958,8 +960,20 @@ def main() -> None:
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
+    prompt_budget_path = analysis_dir / f"deal_{args.deal_id}_prompt_budget.json"
     prompt_path.write_text(prompt, encoding="utf-8")
+    prompt_budget = build_prompt_budget(
+        prompt=prompt,
+        model=args.model,
+        history_text=history_text,
+        transcript_text=transcript_text,
+        diagnostics_text=context_diagnostics_text,
+        okf_sections=okf_sections,
+        stage_policy=stage_policy,
+    )
+    write_prompt_budget(prompt_budget_path, prompt_budget)
     logger.info("Saved full analysis request prompt: %s", prompt_path)
+    logger.info("Saved privacy-preserving prompt budget: %s", prompt_budget_path)
 
     if args.dry_run:
         log_model_text_payload(
@@ -970,6 +984,7 @@ def main() -> None:
             metadata={"api": "responses.create", "dry_run": True},
         )
         print(f"Dry run complete. Request prompt saved: {prompt_path}")
+        print(f"Prompt budget saved: {prompt_budget_path}")
         return
 
     generated_at = datetime.now(MSK_TZ).isoformat()
@@ -981,6 +996,7 @@ def main() -> None:
     try:
         analysis, metadata = call_analysis_json(prompt, model=args.model)
     except ModelJsonParseError as error:
+        write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, error.metadata))
         raw_path.write_text(error.raw_output_text, encoding="utf-8")
         save_json(
             error_path,
@@ -996,6 +1012,8 @@ def main() -> None:
         print(f"Model returned invalid JSON. Raw output saved: {raw_path}")
         print(f"Error details saved: {error_path}")
         raise
+
+    write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, metadata))
 
     normalization_changes = normalize_analysis_for_validation(analysis)
     if normalization_changes:

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "scale": ["pass", "fail", "not_reviewed", "not_applicable"],
+  "criteria": [
+    "rop_attention_correct",
+    "main_risk_preserved",
+    "qualification_correct",
+    "manager_action_specific",
+    "expected_crm_fact_correct",
+    "evidence_sufficient",
+    "no_hallucinated_facts",
+    "no_unsafe_recommendation",
+    "important_legacy_details_preserved"
+  ]
+}

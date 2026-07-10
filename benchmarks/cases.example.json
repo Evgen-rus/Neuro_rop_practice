@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "Sanitized example. Copy it to benchmarks/local/cases.json and replace only local paths.",
+  "cases": [
+    {
+      "case_id": "deal-demo",
+      "entity_type": "deal",
+      "baseline": {
+        "analysis_json": "C:/local/rop/deals/deal_DEMO/analysis/deal_DEMO_analysis.json",
+        "request_prompt": "C:/local/rop/deals/deal_DEMO/analysis/deal_DEMO_request_prompt.txt",
+        "rop_report": "C:/local/rop/deals/deal_DEMO/analysis/deal_DEMO_rop_report.md",
+        "prompt_budget_json": "C:/local/rop/deals/deal_DEMO/analysis/deal_DEMO_prompt_budget.json"
+      },
+      "manual_review": {
+        "status": "not_reviewed",
+        "notes": ""
+      }
+    }
+  ]
+}

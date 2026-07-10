@@ -65,6 +65,17 @@ knowledge/
 downloads/
 tmp/
 
+# The optimization plan is intentionally versioned; all other local Docs files
+# remain excluded because they can contain client-specific runbooks or exports.
+!Docs/
+Docs/*
+!Docs/context_memory_optimization_plan.md
+
+# Benchmark fixtures and results are local-only because they may reference
+# customer workspaces and generated ROP artifacts.
+benchmarks/local/
+benchmarks/results/
+
 # Local media and generated transcripts/analysis exports
 *.mp3
 *.wav

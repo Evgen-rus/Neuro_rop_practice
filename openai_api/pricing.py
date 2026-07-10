@@ -19,9 +19,11 @@ ANALYSIS_MODEL_PRICES_USD_PER_1M: dict[str, dict[str, float]] = {
         "output": 15.00,
     },
     "gpt-5.4-mini": {
-        "input": 2.50,
-        "cached_input": 0.25,
-        "output": 15.00,
+        # OpenAI standard short-context pricing, verified 2026-07-10:
+        # https://developers.openai.com/api/docs/pricing
+        "input": 0.75,
+        "cached_input": 0.075,
+        "output": 4.50,
     },
 }
 
@@ -120,4 +122,3 @@ def format_usd_rub(cost_usd: Any, cost_rub: Any) -> str:
     if cost_usd is None or cost_rub is None:
         return "не рассчитана"
     return f"${float(cost_usd):.4f} / {float(cost_rub):.2f} руб."
-
