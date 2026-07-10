@@ -761,6 +761,20 @@ ul.facts.bad li:before {
   resize: vertical;
 }
 
+.input-hint,
+.input-error {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.input-hint {
+  color: #166534;
+}
+
+.input-error {
+  color: #b91c1c;
+}
+
 .checks {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -27,6 +27,15 @@ import {
 
 type Tab = 'dashboard' | 'manual' | 'history'
 
+type ManualEntityType = 'lead' | 'deal' | 'auto'
+
+type ManualInput = {
+  ids: string[]
+  entityType: ManualEntityType
+  detected: Array<{ entityType: 'lead' | 'deal'; id: string }>
+  error: string | null
+}
+
 const DECISIONS = [
   'Подтвердить рекомендацию',
   'Поставить задачу менеджеру',
@@ -106,6 +115,53 @@ function formatMoneyText(value: string): string {
     /(?:\d{1,3}(?:[ \u00a0]\d{3})+|\d+)(?:[.,]\d+)?\s*(?:RUB|руб(?:\.|лей|ля|ль)?|₽)/gi,
     (amount) => formatMoney(amount),
   )
+}
+
+function parseManualInput(value: string, fallbackEntityType: ManualEntityType): ManualInput {
+  const ids: string[] = []
+  const detected: Array<{ entityType: 'lead' | 'deal'; id: string }> = []
+  const invalid: string[] = []
+
+  for (const token of value.split(/[\s,;]+/).filter(Boolean)) {
+    const link = token.match(/\/crm\/(lead|deal)\/details\/(\d+)(?:[/?#]|$)/i)
+    if (link) {
+      const entityType = link[1].toLowerCase() as 'lead' | 'deal'
+      const id = link[2]
+      ids.push(id)
+      detected.push({ entityType, id })
+      continue
+    }
+    if (/^\d+$/.test(token)) {
+      ids.push(token)
+      continue
+    }
+    invalid.push(token)
+  }
+
+  const uniqueIds = [...new Set(ids)]
+  const types = [...new Set(detected.map((item) => item.entityType))]
+  if (types.length > 1) {
+    return {
+      ids: uniqueIds,
+      entityType: fallbackEntityType,
+      detected,
+      error: 'За один запуск вставьте ссылки только на лиды или только на сделки.',
+    }
+  }
+  if (invalid.length) {
+    return {
+      ids: uniqueIds,
+      entityType: fallbackEntityType,
+      detected,
+      error: `Не удалось распознать: ${invalid.slice(0, 2).join(', ')}`,
+    }
+  }
+  return {
+    ids: uniqueIds,
+    entityType: types[0] || fallbackEntityType,
+    detected,
+    error: null,
+  }
 }
 
 function toast(message: string, setter: (value: string | null) => void) {
@@ -574,6 +630,7 @@ export default function App() {
   }
 
   const summary = candidatesData?.summary
+  const manualInput = parseManualInput(manualIds, options.entity_type)
   const managerBrief = getManagerBrief(activeAnalysis)
   const copyText = buildManagerCopy(managerBrief)
   const facts = activeAnalysis ? evidenceList(activeAnalysis) : selectedCandidate?.reasons || []
@@ -883,12 +940,25 @@ export default function App() {
             <h3>Ручной запуск</h3>
             <p>Для срочной проверки конкретного лида или сделки.</p>
             <div className="field">
-              <label>ID лидов/сделок</label>
+              <label>ID или ссылка Bitrix</label>
               <textarea
                 value={manualIds}
-                onChange={(e) => setManualIds(e.target.value)}
-                placeholder={'18457, 18533\nили столбиком'}
+                onChange={(e) => {
+                  const value = e.target.value
+                  const parsed = parseManualInput(value, options.entity_type)
+                  setManualIds(value)
+                  if (parsed.detected.length && !parsed.error) {
+                    setOptions((prev) => ({ ...prev, entity_type: parsed.entityType }))
+                  }
+                }}
+                placeholder={'18457, 18533\nhttps://…/crm/deal/details/18619/\nhttps://…/crm/lead/details/228505/'}
               />
+              {manualInput.detected.length && !manualInput.error ? (
+                <span className="input-hint">
+                  Распознано: {manualInput.entityType === 'deal' ? 'сделка' : 'лид'} · {manualInput.ids.join(', ')}
+                </span>
+              ) : null}
+              {manualInput.error ? <span className="input-error">{manualInput.error}</span> : null}
             </div>
             <div className="filters manual-basic">
               <div className="field">
@@ -907,8 +977,13 @@ export default function App() {
             </div>
             <button
               className="btn"
-              onClick={() => void runAnalyze(manualIds, options.entity_type)}
-              disabled={!manualIds.trim() || (job?.status === 'running' || job?.status === 'queued')}
+              onClick={() => void runAnalyze(manualInput.ids.join(', '), manualInput.entityType)}
+              disabled={
+                !manualInput.ids.length ||
+                Boolean(manualInput.error) ||
+                job?.status === 'running' ||
+                job?.status === 'queued'
+              }
             >
               Запустить анализ
             </button>
