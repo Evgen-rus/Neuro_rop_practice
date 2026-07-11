@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from openai_api.llm.lead_attention_playbooks import playbook_preview_lines
+from openai_api.llm.deal_attention_playbooks import playbook_preview_lines as deal_playbook_preview_lines
+from openai_api.llm.lead_attention_playbooks import playbook_preview_lines as lead_playbook_preview_lines
 
 def render_attention_delta_preview(delta: dict[str, Any]) -> str:
     """Render the compact result without touching the legacy report renderer."""
@@ -27,9 +28,16 @@ def render_attention_delta_preview(delta: dict[str, Any]) -> str:
     ]
     lead_review = delta.get("lead_review") if isinstance(delta.get("lead_review"), dict) else None
     if lead_review:
-        playbook_lines = playbook_preview_lines(lead_review.get("action_playbook"))
+        playbook_lines = lead_playbook_preview_lines(lead_review.get("action_playbook"))
         if playbook_lines:
             lines.extend(["## Применённый регламент обработки", ""])
+            lines.extend(f"- {line}" for line in playbook_lines)
+            lines.append("")
+    deal_review = delta.get("deal_review") if isinstance(delta.get("deal_review"), dict) else None
+    if deal_review:
+        playbook_lines = deal_playbook_preview_lines(deal_review.get("action_playbook"))
+        if playbook_lines:
+            lines.extend(["## Applied deal playbook", ""])
             lines.extend(f"- {line}" for line in playbook_lines)
             lines.append("")
     return "\n".join(lines)

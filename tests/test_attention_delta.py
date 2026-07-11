@@ -16,6 +16,7 @@ from openai_api.llm.attention_delta import (
     build_lead_attention_delta_prompt,
     deal_attention_delta_schema,
     lead_attention_delta_schema,
+    materialize_deal_attention_delta,
     materialize_lead_attention_delta,
     validate_deal_attention_delta,
     validate_lead_attention_delta,
@@ -50,7 +51,28 @@ def deal_delta(*, attention_required: bool = True) -> dict:
             "risks_resolve": [],
             "next_step": "Получить срок решения",
         },
-        "deal_review": None,
+        "deal_review": {
+            "type": "other",
+            "decision": "manager_action_required",
+            "action_playbook": "manual_context_audit" if attention_required else "none",
+            "closure_status": "not_applicable",
+            "technical_input_status": "not_applicable",
+            "required_technical_inputs": [],
+            "invoice_status": "not_applicable",
+            "invoice_agreed": False,
+            "payment_intent_confirmed": False,
+            "advance_agreed": False,
+            "contract_signed": False,
+            "payment_date_confirmed": False,
+            "customer_compares_options": False,
+            "competitor_confirmed": False,
+            "confirmed_refusal": False,
+            "budget_known": False,
+            "decision_maker_known": False,
+            "decision_date_known": False,
+            "clarifying_contact_completed": False,
+            "price_competitor_risk": "none",
+        },
     }
 
 
@@ -170,6 +192,78 @@ class AttentionDeltaSchemaTests(unittest.TestCase):
         result = materialize_lead_attention_delta(delta, today=date(2033, 6, 7))
         self.assertEqual(result["rop_action"]["deadline"], "2033-06-07")
 
+    def test_invoice_price_competitor_playbook_requires_clarification_not_payment_control(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "customer_compares_options": True,
+                "price_competitor_risk": "suspected",
+            }
+        )
+        result = materialize_deal_attention_delta(delta, today=date(2031, 2, 3))
+        validate_deal_attention_delta(result)
+        action = result["rop_action"]
+        self.assertEqual(action["owner"], "Ответственный менеджер сделки")
+        self.assertEqual(action["deadline"], "2026-07-11")
+        for required_question in ("что именно сравнивает", "реальный бюджет", "кто принимает", "когда оно будет принято", "счёт согласованным"):
+            self.assertIn(required_question, action["message_to_manager"])
+        for required_fact in ("предмет сравнения", "бюджет", "ЛПР", "дата решения", "статус согласования счёта"):
+            self.assertIn(required_fact, action["expected_crm_fact"])
+        self.assertIn("Не закрывайте", action["message_to_manager"])
+        self.assertNotIn("контролировать оплату", action["message_to_manager"].lower())
+
+    def test_invoice_playbook_allows_documented_closure_only_after_confirmed_refusal(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "confirmed_refusal": True,
+                "clarifying_contact_completed": True,
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertIn("подтверждённом явном отказе", result["rop_action"]["message_to_manager"])
+
+    def test_dated_technical_input_playbook_keeps_sale_active_and_separates_dates(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "dated_technical_input_control",
+                "technical_input_status": "internal_control_only",
+                "required_technical_inputs": ["фото тары", "размеры", "видео продукта"],
+            }
+        )
+        result = materialize_deal_attention_delta(delta, today=date(2031, 2, 3))
+        validate_deal_attention_delta(result)
+        action = result["rop_action"]
+        self.assertEqual(action["owner"], "Ответственный менеджер сделки")
+        self.assertIn("фото тары; размеры; видео продукта", action["message_to_manager"])
+        self.assertIn("Внутренний срок контроля не является обещанием клиента", action["message_to_manager"])
+        self.assertIn("Не запускайте глубокую инженерную проработку", action["message_to_manager"])
+        self.assertIn("дата ещё не согласована", action["success_condition"])
+
+    def test_disputed_closed_playbook_does_not_reopen_confirmed_closure(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "type": "closed_wrong_qualification",
+                "decision": "keep_current_state",
+                "action_playbook": "disputed_closed_deal_review",
+                "closure_status": "confirmed",
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertIn("Не возвращайте сделку", result["rop_action"]["message_to_manager"])
+
 
 class AttentionDeltaPromptTests(unittest.TestCase):
     def test_compact_prompt_keeps_grounding_without_legacy_contract(self) -> None:
@@ -219,12 +313,13 @@ class AttentionDeltaPromptTests(unittest.TestCase):
         self.assertIn("## CRM HISTORY\nCRM facts.\n\n## TRANSCRIPT OR NEW EVENT\nTranscript facts.", prompt)
         self.assertIn("## CONTEXT DIAGNOSTICS\nDiagnostics facts.\n\n## OKF RULES", prompt)
 
-    def test_deal_contract_and_prompt_do_not_gain_lead_playbooks(self) -> None:
+    def test_deal_contract_and_prompt_use_only_deal_playbooks(self) -> None:
         prompt = build_deal_attention_delta_prompt(
             "42", "history", "transcript", "diagnostics", [(Path("index.md"), "OKF")], {"is_closed_lost": False}
         )
         self.assertNotIn("restore_no_contact_processing", prompt)
-        self.assertNotIn("action_playbook", deal_attention_delta_schema()["properties"])
+        self.assertIn("action_playbook", deal_attention_delta_schema()["properties"]["deal_review"]["anyOf"][0]["properties"])
+        self.assertIn("invoice_price_competitor_risk", prompt)
 
 
 class AttentionDeltaShadowRunnerTests(unittest.TestCase):

@@ -31,6 +31,7 @@ from openai_api.llm.attention_delta import (
     build_lead_attention_delta_prompt,
     deal_attention_delta_schema,
     lead_attention_delta_schema,
+    materialize_deal_attention_delta,
     materialize_lead_attention_delta,
     validate_deal_attention_delta,
     validate_lead_attention_delta,
@@ -407,6 +408,11 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
     # Usage is persisted before the local business validation, so a rejected
     # structured response remains measurable without becoming a legacy result.
     write_prompt_budget(budget_path, attach_response_metadata(budget, response_metadata))
+    if inputs["entity_type"] == "deal":
+        delta = materialize_deal_attention_delta(delta)
+        response_metadata["deterministic_playbook_applied"] = (
+            delta.get("deal_review", {}).get("action_playbook") if isinstance(delta.get("deal_review"), dict) else None
+        )
     if inputs["entity_type"] == "lead":
         delta = materialize_lead_attention_delta(delta)
         response_metadata["deterministic_playbook_applied"] = (

@@ -12,6 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from openai_api.llm.deal_attention_playbooks import DEAL_ACTION_PLAYBOOKS, materialize_deal_playbook_action
 from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, materialize_lead_playbook_action
 from openai_api.llm.prompt_budget import render_okf_sections
 
@@ -45,6 +46,10 @@ LEAD_FINAL_VERDICTS = (
     "unknown",
 )
 MAX_EVIDENCE_IDS = 7
+DEAL_CLOSURE_STATUSES = ("not_applicable", "confirmed", "disputed", "unconfirmed")
+DEAL_TECHNICAL_INPUT_STATUSES = ("not_applicable", "inputs_missing", "client_date_confirmed", "internal_control_only")
+DEAL_INVOICE_STATUSES = ("not_applicable", "not_sent", "sent_unconfirmed", "agreed", "payment_intent_confirmed", "payment_date_confirmed")
+DEAL_PRICE_COMPETITOR_RISKS = ("none", "suspected", "confirmed")
 
 
 def _string_array_schema(*, max_items: int = 5) -> dict[str, Any]:
@@ -74,6 +79,7 @@ def _rop_action_schema() -> dict[str, Any]:
                 ]
             },
             "success_condition": {"type": "string", "minLength": 1},
+            "owner": {"type": "string", "minLength": 1},
             "evidence_ids": _string_array_schema(max_items=MAX_EVIDENCE_IDS),
         },
     }
@@ -136,10 +142,49 @@ def deal_attention_delta_schema() -> dict[str, Any]:
             {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ("type", "decision"),
+                "required": (
+                    "type",
+                    "decision",
+                    "action_playbook",
+                    "closure_status",
+                    "technical_input_status",
+                    "required_technical_inputs",
+                    "invoice_status",
+                    "invoice_agreed",
+                    "payment_intent_confirmed",
+                    "advance_agreed",
+                    "contract_signed",
+                    "payment_date_confirmed",
+                    "customer_compares_options",
+                    "competitor_confirmed",
+                    "confirmed_refusal",
+                    "budget_known",
+                    "decision_maker_known",
+                    "decision_date_known",
+                    "clarifying_contact_completed",
+                    "price_competitor_risk",
+                ),
                 "properties": {
                     "type": {"type": "string", "enum": list(DEAL_REVIEW_TYPES)},
                     "decision": {"type": "string", "enum": list(DEAL_REVIEW_DECISIONS)},
+                    "action_playbook": {"type": "string", "enum": list(DEAL_ACTION_PLAYBOOKS)},
+                    "closure_status": {"type": "string", "enum": list(DEAL_CLOSURE_STATUSES)},
+                    "technical_input_status": {"type": "string", "enum": list(DEAL_TECHNICAL_INPUT_STATUSES)},
+                    "required_technical_inputs": _string_array_schema(),
+                    "invoice_status": {"type": "string", "enum": list(DEAL_INVOICE_STATUSES)},
+                    "invoice_agreed": {"type": "boolean"},
+                    "payment_intent_confirmed": {"type": "boolean"},
+                    "advance_agreed": {"type": "boolean"},
+                    "contract_signed": {"type": "boolean"},
+                    "payment_date_confirmed": {"type": "boolean"},
+                    "customer_compares_options": {"type": "boolean"},
+                    "competitor_confirmed": {"type": "boolean"},
+                    "confirmed_refusal": {"type": "boolean"},
+                    "budget_known": {"type": "boolean"},
+                    "decision_maker_known": {"type": "boolean"},
+                    "decision_date_known": {"type": "boolean"},
+                    "clarifying_contact_completed": {"type": "boolean"},
+                    "price_competitor_risk": {"type": "string", "enum": list(DEAL_PRICE_COMPETITOR_RISKS)},
                 },
             },
             {"type": "null"},
@@ -196,12 +241,14 @@ def _string_list(value: Any, path: str, *, max_items: int, errors: list[str]) ->
         _non_empty_string(item, f"{path}[{index}]", errors)
 
 
-def _strict_object(value: Any, path: str, required: tuple[str, ...], errors: list[str]) -> dict[str, Any] | None:
+def _strict_object(
+    value: Any, path: str, required: tuple[str, ...], errors: list[str], *, optional: tuple[str, ...] = ()
+) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         errors.append(f"expected object at {path}")
         return None
     missing = [field for field in required if field not in value]
-    extra = sorted(set(value) - set(required))
+    extra = sorted(set(value) - set(required) - set(optional))
     if missing:
         errors.append(f"missing required fields at {path}: {', '.join(missing)}")
     if extra:
@@ -243,10 +290,13 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
             "rop_action",
             ("check", "message_to_manager", "expected_crm_fact", "deadline", "success_condition", "evidence_ids"),
             errors,
+            optional=("owner",),
         )
         if action_obj is not None:
             for field in ("check", "message_to_manager", "expected_crm_fact", "success_condition"):
                 _non_empty_string(action_obj.get(field), f"rop_action.{field}", errors)
+            if "owner" in action_obj:
+                _non_empty_string(action_obj.get("owner"), "rop_action.owner", errors)
             deadline = action_obj.get("deadline")
             if deadline is not None:
                 _non_empty_string(deadline, "rop_action.deadline", errors)
@@ -272,12 +322,49 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
     special = root.get(special_key)
     if special is not None:
         if entity_type == "deal":
-            special_obj = _strict_object(special, special_key, ("type", "decision"), errors)
+            deal_fields = (
+                "type", "decision", "action_playbook", "closure_status", "technical_input_status", "required_technical_inputs",
+                "invoice_status", "invoice_agreed", "payment_intent_confirmed", "advance_agreed", "contract_signed",
+                "payment_date_confirmed", "customer_compares_options", "competitor_confirmed", "confirmed_refusal",
+                "budget_known", "decision_maker_known", "decision_date_known", "clarifying_contact_completed", "price_competitor_risk",
+            )
+            special_obj = _strict_object(special, special_key, deal_fields, errors)
             if special_obj is not None:
                 if special_obj.get("type") not in DEAL_REVIEW_TYPES:
                     errors.append(f"invalid enum at {special_key}.type")
                 if special_obj.get("decision") not in DEAL_REVIEW_DECISIONS:
                     errors.append(f"invalid enum at {special_key}.decision")
+                if special_obj.get("action_playbook") not in DEAL_ACTION_PLAYBOOKS:
+                    errors.append(f"invalid enum at {special_key}.action_playbook")
+                if special_obj.get("closure_status") not in DEAL_CLOSURE_STATUSES:
+                    errors.append(f"invalid enum at {special_key}.closure_status")
+                if special_obj.get("technical_input_status") not in DEAL_TECHNICAL_INPUT_STATUSES:
+                    errors.append(f"invalid enum at {special_key}.technical_input_status")
+                if special_obj.get("invoice_status") not in DEAL_INVOICE_STATUSES:
+                    errors.append(f"invalid enum at {special_key}.invoice_status")
+                if special_obj.get("price_competitor_risk") not in DEAL_PRICE_COMPETITOR_RISKS:
+                    errors.append(f"invalid enum at {special_key}.price_competitor_risk")
+                _string_list(special_obj.get("required_technical_inputs"), f"{special_key}.required_technical_inputs", max_items=5, errors=errors)
+                for field in (
+                    "invoice_agreed", "payment_intent_confirmed", "advance_agreed", "contract_signed", "payment_date_confirmed",
+                    "customer_compares_options", "competitor_confirmed", "confirmed_refusal", "budget_known", "decision_maker_known",
+                    "decision_date_known", "clarifying_contact_completed",
+                ):
+                    if not isinstance(special_obj.get(field), bool):
+                        errors.append(f"expected boolean at {special_key}.{field}")
+                if root.get("attention_required") is True and special_obj.get("action_playbook") == "none":
+                    errors.append("attention_required deal needs a non-none action_playbook")
+                if root.get("attention_required") is True and action is None:
+                    errors.append("attention_required deal needs a concrete rop_action")
+                if special_obj.get("action_playbook") == "dated_technical_input_control" and not special_obj.get("required_technical_inputs"):
+                    errors.append("dated_technical_input_control needs required_technical_inputs")
+                if special_obj.get("action_playbook") == "invoice_price_competitor_risk":
+                    if special_obj.get("invoice_status") != "sent_unconfirmed":
+                        errors.append("invoice_price_competitor_risk needs invoice_status=sent_unconfirmed")
+                    if special_obj.get("payment_intent_confirmed") or special_obj.get("payment_date_confirmed"):
+                        errors.append("invoice_price_competitor_risk cannot assert payment intent or payment date")
+                    if special_obj.get("confirmed_refusal") is False and special_obj.get("decision") == "return_to_pipeline":
+                        errors.append("invoice_price_competitor_risk cannot close or return without confirmed refusal")
         else:
             special_obj = _strict_object(
                 special,
@@ -341,12 +428,25 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                             errors.append(f"diagnostics-only lead must not assert: {forbidden}")
     elif entity_type == "lead":
         errors.append("lead_review must be an object, not null")
+    elif root.get("attention_required") is True:
+        errors.append("attention_required deal needs a deal_review with action_playbook")
     if errors:
         raise ValueError("Invalid attention delta: " + "; ".join(errors))
 
 
 def validate_deal_attention_delta(value: dict[str, Any]) -> None:
     _validate_attention_delta(value, "deal")
+
+
+def materialize_deal_attention_delta(value: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
+    """Apply a selected deterministic deal playbook before business validation."""
+    result = dict(value)
+    review = result.get("deal_review")
+    action = result.get("rop_action")
+    if not isinstance(review, dict) or not isinstance(action, dict):
+        return result
+    result["rop_action"] = materialize_deal_playbook_action(review, action, today=today)
+    return result
 
 
 def materialize_lead_attention_delta(value: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
@@ -422,7 +522,7 @@ def build_deal_attention_delta_prompt(
     okf_sections: list[tuple[Path, str]],
     stage_policy: dict[str, Any],
 ) -> str:
-    return _build_shadow_prompt(
+    prompt = _build_shadow_prompt(
         entity_type="deal",
         entity_id=str(deal_id),
         history_text=history_text,
@@ -431,6 +531,18 @@ def build_deal_attention_delta_prompt(
         okf_sections=okf_sections,
         stage_policy=stage_policy,
     )
+    return prompt + """
+
+<deal_playbook_contract>
+- deal_review обязателен при attention_required=true. Выбери action_playbook: none, disputed_closed_deal_review, dated_technical_input_control, invoice_price_competitor_risk или manual_context_audit.
+- Верни только признаки deal_review и evidence: статус закрытия, статус техвходов, список требуемых техданных, статус счёта/оплаты и признаки риска цены или конкурента.
+- invoice_status=sent_unconfirmed означает: счёт отправлен, но его согласование, намерение платить и дата оплаты не подтверждены. Не смешивай эти факты.
+- Для invoice_price_competitor_risk не предлагай закрытие по вероятному проигрышу или отсутствию оплаты: при неполном контексте нужен уточняющий контакт.
+- Для dated_technical_input_control различай клиентскую подтверждённую дату и внутренний срок контроля; не утверждай просрочку без клиентской даты.
+- Для disputed_closed_deal_review не возвращай сделку в работу без подтверждающих фактов.
+- Для известных deal playbook верни краткие case-specific evidence_ids и deadline; код сформирует обязательную CRM-задачу, владельца и полный текст поручения.
+</deal_playbook_contract>
+"""
 
 
 def build_lead_attention_delta_prompt(
