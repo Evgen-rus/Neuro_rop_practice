@@ -25,18 +25,21 @@ from api.jobs import (
     unwrap_analysis_payload,
     workspace_dir,
 )
+from api.compact_shadow import get_compact_job, get_evidence, review_payload, start_compact_job
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     get_candidate_filter,
     get_candidate_review_states,
+    get_compact_shadow_run,
     get_ui_report,
     init_db,
     list_outcomes,
     list_rop_decisions,
     list_ui_reports,
     save_candidate_filter,
+    save_compact_shadow_feedback,
     save_outcome,
     save_rop_decision,
     upsert_candidate_review_state,
@@ -87,6 +90,12 @@ class OutcomeRequest(BaseModel):
     payment_status: str | None = None
     manager_action_done: bool | None = None
     notes: str | None = None
+
+
+class CompactFeedbackRequest(BaseModel):
+    result: Literal["correct", "partly_correct", "error"]
+    reason: str | None = Field(default=None, max_length=120)
+    comment: str | None = Field(default=None, max_length=800)
 
 
 class CandidatesSearchRequest(BaseModel):
@@ -419,3 +428,71 @@ def entity_analysis(entity_type: Literal["lead", "deal"], entity_id: str) -> dic
         "has_markdown": md_path.exists(),
         "analysis": analysis,
     }
+
+
+@app.get("/api/entity/{entity_type}/{entity_id}/compact-review")
+def compact_review(
+    entity_type: Literal["lead", "deal"], entity_id: str, run_id: str | None = None
+) -> dict[str, Any]:
+    """Read only: load a saved full report and separate Compact runs."""
+    return review_payload(entity_type, entity_id, selected_run_id=run_id)
+
+
+@app.post("/api/entity/{entity_type}/{entity_id}/compact-runs")
+def compact_run(entity_type: Literal["lead", "deal"], entity_id: str) -> dict[str, Any]:
+    try:
+        return start_compact_job(entity_type, entity_id)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as error:
+        # Do not expose workspace paths or a raw source error in the browser.
+        raise HTTPException(
+            status_code=409,
+            detail="Compact-анализ недоступен: нужен полный анализ с сохранённым контекстом и транскриптом.",
+        ) from error
+
+
+@app.get("/api/compact-jobs/{job_id}")
+def compact_job_status(job_id: str) -> dict[str, Any]:
+    job = get_compact_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Compact job not found")
+    return job
+
+
+@app.get("/api/entity/{entity_type}/{entity_id}/compact-evidence/{evidence_id}")
+def compact_evidence(
+    entity_type: Literal["lead", "deal"], entity_id: str, evidence_id: str
+) -> dict[str, Any]:
+    try:
+        source = get_evidence(entity_type, entity_id, evidence_id)
+    except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=404, detail="Evidence source is unavailable") from error
+    if source is None:
+        raise HTTPException(status_code=404, detail="Исходный evidence не найден в переданном контексте")
+    return source
+
+
+@app.put("/api/entity/{entity_type}/{entity_id}/compact-runs/{run_id}/feedback")
+def compact_feedback(
+    entity_type: Literal["lead", "deal"], entity_id: str, run_id: str, body: CompactFeedbackRequest
+) -> dict[str, Any]:
+    run = get_compact_shadow_run(DEFAULT_DB_PATH, run_id)
+    if not run or run.get("entity_type") != entity_type or str(run.get("entity_id")) != str(entity_id):
+        raise HTTPException(status_code=404, detail="Compact run not found")
+    analysis = run.get("analysis") if isinstance(run.get("analysis"), dict) else {}
+    review_key = "lead_review" if entity_type == "lead" else "deal_review"
+    review = analysis.get(review_key) if isinstance(analysis.get(review_key), dict) else {}
+    ui_metadata = analysis.get("_ui") if isinstance(analysis.get("_ui"), dict) else {}
+    feedback = save_compact_shadow_feedback(
+        DEFAULT_DB_PATH,
+        compact_run_id=run_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        snapshot_hash=str(run.get("snapshot_hash") or ""),
+        model=str(run.get("model") or "") or None,
+        raw_playbook=str(ui_metadata.get("raw_playbook") or review.get("action_playbook") or "") or None,
+        final_playbook=str(review.get("action_playbook") or "") or None,
+        feedback_result=body.result,
+        reason=body.reason,
+        comment=body.comment,
+    )
+    return {"ok": True, "feedback": feedback}

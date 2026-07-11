@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './index.css'
 import {
   asRecord,
@@ -14,15 +14,21 @@ import {
   type UiReportDetail,
   type UiReportListItem,
   fetchCandidateFilter,
+  fetchCompactEvidence,
+  fetchCompactJob,
+  fetchCompactReview,
   fetchJob,
   fetchPipelines,
   fetchReport,
   fetchReportMarkdown,
   fetchReports,
   saveDecision,
+  saveCompactFeedback,
   saveOutcome,
   searchCandidates,
   startAnalyze,
+  startCompactRun,
+  type CompactReview,
 } from './api'
 
 type Tab = 'dashboard' | 'manual' | 'history'
@@ -1220,7 +1226,7 @@ export default function App() {
   )
 }
 
-function ReportPanels(props: {
+type ReportPanelsProps = {
   meta: {
     entity_type: string
     entity_id: string
@@ -1246,7 +1252,35 @@ function ReportPanels(props: {
   onOutcome: (value: string) => void
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
-}) {
+}
+
+function ReportPanels(props: ReportPanelsProps) {
+  const [analysisTab, setAnalysisTab] = useState<'current' | 'compact' | 'comparison'>('current')
+  return (
+    <>
+      <section className="section analysis-tabs">
+        <div className="tab-row" role="tablist" aria-label="Анализ карточки">
+          <button className={analysisTab === 'current' ? 'active' : ''} onClick={() => setAnalysisTab('current')}>
+            Текущий анализ
+          </button>
+          <button className={analysisTab === 'compact' ? 'active' : ''} onClick={() => setAnalysisTab('compact')}>
+            Compact beta
+          </button>
+          <button className={analysisTab === 'comparison' ? 'active' : ''} onClick={() => setAnalysisTab('comparison')}>
+            Сравнение
+          </button>
+        </div>
+      </section>
+      {analysisTab === 'current' ? (
+        <FullAnalysisPanels {...props} />
+      ) : (
+        <CompactReviewPanel meta={props.meta} fullAnalysis={props.analysis} comparison={analysisTab === 'comparison'} />
+      )}
+    </>
+  )
+}
+
+function FullAnalysisPanels(props: ReportPanelsProps) {
   const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
@@ -1502,5 +1536,183 @@ function ReportPanels(props: {
         {props.showMarkdown && props.markdown && <div className="markdown">{formatMoneyText(props.markdown)}</div>}
       </section>
     </>
+  )
+}
+
+function compactEvidenceIds(value: unknown): string[] {
+  const result: string[] = []
+  const visit = (item: unknown) => {
+    const record = asRecord(item)
+    if (Array.isArray(record.evidence_ids)) result.push(...asStringList(record.evidence_ids))
+    if (Array.isArray(item)) item.forEach(visit)
+    else if (item && typeof item === 'object') Object.values(record).forEach(visit)
+  }
+  visit(value)
+  return [...new Set(result)]
+}
+
+function CompactReviewPanel(props: {
+  meta: ReportPanelsProps['meta']
+  fullAnalysis: Record<string, unknown> | null
+  comparison: boolean
+}) {
+  const entityType = props.meta?.entity_type === 'lead' ? 'lead' : props.meta?.entity_type === 'deal' ? 'deal' : null
+  const entityId = props.meta?.entity_id || ''
+  const [review, setReview] = useState<CompactReview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null)
+  const [feedbackReason, setFeedbackReason] = useState('')
+  const [feedbackComment, setFeedbackComment] = useState('')
+
+  const load = useCallback(async (runId?: string) => {
+    if (!entityType || !entityId) return
+    setLoading(true)
+    setError(null)
+    try {
+      setReview(await fetchCompactReview(entityType, entityId, runId))
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError))
+    } finally {
+      setLoading(false)
+    }
+  }, [entityId, entityType])
+
+  useEffect(() => {
+    setReview(null)
+    setEvidence(null)
+    void load()
+  }, [load])
+
+  const run = review?.selected_run || null
+  const analysis = asRecord(run?.analysis)
+  const compactReview = asRecord(entityType === 'lead' ? analysis.lead_review : analysis.deal_review)
+  const compactUi = asRecord(analysis._ui)
+  const action = asRecord(analysis.rop_action)
+  const coverage = asRecord(run?.evidence_coverage)
+  const isFallback = run?.fallback_class === 'full_fallback_recommended' || run?.status === 'error'
+  const compactStatus = isFallback
+    ? 'Нужен полный анализ'
+    : run?.status === 'completed'
+      ? 'Compact safe'
+      : 'Требуется ручная проверка'
+
+  const start = async () => {
+    if (!entityType || !entityId) return
+    setRunning(true)
+    setError(null)
+    try {
+      const job = await startCompactRun(entityType, entityId)
+      let current = job
+      while (current.status === 'queued' || current.status === 'running') {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        current = await fetchCompactJob(job.job_id)
+      }
+      if (current.status === 'error') throw new Error(current.error || 'Compact-анализ не завершён')
+      await load(current.run_id || undefined)
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const showEvidence = async (evidenceId: string) => {
+    if (!entityType || !entityId) return
+    try {
+      setEvidence(await fetchCompactEvidence(entityType, entityId, evidenceId))
+    } catch (nextError) {
+      setEvidence({ error: nextError instanceof Error ? nextError.message : String(nextError) })
+    }
+  }
+
+  const submitFeedback = async (result: 'correct' | 'partly_correct' | 'error') => {
+    if (!entityType || !entityId || !run) return
+    if (result !== 'correct' && !feedbackComment.trim() && !feedbackReason) {
+      setError('Для этой оценки укажите причину или короткий комментарий.')
+      return
+    }
+    try {
+      await saveCompactFeedback(entityType, entityId, run.id, result, feedbackReason, feedbackComment)
+      await load(run.id)
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError))
+    }
+  }
+
+  if (!props.meta || !entityType) return <section className="section">Выберите лид или сделку.</section>
+  if (loading && !review) return <section className="section muted">Загрузка Compact-данных…</section>
+
+  if (props.comparison) {
+    const fullLead = asRecord(props.fullAnalysis?.lead_state)
+    const fullDeal = asRecord(props.fullAnalysis?.deal_state)
+    const fullRisk = asRecord(props.fullAnalysis?.main_risk)
+    const fullLoss = asRecord(props.fullAnalysis?.loss_diagnosis)
+    const rows = [
+      ['Qualification', entityType === 'lead' ? asString(fullLead.qualification, '—') : asString(fullDeal.stage, '—'), entityType === 'lead' ? asString(compactReview.qualification, '—') : asString(compactReview.decision, '—')],
+      ['Final verdict', asString(fullLoss.final_verdict, '—'), asString(compactReview.final_verdict, asString(compactReview.closure_status, '—'))],
+      ['Attention required', asString(props.meta.attention_reason, '—'), analysis.attention_required === true ? 'Да' : analysis.attention_required === false ? 'Нет' : '—'],
+      ['Severity', asString(fullRisk.risk_level, '—'), asString(analysis.severity, '—')],
+      ['Playbook', '—', asString(compactReview.action_playbook, '—')],
+      ['Основной риск', asString(fullRisk.description, '—'), asString(analysis.reason, '—')],
+      ['Следующий шаг', asString(asRecord(props.fullAnalysis?.rop_manager_message_block).check_for_rop, '—'), asString(action.message_to_manager, '—')],
+      ['Deadline', '—', asString(action.deadline, '—')],
+      ['Expected CRM fact', asString(asRecord(props.fullAnalysis?.rop_manager_message_block).expected_crm_fact, '—'), asString(action.expected_crm_fact, '—')],
+      ['Evidence', compactEvidenceIds(props.fullAnalysis).join(', ') || '—', compactEvidenceIds(analysis).join(', ') || '—'],
+      ['Стоимость', '—', run?.cost_rub == null ? '—' : `${run.cost_rub} ₽`],
+    ]
+    return (
+      <section className="section">
+        <h2>Сравнение анализов</h2>
+        {!run ? <p className="muted">Compact-анализ ещё не выполнен.</p> : (
+          <div className="comparison-table">
+            {rows.map(([label, full, compact]) => <div className={full === compact ? 'same' : 'different'} key={label}><b>{label}</b><span>{full}</span><span>{compact}</span></div>)}
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  return (
+    <section className="section compact-panel">
+      <div className="section-head">
+        <div><h2>Compact beta</h2><p>Тестовый анализ. Не заменяет основной и не изменяет Bitrix.</p></div>
+        <button className="btn" onClick={() => void start()} disabled={running || Boolean(review?.preflight_error)}>
+          {running ? 'Выполняется…' : 'Запустить Compact-анализ'}
+        </button>
+      </div>
+      {review?.preflight_error ? <div className="alert error">{review.preflight_error}</div> : null}
+      {error ? <div className="alert error">{error}</div> : null}
+      {!run ? <p className="muted">Compact-анализ ещё не выполнен.</p> : <>
+        <div className={`compact-status ${isFallback ? 'fallback' : run.status === 'completed' ? 'safe' : 'review'}`}>
+          <b>{compactStatus}</b><span>{asString(analysis.reason) || asString(coverage.status) || 'Статус пока не определён'}</span>
+        </div>
+        <div className="cards cards-metrics">
+          <div className="card"><div className="label">Время запуска</div><div className="value">{run.started_at}</div></div>
+          <div className="card"><div className="label">Актуальность</div><div className="value">{run.is_current ? 'Актуален' : 'Данные изменились'}</div></div>
+          <div className="card"><div className="label">Snapshot hash</div><div className="value">{run.snapshot_hash.slice(0, 12)}</div></div>
+        </div>
+        {run.is_current ? <p className="muted">После прошлого Compact-анализа новых данных не обнаружено.</p> : null}
+        <div className="reason-box"><div className="label">Что произошло</div><div className="reason-text">{asString(analysis.reason, '—')}</div></div>
+        <div className="action-banner"><div className="label">Действие менеджеру</div><div className="value">{asString(action.message_to_manager, '—')}</div></div>
+        <div className="compact-details">
+          <div><b>Raw playbook</b><span>{asString(compactUi.raw_playbook, '—')}</span></div>
+          <div><b>Playbook</b><span>{asString(compactReview.action_playbook, '—')}</span></div>
+          <div><b>Причина нормализации</b><span>{asString(compactUi.normalization_reason, '—')}</span></div>
+          <div><b>Квалификация / решение</b><span>{asString(compactReview.qualification, asString(compactReview.decision, '—'))}</span></div>
+          <div><b>Что проверить РОПу</b><span>{asString(action.check, '—')}</span></div>
+          <div><b>Deadline</b><span>{asString(action.deadline, '—')}</span></div>
+          <div><b>Expected CRM fact</b><span>{asString(action.expected_crm_fact, '—')}</span></div>
+          <div><b>Evidence coverage</b><span>{asString(coverage.status, '—')} · {asString(coverage.coverage_percent, '—')}%</span></div>
+          <div><b>Fallback class</b><span>{asString(run.fallback_class, '—')}</span></div>
+        </div>
+        <div className="evidence-list"><b>Evidence</b>{compactEvidenceIds(analysis).map((id) => <button key={id} onClick={() => void showEvidence(id)}>{id}</button>)}{!compactEvidenceIds(analysis).length ? <span>Исходный evidence не найден в переданном контексте</span> : null}</div>
+        {evidence ? <div className="evidence-drawer"><button className="close" onClick={() => setEvidence(null)}>×</button><b>{asString(evidence.evidence_id, 'Evidence')}</b><p>{asString(evidence.source_type)} · {asString(evidence.namespace)}</p><pre>{asString(evidence.fragment, asString(evidence.error))}</pre></div> : null}
+        <details><summary>Технические данные анализа</summary><p>Модель: {run.model || '—'} · tokens: {asString(asRecord(run.usage).total_tokens, '—')} · стоимость: {run.cost_rub ?? '—'} ₽</p></details>
+        <div className="feedback"><h3>Оценка результата</h3><select value={feedbackReason} onChange={(event) => setFeedbackReason(event.target.value)}><option value="">Выберите причину (необязательно для «Верно»)</option><option>ложная тревога РОПу</option><option>пропущен риск</option><option>неверный playbook</option><option>неверная qualification</option><option>неверный deadline</option><option>выдуманный факт</option><option>неверный fallback</option><option>evidence не подтверждает вывод</option><option>поручение менеджеру непрактично</option><option>другое</option></select><textarea value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)} placeholder="Короткий комментарий" maxLength={800} /><div className="actions"><button onClick={() => void submitFeedback('correct')}>Верно</button><button onClick={() => void submitFeedback('partly_correct')}>Частично верно</button><button onClick={() => void submitFeedback('error')}>Ошибка</button></div>{run.feedback ? <p className="muted">Оценка сохранена: {asString(run.feedback.feedback_result)}</p> : null}</div>
+        {!!review?.runs.length && <div className="compact-history"><h3>История Compact-анализов</h3>{review.runs.map((item) => <button className={item.id === run.id ? 'active' : ''} key={item.id} onClick={() => void load(item.id)}>{item.started_at.slice(0, 16).replace('T', ' ')} · {asString(asRecord(entityType === 'lead' ? asRecord(item.analysis).lead_review : asRecord(item.analysis).deal_review).action_playbook, '—')} · {item.fallback_class || item.status}</button>)}</div>}
+      </>}
+    </section>
   )
 }

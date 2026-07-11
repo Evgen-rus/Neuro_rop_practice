@@ -20,6 +20,20 @@ from setup import BASE_DIR, MSK_TZ
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
 
 
+class RopConnection(sqlite3.Connection):
+    """Close SQLite handles when a ``with connect(...)`` block finishes.
+
+    The sqlite context manager commits/rolls back but does not close on its own,
+    which leaves temporary databases locked on Windows.
+    """
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def utcish_now() -> str:
     return datetime.now(MSK_TZ).isoformat(timespec="seconds")
 
@@ -37,7 +51,7 @@ def loads_json(value: str | None, default: Any = None) -> Any:
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, factory=RopConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -153,6 +167,43 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 profile_key TEXT NOT NULL PRIMARY KEY,
                 filter_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS compact_shadow_runs (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                snapshot_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                model TEXT,
+                analysis_json TEXT,
+                evidence_coverage_json TEXT,
+                fallback_class TEXT,
+                usage_json TEXT,
+                cost_rub REAL,
+                error TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_compact_shadow_runs_entity
+                ON compact_shadow_runs(entity_type, entity_id, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS compact_shadow_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                compact_run_id TEXT NOT NULL UNIQUE,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                snapshot_hash TEXT NOT NULL,
+                model TEXT,
+                raw_playbook TEXT,
+                final_playbook TEXT,
+                feedback_result TEXT NOT NULL,
+                reason TEXT,
+                comment TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(compact_run_id) REFERENCES compact_shadow_runs(id)
             );
             """
         )
@@ -549,6 +600,135 @@ def list_outcomes(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
             (int(report_id),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def _row_to_compact_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["analysis"] = loads_json(value.pop("analysis_json"), None)
+    value["evidence_coverage"] = loads_json(value.pop("evidence_coverage_json"), {})
+    value["usage"] = loads_json(value.pop("usage_json"), {})
+    return value
+
+
+def save_compact_shadow_run(
+    db_path: str | Path,
+    *,
+    run_id: str,
+    entity_type: str,
+    entity_id: str,
+    snapshot_hash: str,
+    status: str,
+    started_at: str,
+    completed_at: str | None = None,
+    model: str | None = None,
+    analysis: dict[str, Any] | None = None,
+    evidence_coverage: dict[str, Any] | None = None,
+    fallback_class: str | None = None,
+    usage: dict[str, Any] | None = None,
+    cost_rub: float | None = None,
+    error: str | None = None,
+) -> None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO compact_shadow_runs (
+                id, entity_type, entity_id, snapshot_hash, status, started_at, completed_at,
+                model, analysis_json, evidence_coverage_json, fallback_class, usage_json, cost_rub, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                completed_at = COALESCE(excluded.completed_at, compact_shadow_runs.completed_at),
+                model = COALESCE(excluded.model, compact_shadow_runs.model),
+                analysis_json = COALESCE(excluded.analysis_json, compact_shadow_runs.analysis_json),
+                evidence_coverage_json = COALESCE(excluded.evidence_coverage_json, compact_shadow_runs.evidence_coverage_json),
+                fallback_class = COALESCE(excluded.fallback_class, compact_shadow_runs.fallback_class),
+                usage_json = COALESCE(excluded.usage_json, compact_shadow_runs.usage_json),
+                cost_rub = COALESCE(excluded.cost_rub, compact_shadow_runs.cost_rub),
+                error = excluded.error
+            """,
+            (
+                run_id, entity_type, str(entity_id), snapshot_hash, status, started_at, completed_at,
+                model, dumps_json(analysis) if analysis is not None else None,
+                dumps_json(evidence_coverage) if evidence_coverage is not None else None,
+                fallback_class, dumps_json(usage) if usage is not None else None, cost_rub, error,
+            ),
+        )
+
+
+def get_compact_shadow_run(db_path: str | Path, run_id: str) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM compact_shadow_runs WHERE id = ?", (run_id,)).fetchone()
+    return _row_to_compact_run(row)
+
+
+def list_compact_shadow_runs(
+    db_path: str | Path, *, entity_type: str, entity_id: str, limit: int = 20
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM compact_shadow_runs
+            WHERE entity_type = ? AND entity_id = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (entity_type, str(entity_id), int(limit)),
+        ).fetchall()
+    return [_row_to_compact_run(row) for row in rows if row is not None]
+
+
+def save_compact_shadow_feedback(
+    db_path: str | Path,
+    *,
+    compact_run_id: str,
+    entity_type: str,
+    entity_id: str,
+    snapshot_hash: str,
+    model: str | None,
+    raw_playbook: str | None,
+    final_playbook: str | None,
+    feedback_result: str,
+    reason: str | None = None,
+    comment: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO compact_shadow_feedback (
+                compact_run_id, entity_type, entity_id, snapshot_hash, model, raw_playbook,
+                final_playbook, feedback_result, reason, comment, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(compact_run_id) DO UPDATE SET
+                feedback_result = excluded.feedback_result,
+                reason = excluded.reason,
+                comment = excluded.comment,
+                updated_at = excluded.updated_at
+            """,
+            (
+                compact_run_id, entity_type, str(entity_id), snapshot_hash, model, raw_playbook,
+                final_playbook, feedback_result, reason, comment, now, now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM compact_shadow_feedback WHERE compact_run_id = ?", (compact_run_id,)
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def get_compact_shadow_feedback(db_path: str | Path, compact_run_id: str) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM compact_shadow_feedback WHERE compact_run_id = ?", (compact_run_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_candidate_review_states(

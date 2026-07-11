@@ -152,6 +152,43 @@ export type UiReportDetail = UiReportListItem & {
   candidate_review?: Record<string, unknown> | null
 }
 
+export type CompactRun = {
+  id: string
+  entity_type: 'lead' | 'deal'
+  entity_id: string
+  snapshot_hash: string
+  status: string
+  started_at: string
+  completed_at?: string | null
+  model?: string | null
+  analysis?: Record<string, unknown> | null
+  evidence_coverage?: Record<string, unknown>
+  fallback_class?: string | null
+  usage?: Record<string, unknown>
+  cost_rub?: number | null
+  is_current: boolean
+  feedback?: Record<string, unknown> | null
+}
+
+export type CompactReview = {
+  entity_type: 'lead' | 'deal'
+  entity_id: string
+  full_analysis?: Record<string, unknown> | null
+  snapshot_hash?: string | null
+  preflight_error?: string | null
+  selected_run?: CompactRun | null
+  runs: CompactRun[]
+}
+
+export type CompactJob = {
+  job_id: string
+  entity_type: 'lead' | 'deal'
+  entity_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  run_id?: string | null
+  error?: string | null
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: {
@@ -270,6 +307,39 @@ export function saveOutcome(reportId: number, outcome_type: string, notes?: stri
       method: 'POST',
       body: JSON.stringify({ outcome_type, notes: notes || null }),
     },
+  )
+}
+
+export function fetchCompactReview(entityType: 'lead' | 'deal', entityId: string, runId?: string) {
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+  return api<CompactReview>(`/api/entity/${entityType}/${entityId}/compact-review${query}`)
+}
+
+export function startCompactRun(entityType: 'lead' | 'deal', entityId: string) {
+  return api<CompactJob>(`/api/entity/${entityType}/${entityId}/compact-runs`, { method: 'POST' })
+}
+
+export function fetchCompactJob(jobId: string) {
+  return api<CompactJob>(`/api/compact-jobs/${jobId}`)
+}
+
+export function fetchCompactEvidence(entityType: 'lead' | 'deal', entityId: string, evidenceId: string) {
+  return api<Record<string, unknown>>(
+    `/api/entity/${entityType}/${entityId}/compact-evidence/${encodeURIComponent(evidenceId)}`,
+  )
+}
+
+export function saveCompactFeedback(
+  entityType: 'lead' | 'deal',
+  entityId: string,
+  runId: string,
+  result: 'correct' | 'partly_correct' | 'error',
+  reason?: string,
+  comment?: string,
+) {
+  return api<{ ok: boolean; feedback: Record<string, unknown> }>(
+    `/api/entity/${entityType}/${entityId}/compact-runs/${runId}/feedback`,
+    { method: 'PUT', body: JSON.stringify({ result, reason: reason || null, comment: comment || null }) },
   )
 }
 
