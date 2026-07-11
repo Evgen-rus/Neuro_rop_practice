@@ -57,6 +57,7 @@ def build_prompt_budget(
     history_text: str,
     transcript_text: str,
     diagnostics_text: str,
+    diagnostics_raw_text: str | None = None,
     okf_sections: list[tuple[Path, str]],
     stage_policy: dict[str, Any] | None = None,
     entity_memory_text: str = "",
@@ -91,6 +92,11 @@ def build_prompt_budget(
     blocks = {"instructions": _block(remaining)}
     blocks.update({name: _block(text) for name, text in blocks_text.items()})
     accounted_chars = sum(block["chars"] for block in blocks.values())
+    diagnostics_raw = diagnostics_text if diagnostics_raw_text is None else diagnostics_raw_text
+    diagnostics_raw_chars = len(diagnostics_raw.strip())
+    context_completeness_chars = len(diagnostics_text.strip())
+    diagnostics_raw_tokens = math.ceil(diagnostics_raw_chars / APPROX_CHARS_PER_TOKEN)
+    context_completeness_tokens = math.ceil(context_completeness_chars / APPROX_CHARS_PER_TOKEN)
     return {
         "version": 1,
         "mode": "legacy_prompt_observability",
@@ -103,6 +109,16 @@ def build_prompt_budget(
             "unaccounted_chars": len(prompt) - accounted_chars,
         },
         "composition_warnings": [f"fragment_not_found:{name}" for name in missing_fragments],
+        "diagnostics_optimization": {
+            "diagnostics_raw_chars": diagnostics_raw_chars,
+            "context_completeness_chars": context_completeness_chars,
+            "diagnostics_tokens_saved": max(0, diagnostics_raw_tokens - context_completeness_tokens),
+            "reduction_percent": round(
+                (1 - context_completeness_chars / diagnostics_raw_chars) * 100, 2
+            )
+            if diagnostics_raw_chars
+            else 0.0,
+        },
         "actual_usage": None,
         "cost": None,
     }

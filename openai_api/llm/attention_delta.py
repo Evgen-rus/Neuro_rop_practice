@@ -537,7 +537,6 @@ def _build_shadow_prompt(
 ## TRANSCRIPT OR NEW EVENT
 {transcript_text.strip()}
 
-## CONTEXT DIAGNOSTICS
 {diagnostics_text.strip()}
 
 ## OKF RULES

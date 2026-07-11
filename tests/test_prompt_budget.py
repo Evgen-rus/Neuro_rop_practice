@@ -76,6 +76,26 @@ class PromptBudgetTests(unittest.TestCase):
         self.assertNotEqual(first["blocks"]["history"]["sha256"], changed["blocks"]["history"]["sha256"])
         self.assertNotEqual(first["total"]["sha256"], changed["total"]["sha256"])
 
+    def test_records_diagnostics_compression_without_storing_raw_text(self) -> None:
+        raw_diagnostics = "private recovery command " * 20
+        compact_diagnostics = "## CONTEXT_COMPLETENESS\nstatus: partial"
+        prompt = f"Instruction\n{compact_diagnostics}\n## HISTORY\nHistory"
+        budget = build_prompt_budget(
+            prompt=prompt,
+            model="gpt-5.4-mini",
+            history_text="History",
+            transcript_text="",
+            diagnostics_text=compact_diagnostics,
+            diagnostics_raw_text=raw_diagnostics,
+            okf_sections=[],
+        )
+        optimization = budget["diagnostics_optimization"]
+        self.assertEqual(optimization["diagnostics_raw_chars"], len(raw_diagnostics.strip()))
+        self.assertEqual(optimization["context_completeness_chars"], len(compact_diagnostics))
+        self.assertGreater(optimization["diagnostics_tokens_saved"], 0)
+        self.assertGreater(optimization["reduction_percent"], 0)
+        self.assertNotIn(raw_diagnostics, json.dumps(budget, ensure_ascii=False))
+
     def test_attaches_usage_without_raw_model_output(self) -> None:
         budget = build_prompt_budget(
             prompt="Инструкция\nНужная JSON-структура:\n{}\n## ИСТОРИЯ\nИстория",

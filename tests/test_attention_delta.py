@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from benchmarks.compare_attention_delta import compare_case
-from benchmarks.run_attention_delta_shadow import run_shadow_case, verify_api_limits
+from benchmarks.run_attention_delta_shadow import build_shadow_request, load_shadow_inputs, run_shadow_case, verify_api_limits
 from openai_api.config import ATTENTION_DELTA_MAX_OUTPUT_TOKENS
 from openai_api.llm.attention_delta import (
     build_deal_attention_delta_prompt,
@@ -404,7 +404,7 @@ class AttentionDeltaPromptTests(unittest.TestCase):
             "99",
             "CRM facts.",
             "Transcript facts.",
-            "Diagnostics facts.",
+            "## CONTEXT_COMPLETENESS\nDiagnostics facts.",
             [(Path("index.md"), "OKF facts.")],
         )
         self.assertNotIn("анализ" + ":" + "верни", prompt)
@@ -412,7 +412,7 @@ class AttentionDeltaPromptTests(unittest.TestCase):
         self.assertIn("shadow-анализ: верни", prompt)
         self.assertIn("фактов о клиенте", prompt)
         self.assertIn("## CRM HISTORY\nCRM facts.\n\n## TRANSCRIPT OR NEW EVENT\nTranscript facts.", prompt)
-        self.assertIn("## CONTEXT DIAGNOSTICS\nDiagnostics facts.\n\n## OKF RULES", prompt)
+        self.assertIn("## CONTEXT_COMPLETENESS\nDiagnostics facts.\n\n## OKF RULES", prompt)
 
     def test_deal_contract_and_prompt_use_only_deal_playbooks(self) -> None:
         prompt = build_deal_attention_delta_prompt(
@@ -463,6 +463,33 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
             self.assertTrue((output / "deal-01" / "attention_delta_prompt_budget.json").exists())
             self.assertFalse((output / "deal-01" / "attention_delta.json").exists())
             self.assertTrue(result["prompt_metrics"]["uses_real_transcript"])
+
+    def test_shadow_prompt_uses_one_completeness_block_and_excludes_raw_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            case, _analysis, _output = self._case(Path(directory))
+            raw_path = Path(case["baseline"]["analysis_json"]).parent / "diagnostics.md"
+            raw_path.write_text("RAW_DIAGNOSTIC_PATH=C:/private/recovery.ps1", encoding="utf-8")
+            inputs = load_shadow_inputs(case)
+            prompt, schema, schema_name, _validator = build_shadow_request(inputs)
+        self.assertIn("## CONTEXT_COMPLETENESS", prompt)
+        self.assertEqual(prompt.count("## CONTEXT_COMPLETENESS"), 1)
+        self.assertNotIn("RAW_DIAGNOSTIC_PATH", prompt)
+        self.assertIn("history activity:42:1", prompt)
+        self.assertIn("transcript", prompt)
+        self.assertEqual(schema_name, "deal_attention_delta")
+        self.assertEqual(schema, deal_attention_delta_schema())
+
+    def test_shadow_prompt_omits_diagnostics_section_when_legacy_saved_none(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            case, analysis, _output = self._case(Path(directory))
+            payload = json.loads(analysis.read_text(encoding="utf-8"))
+            payload["input_files"]["context_diagnostics"] = []
+            analysis.write_text(json.dumps(payload), encoding="utf-8")
+            inputs = load_shadow_inputs(case)
+            prompt, _schema, _schema_name, _validator = build_shadow_request(inputs)
+        self.assertEqual(inputs["diagnostics_text"], "")
+        self.assertEqual(inputs["diagnostics_raw_text"], "")
+        self.assertNotIn("## CONTEXT_COMPLETENESS", prompt)
 
     def test_usage_is_saved_when_response_fails_local_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

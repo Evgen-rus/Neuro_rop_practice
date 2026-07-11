@@ -37,6 +37,7 @@ from openai_api.llm.attention_delta import (
     validate_lead_attention_delta,
 )
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
+from openai_api.llm.context_completeness import build_context_completeness_block
 from openai_api.llm.llm_client import (
     ModelJsonParseError,
     ModelResponseIncompleteError,
@@ -93,7 +94,7 @@ def _read_required_text(path_value: Any, label: str) -> tuple[Path, str]:
 
 def _read_diagnostics(paths: Any) -> tuple[list[str], str]:
     if paths is None:
-        return [], "Diagnostics were not saved with the legacy baseline."
+        return [], ""
     if isinstance(paths, str):
         paths = [paths]
     elif isinstance(paths, dict):
@@ -106,7 +107,7 @@ def _read_diagnostics(paths: Any) -> tuple[list[str], str]:
         path, text = _read_required_text(value, "context diagnostics")
         used_paths.append(str(path))
         fragments.append(f"### {path.name}\n{text.strip()}")
-    return used_paths, "\n\n".join(fragments) or "Diagnostics were not saved with the legacy baseline."
+    return used_paths, "\n\n".join(fragments)
 
 
 def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
@@ -128,7 +129,7 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
     else:
         transcript_path = None
         transcript_text = "Транскрибация не предоставлена. Анализируй только доступную CRM-историю и ограничения контекста."
-    diagnostics_paths, diagnostics_text = _read_diagnostics(inputs.get("context_diagnostics"))
+    diagnostics_paths, diagnostics_raw_text = _read_diagnostics(inputs.get("context_diagnostics"))
     knowledge_paths = inputs.get("knowledge")
     if not isinstance(knowledge_paths, list) or not knowledge_paths:
         raise ValueError(f"Case {case.get('case_id')!r} has no legacy knowledge input paths")
@@ -141,6 +142,16 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
         baseline_gaps.append("no real transcript input in the legacy baseline")
     if baseline_gaps:
         raise ValueError(f"Case {case.get('case_id')!r} is not ready: {'; '.join(baseline_gaps)}")
+    diagnostics_text = (
+        build_context_completeness_block(
+            diagnostics_paths,
+            history_available=True,
+            transcript_available=transcript_path is not None,
+            stage_policy_available=(stage_policy is not None) if entity_type == "deal" else None,
+        )
+        if diagnostics_paths
+        else ""
+    )
     return {
         "entity_type": entity_type,
         "entity_id": entity_id,
@@ -150,6 +161,7 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
         "transcript_text": transcript_text,
         "diagnostics_paths": diagnostics_paths,
         "diagnostics_text": diagnostics_text,
+        "diagnostics_raw_text": diagnostics_raw_text,
         "okf_sections": okf_sections,
         "knowledge_paths": [str(path) for path, _text in okf_sections],
         "stage_policy": stage_policy,
@@ -196,6 +208,7 @@ def prepare_shadow_case(case: dict[str, Any], *, output_root: Path, model: str) 
         history_text=inputs["history_text"],
         transcript_text=inputs["transcript_text"],
         diagnostics_text=inputs["diagnostics_text"],
+        diagnostics_raw_text=inputs["diagnostics_raw_text"],
         okf_sections=inputs["okf_sections"],
         stage_policy=inputs["stage_policy"],
     )
@@ -214,6 +227,8 @@ def prepare_shadow_case(case: dict[str, Any], *, output_root: Path, model: str) 
         "transcript_chars": len(inputs["transcript_text"].strip()),
         "okf_chars": budget["blocks"]["okf_knowledge"]["chars"],
         "instructions_chars": budget["blocks"]["instructions"]["chars"],
+        "diagnostics_raw_chars": budget["diagnostics_optimization"]["diagnostics_raw_chars"],
+        "context_completeness_chars": budget["diagnostics_optimization"]["context_completeness_chars"],
         "schema_chars": schema_chars,
         "total_chars": budget["total"]["chars"],
         "approx_input_tokens": approx_input_tokens,
