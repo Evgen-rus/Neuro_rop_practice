@@ -41,6 +41,7 @@ def deal_delta(*, attention_required: bool = True) -> dict:
             "expected_crm_fact": "Дата решения клиента.",
             "deadline": "2026-07-11",
             "success_condition": "В CRM есть дата и результат контакта.",
+            "owner": None,
             "evidence_ids": ["activity:42:1"],
         },
         "memory_patch": {
@@ -65,12 +66,16 @@ def deal_delta(*, attention_required: bool = True) -> dict:
             "contract_signed": False,
             "payment_date_confirmed": False,
             "customer_compares_options": False,
+            "comparison_subject_known": False,
+            "price_or_terms_gap_known": False,
+            "budget_not_disclosed_confirmed": False,
             "competitor_confirmed": False,
             "confirmed_refusal": False,
             "budget_known": False,
             "decision_maker_known": False,
             "decision_date_known": False,
             "clarifying_contact_completed": False,
+            "next_step_confirmed": False,
             "price_competitor_risk": "none",
         },
     }
@@ -109,10 +114,30 @@ def no_contact_bad_processing_delta() -> dict:
     return value
 
 
+def assert_strict_object_nodes(test: unittest.TestCase, node: object, path: str = "$") -> None:
+    """Recursively enforce the OpenAI strict-schema object contract."""
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            test.assertIn("required", node, path)
+            test.assertEqual(set(node["required"]), set(properties), path)
+            test.assertIs(node.get("additionalProperties"), False, path)
+        for key, value in node.items():
+            assert_strict_object_nodes(test, value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            assert_strict_object_nodes(test, value, f"{path}[{index}]")
+
+
 class AttentionDeltaSchemaTests(unittest.TestCase):
     def test_valid_deal_delta_passes_schema(self) -> None:
         validate_deal_attention_delta(deal_delta())
         self.assertFalse(deal_attention_delta_schema()["additionalProperties"])
+        self.assertIsNone(deal_delta()["rop_action"]["owner"])
+
+    def test_all_structured_output_object_nodes_are_strict(self) -> None:
+        assert_strict_object_nodes(self, deal_attention_delta_schema())
+        assert_strict_object_nodes(self, lead_attention_delta_schema())
 
     def test_valid_lead_delta_passes_schema(self) -> None:
         validate_lead_attention_delta(lead_delta())
@@ -229,6 +254,82 @@ class AttentionDeltaSchemaTests(unittest.TestCase):
         result = materialize_deal_attention_delta(delta)
         validate_deal_attention_delta(result)
         self.assertIn("подтверждённом явном отказе", result["rop_action"]["message_to_manager"])
+
+    def test_invoice_raw_completed_flag_is_normalized_false_when_required_facts_are_missing(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "customer_compares_options": True,
+                "clarifying_contact_completed": True,
+                "price_competitor_risk": "confirmed",
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertFalse(result["deal_review"]["clarifying_contact_completed"])
+        self.assertEqual(result["deal_review"]["action_playbook"], "invoice_price_competitor_risk")
+        self.assertEqual(result["deal_review"]["decision"], "manager_action_required")
+        self.assertIn("\u041d\u0435 \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0439\u0442\u0435", result["rop_action"]["message_to_manager"])
+        self.assertIn("\u0443\u0442\u043e\u0447\u043d\u044f\u044e\u0449", result["rop_action"]["message_to_manager"])
+
+    def test_invoice_completed_flag_becomes_true_only_with_all_required_facts_and_next_step(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "customer_compares_options": True,
+                "comparison_subject_known": True,
+                "price_or_terms_gap_known": True,
+                "budget_known": True,
+                "decision_maker_known": True,
+                "decision_date_known": True,
+                "next_step_confirmed": True,
+                "clarifying_contact_completed": False,
+                "price_competitor_risk": "confirmed",
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertTrue(result["deal_review"]["clarifying_contact_completed"])
+        self.assertIn("\u043a\u043e\u043d\u043a\u0440\u0435\u0442\u043d\u044b\u0439 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0448\u0430\u0433", result["rop_action"]["expected_crm_fact"])
+
+    def test_invoice_explicit_refusal_with_evidence_normalizes_completed_true(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "confirmed_refusal": True,
+                "clarifying_contact_completed": False,
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertTrue(result["deal_review"]["clarifying_contact_completed"])
+        self.assertIn("\u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0451\u043d\u043d\u043e\u043c \u044f\u0432\u043d\u043e\u043c \u043e\u0442\u043a\u0430\u0437\u0435", result["rop_action"]["message_to_manager"])
+
+    def test_invoice_likely_refusal_without_confirmation_stays_in_clarification_path(self) -> None:
+        delta = deal_delta()
+        review = delta["deal_review"]
+        review.update(
+            {
+                "action_playbook": "invoice_price_competitor_risk",
+                "invoice_status": "sent_unconfirmed",
+                "clarifying_contact_completed": True,
+                "price_competitor_risk": "confirmed",
+                "confirmed_refusal": False,
+            }
+        )
+        result = materialize_deal_attention_delta(delta)
+        validate_deal_attention_delta(result)
+        self.assertFalse(result["deal_review"]["clarifying_contact_completed"])
+        self.assertIn("\u041d\u0435 \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0439\u0442\u0435", result["rop_action"]["message_to_manager"])
 
     def test_dated_technical_input_playbook_keeps_sale_active_and_separates_dates(self) -> None:
         delta = deal_delta()

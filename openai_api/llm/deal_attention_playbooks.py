@@ -106,7 +106,7 @@ def _materialize_technical_inputs(review: dict[str, Any], action: dict[str, Any]
 
 
 def _materialize_invoice_risk(review: dict[str, Any], action: dict[str, Any], deadline: str) -> dict[str, Any]:
-    confirmed_refusal = review.get("confirmed_refusal") is True
+    confirmed_refusal = review.get("confirmed_refusal") is True and bool(_evidence_ids(action))
     closure_clause = (
         "Закрытие допустимо только при уже подтверждённом явном отказе."
         if confirmed_refusal

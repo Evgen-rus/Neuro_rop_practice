@@ -56,32 +56,31 @@ def _string_array_schema(*, max_items: int = 5) -> dict[str, Any]:
     return {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": max_items}
 
 
-def _rop_action_schema() -> dict[str, Any]:
+def _rop_action_schema(*, include_owner: bool = False) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "check": {"type": "string", "minLength": 1},
+        "message_to_manager": {"type": "string", "minLength": 1},
+        "expected_crm_fact": {"type": "string", "minLength": 1},
+        "deadline": {
+            "anyOf": [
+                {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                {"type": "null"},
+            ]
+        },
+        "success_condition": {"type": "string", "minLength": 1},
+        "evidence_ids": _string_array_schema(max_items=MAX_EVIDENCE_IDS),
+    }
+    required = ["check", "message_to_manager", "expected_crm_fact", "deadline", "success_condition", "evidence_ids"]
+    if include_owner:
+        # Structured Outputs requires every declared object property to be required.
+        # The model must therefore return explicit null; known deal playbooks fill it locally.
+        properties["owner"] = {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}
+        required.append("owner")
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": (
-            "check",
-            "message_to_manager",
-            "expected_crm_fact",
-            "deadline",
-            "success_condition",
-            "evidence_ids",
-        ),
-        "properties": {
-            "check": {"type": "string", "minLength": 1},
-            "message_to_manager": {"type": "string", "minLength": 1},
-            "expected_crm_fact": {"type": "string", "minLength": 1},
-            "deadline": {
-                "anyOf": [
-                    {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
-                    {"type": "null"},
-                ]
-            },
-            "success_condition": {"type": "string", "minLength": 1},
-            "owner": {"type": "string", "minLength": 1},
-            "evidence_ids": _string_array_schema(max_items=MAX_EVIDENCE_IDS),
-        },
+        "required": required,
+        "properties": properties,
     }
 
 
@@ -127,7 +126,7 @@ def _base_schema(entity_type: str) -> dict[str, Any]:
             "attention_required": {"type": "boolean"},
             "severity": {"type": "string", "enum": list(SEVERITIES)},
             "reason": {"type": "string", "minLength": 1},
-            "rop_action": {"anyOf": [_rop_action_schema(), {"type": "null"}]},
+            "rop_action": {"anyOf": [_rop_action_schema(include_owner=entity_type == "deal"), {"type": "null"}]},
             "memory_patch": _memory_patch_schema(),
         },
     }
@@ -156,12 +155,16 @@ def deal_attention_delta_schema() -> dict[str, Any]:
                     "contract_signed",
                     "payment_date_confirmed",
                     "customer_compares_options",
+                    "comparison_subject_known",
+                    "price_or_terms_gap_known",
+                    "budget_not_disclosed_confirmed",
                     "competitor_confirmed",
                     "confirmed_refusal",
                     "budget_known",
                     "decision_maker_known",
                     "decision_date_known",
                     "clarifying_contact_completed",
+                    "next_step_confirmed",
                     "price_competitor_risk",
                 ),
                 "properties": {
@@ -178,12 +181,16 @@ def deal_attention_delta_schema() -> dict[str, Any]:
                     "contract_signed": {"type": "boolean"},
                     "payment_date_confirmed": {"type": "boolean"},
                     "customer_compares_options": {"type": "boolean"},
+                    "comparison_subject_known": {"type": "boolean"},
+                    "price_or_terms_gap_known": {"type": "boolean"},
+                    "budget_not_disclosed_confirmed": {"type": "boolean"},
                     "competitor_confirmed": {"type": "boolean"},
                     "confirmed_refusal": {"type": "boolean"},
                     "budget_known": {"type": "boolean"},
                     "decision_maker_known": {"type": "boolean"},
                     "decision_date_known": {"type": "boolean"},
                     "clarifying_contact_completed": {"type": "boolean"},
+                    "next_step_confirmed": {"type": "boolean"},
                     "price_competitor_risk": {"type": "string", "enum": list(DEAL_PRICE_COMPETITOR_RISKS)},
                 },
             },
@@ -288,14 +295,15 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
         action_obj = _strict_object(
             action,
             "rop_action",
-            ("check", "message_to_manager", "expected_crm_fact", "deadline", "success_condition", "evidence_ids"),
+            ("check", "message_to_manager", "expected_crm_fact", "deadline", "success_condition", "evidence_ids")
+            + (("owner",) if entity_type == "deal" else ()),
             errors,
-            optional=("owner",),
+            optional=("owner",) if entity_type != "deal" else (),
         )
         if action_obj is not None:
             for field in ("check", "message_to_manager", "expected_crm_fact", "success_condition"):
                 _non_empty_string(action_obj.get(field), f"rop_action.{field}", errors)
-            if "owner" in action_obj:
+            if action_obj.get("owner") is not None:
                 _non_empty_string(action_obj.get("owner"), "rop_action.owner", errors)
             deadline = action_obj.get("deadline")
             if deadline is not None:
@@ -325,8 +333,9 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
             deal_fields = (
                 "type", "decision", "action_playbook", "closure_status", "technical_input_status", "required_technical_inputs",
                 "invoice_status", "invoice_agreed", "payment_intent_confirmed", "advance_agreed", "contract_signed",
-                "payment_date_confirmed", "customer_compares_options", "competitor_confirmed", "confirmed_refusal",
-                "budget_known", "decision_maker_known", "decision_date_known", "clarifying_contact_completed", "price_competitor_risk",
+                "payment_date_confirmed", "customer_compares_options", "comparison_subject_known", "price_or_terms_gap_known",
+                "budget_not_disclosed_confirmed", "competitor_confirmed", "confirmed_refusal", "budget_known", "decision_maker_known",
+                "decision_date_known", "clarifying_contact_completed", "next_step_confirmed", "price_competitor_risk",
             )
             special_obj = _strict_object(special, special_key, deal_fields, errors)
             if special_obj is not None:
@@ -347,8 +356,9 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                 _string_list(special_obj.get("required_technical_inputs"), f"{special_key}.required_technical_inputs", max_items=5, errors=errors)
                 for field in (
                     "invoice_agreed", "payment_intent_confirmed", "advance_agreed", "contract_signed", "payment_date_confirmed",
-                    "customer_compares_options", "competitor_confirmed", "confirmed_refusal", "budget_known", "decision_maker_known",
-                    "decision_date_known", "clarifying_contact_completed",
+                    "customer_compares_options", "comparison_subject_known", "price_or_terms_gap_known", "budget_not_disclosed_confirmed",
+                    "competitor_confirmed", "confirmed_refusal", "budget_known", "decision_maker_known", "decision_date_known",
+                    "clarifying_contact_completed", "next_step_confirmed",
                 ):
                     if not isinstance(special_obj.get(field), bool):
                         errors.append(f"expected boolean at {special_key}.{field}")
@@ -363,7 +373,10 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                         errors.append("invoice_price_competitor_risk needs invoice_status=sent_unconfirmed")
                     if special_obj.get("payment_intent_confirmed") or special_obj.get("payment_date_confirmed"):
                         errors.append("invoice_price_competitor_risk cannot assert payment intent or payment date")
-                    if special_obj.get("confirmed_refusal") is False and special_obj.get("decision") == "return_to_pipeline":
+                    confirmed_refusal_with_evidence = special_obj.get("confirmed_refusal") is True and bool(
+                        action.get("evidence_ids") if isinstance(action, dict) else []
+                    )
+                    if not confirmed_refusal_with_evidence and special_obj.get("decision") == "return_to_pipeline":
                         errors.append("invoice_price_competitor_risk cannot close or return without confirmed refusal")
         else:
             special_obj = _strict_object(
@@ -445,6 +458,24 @@ def materialize_deal_attention_delta(value: dict[str, Any], *, today: date | Non
     action = result.get("rop_action")
     if not isinstance(review, dict) or not isinstance(action, dict):
         return result
+    review = dict(review)
+    if review.get("action_playbook") == "invoice_price_competitor_risk":
+        confirmed_refusal_with_evidence = review.get("confirmed_refusal") is True and bool(action.get("evidence_ids"))
+        required_facts_complete = all(
+            (
+                review.get("comparison_subject_known") is True,
+                review.get("price_or_terms_gap_known") is True,
+                review.get("budget_known") is True or review.get("budget_not_disclosed_confirmed") is True,
+                review.get("decision_maker_known") is True,
+                review.get("decision_date_known") is True,
+                review.get("invoice_status") == "sent_unconfirmed",
+                review.get("next_step_confirmed") is True,
+            )
+        )
+        # The model's raw flag is advisory only. A complete documented contact or
+        # an evidence-backed explicit refusal is required before it becomes true.
+        review["clarifying_contact_completed"] = confirmed_refusal_with_evidence or required_facts_complete
+        result["deal_review"] = review
     result["rop_action"] = materialize_deal_playbook_action(review, action, today=today)
     return result
 
@@ -537,10 +568,12 @@ def build_deal_attention_delta_prompt(
 - deal_review обязателен при attention_required=true. Выбери action_playbook: none, disputed_closed_deal_review, dated_technical_input_control, invoice_price_competitor_risk или manual_context_audit.
 - Верни только признаки deal_review и evidence: статус закрытия, статус техвходов, список требуемых техданных, статус счёта/оплаты и признаки риска цены или конкурента.
 - invoice_status=sent_unconfirmed означает: счёт отправлен, но его согласование, намерение платить и дата оплаты не подтверждены. Не смешивай эти факты.
+- Для invoice_price_competitor_risk верни отдельные признаки предмета сравнения, известного расхождения цены/условий, бюджета или подтверждённого отказа его раскрывать, ЛПР, даты решения и подтверждённого следующего шага.
 - Для invoice_price_competitor_risk не предлагай закрытие по вероятному проигрышу или отсутствию оплаты: при неполном контексте нужен уточняющий контакт.
 - Для dated_technical_input_control различай клиентскую подтверждённую дату и внутренний срок контроля; не утверждай просрочку без клиентской даты.
 - Для disputed_closed_deal_review не возвращай сделку в работу без подтверждающих фактов.
 - Для известных deal playbook верни краткие case-specific evidence_ids и deadline; код сформирует обязательную CRM-задачу, владельца и полный текст поручения.
+- В raw rop_action всегда возвращай owner=null: владельца определяет только deterministic layer после ответа.
 </deal_playbook_contract>
 """
 

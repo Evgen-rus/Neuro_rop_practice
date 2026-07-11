@@ -41,12 +41,16 @@ def _review_for_playbook(args: argparse.Namespace, existing: dict[str, Any]) -> 
         "contract_signed": False,
         "payment_date_confirmed": False,
         "customer_compares_options": args.customer_compares_options,
+        "comparison_subject_known": args.comparison_subject_known,
+        "price_or_terms_gap_known": args.price_or_terms_gap_known,
+        "budget_not_disclosed_confirmed": args.budget_not_disclosed_confirmed,
         "competitor_confirmed": args.competitor_confirmed,
         "confirmed_refusal": args.confirmed_refusal,
         "budget_known": args.budget_known,
         "decision_maker_known": args.decision_maker_known,
         "decision_date_known": args.decision_date_known,
         "clarifying_contact_completed": args.clarifying_contact_completed,
+        "next_step_confirmed": args.next_step_confirmed,
         "price_competitor_risk": args.price_competitor_risk,
     }
     if args.playbook == DATED_TECHNICAL_INPUT_CONTROL:
@@ -85,12 +89,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--closure-status", choices=("confirmed", "disputed", "unconfirmed"), default="disputed")
     parser.add_argument("--invoice-sent", action="store_true")
     parser.add_argument("--customer-compares-options", action="store_true")
+    parser.add_argument("--comparison-subject-known", action="store_true")
+    parser.add_argument("--price-or-terms-gap-known", action="store_true")
+    parser.add_argument("--budget-not-disclosed-confirmed", action="store_true")
     parser.add_argument("--competitor-confirmed", action="store_true")
     parser.add_argument("--confirmed-refusal", action="store_true")
     parser.add_argument("--budget-known", action="store_true")
     parser.add_argument("--decision-maker-known", action="store_true")
     parser.add_argument("--decision-date-known", action="store_true")
     parser.add_argument("--clarifying-contact-completed", action="store_true")
+    parser.add_argument("--next-step-confirmed", action="store_true")
     parser.add_argument("--price-competitor-risk", choices=("none", "suspected", "confirmed"), default="suspected")
     return parser.parse_args()
 
