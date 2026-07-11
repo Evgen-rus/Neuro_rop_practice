@@ -536,6 +536,7 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             case, output = self._lead_case(Path(directory))
             raw = no_contact_bad_processing_delta()
+            raw["rop_action"]["evidence_ids"] = ["call-busy"]
             metadata = {
                 "model": "test-model",
                 "usage": {"input_tokens": 10, "output_tokens": 2},

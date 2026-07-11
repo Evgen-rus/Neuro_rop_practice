@@ -39,6 +39,7 @@ from openai_api.llm.attention_delta import (
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
 from openai_api.llm.attention_delta_knowledge import select_attention_delta_knowledge
 from openai_api.llm.context_completeness import build_context_completeness_block
+from openai_api.llm.evidence_coverage import validate_evidence_context_coverage
 from openai_api.llm.lead_playbook_resolver import normalize_lead_action_playbook
 from openai_api.llm.llm_client import (
     ModelJsonParseError,
@@ -470,6 +471,14 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         write_json(output_dir / "attention_delta_error.json", {"error": str(error), "attention_delta": delta})
         raise
 
+    evidence_coverage = validate_evidence_context_coverage(
+        delta,
+        history_text=inputs["history_text"],
+        transcript_text=inputs["transcript_text"],
+        stage_policy=inputs["stage_policy"],
+        structured_blocks=[{f"{inputs['entity_type']}_id": inputs["entity_id"]}],
+    )
+
     payload = {
         "generated_at": common_metadata["generated_at"],
         "entity_type": inputs["entity_type"],
@@ -477,6 +486,7 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         "attention_delta": delta,
         "model_metadata": {key: value for key, value in response_metadata.items() if key != "raw_output_text"},
         "response_metrics": response_metrics(response_metadata, max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS),
+        "evidence_coverage": evidence_coverage,
     }
     write_json(output_dir / "attention_delta.json", payload)
     (output_dir / "attention_delta_preview.md").write_text(render_attention_delta_preview(delta), encoding="utf-8")
@@ -485,7 +495,10 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
     )
     metadata = {
         **common_metadata,
-        "status": "completed",
+        "status": "completed" if evidence_coverage["status"] != "failed" else "evidence_coverage_failed",
+        "validation_result": "passed" if evidence_coverage["status"] != "failed" else "evidence_coverage_failed",
+        "fallback_class": "compact_safe" if evidence_coverage["status"] != "failed" else "full_fallback_recommended",
+        "evidence_coverage": evidence_coverage,
         "model_metadata": payload["model_metadata"],
         "response_metrics": payload["response_metrics"],
     }

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from openai_api.llm.deal_attention_playbooks import DEAL_ACTION_PLAYBOOKS, materialize_deal_playbook_action
-from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, RETRY_BUSY_NUMBER, materialize_lead_playbook_action
+from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, RETRY_BUSY_NUMBER, SCHEDULED_NURTURE_FOLLOWUP, materialize_lead_playbook_action
 from openai_api.llm.prompt_budget import render_okf_sections
 
 
@@ -420,6 +420,10 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                     "verify_invalid_number",
                 }:
                     errors.append("bad_processing without meaningful contact needs a concrete recovery playbook")
+                if verdict == "needs_nurture" and playbook == RESTORE_NO_CONTACT_PROCESSING:
+                    errors.append("needs_nurture must not use restore_no_contact_processing")
+                if playbook == SCHEDULED_NURTURE_FOLLOWUP and meaningful_contact is not True:
+                    errors.append("scheduled_nurture_followup requires meaningful contact")
                 if playbook == RESTORE_NO_CONTACT_PROCESSING and action is not None:
                     action_text = " ".join(
                         str(action.get(field) or "")
@@ -493,11 +497,17 @@ def materialize_deal_attention_delta(value: dict[str, Any], *, today: date | Non
 def materialize_lead_attention_delta(value: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
     """Apply the selected deterministic lead playbook before business validation."""
     result = dict(value)
+    nurture_context = result.pop("_nurture_context", None)
     review = result.get("lead_review")
     action = result.get("rop_action")
     if not isinstance(review, dict) or not isinstance(action, dict):
         return result
-    result["rop_action"] = materialize_lead_playbook_action(review, action, today=today)
+    result["rop_action"] = materialize_lead_playbook_action(
+        review,
+        action,
+        today=today,
+        nurture_context=nurture_context,
+    )
     return result
 
 
@@ -610,4 +620,6 @@ def build_lead_attention_delta_prompt(
 - Diagnostics честно отражай как ограничение, но не заменяй ими безопасное восстановление обработки: действие должно одновременно проверить ситуацию и создать CRM-след.
 - Для restore_no_contact_processing верни краткий case-specific check, deadline и evidence IDs. Код детерминированно развернёт регламент дозвона; не пересказывай его полностью в JSON.
 - Не утверждай, что клиент отказался или лид нецелевой, если это подтверждено только diagnostic gaps.""",
-    )
+    ) + """
+- If final_verdict=needs_nurture and a meaningful contact confirms a deferred need, choose scheduled_nurture_followup. It is one calm CRM follow-up task, not a three-call recovery cycle. Preserve a client-confirmed date only with evidence; otherwise preserve the stated trigger or time hint without inventing a date.
+"""
