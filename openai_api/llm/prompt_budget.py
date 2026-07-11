@@ -59,6 +59,7 @@ def build_prompt_budget(
     diagnostics_text: str,
     diagnostics_raw_text: str | None = None,
     okf_sections: list[tuple[Path, str]],
+    knowledge_selection: dict[str, Any] | None = None,
     stage_policy: dict[str, Any] | None = None,
     entity_memory_text: str = "",
     delta_events_text: str = "",
@@ -119,6 +120,7 @@ def build_prompt_budget(
             if diagnostics_raw_chars
             else 0.0,
         },
+        "knowledge_selection": knowledge_selection,
         "actual_usage": None,
         "cost": None,
     }

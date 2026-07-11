@@ -37,6 +37,7 @@ from openai_api.llm.attention_delta import (
     validate_lead_attention_delta,
 )
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
+from openai_api.llm.attention_delta_knowledge import select_attention_delta_knowledge
 from openai_api.llm.context_completeness import build_context_completeness_block
 from openai_api.llm.lead_playbook_resolver import normalize_lead_action_playbook
 from openai_api.llm.llm_client import (
@@ -131,10 +132,16 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
         transcript_path = None
         transcript_text = "Транскрибация не предоставлена. Анализируй только доступную CRM-историю и ограничения контекста."
     diagnostics_paths, diagnostics_raw_text = _read_diagnostics(inputs.get("context_diagnostics"))
-    knowledge_paths = inputs.get("knowledge")
-    if not isinstance(knowledge_paths, list) or not knowledge_paths:
+    legacy_knowledge_paths = inputs.get("knowledge")
+    if not isinstance(legacy_knowledge_paths, list) or not legacy_knowledge_paths:
         raise ValueError(f"Case {case.get('case_id')!r} has no legacy knowledge input paths")
-    okf_sections = [_read_required_text(value, "OKF knowledge input") for value in knowledge_paths]
+    legacy_knowledge_files = [Path(str(value)) for value in legacy_knowledge_paths]
+    if any(not path.is_file() for path in legacy_knowledge_files):
+        missing = next(path for path in legacy_knowledge_files if not path.is_file())
+        raise FileNotFoundError(f"Missing legacy OKF knowledge input: {missing}")
+    knowledge_selection_raw = select_attention_delta_knowledge(entity_type, legacy_knowledge_files[0].parent)
+    okf_sections = knowledge_selection_raw["sections"]
+    knowledge_selection = {key: value for key, value in knowledge_selection_raw.items() if key != "sections"}
     stage_policy = payload.get("crm_stage_policy") if isinstance(payload.get("crm_stage_policy"), dict) else None
     baseline_gaps: list[str] = []
     if entity_type == "deal" and stage_policy is None:
@@ -165,6 +172,8 @@ def load_shadow_inputs(case: dict[str, Any]) -> dict[str, Any]:
         "diagnostics_raw_text": diagnostics_raw_text,
         "okf_sections": okf_sections,
         "knowledge_paths": [str(path) for path, _text in okf_sections],
+        "legacy_knowledge_paths": [str(path) for path in legacy_knowledge_files],
+        "knowledge_selection": knowledge_selection,
         "stage_policy": stage_policy,
         "legacy_analysis_path": str(analysis_path),
     }
@@ -211,6 +220,7 @@ def prepare_shadow_case(case: dict[str, Any], *, output_root: Path, model: str) 
         diagnostics_text=inputs["diagnostics_text"],
         diagnostics_raw_text=inputs["diagnostics_raw_text"],
         okf_sections=inputs["okf_sections"],
+        knowledge_selection=inputs["knowledge_selection"],
         stage_policy=inputs["stage_policy"],
     )
     budget["mode"] = "attention_delta_shadow"
@@ -227,6 +237,7 @@ def prepare_shadow_case(case: dict[str, Any], *, output_root: Path, model: str) 
         "history_chars": len(inputs["history_text"].strip()),
         "transcript_chars": len(inputs["transcript_text"].strip()),
         "okf_chars": budget["blocks"]["okf_knowledge"]["chars"],
+        "knowledge_packs": inputs["knowledge_selection"]["selected_pack_ids"],
         "instructions_chars": budget["blocks"]["instructions"]["chars"],
         "diagnostics_raw_chars": budget["diagnostics_optimization"]["diagnostics_raw_chars"],
         "context_completeness_chars": budget["diagnostics_optimization"]["context_completeness_chars"],
@@ -375,7 +386,9 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             "transcript": inputs["transcript_path"],
             "context_diagnostics": inputs["diagnostics_paths"],
             "knowledge": inputs["knowledge_paths"],
+            "legacy_knowledge": inputs["legacy_knowledge_paths"],
         },
+        "knowledge_selection": inputs["knowledge_selection"],
     }
     if not allow_api:
         status = "inputs_ready_no_api_call" if prepared["ready_for_api"] else "inputs_not_ready_no_api_call"

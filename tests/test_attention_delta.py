@@ -424,6 +424,12 @@ class AttentionDeltaPromptTests(unittest.TestCase):
 
 
 class AttentionDeltaShadowRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _write_attention_packs(root: Path) -> None:
+        (root / "attention_delta_core.md").write_text("Core pack", encoding="utf-8")
+        (root / "attention_delta_lead.md").write_text("Lead pack", encoding="utf-8")
+        (root / "attention_delta_deal.md").write_text("Deal pack", encoding="utf-8")
+
     def _case(self, root: Path) -> tuple[dict, Path, Path]:
         history = root / "history.md"
         transcript = root / "transcript.md"
@@ -433,6 +439,7 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
         transcript.write_text("transcript", encoding="utf-8")
         diagnostics.write_text("diagnostics", encoding="utf-8")
         knowledge.write_text("OKF", encoding="utf-8")
+        self._write_attention_packs(root)
         analysis = root / "deal_42_analysis.json"
         analysis.write_text(
             json.dumps(
@@ -464,6 +471,7 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
         )
         diagnostics.write_text("diagnostics", encoding="utf-8")
         knowledge.write_text("OKF", encoding="utf-8")
+        self._write_attention_packs(root)
         analysis = root / "lead_99_analysis.json"
         analysis.write_text(
             json.dumps(
@@ -493,6 +501,9 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
             self.assertTrue((output / "deal-01" / "attention_delta_prompt_budget.json").exists())
             self.assertFalse((output / "deal-01" / "attention_delta.json").exists())
             self.assertTrue(result["prompt_metrics"]["uses_real_transcript"])
+            self.assertEqual(result["prompt_metrics"]["knowledge_packs"], ["core", "deal"])
+            metadata = json.loads((output / "deal-01" / "attention_delta_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["knowledge_selection"]["selected_pack_ids"], ["core", "deal"])
 
     def test_shadow_prompt_uses_one_completeness_block_and_excludes_raw_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
