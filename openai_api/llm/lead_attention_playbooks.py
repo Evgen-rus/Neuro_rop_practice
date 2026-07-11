@@ -9,11 +9,12 @@ from setup import MSK_TZ
 
 
 RESTORE_NO_CONTACT_PROCESSING = "restore_no_contact_processing"
+RETRY_BUSY_NUMBER = "retry_busy_number"
 
 LEAD_ACTION_PLAYBOOKS: dict[str, dict[str, str]] = {
     "none": {"title": "No deterministic playbook"},
     RESTORE_NO_CONTACT_PROCESSING: {"title": "Restore processing when no meaningful contact is confirmed"},
-    "retry_busy_number": {"title": "Retry a busy number"},
+    RETRY_BUSY_NUMBER: {"title": "Retry a busy number"},
     "verify_invalid_number": {"title": "Verify an invalid number"},
     "qualification_followup": {"title": "Qualification follow-up"},
     "move_to_deal": {"title": "Move a qualified lead to a deal"},
@@ -35,6 +36,20 @@ def materialize_lead_playbook_action(
 ) -> dict[str, Any]:
     """Expand a selected compact playbook into a deterministic ROP action."""
     playbook = lead_review.get("action_playbook")
+    if playbook == RETRY_BUSY_NUMBER:
+        deadline = _deadline(rop_action.get("deadline"), today=today)
+        evidence_ids = rop_action.get("evidence_ids") if isinstance(rop_action.get("evidence_ids"), list) else []
+        return {
+            "check": "Повторить один звонок примерно через 10 минут после подтверждённого результата «занято»; не запускать общий цикл из трёх попыток до нового результата.",
+            "message_to_manager": (
+                f"До {deadline} повторите звонок примерно через 10 минут и сразу зафиксируйте в CRM дату, результат и следующий сценарий. "
+                "Выбирайте следующий сценарий только по фактическому результату новой попытки."
+            ),
+            "expected_crm_fact": "В CRM зафиксированы дата и результат повторного звонка после «занято», а следующий шаг выбран по фактическому результату этой попытки.",
+            "deadline": deadline,
+            "success_condition": "Есть CRM-след повторного звонка и датированный следующий шаг; общий no-contact цикл не запускается без нового фактического результата.",
+            "evidence_ids": evidence_ids,
+        }
     if playbook != RESTORE_NO_CONTACT_PROCESSING:
         return rop_action
 
@@ -66,6 +81,11 @@ def materialize_lead_playbook_action(
 
 
 def playbook_preview_lines(playbook: Any) -> list[str]:
+    if playbook == RETRY_BUSY_NUMBER:
+        return [
+            "Повторить один звонок примерно через 10 минут после подтверждённого результата «занято».",
+            "В CRM: дата и результат повторной попытки, затем следующий шаг только по её фактическому результату.",
+        ]
     if playbook != RESTORE_NO_CONTACT_PROCESSING:
         return []
     return [

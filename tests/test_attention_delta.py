@@ -451,6 +451,36 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
         )
         return {"case_id": "deal-01", "entity_type": "deal", "baseline": {"analysis_json": str(analysis)}}, analysis, root / "shadow"
 
+    def _lead_case(self, root: Path) -> tuple[dict, Path]:
+        history = root / "lead_history.md"
+        transcript = root / "lead_transcript.md"
+        diagnostics = root / "diagnostics.md"
+        knowledge = root / "index.md"
+        history.write_text("history call-busy", encoding="utf-8")
+        transcript.write_text(
+            "### Звонок: activity_id=call-busy\n\n- Дата звонка: 2031-02-03T10:00:00+03:00\n\n```text\n"
+            "Линия занята, абоненту неудобно сейчас говорить. Я голосовой ассистент.\n```",
+            encoding="utf-8",
+        )
+        diagnostics.write_text("diagnostics", encoding="utf-8")
+        knowledge.write_text("OKF", encoding="utf-8")
+        analysis = root / "lead_99_analysis.json"
+        analysis.write_text(
+            json.dumps(
+                {
+                    "lead_id": "99",
+                    "input_files": {
+                        "history": str(history),
+                        "transcript": str(transcript),
+                        "context_diagnostics": [str(diagnostics)],
+                        "knowledge": [str(knowledge)],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {"case_id": "lead-busy", "entity_type": "lead", "baseline": {"analysis_json": str(analysis)}}, root / "shadow"
+
     def test_without_allow_api_does_not_call_openai_or_overwrite_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             case, analysis, output = self._case(Path(directory))
@@ -490,6 +520,28 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
         self.assertEqual(inputs["diagnostics_text"], "")
         self.assertEqual(inputs["diagnostics_raw_text"], "")
         self.assertNotIn("## CONTEXT_COMPLETENESS", prompt)
+
+    def test_lead_busy_normalization_is_saved_in_metadata_before_materialization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            case, output = self._lead_case(Path(directory))
+            raw = no_contact_bad_processing_delta()
+            metadata = {
+                "model": "test-model",
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+                "estimated_cost": {"estimated_cost_rub": 1},
+                "raw_output_text": json.dumps(raw, ensure_ascii=False),
+                "response_status": "completed",
+                "incomplete_reason": None,
+            }
+            with patch("benchmarks.run_attention_delta_shadow.call_structured_output_json", return_value=(raw, metadata)):
+                result = run_shadow_case(case, output_root=output, allow_api=True, model="test-model")
+            saved = json.loads((output / "lead-busy" / "attention_delta.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "completed")
+        audit = saved["model_metadata"]["lead_playbook_normalization"]
+        self.assertEqual(audit["raw_action_playbook"], "restore_no_contact_processing")
+        self.assertEqual(audit["normalized_action_playbook"], "retry_busy_number")
+        self.assertEqual(audit["normalization_evidence_ids"], ["call-busy"])
+        self.assertEqual(saved["attention_delta"]["lead_review"]["action_playbook"], "retry_busy_number")
 
     def test_usage_is_saved_when_response_fails_local_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

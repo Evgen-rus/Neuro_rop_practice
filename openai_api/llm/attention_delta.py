@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from openai_api.llm.deal_attention_playbooks import DEAL_ACTION_PLAYBOOKS, materialize_deal_playbook_action
-from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, materialize_lead_playbook_action
+from openai_api.llm.lead_attention_playbooks import LEAD_ACTION_PLAYBOOKS, RESTORE_NO_CONTACT_PROCESSING, RETRY_BUSY_NUMBER, materialize_lead_playbook_action
 from openai_api.llm.prompt_budget import render_okf_sections
 
 
@@ -428,6 +428,16 @@ def _validate_attention_delta(value: dict[str, Any], entity_type: str) -> None:
                     for marker in ("3 попыт", "2 часов", "11:00", "10 минут", "мессендж", "задач"):
                         if marker not in action_text:
                             errors.append(f"restore_no_contact_processing action misses required rule: {marker}")
+                if playbook == RETRY_BUSY_NUMBER and action is not None:
+                    action_text = " ".join(
+                        str(action.get(field) or "")
+                        for field in ("check", "message_to_manager", "expected_crm_fact", "success_condition")
+                    ).lower()
+                    for marker in ("10 минут", "crm", "результат"):
+                        if marker not in action_text:
+                            errors.append(f"retry_busy_number action misses required rule: {marker}")
+                    if "3 попыт" in action_text:
+                        errors.append("retry_busy_number must not start the generic three-attempt cycle")
                 if meaningful_contact is False and verdict in {"bad_processing", "data_gap"}:
                     claim_text = " ".join(
                         str(root.get("reason") or "")

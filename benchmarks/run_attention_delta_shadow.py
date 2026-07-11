@@ -38,6 +38,7 @@ from openai_api.llm.attention_delta import (
 )
 from openai_api.llm.attention_delta_report import render_attention_delta_preview
 from openai_api.llm.context_completeness import build_context_completeness_block
+from openai_api.llm.lead_playbook_resolver import normalize_lead_action_playbook
 from openai_api.llm.llm_client import (
     ModelJsonParseError,
     ModelResponseIncompleteError,
@@ -429,6 +430,12 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             delta.get("deal_review", {}).get("action_playbook") if isinstance(delta.get("deal_review"), dict) else None
         )
     if inputs["entity_type"] == "lead":
+        delta, normalization = normalize_lead_action_playbook(
+            delta,
+            history_text=inputs["history_text"],
+            transcript_text=inputs["transcript_text"],
+        )
+        response_metadata["lead_playbook_normalization"] = normalization
         delta = materialize_lead_attention_delta(delta)
         response_metadata["deterministic_playbook_applied"] = (
             delta.get("lead_review", {}).get("action_playbook") if isinstance(delta.get("lead_review"), dict) else None
