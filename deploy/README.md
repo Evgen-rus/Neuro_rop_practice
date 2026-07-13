@@ -11,9 +11,11 @@
 ```text
 /opt/Neuro_rop_practice/runtime/.env
 /opt/Neuro_rop_practice/runtime/reports/
+/opt/Neuro_rop_practice/runtime/knowledge/
 ```
 
-Они не входят в Git и не попадают в Docker-образы. Скрипт создаёт временный пароль
+Они не входят в Git и не попадают в Docker-образы. База правил `knowledge/` монтируется
+в API только на чтение. Скрипт создаёт временный пароль
 в `/opt/Neuro_rop_practice/runtime/access.txt` с правами только для root. Его можно
 сменить, удалив этот файл и повторно запустив скрипт.
 

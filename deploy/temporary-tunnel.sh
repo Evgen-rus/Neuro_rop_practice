@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/opt/Neuro_rop_practice}"
 RUNTIME_DIR="${PROJECT_ROOT}/runtime"
 REPORTS_DIR="${RUNTIME_DIR}/reports"
+KNOWLEDGE_DIR="${RUNTIME_DIR}/knowledge"
 AUTH_DIR="${RUNTIME_DIR}/nginx"
 AUTH_FILE="${AUTH_DIR}/.htpasswd"
 ACCESS_FILE="${RUNTIME_DIR}/access.txt"
@@ -30,6 +31,7 @@ require_directory() {
 
 require_file "${RUNTIME_DIR}/.env"
 require_directory "${REPORTS_DIR}"
+require_directory "${KNOWLEDGE_DIR}"
 
 mkdir -p "${AUTH_DIR}"
 chmod 700 "${RUNTIME_DIR}" "${AUTH_DIR}"
@@ -61,6 +63,7 @@ docker run --detach \
     --restart unless-stopped \
     --env-file "${RUNTIME_DIR}/.env" \
     --volume "${REPORTS_DIR}:/app/reports" \
+    --volume "${KNOWLEDGE_DIR}:/app/knowledge:ro" \
     --security-opt no-new-privileges \
     "${API_IMAGE}" >/dev/null
 

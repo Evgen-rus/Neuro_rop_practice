@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .env
 reports/
+knowledge/
 benchmarks/local/
 benchmarks/results/
 frontend/node_modules/
