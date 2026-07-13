@@ -46,7 +46,8 @@ fi
 password="$(<"${ACCESS_FILE}")"
 printf '%s\n' "${password}" | docker run --rm -i httpd:2.4-alpine htpasswd -i -nB rop > "${AUTH_FILE}"
 unset password
-chmod 600 "${AUTH_FILE}" "${ACCESS_FILE}"
+chmod 644 "${AUTH_FILE}"
+chmod 600 "${ACCESS_FILE}"
 
 docker network inspect "${NETWORK}" >/dev/null 2>&1 || docker network create "${NETWORK}" >/dev/null
 
