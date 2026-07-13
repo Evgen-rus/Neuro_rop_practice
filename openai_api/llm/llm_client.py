@@ -14,6 +14,7 @@ from openai_api.config import (
     ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
+    ANALYSIS_REASONING_EFFORT,
     OPENAI_API_KEY,
     USD_RUB_RATE,
     logger,
@@ -108,13 +109,18 @@ def call_analysis_json(prompt: str, *, model: str = ANALYSIS_MODEL) -> tuple[dic
         title="deal analysis prompt",
         model=model,
         text=prompt,
-        metadata={"api": "responses.create", "response_format": "json_object"},
+        metadata={
+            "api": "responses.create",
+            "response_format": "json_object",
+            "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+        },
     )
 
     response = client.responses.create(
         model=model,
         input=prompt,
         max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
+        reasoning={"effort": ANALYSIS_REASONING_EFFORT},
         text={"format": {"type": "json_object"}},
         store=False,
     )
@@ -135,6 +141,7 @@ def call_analysis_json(prompt: str, *, model: str = ANALYSIS_MODEL) -> tuple[dic
 
     metadata = {
         "model": model,
+        "reasoning_effort": ANALYSIS_REASONING_EFFORT,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
@@ -170,12 +177,18 @@ def call_structured_output_json(
         title="attention delta shadow prompt",
         model=model,
         text=prompt,
-        metadata={"api": "responses.create", "response_format": "json_schema", "schema_name": schema_name},
+        metadata={
+            "api": "responses.create",
+            "response_format": "json_schema",
+            "schema_name": schema_name,
+            "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+        },
     )
     response = client.responses.create(
         model=model,
         input=prompt,
         max_output_tokens=max_output_tokens,
+        reasoning={"effort": ANALYSIS_REASONING_EFFORT},
         text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
         store=False,
     )
@@ -184,6 +197,7 @@ def call_structured_output_json(
     estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
     metadata = {
         "model": model,
+        "reasoning_effort": ANALYSIS_REASONING_EFFORT,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),

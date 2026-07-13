@@ -25,6 +25,7 @@ BITRIX_PORTAL_URL = os.getenv("BITRIX_PORTAL_URL", "").strip().rstrip("/")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
 ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
+ANALYSIS_REASONING_EFFORT = os.getenv("ANALYSIS_REASONING_EFFORT", "low").strip() or "low"
 ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500") or "3500")
 # Compact attention_delta is an isolated shadow artifact. The cap includes
 # both visible JSON and reasoning tokens, so it leaves quality headroom while
