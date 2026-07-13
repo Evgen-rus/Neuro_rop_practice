@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__/
+*.py[cod]
+.env
+reports/
+benchmarks/local/
+benchmarks/results/
+frontend/node_modules/
+Docs/
+.agents/
+.codex/
