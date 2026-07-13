@@ -11,7 +11,7 @@
 - Обновляй `ARCHITECTURE.md` только когда пользователь прямо просит обновить архитектуру или явно просит зафиксировать новое архитектурное состояние. Не обновляй его автоматически после каждой правки кода.
 - При обновлении сохраняй средний размер и убирай явное дублирование: здесь должны быть стабильные правила, карта потоков и ссылки на подробные документы.
 
-Last updated: 2026-07-10
+Last updated: 2026-07-13
 
 ## 1) System At A Glance
 
@@ -23,7 +23,7 @@ Last updated: 2026-07-10
 - Транскрибация: OpenAI audio transcription, локальная подготовка аудио через `ffmpeg`/`ffprobe`.
 - База правил клиента: обработанные Markdown-файлы в `knowledge/clients/praktikm/`.
 - Поддерживаемые контуры: `deals` и `leads`.
-- Текущий продуктовый статус: локальный MVP с CLI + UI/API-адаптером, SQLite для change detection и feedback РОПа; без Telegram-отправки и без записи в Bitrix.
+- Текущий продуктовый статус: локальный MVP с CLI + UI/API-адаптером, SQLite для change detection, feedback РОПа и ручных compact shadow runs; без Telegram-отправки и без записи в Bitrix.
 
 Главная логика:
 
@@ -42,6 +42,14 @@ run_rop_assistant.py -> lead/deal pipeline -> context diagnostics -> missing aud
 ```text
 React UI -> FastAPI api/ -> candidates scoring | analyze job -> run_rop_assistant.py / analysis JSON -> UI report + SQLite feedback
 ```
+
+Отдельный ручной compact-контур не участвует в штатном pipeline:
+
+```text
+сохранённый полный analysis JSON -> recorded input files -> attention_delta shadow -> evidence coverage -> SQLite run/feedback -> UI review
+```
+
+Он не перечитывает CRM, не запускает legacy pipeline и не заменяет полный analysis JSON или ROP markdown report.
 
 Расширенный контур истории клиента:
 
@@ -63,6 +71,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Верхний CLI ROP assistant: `run_rop_assistant.py`
 - FastAPI entrypoint: `api/app.py`
 - Analyze jobs / CLI adapter: `api/jobs.py`
+- Compact shadow job и evidence lookup: `api/compact_shadow.py`
 - Candidates scoring (без LLM): `api/candidates.py`
 - React UI: `frontend/src/App.tsx`, API-клиент `frontend/src/api.ts`
 - Визуальный референс демо: `praktikm_rop_assistant_demo.html`
@@ -92,12 +101,20 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Lead LLM-анализ: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
 - Валидация LLM JSON перед отчётом: `openai_api/llm/validation.py`
+- Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
+- Compact OKF packs: `openai_api/llm/attention_delta_knowledge.py`, `knowledge/clients/praktikm/attention_delta_*.md`
+- Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
+- Проверка evidence compact-ответа относительно переданного контекста: `openai_api/llm/evidence_coverage.py`
+- Детерминированные playbooks compact-анализа: `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`
 - SQLite-хранилище состояния ROP assistant + UI feedback и текущего статуса проверки кандидата: `storage/rop_db.py`
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
 - Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal CRM stage policy / closed-lost classification: `openai_api/change_detection/stage_policy.py`
 - Deal orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_deal_if_changed.py`
 - Lead orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_lead_if_changed.py`
+- Локальный benchmark/shadow runner: `benchmarks/run_attention_delta_shadow.py`
+- Сравнение и replay локальных shadow-результатов: `benchmarks/compare_attention_delta.py`, `benchmarks/replay_attention_delta_postprocessing.py`
+- Правила локальных benchmark-артефактов: `benchmarks/README.md`
 - Инструкция ручного запуска change detection: `Docs/change_detection_runbook.md`
 - Инструкция запуска полной истории клиента: `Docs/customer_history_runbook.md`
 - Практические заметки по проверке customer history: `Docs/customer_history_experiment.md`
@@ -164,6 +181,11 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 56. Решение РОПа «Закрытие обосновано» исключает только конкретный lead/deal из основной очереди кандидатов, а не целую воронку или этап. Проверенные сущности доступны в режиме `reviewed`, а `Вернуть в контроль` снимает исключение.
 57. Проверенная сущность возвращается в основную очередь при изменении стадии, воронки, суммы или наступлении даты контроля. Одно изменение `DATE_MODIFY` не является причиной автоповтора: оно отмечается только в аудите как обновление CRM после решения РОПа.
 58. В deal prompt сравнение технических показателей требует нормализации единиц. Например, `150 банок/мин` и `9 000 банок/час` должны рассматриваться как совпадение при одинаковом типе продукта; если единица не указана, модель обязана запросить уточнение, а не объявлять несоответствие.
+59. `attention_delta` — изолированный shadow-контур. Он не может перезаписывать legacy `*_analysis.json`, prompt, ROP markdown report, change-detection state или UI report; полный анализ остаётся baseline и fallback.
+60. Compact run разрешён только после preflight по входным путям, записанным в завершённом полном `*_analysis.json`. Он не должен неявно запускать Bitrix-fetch, legacy pipeline или повторный полный анализ.
+61. Перед сохранением успешного compact-результата обязательны: structured-output contract, entity-specific deterministic playbook/materialization и `validate_evidence_context_coverage`. При непокрытом evidence или ошибке класс fallback — `full_fallback_recommended`; автоматически повторять платный вызов нельзя.
+62. Compact diagnostics ограничивают использование evidence, но не являются фактами о клиенте: отсутствие источника нельзя интерпретировать как отсутствие события или намерения клиента.
+63. Compact knowledge packs выбираются только по типу сущности (`core + lead` или `core + deal`) и должны оставаться воспроизводимыми. Полная OKF-база legacy-анализа не подменяется этими пакетами.
 
 ## 4) Key Domain Objects
 
@@ -202,6 +224,10 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - `UI report` — запись в `ui_reports`: ссылка на analysis/report paths + snapshot `report_json` для истории UI.
 - `ROP decision` — локальное решение РОПа по отчёту (`rop_decisions`), без записи в Bitrix.
 - `Outcome` — локальный исход после рекомендации (`outcomes`), включая отрицательные исходы.
+- `Attention delta` — компактный структурированный shadow-вывод для одного существующего full analysis: необходимость внимания, причина, ROP action с typed evidence IDs, memory patch и entity-specific review. Не является штатным ROP report.
+- `Compact shadow run` — сохранённый в `compact_shadow_runs` результат ручного compact-вызова: snapshot hash входного контекста, статус, модель, usage/cost, evidence coverage и fallback class.
+- `Compact shadow feedback` — один локальный отзыв РОПа на compact run в `compact_shadow_feedback`: исход, причина, комментарий, исходный и финальный playbook. Не обучает модель и не изменяет CRM.
+- `Evidence coverage` — детерминированная проверка, что typed evidence IDs compact-ответа присутствуют в переданных history/transcript/stage-policy данных.
 
 ## 5) Runtime Flows
 
@@ -337,6 +363,22 @@ saved filter / UI multi-select + review view -> crm_pipeline_map stages
 
 По умолчанию: `entity_type=lead`, `created_days=15`, `modified_days=15`, `limit=20`, `review_view=active`, воронка/этапы пустые (`ready=false` до выбора). High-сигналы сделок включают `wrong_qualification` (`C15:4`), `no_response`, зависание открытых сделок; medium — `price_lost`, `lost_to_competitor`, `postponed` и др. Это triage до LLM, не замена analysis JSON. Текущая v1 не делает дорогой semantic diff активности на каждом поиске: CRM-обновление после решения видно в reviewed-аудите, но само по себе не возвращает сущность в active.
 
+### H) Compact Attention-Delta Shadow
+
+Это отдельная ручная проверка компактного JSON-контракта, а не второй штатный pipeline. Benchmark runner и UI получают входы только из `input_files`, записанных полным анализом; до платного запроса выполняется локальный preflight. Для benchmark API-вызов требует `--allow-api`, а legacy paid-run — отдельное явное подтверждение.
+
+```text
+full analysis envelope
+-> load recorded history/transcript/diagnostics/stage policy
+-> compact prompt (static core + entity pack)
+-> Structured Outputs
+-> deterministic playbook normalization/materialization
+-> contract + evidence coverage
+-> compact_safe | full_fallback_recommended
+```
+
+В UI доступны read-only review, запуск одного compact job для сущности, polling статуса, раскрытие исходного evidence и один feedback на run. Run хранится в SQLite, привязан к hash фактически поданных inputs; `is_current=false` означает, что исходный контекст с тех пор изменился. Compact job не делает Bitrix-вызовов, но может вызвать OpenAI после успешного preflight. Ошибка или coverage failure сохраняются, автоматически не перезапускаются и не меняют legacy report.
+
 ## 6) Where To Change Code By Task Type
 
 - Новый Bitrix-метод или изменение REST-обработки: `bitrix/client.py` и конкретный `1_fetch_*_context.py`.
@@ -357,6 +399,7 @@ saved filter / UI multi-select + review view -> crm_pipeline_map stages
 - Изменение транскрибации, chunking, `ffmpeg`: `openai_api/audio/transcribe_core.py`.
 - Изменение CLI выбора аудио и сохранения transcript bundle: `openai_api/audio/local_file_transcribe.py`.
 - Изменение модели/лимитов/стоимости анализа: `.env`, `.env.example`, `openai_api/config.py`.
+- Изменение Responses API reasoning/structured output или поддержки модели: `openai_api/llm/llm_client.py`, `openai_api/pricing.py`, `openai_api/config.py`.
 - Изменение публичных ссылок на лиды/сделки Bitrix: `BITRIX_PORTAL_URL` и `openai_api/bitrix_links.py`.
 - Изменение тарифов моделей и формулы стоимости: `openai_api/pricing.py`.
 - Изменение вызова OpenAI Responses API и JSON-парсинга: `openai_api/llm/llm_client.py`.
@@ -374,6 +417,12 @@ saved filter / UI multi-select + review view -> crm_pipeline_map stages
 - Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа и режима очереди: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
 - Изменение распознавания ID и ссылок Bitrix в ручном запуске: `parseManualInput()` в `frontend/src/App.tsx`.
 - Изменение UI feedback / saved candidate filter tables: `storage/rop_db.py` (`ui_reports`, `rop_decisions`, `outcomes`, `ui_candidate_filters`).
+- Изменение compact JSON-контракта, prompt или детерминированных playbooks: `openai_api/llm/attention_delta.py`, `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`.
+- Изменение compact knowledge packs или их воспроизводимого выбора: `knowledge/clients/praktikm/attention_delta_*.md`, `openai_api/llm/attention_delta_knowledge.py`.
+- Изменение диагностики/валидации compact evidence: `openai_api/llm/context_completeness.py`, `openai_api/llm/evidence_coverage.py`.
+- Изменение benchmark/shadow preflight, telemetry или ручного сравнения: `benchmarks/run_attention_delta_shadow.py`, `benchmarks/compare_attention_delta.py`, `benchmarks/replay_attention_delta_postprocessing.py`.
+- Изменение API/UI compact review или фонового compact job: `api/compact_shadow.py`, `api/app.py`, `frontend/src/App.tsx`, `frontend/src/api.ts`.
+- Изменение хранения compact run/feedback: `storage/rop_db.py` (`compact_shadow_runs`, `compact_shadow_feedback`).
 - Обновление краткого запуска: `README.md`.
 - Обновление ручной инструкции проверки: `Docs/ручная проверка проекта.md`.
 - Обновление инструкции по полной истории клиента: `Docs/customer_history_runbook.md`.
@@ -390,7 +439,9 @@ OpenAI:
 - `OPENAI_API_KEY`
 - `TRANSCRIPTION_MODEL`
 - `ANALYSIS_MODEL`
+- `ANALYSIS_REASONING_EFFORT`
 - `ANALYSIS_MAX_OUTPUT_TOKENS`
+- `ATTENTION_DELTA_MAX_OUTPUT_TOKENS`
 - `USD_RUB_RATE`
 
 ROP assistant state:
@@ -404,7 +455,9 @@ ROP assistant state:
 
 Важно:
 
-- для `gpt-5.5` и длинных отчётов может понадобиться увеличить `ANALYSIS_MAX_OUTPUT_TOKENS`;
+- для настроенной модели и длинных отчётов может понадобиться увеличить `ANALYSIS_MAX_OUTPUT_TOKENS`;
+- fallback legacy-модели задаёт `openai_api/config.py` (сейчас `gpt-5.4-mini`), но реальная модель определяется `ANALYSIS_MODEL` из `.env`; в `pricing.py` также описаны тарифы `gpt-5.6-terra` и `gpt-5.6-luna`;
+- `ATTENTION_DELTA_MAX_OUTPUT_TOKENS` относится только к compact shadow и включает reasoning + видимый JSON; не использовать его как лимит legacy report;
 - цены моделей зашиты в `openai_api/pricing.py`, а курс рубля берётся из `USD_RUB_RATE`;
 - UI/API используют тот же `.env` и существующий `venv`.
 
@@ -437,6 +490,9 @@ ROP assistant state:
 17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
 18. `candidate_review_state` применяется только к конкретной сущности. Нельзя скрывать всех кандидатов этапа после одного подтверждённого закрытия; перенос решения на похожие сущности требует отдельного накопленного feedback-паттерна.
 19. Текущий candidates scorer видит изменение стадии/воронки/суммы напрямую. Новый звонок, письмо, комментарий или внутренний чат после решения РОПа требуют semantic diff полного контекста; пока они не должны автоматически возвращать сущность только по `DATE_MODIFY`.
+20. Compact review не является доказательством готовности заменить legacy analysis: он доступен лишь при сохранённых full-analysis inputs, а `full_fallback_recommended`, error или устаревший snapshot требуют вернуться к полному контуру.
+21. Запуск compact run из UI платный и ручной; API preflight не гарантирует достаточность фактов, а только проверяет наличие зафиксированных входов. Не добавлять автоматические retry или batch-вызовы без отдельного продуктового решения.
+22. `benchmarks/local/` и `benchmarks/results/` намеренно игнорируются Git. В них допустимы только локальные чувствительные артефакты; в tracked manifest нельзя добавлять реальные CRM-выгрузки, транскрипты, телефоны, имена или отчёты.
 
 ## 10) Current Gaps
 
@@ -444,6 +500,8 @@ ROP assistant state:
 - Нет auth/multi-user кабинета: UI локальный, только localhost.
 - Candidates scoring v1 грубый: нет полноценного учёта задач/следующего шага/счетов/оплат как отдельных CRM-сигналов в scorer.
 - SQLite feedback loop есть (`ui_reports` / `rop_decisions` / `outcomes` / `candidate_review_state` / `ui_candidate_filters`), но нет аналитики качества рекомендаций, semantic diff активностей для reviewed-сущностей и портфельной `deal_memory` / `lead_memory`.
+- Compact attention-delta работает только как isolated shadow/review: он не включён в штатный CLI/change-detection flow и не может заменить legacy report без отдельной валидации и продуктового решения.
+- Нет автоматического отбора безопасных compact cases, batch-режима и автоматического принятия compact-результата; coverage failure ведёт только к `full_fallback_recommended`.
 - Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.
 - Автоматическое скачивание аудио и contact timeline зависят от прав Bitrix webhook/user; часть сценариев остается ручной.
 - Комментарии к задачам не выгружаются отдельным API-методом.
