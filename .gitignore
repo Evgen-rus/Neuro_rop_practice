@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Server-only runtime state: secrets, reports, SQLite and access credentials
+runtime/
+
 # Python
 __pycache__/
 *.py[cod]
