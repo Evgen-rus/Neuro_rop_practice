@@ -127,6 +127,7 @@ export type JobState = {
   current_stage?: string | null
   results: JobResult[]
   report_ids: number[]
+  logs: string[]
   error?: string | null
 }
 

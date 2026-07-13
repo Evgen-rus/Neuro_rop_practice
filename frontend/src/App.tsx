@@ -1122,6 +1122,12 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+                {!!job.logs?.length && (
+                  <details className="job-log">
+                    <summary>Лог выполнения ({job.logs.length})</summary>
+                    <pre>{job.logs.join('\n')}</pre>
+                  </details>
+                )}
                 {!!job.results?.length && (
                   <>
                     <h3 style={{ marginTop: 16 }}>Результаты</h3>

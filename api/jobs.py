@@ -22,6 +22,8 @@ from storage.rop_db import DEFAULT_DB_PATH, save_ui_report
 
 PROJECT_ROOT = BASE_DIR
 PYTHON = sys.executable
+MAX_JOB_LOG_LINES = 120
+MAX_JOB_LOG_LINE_CHARS = 1200
 
 
 @dataclass
@@ -50,6 +52,7 @@ class JobState:
     current_stage: str | None = None
     results: list[dict[str, Any]] = field(default_factory=list)
     report_ids: list[int] = field(default_factory=list)
+    logs: list[str] = field(default_factory=list)
     error: str | None = None
 
 
@@ -316,6 +319,9 @@ def _run_job(job_id: str) -> None:
     def log_line(text: str) -> None:
         with _LOCK:
             current = _JOBS[job_id]
+            current.logs.append(text[-MAX_JOB_LOG_LINE_CHARS:])
+            if len(current.logs) > MAX_JOB_LOG_LINES:
+                del current.logs[:-MAX_JOB_LOG_LINES]
             # Keep last detail on current stage.
             if current.stages:
                 current.stages[-1]["detail"] = text[-300:]

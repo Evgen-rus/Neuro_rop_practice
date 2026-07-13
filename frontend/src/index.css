@@ -703,6 +703,21 @@ ul.facts.bad li:before {
   background: #fef2f2;
 }
 
+.job-log {
+  margin-top: 12px;
+}
+
+.job-log summary {
+  cursor: pointer;
+}
+
+.job-log pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .filters {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
