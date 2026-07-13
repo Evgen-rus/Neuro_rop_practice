@@ -27,3 +27,6 @@ docker network rm neuro-rop-practice-net
 ```
 
 `/opt`-проекты, cron-задачи, системные сервисы и firewall скрипт не изменяет.
+
+Подробное обновление, проверка и безопасная остановка стенда описаны в
+[`Docs/temporary_tunnel_runbook.md`](../Docs/temporary_tunnel_runbook.md).

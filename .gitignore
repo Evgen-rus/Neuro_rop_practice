@@ -82,6 +82,7 @@ tmp/
 !Docs/
 Docs/*
 !Docs/context_memory_optimization_plan.md
+!Docs/temporary_tunnel_runbook.md
 
 # Benchmark fixtures and results are local-only because they may reference
 # customer workspaces and generated ROP artifacts.
