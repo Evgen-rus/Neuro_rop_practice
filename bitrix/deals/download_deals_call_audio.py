@@ -362,6 +362,65 @@ def existing_downloads_by_activity(manifest: dict[str, Any]) -> dict[str, list[d
     return rows
 
 
+def existing_transcriptions_by_activity(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return successfully saved transcript bundles for purged source audio."""
+    rows: dict[str, dict[str, Any]] = {}
+    for call in manifest.get("calls") or []:
+        if not isinstance(call, dict):
+            continue
+        activity_id = str(call.get("activity_id") or "")
+        transcription = call.get("transcription")
+        if not activity_id or not isinstance(transcription, dict):
+            continue
+        if transcription.get("status") != "transcribed_and_purged":
+            continue
+        transcript_path = transcription.get("transcript_json_path")
+        if transcript_path and Path(str(transcript_path)).exists():
+            rows[activity_id] = dict(transcription)
+    return rows
+
+
+def record_transcribed_and_purged(
+    manifest_path: Path,
+    audio_path: Path,
+    activity_id: str,
+    transcript_paths: dict[str, str],
+) -> bool:
+    """Persist that a manifest-managed audio file was deleted after transcription.
+
+    The caller must delete ``audio_path`` first.  A transcript JSON bundle is
+    required later to keep missing-only download from fetching the recording again.
+    """
+    manifest = load_existing_manifest(manifest_path)
+    normalized_audio_path = audio_path.resolve()
+    for call in manifest.get("calls") or []:
+        if not isinstance(call, dict) or str(call.get("activity_id") or "") != str(activity_id):
+            continue
+        for download in call.get("downloads") or []:
+            if not isinstance(download, dict) or not download.get("local_path"):
+                continue
+            try:
+                is_source = Path(str(download["local_path"])).resolve() == normalized_audio_path
+            except OSError:
+                is_source = False
+            if not is_source:
+                continue
+            download["status"] = "transcribed_and_purged"
+            download["audio_purged"] = True
+            call["status"] = "transcribed_and_purged"
+            call["transcription"] = {
+                "status": "transcribed_and_purged",
+                "transcribed_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
+                "source_audio_path": str(audio_path),
+                "transcript_txt_path": transcript_paths["txt_path"],
+                "transcript_md_path": transcript_paths["md_path"],
+                "transcript_json_path": transcript_paths["json_path"],
+            }
+            save_json(manifest_path, manifest)
+            return True
+    return False
+
+
 def mark_existing_downloads(downloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for item in downloads:
@@ -378,6 +437,7 @@ def process_call(
     timeline: list[dict[str, Any]],
     *,
     existing_downloads: list[dict[str, Any]] | None = None,
+    existing_transcription: dict[str, Any] | None = None,
     missing_only: bool = True,
 ) -> dict[str, Any]:
     activity_id = str(activity.get("ID") or "")
@@ -401,6 +461,11 @@ def process_call(
         "downloads": [],
         "voximplant_attempts": [],
     }
+
+    if missing_only and existing_transcription:
+        row["transcription"] = existing_transcription
+        row["status"] = "transcribed_and_purged"
+        return row
 
     if missing_only and existing_downloads:
         row["downloads"] = mark_existing_downloads(existing_downloads)
@@ -482,6 +547,7 @@ def build_manifest(
     calls = call_activities(bundle)
     timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
+    existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
     return {
         "deal_id": str(deal_id),
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
@@ -495,6 +561,7 @@ def build_manifest(
                 activity,
                 timeline,
                 existing_downloads=existing_by_activity.get(str(activity.get("ID") or "")),
+                existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,
             )
             for activity in calls

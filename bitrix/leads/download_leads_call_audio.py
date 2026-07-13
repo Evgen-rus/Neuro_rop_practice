@@ -27,6 +27,7 @@ from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, sav
 from bitrix.deals.download_deals_call_audio import (
     call_activities_from_bundle,
     existing_downloads_by_activity,
+    existing_transcriptions_by_activity,
     load_existing_manifest,
     process_call,
     summarize_manifest,
@@ -134,6 +135,7 @@ def build_manifest(
     calls = call_activities(bundle, lead_id)
     timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
+    existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
     return {
         "lead_id": str(lead_id),
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
@@ -147,6 +149,7 @@ def build_manifest(
                 activity,
                 timeline,
                 existing_downloads=existing_by_activity.get(str(activity.get("ID") or "")),
+                existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,
             )
             for activity in calls

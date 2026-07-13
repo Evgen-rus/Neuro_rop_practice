@@ -19,6 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from openai_api.config import TRANSCRIPTION_MODEL, logger
 from bitrix.workspace import (
+    DEFAULT_AUDIO_MANIFEST_DIR,
+    DEFAULT_LEAD_AUDIO_MANIFEST_DIR,
     DEFAULT_DEAL_WORKSPACE_ROOT,
     DEFAULT_LEAD_WORKSPACE_ROOT,
     copy_audio_to_workspace,
@@ -27,6 +29,7 @@ from bitrix.workspace import (
     normalize_dt_for_filename,
     safe_slug,
 )
+from bitrix.deals.download_deals_call_audio import load_existing_manifest, record_transcribed_and_purged
 from openai_api.audio.transcribe_core import (
     estimate_transcription_cost_details,
     get_audio_duration_seconds,
@@ -74,6 +77,39 @@ def choose_audio_file() -> str | None:
 
     root.destroy()
     return filepath or None
+
+
+def purge_manifest_audio_after_transcription(
+    *,
+    entity_type: str,
+    entity_id: str | None,
+    activity_id: str | None,
+    audio_path: Path,
+    transcript_paths: dict[str, str],
+) -> bool:
+    """Delete only audio that belongs to the managed Bitrix download manifest."""
+    if not entity_id or not activity_id:
+        return False
+    manifest_dir = DEFAULT_AUDIO_MANIFEST_DIR if entity_type == "deal" else DEFAULT_LEAD_AUDIO_MANIFEST_DIR
+    manifest_path = manifest_dir / f"{entity_type}_{entity_id}_call_audio_manifest.json"
+    if not manifest_path.exists():
+        return False
+
+    # Do not delete a manually selected file: it must be the exact path recorded
+    # in the Bitrix download manifest for this entity and activity.
+    manifest = load_existing_manifest(manifest_path)
+    is_manifest_audio = any(
+        audio_path.resolve() == Path(str(download["local_path"])).resolve()
+        for call in manifest.get("calls") or []
+        if isinstance(call, dict) and str(call.get("activity_id") or "") == str(activity_id)
+        for download in call.get("downloads") or []
+        if isinstance(download, dict) and download.get("local_path")
+    )
+    if not is_manifest_audio:
+        return False
+
+    audio_path.unlink()
+    return record_transcribed_and_purged(manifest_path, audio_path, str(activity_id), transcript_paths)
 
 
 def main() -> None:
@@ -190,6 +226,14 @@ def main() -> None:
         )
         print("Транскрибация сохранена:")
         print(saved["md_path"])
+        if purge_manifest_audio_after_transcription(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            activity_id=args.activity_id,
+            audio_path=transcribed_audio_path,
+            transcript_paths=saved,
+        ):
+            print("Исходное аудио удалено после успешного сохранения транскрипта.")
     else:
         txt_path = save_transcription(text, str(transcribed_audio_path))
         print(f"Транскрипция сохранена в файл:\n{txt_path}")
