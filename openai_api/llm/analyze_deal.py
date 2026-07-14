@@ -201,6 +201,14 @@ def build_prompt(
 Если CRM_STAGE_POLICY.is_closed_lost=false, closed_deal_review.applicable=false.
 </crm_stage_rules>
 
+<qualification_rules>
+Сначала заполни qualification_assessment: BANT, техническую применимость и коммерческую реализуемость нового оборудования. Затем выбери deal_mode, priority_recommendation, payment_blocker и closed_deal_review по фактическому состоянию сделки.
+- BANT: budget — реальный бюджет и готовность к договору с предоплатой; authority — ЛПР или влияние на решение; need — конкретная актуальная потребность; timeframe — названный срок. Предоплата до 30 дней для этикетировщика и до 60 дней для блока/линии поддерживает confirmed timeframe, но не заменяет остальные признаки.
+- technical_mismatch допустим только при подтверждённом техническом стоп-факторе из истории/транскрипта. Недостающие параметры означают needs_technical_data, а не отказ.
+- budget_below_new_equipment_minimum допустим только для нового оборудования при явно названном бюджете менее 1000000 рублей. Не предполагай бюджет и не распространяй правило на б/у, аренду, лизинг, скидки или кредитную историю.
+- Неполный BANT или технические данные обычно требуют hard_qualification и одного контакта менеджера с конкретными вопросами и CRM-фактами. Не добавляй lead-категории A–E и не скрывай payment_blocker/closed_deal_review.
+</qualification_rules>
+
 <price_comparability_rules>
 - Заполни price_comparability_check, если в истории есть цена нашего предложения, бюджет клиента, цена конкурента, "дорого", "не проходит по цене", "предложили дешевле", "Китай", локальный поставщик или другой ценовой ориентир.
 - Не используй жесткие числовые пороги и не принимай решение только по коэффициенту разницы. Существенная или кратная разница в цене — это красный флаг проверки, а не автоматическое доказательство ошибочного закрытия или окончательной неквалификации.
@@ -327,6 +335,19 @@ def build_prompt(
     "amount": "сумма, если есть",
     "stage": "этап, если есть",
     "client": "клиент/контакт, если есть"
+  }},
+  "qualification_assessment": {{
+    "bant": {{
+      "budget": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "authority": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "need": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "timeframe": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "overall_status": "confirmed|incomplete|unknown",
+      "missing_facts": [],
+      "next_question": "один вопрос клиенту или null"
+    }},
+    "solution_fit": {{"equipment_type": "labeler|filling_line|block|unknown", "status": "compatible|not_compatible|needs_technical_data|unknown", "reason_code": "technical_mismatch|unknown|null", "evidence": [], "missing_facts": []}},
+    "commercial_fit": {{"new_equipment_budget_status": "sufficient|below_minimum|unknown", "confirmed_budget_rub": "число или null", "new_equipment_minimum_rub": 1000000, "reason_code": "budget_below_new_equipment_minimum|unknown|null", "evidence": []}}
   }},
   "rop_manager_message_block": {{
     "check_for_rop": "что конкретно РОПу проверить по сделке",
@@ -552,6 +573,7 @@ def render_report(
     context_diagnostics: dict[str, Any] | None = None,
 ) -> str:
     deal_state = analysis.get("deal_state", {}) or {}
+    qualification_assessment = analysis.get("qualification_assessment", {}) or {}
     new_event = analysis.get("new_event", {}) or {}
     risk = analysis.get("main_risk", {}) or {}
     rop_manager = analysis.get("rop_manager_message_block", {}) or {}
@@ -591,6 +613,49 @@ def render_report(
         if value is False:
             return "нет"
         return human_value(value)
+
+    def render_qualification_assessment(value: Any) -> str:
+        if not isinstance(value, dict):
+            return "## Квалификация и применимость\n\nНет данных"
+        bant = value.get("bant") if isinstance(value.get("bant"), dict) else {}
+        solution = value.get("solution_fit") if isinstance(value.get("solution_fit"), dict) else {}
+        commercial = value.get("commercial_fit") if isinstance(value.get("commercial_fit"), dict) else {}
+        def status(name: str) -> str:
+            item = bant.get(name) if isinstance(bant.get(name), dict) else {}
+            return str(item.get("status") or "нет данных")
+        return f"""## Квалификация и применимость
+
+### BANT
+
+- Бюджет: {status('budget')}
+- Полномочия: {status('authority')}
+- Потребность: {status('need')}
+- Срок: {status('timeframe')}
+- Общий статус: {bant.get('overall_status', 'нет данных')}
+- Недостающие факты:
+{bullet_list(bant.get('missing_facts'))}
+- Один вопрос клиенту: {human_value(bant.get('next_question'))}
+
+### Техническая применимость
+
+- Тип оборудования: {solution.get('equipment_type', 'нет данных')}
+- Статус: {solution.get('status', 'нет данных')}
+- Причина: {human_value(solution.get('reason_code'))}
+- Доказательства:
+{bullet_list(solution.get('evidence'))}
+- Недостающие параметры:
+{bullet_list(solution.get('missing_facts'))}
+
+### Бюджет нового оборудования
+
+- Подтверждённый бюджет: {human_value(commercial.get('confirmed_budget_rub'))}
+- Минимальный порог: {commercial.get('new_equipment_minimum_rub', 'нет данных')}
+- Статус: {commercial.get('new_equipment_budget_status', 'нет данных')}
+- Причина: {human_value(commercial.get('reason_code'))}
+- Доказательства:
+{bullet_list(commercial.get('evidence'))}"""
+
+    qualification_section = render_qualification_assessment(qualification_assessment)
 
     backup_texts = manager.get("backup_texts") or []
     backup_md = "\n\n".join(
@@ -747,6 +812,8 @@ def render_report(
 
 - Продвинулась: {human_value(progress.get('progressed'))}
 - Причина: {progress.get('reason', 'не указано')}
+
+{qualification_section}
 
 ## Диагностика пути к деньгам
 

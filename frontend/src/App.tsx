@@ -1325,6 +1325,8 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const bant = asRecord(qualificationAssessment.bant)
   const solutionFit = asRecord(qualificationAssessment.solution_fit)
   const commercialFit = asRecord(qualificationAssessment.commercial_fit)
+  const dealMode = asRecord(analysis?.deal_mode)
+  const priority = asRecord(analysis?.priority_recommendation)
 
   const riskLevel = asString(mainRisk.risk_level) || asString(meta?.risk_level) || ''
   const riskRu = riskLabelRu(riskLevel)
@@ -1333,7 +1335,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const client = asString(leadState.client) || asString(dealState.client) || '—'
   const qualification = asString(leadState.qualification) || '—'
   const qualificationReason = asString(leadState.qualification_reason)
-  const hasQualificationAssessment = isLead && Object.keys(qualificationAssessment).length > 0
+  const hasQualificationAssessment = Object.keys(qualificationAssessment).length > 0
   const bantStatus = assessmentLabel(asString(bant.overall_status), BANT_STATUS_RU)
   const solutionFitStatus = assessmentLabel(asString(solutionFit.status), SOLUTION_FIT_STATUS_RU)
   const commercialFitStatus = assessmentLabel(
@@ -1428,7 +1430,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           <div className="label">Что сделать</div>
           <div className="value">{nextAction}</div>
         </div>
-        {isLead ? (
+        {hasQualificationAssessment ? (
           <section className="qualification-summary" aria-label="Квалификация и применимость">
             <div className="qualification-summary-head">
               <div>
@@ -1460,9 +1462,15 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                     </div>
                   </div>
                   <div className="card">
-                    <div className="label">Категория и вердикт</div>
-                    <div className="value">{qualification}</div>
-                    <div className="hint">{verdict ? verdictLabelRu(verdict) : 'Вердикт не указан'}</div>
+                    <div className="label">{isLead ? 'Категория и вердикт' : 'Режим и приоритет'}</div>
+                    <div className="value">{isLead ? qualification : asString(dealMode.mode, '—')}</div>
+                    <div className="hint">
+                      {isLead
+                        ? verdict
+                          ? verdictLabelRu(verdict)
+                          : 'Вердикт не указан'
+                        : asString(priority.priority, 'Приоритет не указан')}
+                    </div>
                   </div>
                 </div>
                 {nextQualificationQuestion ? (
@@ -1472,9 +1480,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                   </div>
                 ) : null}
               </>
-            ) : (
-              <div className="qualification-empty">Для сохранённого отчёта нет данных BANT, технической или бюджетной оценки.</div>
-            )}
+            ) : null}
           </section>
         ) : null}
         {internalChecks.length ? (

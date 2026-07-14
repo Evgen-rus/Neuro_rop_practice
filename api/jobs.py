@@ -309,6 +309,17 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
         )
 
 
+def _converted_lead_handoffs(lead_ids: list[str]) -> dict[str, str]:
+    """Read the just-built local lead bundles; never refetch CRM for UI routing."""
+    from run_rop_assistant import converted_lead_deals
+
+    return {
+        lead_id: str(deal.get("id"))
+        for lead_id, deal in converted_lead_deals(lead_ids).items()
+        if deal.get("id")
+    }
+
+
 def _run_job(job_id: str) -> None:
     with _LOCK:
         job = _JOBS[job_id]
@@ -361,7 +372,13 @@ def _run_job(job_id: str) -> None:
             with _LOCK:
                 _set_stage(_JOBS[job_id], stage_key, f"Pipeline {entity_type}", "done")
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "running")
-                _collect_results(_JOBS[job_id], entity_type, ids)
+                if entity_type == "lead":
+                    handoffs = _converted_lead_handoffs(ids)
+                    remaining_lead_ids = [entity_id for entity_id in ids if entity_id not in handoffs]
+                    _collect_results(_JOBS[job_id], "lead", remaining_lead_ids)
+                    _collect_results(_JOBS[job_id], "deal", list(handoffs.values()))
+                else:
+                    _collect_results(_JOBS[job_id], entity_type, ids)
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
         with _LOCK:

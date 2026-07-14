@@ -49,6 +49,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "shaker_question",
     "competitor_defense_checklist",
     "priority_recommendation",
+    "qualification_assessment",
 }
 
 LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
@@ -894,6 +895,7 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _expect_dict(analysis.get("new_event"), "new_event", errors)
     _expect_list(analysis.get("what_changed"), "what_changed", errors)
     _expect_dict(analysis.get("deal_progress"), "deal_progress", errors)
+    _validate_qualification_assessment(analysis, errors)
     _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:
