@@ -126,7 +126,7 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
     def test_incomplete_bant_keeps_data_gap_and_one_question(self) -> None:
         analysis = lead_analysis()
         assessment = analysis["qualification_assessment"]
-        assessment["bant"]["authority"] = {"status": "missing", "evidence": ["ЛПР не назван."]}
+        assessment["bant"]["authority"] = {"status": "missing", "evidence": []}
         assessment["bant"]["overall_status"] = "incomplete"
         assessment["bant"]["missing_facts"] = ["Кто принимает окончательное решение."]
         assessment["bant"]["next_question"] = "Кто принимает окончательное решение по закупке?"

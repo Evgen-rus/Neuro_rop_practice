@@ -406,7 +406,7 @@ def _validate_bant_item(value: Any, path: str, errors: list[str]) -> None:
     _require_fields(item, {"status", "evidence"}, path, errors)
     status = item.get("status")
     _expect_enum(status, f"{path}.status", {"confirmed", "missing", "unknown"}, errors)
-    _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, {"unknown"}, errors)
+    _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, {"missing", "unknown"}, errors)
 
 
 def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[str]) -> None:
