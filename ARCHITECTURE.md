@@ -97,10 +97,10 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Транскрибация аудио CLI: `openai_api/audio/local_file_transcribe.py`
 - Общая логика транскрибации: `openai_api/audio/transcribe_core.py`
 - Short-call / недозвон filter: `openai_api/audio/short_call.py`
-- Deal LLM-анализ: `openai_api/llm/analyze_deal.py`
+- Deal LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_deal.py`
 - Lead LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
-- Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead-анализа: `openai_api/llm/validation.py`
+- Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead- и deal-анализа: `openai_api/llm/validation.py`
 - Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
 - Compact OKF packs: `openai_api/llm/attention_delta_knowledge.py`, `knowledge/clients/praktikm/attention_delta_*.md`
 - Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
@@ -150,7 +150,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 25. `manager_action_block` сохранён для обратной совместимости: его `primary_text` — готовый текст именно клиенту, а не инструкция менеджеру. Чеклист блока содержит только факты для CRM после контакта.
 26. Markdown-отчёт по сделке и лиду должен начинаться с раздела `## Что сделать РОПу сейчас`; текст клиенту выводится ниже как готовый материал менеджеру для одного контакта.
 27. Deal-анализ обязан возвращать `money_path_diagnosis`: где застрял путь к деньгам, почему деньги под риском, у кого следующий шаг, какой факт нужен для движения и evidence.
-28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence. Полный lead-анализ также обязан возвращать `qualification_assessment` с независимыми BANT, технической и коммерческой оценками.
+28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence. Полный lead- и deal-анализ обязан возвращать `qualification_assessment` с независимыми BANT, технической и коммерческой оценками; deal-оценка не заменяет `deal_mode`, `payment_blocker` или `closed_deal_review`.
 29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict. Неполные BANT или технические данные не являются техническим либо бюджетным отказом; `technical_mismatch` и `budget_below_new_equipment_minimum` требуют соответственно подтверждённого стоп-фактора или явно названного бюджета нового оборудования ниже 1 000 000 ₽.
 30. Полная история клиента строится read-only: `customer_history_bundle` может читать root lead/deal, контакты, связанные сделки контакта, duplicate leads по телефону/email, активности, timeline comments и внутренние Bitrix IM-чаты CRM-сущностей, но не пишет в Bitrix.
 31. `CONTACT_ID` — базовая связка клиента. Если `CONTACT_ID` отсутствует, fallback по телефону/email должен подтверждать совпадение через `crm.contact.get` или `crm.lead.get`; неподтвержденные кандидаты остаются только в diagnostics.
@@ -169,7 +169,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 44. Существенный ценовой разрыв не является автоматическим доказательством ошибочного закрытия или окончательной неквалификации. Deal-анализ должен сначала проверить сопоставимость КП: состав решения, обязательные/опциональные узлы, этапность, сервис, запуск, гарантию и то, что именно клиент сравнивает.
 45. Модель видит полный доступный контекст, но перед `validate_deal_analysis` / `validate_lead_analysis` ответ нормализуется до лимитов JSON-контракта; такие изменения фиксируются в `model_metadata.normalization_changes`.
 46. FastAPI не должен ломать CLI: analyze job вызывает существующий `run_rop_assistant.py` / те же модули, а не дублирует pipeline.
-47. UI читает текущий `*_analysis.json` как есть; отдельный UI-only JSON-контракт поверх LLM пока не вводим.
+47. UI читает текущий `*_analysis.json` как есть; отдельный UI-only JSON-контракт поверх LLM пока не вводим. Для converted lead результат job обязан возвращать связанную сделку, если её полный анализ создан штатным handoff, а не пустой lead-результат.
 48. `reports/` не раздаётся frontend'у целиком: UI получает analysis/report только через API; полный markdown — по запросу, не на первом экране.
 49. Первый экран UI показывает кандидатов на внимание (Bitrix-фильтр + scoring без LLM), а не технический pipeline.
 50. Candidates scoring v1 — дешёвый pre-LLM слой: тип по умолчанию `lead`, окна `created_days`/`modified_days` (по умолчанию 15/15), топ-20; воронка/этапы из реальной CRM-карты обязательны — без выбора поиск не запускается; выбранный фильтр сохраняется в `ui_candidate_filters`. Это «кандидат на разбор», не финальный вердикт модели.
