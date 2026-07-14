@@ -5,6 +5,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-/opt/Neuro_rop_practice}"
 RUNTIME_DIR="${PROJECT_ROOT}/runtime"
 REPORTS_DIR="${RUNTIME_DIR}/reports"
 KNOWLEDGE_DIR="${RUNTIME_DIR}/knowledge"
+PIPELINE_MAP_FILE="${RUNTIME_DIR}/crm_pipeline_map.json"
 AUTH_DIR="${RUNTIME_DIR}/nginx"
 AUTH_FILE="${AUTH_DIR}/.htpasswd"
 ACCESS_FILE="${RUNTIME_DIR}/access.txt"
@@ -32,6 +33,7 @@ require_directory() {
 require_file "${RUNTIME_DIR}/.env"
 require_directory "${REPORTS_DIR}"
 require_directory "${KNOWLEDGE_DIR}"
+require_file "${PIPELINE_MAP_FILE}"
 
 mkdir -p "${AUTH_DIR}"
 chmod 700 "${RUNTIME_DIR}" "${AUTH_DIR}"
@@ -65,6 +67,7 @@ docker run --detach \
     --env-file "${RUNTIME_DIR}/.env" \
     --volume "${REPORTS_DIR}:/app/reports" \
     --volume "${KNOWLEDGE_DIR}:/app/knowledge:ro" \
+    --volume "${PIPELINE_MAP_FILE}:/app/crm_pipeline_map.json:ro" \
     --security-opt no-new-privileges \
     "${API_IMAGE}" >/dev/null
 
