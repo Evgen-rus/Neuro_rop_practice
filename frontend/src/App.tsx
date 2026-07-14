@@ -75,7 +75,29 @@ const VERDICT_RU: Record<string, string> = {
   data_gap: 'не хватает данных',
   needs_nurture: 'нужен прогрев',
   ready_for_deal: 'готов к сделке',
+  technical_mismatch: 'техническое несоответствие',
+  budget_below_new_equipment_minimum: 'бюджет ниже минимума для нового оборудования',
   unknown: 'неясно',
+}
+
+const BANT_STATUS_RU: Record<string, string> = {
+  confirmed: 'подтверждён',
+  incomplete: 'неполный',
+  missing: 'не хватает данных',
+  unknown: 'нет данных',
+}
+
+const SOLUTION_FIT_STATUS_RU: Record<string, string> = {
+  compatible: 'совместимо',
+  not_compatible: 'не совместимо',
+  needs_technical_data: 'нужны параметры',
+  unknown: 'нет данных',
+}
+
+const COMMERCIAL_FIT_STATUS_RU: Record<string, string> = {
+  sufficient: 'достаточен',
+  below_minimum: 'ниже минимума',
+  unknown: 'нет данных',
 }
 
 function riskLabelRu(value: string): string {
@@ -94,6 +116,11 @@ function priorityLabelRu(value: string): string {
 function verdictLabelRu(value: string): string {
   const key = value.trim().toLowerCase()
   return VERDICT_RU[key] || value.replaceAll('_', ' ')
+}
+
+function assessmentLabel(value: string, labels: Record<string, string>): string {
+  const key = value.trim().toLowerCase()
+  return labels[key] || value || 'нет данных'
 }
 
 function formatMoney(value: unknown): string {
@@ -1294,6 +1321,10 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const mainRisk = asRecord(analysis?.main_risk)
   const loss = asRecord(analysis?.loss_diagnosis)
   const rop = asRecord(analysis?.rop_manager_message_block)
+  const qualificationAssessment = asRecord(analysis?.qualification_assessment)
+  const bant = asRecord(qualificationAssessment.bant)
+  const solutionFit = asRecord(qualificationAssessment.solution_fit)
+  const commercialFit = asRecord(qualificationAssessment.commercial_fit)
 
   const riskLevel = asString(mainRisk.risk_level) || asString(meta?.risk_level) || ''
   const riskRu = riskLabelRu(riskLevel)
@@ -1302,6 +1333,16 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const client = asString(leadState.client) || asString(dealState.client) || '—'
   const qualification = asString(leadState.qualification) || '—'
   const qualificationReason = asString(leadState.qualification_reason)
+  const hasQualificationAssessment = isLead && Object.keys(qualificationAssessment).length > 0
+  const bantStatus = assessmentLabel(asString(bant.overall_status), BANT_STATUS_RU)
+  const solutionFitStatus = assessmentLabel(asString(solutionFit.status), SOLUTION_FIT_STATUS_RU)
+  const commercialFitStatus = assessmentLabel(
+    asString(commercialFit.new_equipment_budget_status),
+    COMMERCIAL_FIT_STATUS_RU,
+  )
+  const confirmedBudget = formatMoney(commercialFit.confirmed_budget_rub)
+  const minimumBudget = formatMoney(commercialFit.new_equipment_minimum_rub) || '1 000 000 ₽'
+  const nextQualificationQuestion = formatMoneyText(asString(bant.next_question))
   const amount = formatMoney(dealState.amount)
   const stage = asString(dealState.stage) || '—'
   const attention =
@@ -1387,6 +1428,55 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           <div className="label">Что сделать</div>
           <div className="value">{nextAction}</div>
         </div>
+        {isLead ? (
+          <section className="qualification-summary" aria-label="Квалификация и применимость">
+            <div className="qualification-summary-head">
+              <div>
+                <h3>Квалификация и применимость</h3>
+                <p>Основание категории и следующий факт, который нужно подтвердить.</p>
+              </div>
+            </div>
+            {hasQualificationAssessment ? (
+              <>
+                <div className="cards qualification-cards">
+                  <div className="card">
+                    <div className="label">BANT</div>
+                    <div className="value">{bantStatus}</div>
+                    <div className="hint">Бюджет, ЛПР, потребность и срок</div>
+                  </div>
+                  <div className="card">
+                    <div className="label">Техническая применимость</div>
+                    <div className="value">{solutionFitStatus}</div>
+                    {asString(solutionFit.reason_code) && asString(solutionFit.reason_code) !== 'unknown' ? (
+                      <div className="hint">{verdictLabelRu(asString(solutionFit.reason_code))}</div>
+                    ) : null}
+                  </div>
+                  <div className="card">
+                    <div className="label">Бюджет нового оборудования</div>
+                    <div className="value">{commercialFitStatus}</div>
+                    <div className="hint">
+                      {confirmedBudget && confirmedBudget !== '—' ? `Подтверждён: ${confirmedBudget}. ` : ''}
+                      Порог: {minimumBudget}
+                    </div>
+                  </div>
+                  <div className="card">
+                    <div className="label">Категория и вердикт</div>
+                    <div className="value">{qualification}</div>
+                    <div className="hint">{verdict ? verdictLabelRu(verdict) : 'Вердикт не указан'}</div>
+                  </div>
+                </div>
+                {nextQualificationQuestion ? (
+                  <div className="qualification-question">
+                    <div className="label">Один вопрос клиенту</div>
+                    <div>{nextQualificationQuestion}</div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="qualification-empty">Для сохранённого отчёта нет данных BANT, технической или бюджетной оценки.</div>
+            )}
+          </section>
+        ) : null}
         {internalChecks.length ? (
           <div className="internal-checks">
             <div className="label">Внутренняя проверка РОПа / техспециалиста</div>

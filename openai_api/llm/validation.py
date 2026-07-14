@@ -56,6 +56,7 @@ LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "lead_state",
     "activity_summary",
     "loss_diagnosis",
+    "qualification_assessment",
 }
 
 MAX_LIST_LIMITS = {
@@ -74,6 +75,12 @@ MAX_LIST_LIMITS = {
     "competitor_defense_checklist.defense_points": 5,
     "competitor_defense_checklist.questions_to_client": 5,
     "loss_diagnosis.evidence": 7,
+    "qualification_assessment.bant.budget.evidence": 7,
+    "qualification_assessment.bant.authority.evidence": 7,
+    "qualification_assessment.bant.need.evidence": 7,
+    "qualification_assessment.bant.timeframe.evidence": 7,
+    "qualification_assessment.solution_fit.evidence": 7,
+    "qualification_assessment.commercial_fit.evidence": 7,
 }
 
 
@@ -101,10 +108,24 @@ def _set_value_at_path(value: dict[str, Any], path: str, new_value: Any) -> None
         current[parts[-1]] = new_value
 
 
-def normalize_analysis_for_validation(analysis: dict[str, Any]) -> list[dict[str, Any]]:
-    """Clamp long model lists to validator limits without changing input context."""
+def normalize_analysis_for_validation(
+    analysis: dict[str, Any],
+    *,
+    allow_legacy_qualification_assessment: bool = False,
+) -> list[dict[str, Any]]:
+    """Clamp model lists and normalize only schema-safe qualification defaults.
+
+    ``allow_legacy_qualification_assessment`` is for already saved reports created
+    before the qualification block existed. New model responses keep the block
+    mandatory and are rejected by ``validate_lead_analysis`` when it is absent.
+    """
 
     changes: list[dict[str, Any]] = []
+    _normalize_qualification_assessment(
+        analysis,
+        changes,
+        allow_legacy_qualification_assessment=allow_legacy_qualification_assessment,
+    )
     for path, limit in MAX_LIST_LIMITS.items():
         value = _value_at_path(analysis, path)
         if not isinstance(value, list) or len(value) <= limit:
@@ -120,6 +141,105 @@ def normalize_analysis_for_validation(analysis: dict[str, Any]) -> list[dict[str
             }
         )
     return changes
+
+
+def _legacy_qualification_assessment() -> dict[str, Any]:
+    def bant_item() -> dict[str, Any]:
+        return {"status": "unknown", "evidence": []}
+
+    return {
+        "bant": {
+            "budget": bant_item(),
+            "authority": bant_item(),
+            "need": bant_item(),
+            "timeframe": bant_item(),
+            "overall_status": "unknown",
+            "missing_facts": [],
+            "next_question": None,
+        },
+        "solution_fit": {
+            "equipment_type": "unknown",
+            "status": "unknown",
+            "reason_code": "unknown",
+            "evidence": [],
+            "missing_facts": [],
+        },
+        "commercial_fit": {
+            "new_equipment_budget_status": "unknown",
+            "confirmed_budget_rub": None,
+            "new_equipment_minimum_rub": 1_000_000,
+            "reason_code": "unknown",
+            "evidence": [],
+        },
+    }
+
+
+def _normalize_qualification_assessment(
+    analysis: dict[str, Any],
+    changes: list[dict[str, Any]],
+    *,
+    allow_legacy_qualification_assessment: bool,
+) -> None:
+    assessment = analysis.get("qualification_assessment")
+    if assessment is None:
+        if allow_legacy_qualification_assessment and "qualification_assessment" not in analysis:
+            analysis["qualification_assessment"] = _legacy_qualification_assessment()
+            changes.append({"path": "qualification_assessment", "action": "added_legacy_fallback"})
+        return
+    if not isinstance(assessment, dict):
+        return
+
+    bant = assessment.get("bant")
+    if isinstance(bant, dict):
+        for name in ("budget", "authority", "need", "timeframe"):
+            item = bant.get(name)
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") is None:
+                item["status"] = "unknown"
+                changes.append({"path": f"qualification_assessment.bant.{name}.status", "action": "null_to_unknown"})
+            if item.get("evidence") is None:
+                item["evidence"] = []
+                changes.append({"path": f"qualification_assessment.bant.{name}.evidence", "action": "null_to_empty_list"})
+        if bant.get("overall_status") is None:
+            bant["overall_status"] = "unknown"
+            changes.append({"path": "qualification_assessment.bant.overall_status", "action": "null_to_unknown"})
+        if bant.get("missing_facts") is None:
+            bant["missing_facts"] = []
+            changes.append({"path": "qualification_assessment.bant.missing_facts", "action": "null_to_empty_list"})
+
+    solution_fit = assessment.get("solution_fit")
+    if isinstance(solution_fit, dict):
+        for field in ("equipment_type", "status"):
+            if solution_fit.get(field) is None:
+                solution_fit[field] = "unknown"
+                changes.append({"path": f"qualification_assessment.solution_fit.{field}", "action": "null_to_unknown"})
+        for field in ("evidence", "missing_facts"):
+            if solution_fit.get(field) is None:
+                solution_fit[field] = []
+                changes.append({"path": f"qualification_assessment.solution_fit.{field}", "action": "null_to_empty_list"})
+
+    commercial_fit = assessment.get("commercial_fit")
+    if isinstance(commercial_fit, dict):
+        if commercial_fit.get("new_equipment_budget_status") is None:
+            commercial_fit["new_equipment_budget_status"] = "unknown"
+            changes.append(
+                {
+                    "path": "qualification_assessment.commercial_fit.new_equipment_budget_status",
+                    "action": "null_to_unknown",
+                }
+            )
+        if commercial_fit.get("new_equipment_minimum_rub") is None:
+            commercial_fit["new_equipment_minimum_rub"] = 1_000_000
+            changes.append(
+                {
+                    "path": "qualification_assessment.commercial_fit.new_equipment_minimum_rub",
+                    "action": "null_to_default",
+                }
+            )
+        if commercial_fit.get("evidence") is None:
+            commercial_fit["evidence"] = []
+            changes.append({"path": "qualification_assessment.commercial_fit.evidence", "action": "null_to_empty_list"})
 
 
 def _require_fields(value: dict[str, Any], required_fields: set[str], parent: str, errors: list[str]) -> None:
@@ -232,9 +352,9 @@ def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None
         _validate_client_texts(manager_action, errors)
 
 
-def _expect_enum(value: Any, path: str, allowed: set[str], errors: list[str]) -> None:
+def _expect_enum(value: Any, path: str, allowed: set[Any], errors: list[str]) -> None:
     if value not in allowed:
-        errors.append(f"invalid enum at {path}: expected one of {sorted(allowed)}, got {value!r}")
+        errors.append(f"invalid enum at {path}: expected one of {sorted(map(repr, allowed))}, got {value!r}")
 
 
 def _expect_non_empty_string(value: Any, path: str, errors: list[str]) -> None:
@@ -247,6 +367,227 @@ def _expect_max_list_length(value: Any, path: str, max_length: int, errors: list
     if len(items) > max_length:
         errors.append(f"too many items at {path}: max {max_length}, got {len(items)}")
     return items
+
+
+def _validate_short_text_list(value: Any, path: str, max_length: int, errors: list[str]) -> list[Any]:
+    items = _expect_max_list_length(value, path, max_length, errors)
+    for index, item in enumerate(items):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"expected non-empty string at {path}[{index}]")
+    return items
+
+
+def _expect_number_or_none(value: Any, path: str, errors: list[str]) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        errors.append(f"expected number or null at {path}")
+
+
+def _is_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _validate_qualification_evidence(
+    value: Any,
+    path: str,
+    status: Any,
+    empty_allowed_for: set[str],
+    errors: list[str],
+) -> None:
+    evidence = _validate_short_text_list(value, path, 7, errors)
+    if not evidence and status not in empty_allowed_for:
+        errors.append(f"{path} must not be empty when status is {status!r}")
+
+
+def _validate_bant_item(value: Any, path: str, errors: list[str]) -> None:
+    item = _expect_dict(value, path, errors)
+    if not item:
+        return
+    _require_fields(item, {"status", "evidence"}, path, errors)
+    status = item.get("status")
+    _expect_enum(status, f"{path}.status", {"confirmed", "missing", "unknown"}, errors)
+    _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, {"unknown"}, errors)
+
+
+def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[str]) -> None:
+    assessment = _expect_dict(analysis.get("qualification_assessment"), "qualification_assessment", errors)
+    if not assessment:
+        return
+    _require_fields(assessment, {"bant", "solution_fit", "commercial_fit"}, "qualification_assessment", errors)
+
+    bant = _expect_dict(assessment.get("bant"), "qualification_assessment.bant", errors)
+    if bant:
+        _require_fields(
+            bant,
+            {"budget", "authority", "need", "timeframe", "overall_status", "missing_facts", "next_question"},
+            "qualification_assessment.bant",
+            errors,
+        )
+        for name in ("budget", "authority", "need", "timeframe"):
+            _validate_bant_item(bant.get(name), f"qualification_assessment.bant.{name}", errors)
+        overall_status = bant.get("overall_status")
+        _expect_enum(
+            overall_status,
+            "qualification_assessment.bant.overall_status",
+            {"confirmed", "incomplete", "unknown"},
+            errors,
+        )
+        missing_facts = _validate_short_text_list(
+            bant.get("missing_facts"),
+            "qualification_assessment.bant.missing_facts",
+            7,
+            errors,
+        )
+        next_question = bant.get("next_question")
+        if next_question is not None and (not isinstance(next_question, str) or not next_question.strip()):
+            errors.append("expected qualification_assessment.bant.next_question to be non-empty string or null")
+        if overall_status == "incomplete" and not missing_facts and next_question is None:
+            errors.append(
+                "qualification_assessment.bant requires missing_facts or next_question when overall_status=incomplete"
+            )
+
+    solution_fit = _expect_dict(assessment.get("solution_fit"), "qualification_assessment.solution_fit", errors)
+    if solution_fit:
+        _require_fields(
+            solution_fit,
+            {"equipment_type", "status", "reason_code", "evidence", "missing_facts"},
+            "qualification_assessment.solution_fit",
+            errors,
+        )
+        status = solution_fit.get("status")
+        _expect_enum(
+            solution_fit.get("equipment_type"),
+            "qualification_assessment.solution_fit.equipment_type",
+            {"labeler", "filling_line", "block", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            status,
+            "qualification_assessment.solution_fit.status",
+            {"compatible", "not_compatible", "needs_technical_data", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            solution_fit.get("reason_code"),
+            "qualification_assessment.solution_fit.reason_code",
+            {"technical_mismatch", "unknown", None},
+            errors,
+        )
+        _validate_qualification_evidence(
+            solution_fit.get("evidence"),
+            "qualification_assessment.solution_fit.evidence",
+            status,
+            {"unknown"},
+            errors,
+        )
+        missing_facts = _validate_short_text_list(
+            solution_fit.get("missing_facts"),
+            "qualification_assessment.solution_fit.missing_facts",
+            7,
+            errors,
+        )
+        if status == "needs_technical_data" and not missing_facts:
+            errors.append(
+                "qualification_assessment.solution_fit.missing_facts must not be empty when status=needs_technical_data"
+            )
+        if status == "not_compatible" and solution_fit.get("reason_code") != "technical_mismatch":
+            errors.append(
+                "qualification_assessment.solution_fit.reason_code must be technical_mismatch when status=not_compatible"
+            )
+        if solution_fit.get("reason_code") == "technical_mismatch" and status != "not_compatible":
+            errors.append(
+                "qualification_assessment.solution_fit.status must be not_compatible when reason_code=technical_mismatch"
+            )
+
+    commercial_fit = _expect_dict(assessment.get("commercial_fit"), "qualification_assessment.commercial_fit", errors)
+    if commercial_fit:
+        _require_fields(
+            commercial_fit,
+            {
+                "new_equipment_budget_status",
+                "confirmed_budget_rub",
+                "new_equipment_minimum_rub",
+                "reason_code",
+                "evidence",
+            },
+            "qualification_assessment.commercial_fit",
+            errors,
+        )
+        status = commercial_fit.get("new_equipment_budget_status")
+        _expect_enum(
+            status,
+            "qualification_assessment.commercial_fit.new_equipment_budget_status",
+            {"sufficient", "below_minimum", "unknown"},
+            errors,
+        )
+        _expect_number_or_none(
+            commercial_fit.get("confirmed_budget_rub"),
+            "qualification_assessment.commercial_fit.confirmed_budget_rub",
+            errors,
+        )
+        if commercial_fit.get("new_equipment_minimum_rub") != 1_000_000:
+            errors.append("qualification_assessment.commercial_fit.new_equipment_minimum_rub must equal 1000000")
+        _expect_enum(
+            commercial_fit.get("reason_code"),
+            "qualification_assessment.commercial_fit.reason_code",
+            {"budget_below_new_equipment_minimum", "unknown", None},
+            errors,
+        )
+        _validate_qualification_evidence(
+            commercial_fit.get("evidence"),
+            "qualification_assessment.commercial_fit.evidence",
+            status,
+            {"unknown"},
+            errors,
+        )
+        budget = commercial_fit.get("confirmed_budget_rub")
+        if status == "below_minimum":
+            if not _is_number(budget) or budget >= 1_000_000:
+                errors.append(
+                    "qualification_assessment.commercial_fit.confirmed_budget_rub must be a number below 1000000 when status=below_minimum"
+                )
+            if commercial_fit.get("reason_code") != "budget_below_new_equipment_minimum":
+                errors.append(
+                    "qualification_assessment.commercial_fit.reason_code must be budget_below_new_equipment_minimum when status=below_minimum"
+                )
+        if status == "sufficient" and (not _is_number(budget) or budget < 1_000_000):
+            errors.append(
+                "qualification_assessment.commercial_fit.confirmed_budget_rub must be a number at least 1000000 when status=sufficient"
+            )
+        if commercial_fit.get("reason_code") == "budget_below_new_equipment_minimum" and status != "below_minimum":
+            errors.append(
+                "qualification_assessment.commercial_fit.new_equipment_budget_status must be below_minimum when reason_code=budget_below_new_equipment_minimum"
+            )
+
+
+def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: list[str]) -> None:
+    lead_state = analysis.get("lead_state")
+    assessment = analysis.get("qualification_assessment")
+    loss = analysis.get("loss_diagnosis")
+    if not isinstance(lead_state, dict) or lead_state.get("qualification") != "D":
+        return
+    if not isinstance(assessment, dict) or not isinstance(loss, dict):
+        return
+
+    solution_fit = assessment.get("solution_fit")
+    commercial_fit = assessment.get("commercial_fit")
+    reason_to_verdict = {
+        "technical_mismatch": "technical_mismatch",
+        "budget_below_new_equipment_minimum": "budget_below_new_equipment_minimum",
+    }
+    reasons = []
+    if isinstance(solution_fit, dict) and solution_fit.get("reason_code") == "technical_mismatch":
+        reasons.append("technical_mismatch")
+    if isinstance(commercial_fit, dict) and commercial_fit.get("reason_code") == "budget_below_new_equipment_minimum":
+        reasons.append("budget_below_new_equipment_minimum")
+    if len(reasons) != 1:
+        errors.append("lead_state.qualification=D requires exactly one technical or budget reason_code")
+        return
+    expected_verdict = reason_to_verdict[reasons[0]]
+    if loss.get("final_verdict") != expected_verdict:
+        errors.append(
+            "loss_diagnosis.final_verdict must match the single D reason_code: "
+            f"expected {expected_verdict}, got {loss.get('final_verdict')!r}"
+        )
 
 
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
@@ -594,12 +935,23 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
         _expect_enum(
             loss.get("final_verdict"),
             "loss_diagnosis.final_verdict",
-            {"bad_lead", "bad_processing", "data_gap", "needs_nurture", "ready_for_deal", "unknown"},
+            {
+                "bad_lead",
+                "bad_processing",
+                "data_gap",
+                "needs_nurture",
+                "ready_for_deal",
+                "technical_mismatch",
+                "budget_below_new_equipment_minimum",
+                "unknown",
+            },
             errors,
         )
         evidence = _expect_max_list_length(loss.get("evidence"), "loss_diagnosis.evidence", 7, errors)
         if not evidence:
             errors.append("loss_diagnosis.evidence must not be empty")
+    _validate_qualification_assessment(analysis, errors)
+    _validate_lead_qualification_consistency(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

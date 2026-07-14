@@ -144,6 +144,25 @@ def build_prompt(
 13. manager_action_block.primary_text — готовый текст именно для клиента, без инструкций менеджеру вроде "внеси в CRM". Для лида он должен уточнять потребность, параметры задачи, бюджетный ориентир, срок, ЛПР и следующий шаг только в той части, которая ещё не известна.
 14. manager_action_block.manager_checklist — короткий список CRM-фактов после контакта; не дублируй в нём задачу или текст клиенту.
 
+<qualification_rules>
+Сначала заполни qualification_assessment: BANT, техническую применимость и коммерческую реализуемость нового оборудования. Только затем выбери lead_state.qualification, loss_diagnosis.final_verdict и рекомендацию.
+
+1. BANT — четыре независимых признака:
+   - budget: реальный бюджет и готовность двигаться к договору с предоплатой;
+   - authority: контакт ЛПР либо влияет на решение;
+   - need: конкретная актуальная потребность;
+   - timeframe: назван срок закупки или запуска.
+   Для этикетировщика готовность к предоплате в срок до 30 дней поддерживает timeframe=confirmed; для блока или линии розлива — до 60 дней. Это не заменяет остальные признаки BANT.
+2. Техническая применимость оценивается по типу оборудования и известным параметрам из OKF technical_data.md. technical_mismatch допустим только при факте из CRM-истории или транскрибации о конкретном техническом стоп-факторе. Если параметров не хватает, укажи needs_technical_data, недостающие параметры и вопрос клиенту; это не технический отказ.
+3. Коммерческая реализуемость относится только к новому оборудованию. below_minimum и verdict budget_below_new_equipment_minimum допустимы только когда клиент явно назвал бюджет менее 1000000 рублей. Не извлекай, не округляй и не предполагай бюджет. Не делай выводов о б/у оборудовании, аренде, лизинге, скидках или кредитной истории без отдельного подтвержденного правила.
+4. Если BANT подтверждён, решение совместимо и подтверждённый бюджет нового оборудования не ниже 1000000 рублей: qualification=A, final_verdict=ready_for_deal.
+5. Если проект реален, но BANT или технических данных не хватает: qualification=B или unknown по фактам, final_verdict=data_gap. При неполном BANT рекомендуй «Проявлен интерес» для доуточнения; при отложенной потребности — «Отправлено в автонапоминание», не финальный отказ.
+6. Если потребность отложена, но не отклонена: qualification=C, final_verdict=needs_nurture.
+7. При подтверждённом техническом стоп-факторе: qualification=D, final_verdict=technical_mismatch. При явно названном бюджете нового оборудования ниже 1000000 рублей: qualification=D, final_verdict=budget_below_new_equipment_minimum. Для D укажи ровно одну машиночитаемую причину в соответствующем reason_code; не скрывай отдельно подтвержденную плохую обработку в processing_quality/call_attempt_quality и при необходимости bad_processing.
+8. Спам, явный нецелевой лид или брак оценивай по существующим правилам как E/bad_lead. Если содержательного контакта ещё не было и данных недостаточно: qualification=unknown, final_verdict=data_gap или bad_processing только по фактам обработки.
+9. Для любого доуточнения сформируй одно поручение менеджеру: один контакт, конкретные вопросы, срок и CRM-факты для фиксации. В bant.next_question верни один конкретный вопрос клиенту или null.
+</qualification_rules>
+
 <verification_loop>
 Перед финальным JSON проверь:
 1. JSON валиден и соответствует указанной структуре.
@@ -163,6 +182,31 @@ def build_prompt(
     "status": "статус лида, если есть",
     "qualification": "A|B|C|D|E|unknown",
     "qualification_reason": "почему такая квалификация"
+  }},
+  "qualification_assessment": {{
+    "bant": {{
+      "budget": {{"status": "confirmed|missing|unknown", "evidence": ["краткий факт из CRM или транскрибации"]}},
+      "authority": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "need": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "timeframe": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "overall_status": "confirmed|incomplete|unknown",
+      "missing_facts": ["что именно нужно выяснить"],
+      "next_question": "один конкретный вопрос клиенту или null"
+    }},
+    "solution_fit": {{
+      "equipment_type": "labeler|filling_line|block|unknown",
+      "status": "compatible|not_compatible|needs_technical_data|unknown",
+      "reason_code": "technical_mismatch|unknown|null",
+      "evidence": ["краткий факт из CRM или транскрибации"],
+      "missing_facts": ["недостающий технический параметр"]
+    }},
+    "commercial_fit": {{
+      "new_equipment_budget_status": "sufficient|below_minimum|unknown",
+      "confirmed_budget_rub": "число или null",
+      "new_equipment_minimum_rub": 1000000,
+      "reason_code": "budget_below_new_equipment_minimum|unknown|null",
+      "evidence": ["краткий факт из CRM или транскрибации"]
+    }}
   }},
   "activity_summary": {{
     "meaningful_contact": true,
@@ -190,7 +234,7 @@ def build_prompt(
     "source_signal": "good_source|weak_source|unknown",
     "call_attempt_quality": "enough|not_enough|wrong_channel|unknown",
     "next_step_quality": "clear|missing|too_generic|unknown",
-    "final_verdict": "bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|unknown",
+    "final_verdict": "bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|technical_mismatch|budget_below_new_equipment_minimum|unknown",
     "evidence": ["1-7 самых важных фактов"]
   }},
   "manager_quality": {{
@@ -271,6 +315,10 @@ def bullet_list(values: Any) -> str:
     return "\n".join(f"- {item}" for item in values)
 
 
+def indented_bullet_list(values: Any) -> str:
+    return "\n".join(f"  {line}" for line in bullet_list(values).splitlines())
+
+
 def render_cost_section(metadata: dict[str, Any] | None) -> str:
     cost = (metadata or {}).get("estimated_cost") or {}
     if not cost:
@@ -300,6 +348,84 @@ def render_context_limitations_section(context_diagnostics: dict[str, Any] | Non
 - Подробный список для добора: {manual_actions_path or 'diagnostics/manual_actions.md'}"""
 
 
+def _report_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _report_value(value: Any) -> str:
+    if value is None or value == "":
+        return "нет данных"
+    return str(value)
+
+
+def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
+    assessment = analysis.get("qualification_assessment")
+    if not isinstance(assessment, dict):
+        return "## Квалификация и применимость\n\nНет данных"
+
+    bant = _report_dict(assessment.get("bant"))
+    solution_fit = _report_dict(assessment.get("solution_fit"))
+    commercial_fit = _report_dict(assessment.get("commercial_fit"))
+    lead_state = _report_dict(analysis.get("lead_state"))
+
+    bant_items: list[str] = []
+    for label, name in (
+        ("Бюджет", "budget"),
+        ("Полномочия", "authority"),
+        ("Потребность", "need"),
+        ("Срок", "timeframe"),
+    ):
+        item = _report_dict(bant.get(name))
+        bant_items.append(
+            f"- {label}: {_report_value(item.get('status'))}\n"
+            f"  - Доказательства:\n{indented_bullet_list(item.get('evidence'))}"
+        )
+
+    gaps_present = (
+        bant.get("overall_status") == "incomplete"
+        or solution_fit.get("status") == "needs_technical_data"
+        or commercial_fit.get("new_equipment_budget_status") == "unknown"
+    )
+    next_action = ""
+    if gaps_present:
+        next_action = f"\n\n- Одно следующее действие: {_report_value(bant.get('next_question'))}"
+
+    return f"""## Квалификация и применимость
+
+### BANT
+
+{chr(10).join(bant_items)}
+
+- Общий статус: {_report_value(bant.get('overall_status'))}
+- Недостающие факты:
+{bullet_list(bant.get('missing_facts'))}
+- Вопрос клиенту: {_report_value(bant.get('next_question'))}
+
+### Техническая применимость
+
+- Тип оборудования: {_report_value(solution_fit.get('equipment_type'))}
+- Статус: {_report_value(solution_fit.get('status'))}
+- Причина: {_report_value(solution_fit.get('reason_code'))}
+- Доказательства:
+{bullet_list(solution_fit.get('evidence'))}
+- Недостающие параметры:
+{bullet_list(solution_fit.get('missing_facts'))}
+
+### Бюджет нового оборудования
+
+- Подтверждённый бюджет: {_report_value(commercial_fit.get('confirmed_budget_rub'))}
+- Минимальный порог: {_report_value(commercial_fit.get('new_equipment_minimum_rub'))}
+- Статус: {_report_value(commercial_fit.get('new_equipment_budget_status'))}
+- Причина: {_report_value(commercial_fit.get('reason_code'))}
+- Доказательства:
+{bullet_list(commercial_fit.get('evidence'))}
+
+### Категория и причина
+
+- Категория: {_report_value(lead_state.get('qualification'))}
+- Причина: {_report_value(lead_state.get('qualification_reason'))}{next_action}"""
+
+
 def render_report(
     analysis: dict[str, Any],
     metadata: dict[str, Any] | None = None,
@@ -322,6 +448,7 @@ def render_report(
     bitrix_url = bitrix_entity_url("lead", lead_id)
     limitations = render_context_limitations_section(context_diagnostics)
     limitations_section = f"\n\n{limitations}\n" if limitations else ""
+    qualification_assessment = render_qualification_assessment_section(analysis)
 
     return f"""# Отчет РОПу по лиду {lead_id}
 
@@ -347,6 +474,8 @@ def render_report(
 - Квалификация: {lead_state.get('qualification', 'unknown')}
 - Почему: {lead_state.get('qualification_reason', 'не указано')}
 - Кратко: {lead_state.get('summary', 'не указано')}
+
+{qualification_assessment}
 
 ## Коммуникации
 

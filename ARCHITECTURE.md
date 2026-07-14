@@ -98,9 +98,9 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Общая логика транскрибации: `openai_api/audio/transcribe_core.py`
 - Short-call / недозвон filter: `openai_api/audio/short_call.py`
 - Deal LLM-анализ: `openai_api/llm/analyze_deal.py`
-- Lead LLM-анализ: `openai_api/llm/analyze_lead.py`
+- Lead LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
-- Валидация LLM JSON перед отчётом: `openai_api/llm/validation.py`
+- Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead-анализа: `openai_api/llm/validation.py`
 - Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
 - Compact OKF packs: `openai_api/llm/attention_delta_knowledge.py`, `knowledge/clients/praktikm/attention_delta_*.md`
 - Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
@@ -150,8 +150,8 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 25. `manager_action_block` сохранён для обратной совместимости: его `primary_text` — готовый текст именно клиенту, а не инструкция менеджеру. Чеклист блока содержит только факты для CRM после контакта.
 26. Markdown-отчёт по сделке и лиду должен начинаться с раздела `## Что сделать РОПу сейчас`; текст клиенту выводится ниже как готовый материал менеджеру для одного контакта.
 27. Deal-анализ обязан возвращать `money_path_diagnosis`: где застрял путь к деньгам, почему деньги под риском, у кого следующий шаг, какой факт нужен для движения и evidence.
-28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence.
-29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict.
+28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, финальный вердикт и evidence. Полный lead-анализ также обязан возвращать `qualification_assessment` с независимыми BANT, технической и коммерческой оценками.
+29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict. Неполные BANT или технические данные не являются техническим либо бюджетным отказом; `technical_mismatch` и `budget_below_new_equipment_minimum` требуют соответственно подтверждённого стоп-фактора или явно названного бюджета нового оборудования ниже 1 000 000 ₽.
 30. Полная история клиента строится read-only: `customer_history_bundle` может читать root lead/deal, контакты, связанные сделки контакта, duplicate leads по телефону/email, активности, timeline comments и внутренние Bitrix IM-чаты CRM-сущностей, но не пишет в Bitrix.
 31. `CONTACT_ID` — базовая связка клиента. Если `CONTACT_ID` отсутствует, fallback по телефону/email должен подтверждать совпадение через `crm.contact.get` или `crm.lead.get`; неподтвержденные кандидаты остаются только в diagnostics.
 32. Если fallback нашел несколько подтвержденных контактов, автосклейка не применяется: такие совпадения считаются ambiguous и требуют ручной проверки.

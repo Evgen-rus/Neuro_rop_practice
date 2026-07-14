@@ -529,6 +529,66 @@ p {
   color: var(--dark);
 }
 
+.qualification-summary {
+  margin-top: 12px;
+  border: 1px solid #c9dfd2;
+  border-radius: 10px;
+  background: #f7fcf8;
+  padding: 16px 18px;
+}
+
+.qualification-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.qualification-summary h3 {
+  margin-bottom: 4px;
+}
+
+.qualification-summary p {
+  margin: 0;
+}
+
+.qualification-cards {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.qualification-cards .card {
+  background: #fff;
+}
+
+.qualification-question,
+.qualification-empty {
+  margin-top: 12px;
+  border-radius: 8px;
+  padding: 12px 14px;
+  line-height: 1.4;
+}
+
+.qualification-question {
+  border: 1px solid #bfe0ff;
+  background: #f5f9ff;
+  color: var(--dark);
+  font-weight: 700;
+}
+
+.qualification-question .label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.qualification-empty {
+  border: 1px dashed #b8c8bc;
+  color: var(--muted);
+}
+
 .internal-checks,
 .review-status {
   margin-top: 12px;
@@ -983,6 +1043,7 @@ ul.facts.bad li:before {
   .grid,
   .two,
   .cards,
+  .qualification-cards,
   .actions,
   .pipeline,
   .filters,
