@@ -145,22 +145,27 @@ def build_prompt(
 14. manager_action_block.manager_checklist — короткий список CRM-фактов после контакта; не дублируй в нём задачу или текст клиенту.
 
 <qualification_rules>
-Сначала заполни qualification_assessment: BANT, техническую применимость и коммерческую реализуемость нового оборудования. Только затем выбери lead_state.qualification, loss_diagnosis.final_verdict и рекомендацию.
+Сначала заполни qualification_assessment: четыре независимых критерия BANT, техническую применимость, коммерческую проверку бюджета нового оборудования, категорию лида и маршрут. Только затем продублируй категорию в legacy-поле lead_state.qualification, выбери loss_diagnosis.final_verdict и рекомендацию.
 
 1. BANT — четыре независимых признака:
-   - budget: реальный бюджет и готовность двигаться к договору с предоплатой;
-   - authority: контакт ЛПР либо влияет на решение;
+   - budget: реальный бюджет, финансовая возможность и готовность двигаться к договору с предоплатой;
+   - authority: контакт является ЛПР либо подтверждённо влияет на решение;
    - need: конкретная актуальная потребность;
    - timeframe: назван срок закупки или запуска.
-   Для этикетировщика готовность к предоплате в срок до 30 дней поддерживает timeframe=confirmed; для блока или линии розлива — до 60 дней. Это не заменяет остальные признаки BANT.
-2. Техническая применимость оценивается по типу оборудования и известным параметрам из OKF technical_data.md. technical_mismatch допустим только при факте из CRM-истории или транскрибации о конкретном техническом стоп-факторе. Если параметров не хватает, укажи needs_technical_data, недостающие параметры и вопрос клиенту; это не технический отказ.
-3. Коммерческая реализуемость относится только к новому оборудованию. below_minimum и verdict budget_below_new_equipment_minimum допустимы только когда клиент явно назвал бюджет менее 1000000 рублей. Не извлекай, не округляй и не предполагай бюджет. Не делай выводов о б/у оборудовании, аренде, лизинге, скидках или кредитной истории без отдельного подтвержденного правила.
-4. Если BANT подтверждён, решение совместимо и подтверждённый бюджет нового оборудования не ниже 1000000 рублей: qualification=A, final_verdict=ready_for_deal.
-5. Если проект реален, но BANT или технических данных не хватает: qualification=B или unknown по фактам, final_verdict=data_gap. При неполном BANT рекомендуй «Проявлен интерес» для доуточнения; при отложенной потребности — «Отправлено в автонапоминание», не финальный отказ.
-6. Если потребность отложена, но не отклонена: qualification=C, final_verdict=needs_nurture.
-7. При подтверждённом техническом стоп-факторе: qualification=D, final_verdict=technical_mismatch. При явно названном бюджете нового оборудования ниже 1000000 рублей: qualification=D, final_verdict=budget_below_new_equipment_minimum. Для D укажи ровно одну машиночитаемую причину в соответствующем reason_code; не скрывай отдельно подтвержденную плохую обработку в processing_quality/call_attempt_quality и при необходимости bad_processing.
-8. Спам, явный нецелевой лид или брак оценивай по существующим правилам как E/bad_lead. Если содержательного контакта ещё не было и данных недостаточно: qualification=unknown, final_verdict=data_gap или bad_processing только по фактам обработки.
-9. Для любого доуточнения сформируй одно поручение менеджеру: один контакт, конкретные вопросы, срок и CRM-факты для фиксации. В bant.next_question верни один конкретный вопрос клиенту или null.
+   Статусы критериев: confirmed — критерий доказательно подтверждён; not_confirmed — доступные факты не подтверждают критерий, но отрицательного ответа нет; negative — есть подтверждённый отрицательный ответ/стоп-фактор именно по критерию; unknown — данных недостаточно. Отсутствие информации всегда unknown или not_confirmed, но не negative.
+   Для timeframe отдельно выбери purchase_window: up_to_60_days, days_61_to_89, months_3_to_12, over_12_months или unknown. Ровно 3 месяца относится к months_3_to_12.
+2. Для каждого критерия верни заметное русское label, краткий summary, evidence, missing_facts и один конкретный next_question_or_action при нехватке данных. Общий bant.next_question оставь как один главный вопрос для обратной совместимости.
+3. Техническая применимость оценивается отдельно от BANT по типу оборудования и известным параметрам из OKF technical_data.md. Ожидание заключения технического специалиста и нехватка параметров означают needs_technical_data/insufficient, а не техническую несовместимость и не категорию D. technical_mismatch допустим только при подтверждённом конкретном стоп-факторе из CRM-истории или транскрибации.
+4. Коммерческая проверка относится только к явно названному бюджету нового оборудования. below_minimum и budget_below_new_equipment_minimum допустимы только при явно названной сумме менее 1000000 рублей. Не извлекай, не округляй и не предполагай бюджет. Лизинг, рассрочка, аренда, б/у или более доступная комплектация могут быть рекомендацией, но не меняют категорию сами по себе.
+5. Категория A: одновременно полный confirmed BANT, compatible, явно подтверждённый бюджет нового оборудования от 1000000 рублей и timeframe up_to_60_days.
+6. Категория B: проект реален (need=confirmed), срок up_to_60_days или days_61_to_89, не хватает части BANT либо технических данных, и нет подтверждённого стоп-фактора.
+7. Категория C: подтверждённая отложенная потребность со сроком months_3_to_12. Обязателен контролируемый возврат с датой: CRM-дело, задача или предусмотренное системой действие. Даже если срок более 6 месяцев соответствует браковочной стадии текущей воронки, возврат должен остаться управляемым.
+8. Категория D допустима только для одной или нескольких подтверждённых причин: timeframe_over_12_months, technical_mismatch, budget_below_new_equipment_minimum. Причины храни в lead_category.reason_codes; нехватка технических данных не является D.
+9. Категория E допустима только для подтверждённой причины: spam, invalid_contact или call_cycle_completed_no_contact. Используй существующую рекомендацию поставщика из call_attempt_rules.md как цикл дозвона и не придумывай новый норматив. Пока цикл не завершён, ставь unknown, не E.
+10. Категория unknown: нет содержательного контакта, реальность проекта не доказана, цикл дозвона не завершён или данных недостаточно для A–E. Обязательны missing_facts и конкретный next_step.
+11. Категория и маршрут различаются. ordinary_deal разрешён только при полном confirmed BANT. op2 разрешён при ровно одном not_confirmed/unknown критерии BANT и отсутствии negative. Иначе используй clarification, auto_reminder, deferred_demand, disqualified или unknown. Если текущий маршрут нарушает правило, lead_route.status=violation.
+12. Не смешивай качество лида с качеством обработки: loss_diagnosis независимо оценивает lead_quality, processing_quality, call_attempt_quality, next_step_quality и route_quality. Если менеджер не выяснил BANT, это не означает отрицательный BANT.
+13. Для любого доуточнения сформируй одно поручение менеджеру: один контакт, конкретные вопросы, срок и CRM-факты для фиксации.
 </qualification_rules>
 
 <verification_loop>
@@ -185,27 +190,52 @@ def build_prompt(
   }},
   "qualification_assessment": {{
     "bant": {{
-      "budget": {{"status": "confirmed|missing|unknown", "evidence": ["краткий факт из CRM или транскрибации"]}},
-      "authority": {{"status": "confirmed|missing|unknown", "evidence": []}},
-      "need": {{"status": "confirmed|missing|unknown", "evidence": []}},
-      "timeframe": {{"status": "confirmed|missing|unknown", "evidence": []}},
-      "overall_status": "confirmed|incomplete|unknown",
+      "budget": {{"label": "Бюджет и финансовая готовность", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": ["факт из CRM или коммуникации"], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
+      "authority": {{"label": "ЛПР и влияние на решение", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
+      "need": {{"label": "Актуальная потребность", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
+      "timeframe": {{"label": "Срок покупки или запуска", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "purchase_window": "up_to_60_days|days_61_to_89|months_3_to_12|over_12_months|unknown", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
+      "overall_status": "confirmed|incomplete|negative|unknown",
       "missing_facts": ["что именно нужно выяснить"],
       "next_question": "один конкретный вопрос клиенту или null"
     }},
     "solution_fit": {{
       "equipment_type": "labeler|filling_line|block|unknown",
       "status": "compatible|not_compatible|needs_technical_data|unknown",
+      "technical_data_status": "sufficient|insufficient|unknown",
       "reason_code": "technical_mismatch|unknown|null",
       "evidence": ["краткий факт из CRM или транскрибации"],
-      "missing_facts": ["недостающий технический параметр"]
+      "missing_facts": ["недостающий технический параметр"],
+      "next_question_or_action": "конкретный вопрос или null"
     }},
     "commercial_fit": {{
       "new_equipment_budget_status": "sufficient|below_minimum|unknown",
+      "budget_named": true,
+      "applies_to_new_equipment": "true|false|unknown",
       "confirmed_budget_rub": "число или null",
       "new_equipment_minimum_rub": 1000000,
       "reason_code": "budget_below_new_equipment_minimum|unknown|null",
-      "evidence": ["краткий факт из CRM или транскрибации"]
+      "evidence": ["краткий факт из CRM или транскрибации"],
+      "missing_facts": [],
+      "next_question_or_action": "конкретный вопрос или null"
+    }},
+    "lead_category": {{
+      "value": "A|B|C|D|E|unknown",
+      "reason": "почему присвоена категория",
+      "reason_codes": ["машиночитаемые причины, если есть"],
+      "bant_factors": ["как BANT повлиял на категорию"],
+      "technical_factors": ["как техническая проверка повлияла на категорию"],
+      "budget_factors": ["как бюджетная проверка повлияла на категорию"],
+      "missing_facts": ["чего не хватает"],
+      "next_step": "одно конкретное следующее действие"
+    }},
+    "lead_route": {{
+      "current_route": "ordinary_deal|op2|clarification|auto_reminder|deferred_demand|disqualified|unknown",
+      "recommended_route": "ordinary_deal|op2|clarification|auto_reminder|deferred_demand|disqualified|unknown",
+      "status": "allowed|violation|needs_clarification|unknown",
+      "reason": "почему маршрут корректен или нарушен",
+      "controlled_return_required": false,
+      "controlled_return_date": "YYYY-MM-DD или null",
+      "evidence": ["факт о текущем маршруте или следующем CRM-действии"]
     }}
   }},
   "activity_summary": {{
@@ -232,9 +262,10 @@ def build_prompt(
     "lead_quality": "good|weak|bad|unknown",
     "processing_quality": "good|weak|bad|unknown",
     "source_signal": "good_source|weak_source|unknown",
-    "call_attempt_quality": "enough|not_enough|wrong_channel|unknown",
+    "call_attempt_quality": "enough|not_enough|wrong_channel|not_applicable|unknown",
     "next_step_quality": "clear|missing|too_generic|unknown",
-    "final_verdict": "bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|technical_mismatch|budget_below_new_equipment_minimum|unknown",
+    "route_quality": "correct|violation|needs_clarification|unknown",
+    "final_verdict": "bad_lead|bad_processing|data_gap|needs_nurture|ready_for_deal|technical_mismatch|budget_below_new_equipment_minimum|timeframe_over_12_months|no_contact_after_full_cycle|unknown",
     "evidence": ["1-7 самых важных фактов"]
   }},
   "manager_quality": {{
@@ -245,6 +276,7 @@ def build_prompt(
   "call_attempt_recommendation": {{
     "applicable": true,
     "contact_status": "meaningful_contact|missed_call|busy|voicemail|unavailable|dropped|unknown",
+    "cycle_status": "not_started|in_progress|completed|not_applicable|unknown",
     "attempts_found": "что видно по попыткам дозвона",
     "recommendation_fit": "follows|partial|does_not_follow|unknown|not_applicable",
     "recommendation_gap": "что не сделано по рекомендации или чего не хватает в истории",
@@ -366,6 +398,8 @@ def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
     bant = _report_dict(assessment.get("bant"))
     solution_fit = _report_dict(assessment.get("solution_fit"))
     commercial_fit = _report_dict(assessment.get("commercial_fit"))
+    lead_category = _report_dict(assessment.get("lead_category"))
+    lead_route = _report_dict(assessment.get("lead_route"))
     lead_state = _report_dict(analysis.get("lead_state"))
 
     bant_items: list[str] = []
@@ -376,10 +410,17 @@ def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
         ("Срок", "timeframe"),
     ):
         item = _report_dict(bant.get(name))
-        bant_items.append(
-            f"- {label}: {_report_value(item.get('status'))}\n"
-            f"  - Доказательства:\n{indented_bullet_list(item.get('evidence'))}"
-        )
+        display_label = item.get("label") or label
+        detail_lines = [
+            f"- {display_label}: {_report_value(item.get('status'))}",
+            f"  - Вывод: {_report_value(item.get('summary'))}",
+            f"  - Доказательства:\n{indented_bullet_list(item.get('evidence'))}",
+            f"  - Чего не хватает:\n{indented_bullet_list(item.get('missing_facts'))}",
+            f"  - Вопрос/действие: {_report_value(item.get('next_question_or_action'))}",
+        ]
+        if name == "timeframe":
+            detail_lines.insert(2, f"  - Горизонт: {_report_value(item.get('purchase_window'))}")
+        bant_items.append("\n".join(detail_lines))
 
     gaps_present = (
         bant.get("overall_status") == "incomplete"
@@ -405,25 +446,50 @@ def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
 
 - Тип оборудования: {_report_value(solution_fit.get('equipment_type'))}
 - Статус: {_report_value(solution_fit.get('status'))}
+- Достаточность технических данных: {_report_value(solution_fit.get('technical_data_status'))}
 - Причина: {_report_value(solution_fit.get('reason_code'))}
 - Доказательства:
 {bullet_list(solution_fit.get('evidence'))}
 - Недостающие параметры:
 {bullet_list(solution_fit.get('missing_facts'))}
+- Вопрос/действие: {_report_value(solution_fit.get('next_question_or_action'))}
 
 ### Бюджет нового оборудования
 
 - Подтверждённый бюджет: {_report_value(commercial_fit.get('confirmed_budget_rub'))}
+- Бюджет назван: {_report_value(commercial_fit.get('budget_named'))}
+- Относится к новому оборудованию: {_report_value(commercial_fit.get('applies_to_new_equipment'))}
 - Минимальный порог: {_report_value(commercial_fit.get('new_equipment_minimum_rub'))}
 - Статус: {_report_value(commercial_fit.get('new_equipment_budget_status'))}
 - Причина: {_report_value(commercial_fit.get('reason_code'))}
 - Доказательства:
 {bullet_list(commercial_fit.get('evidence'))}
+- Чего не хватает:
+{bullet_list(commercial_fit.get('missing_facts'))}
 
-### Категория и причина
+### Категория лида
 
-- Категория: {_report_value(lead_state.get('qualification'))}
-- Причина: {_report_value(lead_state.get('qualification_reason'))}{next_action}"""
+- Категория: {_report_value(lead_category.get('value') or lead_state.get('qualification'))}
+- Причина: {_report_value(lead_category.get('reason') or lead_state.get('qualification_reason'))}
+- Причины D/E: {', '.join(str(item) for item in lead_category.get('reason_codes', [])) or 'нет'}
+- BANT-факторы:
+{bullet_list(lead_category.get('bant_factors'))}
+- Технические факторы:
+{bullet_list(lead_category.get('technical_factors'))}
+- Бюджетные факторы:
+{bullet_list(lead_category.get('budget_factors'))}
+- Недостающие факты:
+{bullet_list(lead_category.get('missing_facts'))}
+- Следующий шаг: {_report_value(lead_category.get('next_step'))}
+
+### Маршрут лида
+
+- Текущий маршрут: {_report_value(lead_route.get('current_route'))}
+- Рекомендуемый маршрут: {_report_value(lead_route.get('recommended_route'))}
+- Проверка маршрута: {_report_value(lead_route.get('status'))}
+- Причина: {_report_value(lead_route.get('reason'))}
+- Контролируемый возврат: {_report_value(lead_route.get('controlled_return_required'))}
+- Дата возврата: {_report_value(lead_route.get('controlled_return_date'))}{next_action}"""
 
 
 def render_report(
@@ -495,6 +561,7 @@ def render_report(
 - Сигнал источника: {loss.get('source_signal', 'не указано')}
 - Качество дозвона: {loss.get('call_attempt_quality', 'не указано')}
 - Качество следующего шага: {loss.get('next_step_quality', 'не указано')}
+- Корректность маршрута: {loss.get('route_quality', 'не указано')}
 - Вердикт: {loss.get('final_verdict', 'не указано')}
 
 Основание:
@@ -517,6 +584,7 @@ def render_report(
 
 - Применима: {human_value(call_recommendation.get('applicable'))}
 - Статус контакта: {call_recommendation.get('contact_status', 'не указано')}
+- Статус цикла дозвона: {call_recommendation.get('cycle_status', 'не указано')}
 - Попытки в истории: {call_recommendation.get('attempts_found', 'не указано')}
 - Соответствие рекомендации: {call_recommendation.get('recommendation_fit', 'не указано')}
 - Что усилить: {call_recommendation.get('recommendation_gap', 'не указано')}

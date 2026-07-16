@@ -80,8 +80,18 @@ MAX_LIST_LIMITS = {
     "qualification_assessment.bant.authority.evidence": 7,
     "qualification_assessment.bant.need.evidence": 7,
     "qualification_assessment.bant.timeframe.evidence": 7,
+    "qualification_assessment.bant.budget.missing_facts": 7,
+    "qualification_assessment.bant.authority.missing_facts": 7,
+    "qualification_assessment.bant.need.missing_facts": 7,
+    "qualification_assessment.bant.timeframe.missing_facts": 7,
     "qualification_assessment.solution_fit.evidence": 7,
     "qualification_assessment.commercial_fit.evidence": 7,
+    "qualification_assessment.lead_category.reason_codes": 7,
+    "qualification_assessment.lead_category.bant_factors": 7,
+    "qualification_assessment.lead_category.technical_factors": 7,
+    "qualification_assessment.lead_category.budget_factors": 7,
+    "qualification_assessment.lead_category.missing_facts": 7,
+    "qualification_assessment.lead_route.evidence": 7,
 }
 
 
@@ -127,6 +137,27 @@ def normalize_analysis_for_validation(
         changes,
         allow_legacy_qualification_assessment=allow_legacy_qualification_assessment,
     )
+    if allow_legacy_qualification_assessment:
+        loss = analysis.get("loss_diagnosis")
+        if isinstance(loss, dict) and "route_quality" not in loss:
+            loss["route_quality"] = "unknown"
+            changes.append({"path": "loss_diagnosis.route_quality", "action": "added_legacy_fallback"})
+        call_attempt = analysis.get("call_attempt_recommendation")
+        if isinstance(call_attempt, dict) and "cycle_status" not in call_attempt:
+            call_attempt["cycle_status"] = "unknown"
+            changes.append({"path": "call_attempt_recommendation.cycle_status", "action": "added_legacy_fallback"})
+        lead_state = analysis.get("lead_state")
+        assessment = analysis.get("qualification_assessment")
+        category = assessment.get("lead_category") if isinstance(assessment, dict) else None
+        if isinstance(lead_state, dict) and isinstance(category, dict) and any(
+            change.get("action") == "added_legacy_fallback" and change.get("path") == "qualification_assessment"
+            for change in changes
+        ):
+            lead_state["qualification"] = "unknown"
+            if isinstance(loss, dict):
+                loss["route_quality"] = "unknown"
+            if isinstance(call_attempt, dict):
+                call_attempt["cycle_status"] = "unknown"
     for path, limit in MAX_LIST_LIMITS.items():
         value = _value_at_path(analysis, path)
         if not isinstance(value, list) or len(value) <= limit:
@@ -145,15 +176,32 @@ def normalize_analysis_for_validation(
 
 
 def _legacy_qualification_assessment() -> dict[str, Any]:
-    def bant_item() -> dict[str, Any]:
-        return {"status": "unknown", "evidence": []}
+    labels = {
+        "budget": "Бюджет и финансовая готовность",
+        "authority": "ЛПР и влияние на решение",
+        "need": "Актуальная потребность",
+        "timeframe": "Срок покупки или запуска",
+    }
+
+    def bant_item(name: str) -> dict[str, Any]:
+        item = {
+            "label": labels[name],
+            "status": "unknown",
+            "summary": "В старом анализе нет структурированной оценки.",
+            "evidence": [],
+            "missing_facts": ["Нет данных в сохранённом формате анализа."],
+            "next_question_or_action": "Проверить факты в CRM и уточнить критерий у клиента.",
+        }
+        if name == "timeframe":
+            item["purchase_window"] = "unknown"
+        return item
 
     return {
         "bant": {
-            "budget": bant_item(),
-            "authority": bant_item(),
-            "need": bant_item(),
-            "timeframe": bant_item(),
+            "budget": bant_item("budget"),
+            "authority": bant_item("authority"),
+            "need": bant_item("need"),
+            "timeframe": bant_item("timeframe"),
             "overall_status": "unknown",
             "missing_facts": [],
             "next_question": None,
@@ -161,15 +209,40 @@ def _legacy_qualification_assessment() -> dict[str, Any]:
         "solution_fit": {
             "equipment_type": "unknown",
             "status": "unknown",
+            "technical_data_status": "unknown",
             "reason_code": "unknown",
             "evidence": [],
             "missing_facts": [],
+            "next_question_or_action": None,
         },
         "commercial_fit": {
             "new_equipment_budget_status": "unknown",
+            "budget_named": False,
+            "applies_to_new_equipment": "unknown",
             "confirmed_budget_rub": None,
             "new_equipment_minimum_rub": 1_000_000,
             "reason_code": "unknown",
+            "evidence": [],
+            "missing_facts": [],
+            "next_question_or_action": None,
+        },
+        "lead_category": {
+            "value": "unknown",
+            "reason": "В старом анализе нет структурированного основания категории.",
+            "reason_codes": [],
+            "bant_factors": [],
+            "technical_factors": [],
+            "budget_factors": [],
+            "missing_facts": ["Нет данных в сохранённом формате анализа."],
+            "next_step": "Проверить факты в CRM и при необходимости обновить анализ.",
+        },
+        "lead_route": {
+            "current_route": "unknown",
+            "recommended_route": "unknown",
+            "status": "unknown",
+            "reason": "В старом анализе нет структурированной проверки маршрута.",
+            "controlled_return_required": False,
+            "controlled_return_date": None,
             "evidence": [],
         },
     }
@@ -399,21 +472,65 @@ def _validate_qualification_evidence(
         errors.append(f"{path} must not be empty when status is {status!r}")
 
 
-def _validate_bant_item(value: Any, path: str, errors: list[str]) -> None:
+def _validate_optional_question(value: Any, path: str, errors: list[str]) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        errors.append(f"expected {path} to be non-empty string or null")
+
+
+def _validate_bant_item(
+    value: Any,
+    path: str,
+    errors: list[str],
+    *,
+    lead_contract: bool = False,
+    name: str = "",
+) -> None:
     item = _expect_dict(value, path, errors)
     if not item:
         return
-    _require_fields(item, {"status", "evidence"}, path, errors)
+    required = {"status", "evidence"}
+    if lead_contract:
+        required |= {"label", "summary", "missing_facts", "next_question_or_action"}
+        if name == "timeframe":
+            required.add("purchase_window")
+    _require_fields(item, required, path, errors)
     status = item.get("status")
-    _expect_enum(status, f"{path}.status", {"confirmed", "missing", "unknown"}, errors)
-    _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, {"missing", "unknown"}, errors)
+    statuses = {"confirmed", "not_confirmed", "negative", "unknown"} if lead_contract else {
+        "confirmed",
+        "missing",
+        "unknown",
+    }
+    _expect_enum(status, f"{path}.status", statuses, errors)
+    empty_allowed = {"not_confirmed", "unknown"} if lead_contract else {"missing", "unknown"}
+    _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, empty_allowed, errors)
+    if not lead_contract:
+        return
+    _expect_non_empty_string(item.get("label"), f"{path}.label", errors)
+    _expect_non_empty_string(item.get("summary"), f"{path}.summary", errors)
+    missing_facts = _validate_short_text_list(item.get("missing_facts"), f"{path}.missing_facts", 7, errors)
+    question = item.get("next_question_or_action")
+    _validate_optional_question(question, f"{path}.next_question_or_action", errors)
+    if status in {"not_confirmed", "unknown"} and not missing_facts and question is None:
+        errors.append(f"{path} requires missing_facts or next_question_or_action when status={status}")
+    if name == "timeframe":
+        _expect_enum(
+            item.get("purchase_window"),
+            f"{path}.purchase_window",
+            {"up_to_60_days", "days_61_to_89", "months_3_to_12", "over_12_months", "unknown"},
+            errors,
+        )
 
 
-def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[str]) -> None:
+def _validate_qualification_assessment(
+    analysis: dict[str, Any], errors: list[str], *, lead_contract: bool = False
+) -> None:
     assessment = _expect_dict(analysis.get("qualification_assessment"), "qualification_assessment", errors)
     if not assessment:
         return
-    _require_fields(assessment, {"bant", "solution_fit", "commercial_fit"}, "qualification_assessment", errors)
+    required = {"bant", "solution_fit", "commercial_fit"}
+    if lead_contract:
+        required |= {"lead_category", "lead_route"}
+    _require_fields(assessment, required, "qualification_assessment", errors)
 
     bant = _expect_dict(assessment.get("bant"), "qualification_assessment.bant", errors)
     if bant:
@@ -424,12 +541,18 @@ def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[st
             errors,
         )
         for name in ("budget", "authority", "need", "timeframe"):
-            _validate_bant_item(bant.get(name), f"qualification_assessment.bant.{name}", errors)
+            _validate_bant_item(
+                bant.get(name),
+                f"qualification_assessment.bant.{name}",
+                errors,
+                lead_contract=lead_contract,
+                name=name,
+            )
         overall_status = bant.get("overall_status")
         _expect_enum(
             overall_status,
             "qualification_assessment.bant.overall_status",
-            {"confirmed", "incomplete", "unknown"},
+            {"confirmed", "incomplete", "negative", "unknown"} if lead_contract else {"confirmed", "incomplete", "unknown"},
             errors,
         )
         missing_facts = _validate_short_text_list(
@@ -439,8 +562,7 @@ def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[st
             errors,
         )
         next_question = bant.get("next_question")
-        if next_question is not None and (not isinstance(next_question, str) or not next_question.strip()):
-            errors.append("expected qualification_assessment.bant.next_question to be non-empty string or null")
+        _validate_optional_question(next_question, "qualification_assessment.bant.next_question", errors)
         if overall_status == "incomplete" and not missing_facts and next_question is None:
             errors.append(
                 "qualification_assessment.bant requires missing_facts or next_question when overall_status=incomplete"
@@ -448,9 +570,12 @@ def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[st
 
     solution_fit = _expect_dict(assessment.get("solution_fit"), "qualification_assessment.solution_fit", errors)
     if solution_fit:
+        solution_required = {"equipment_type", "status", "reason_code", "evidence", "missing_facts"}
+        if lead_contract:
+            solution_required |= {"technical_data_status", "next_question_or_action"}
         _require_fields(
             solution_fit,
-            {"equipment_type", "status", "reason_code", "evidence", "missing_facts"},
+            solution_required,
             "qualification_assessment.solution_fit",
             errors,
         )
@@ -498,18 +623,43 @@ def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[st
             errors.append(
                 "qualification_assessment.solution_fit.status must be not_compatible when reason_code=technical_mismatch"
             )
+        if lead_contract:
+            technical_data_status = solution_fit.get("technical_data_status")
+            _expect_enum(
+                technical_data_status,
+                "qualification_assessment.solution_fit.technical_data_status",
+                {"sufficient", "insufficient", "unknown"},
+                errors,
+            )
+            _validate_optional_question(
+                solution_fit.get("next_question_or_action"),
+                "qualification_assessment.solution_fit.next_question_or_action",
+                errors,
+            )
+            if status == "needs_technical_data" and technical_data_status != "insufficient":
+                errors.append(
+                    "qualification_assessment.solution_fit.technical_data_status must be insufficient when status=needs_technical_data"
+                )
 
     commercial_fit = _expect_dict(assessment.get("commercial_fit"), "qualification_assessment.commercial_fit", errors)
     if commercial_fit:
-        _require_fields(
-            commercial_fit,
-            {
+        commercial_required = {
                 "new_equipment_budget_status",
                 "confirmed_budget_rub",
                 "new_equipment_minimum_rub",
                 "reason_code",
                 "evidence",
-            },
+            }
+        if lead_contract:
+            commercial_required |= {
+                "budget_named",
+                "applies_to_new_equipment",
+                "missing_facts",
+                "next_question_or_action",
+            }
+        _require_fields(
+            commercial_fit,
+            commercial_required,
             "qualification_assessment.commercial_fit",
             errors,
         )
@@ -558,36 +708,280 @@ def _validate_qualification_assessment(analysis: dict[str, Any], errors: list[st
             errors.append(
                 "qualification_assessment.commercial_fit.new_equipment_budget_status must be below_minimum when reason_code=budget_below_new_equipment_minimum"
             )
+        if lead_contract:
+            _expect_bool(commercial_fit.get("budget_named"), "qualification_assessment.commercial_fit.budget_named", errors)
+            _expect_enum(
+                commercial_fit.get("applies_to_new_equipment"),
+                "qualification_assessment.commercial_fit.applies_to_new_equipment",
+                {True, False, "unknown"},
+                errors,
+            )
+            _validate_short_text_list(
+                commercial_fit.get("missing_facts"),
+                "qualification_assessment.commercial_fit.missing_facts",
+                7,
+                errors,
+            )
+            _validate_optional_question(
+                commercial_fit.get("next_question_or_action"),
+                "qualification_assessment.commercial_fit.next_question_or_action",
+                errors,
+            )
+            if status in {"sufficient", "below_minimum"}:
+                if commercial_fit.get("budget_named") is not True:
+                    errors.append("qualification_assessment.commercial_fit.budget_named must be true for a known budget")
+                if commercial_fit.get("applies_to_new_equipment") is not True:
+                    errors.append(
+                        "qualification_assessment.commercial_fit.applies_to_new_equipment must be true for a budget category decision"
+                    )
+
+    if lead_contract:
+        _validate_lead_category(assessment.get("lead_category"), errors)
+        _validate_lead_route(assessment.get("lead_route"), errors)
+
+
+LEAD_CATEGORY_REASONS = {
+    "technical_mismatch",
+    "budget_below_new_equipment_minimum",
+    "timeframe_over_12_months",
+    "spam",
+    "invalid_contact",
+    "call_cycle_completed_no_contact",
+}
+LEAD_D_REASONS = {
+    "technical_mismatch",
+    "budget_below_new_equipment_minimum",
+    "timeframe_over_12_months",
+}
+LEAD_E_REASONS = {"spam", "invalid_contact", "call_cycle_completed_no_contact"}
+LEAD_ROUTES = {
+    "ordinary_deal",
+    "op2",
+    "clarification",
+    "auto_reminder",
+    "deferred_demand",
+    "disqualified",
+    "unknown",
+}
+
+
+def _validate_lead_category(value: Any, errors: list[str]) -> None:
+    path = "qualification_assessment.lead_category"
+    category = _expect_dict(value, path, errors)
+    if not category:
+        return
+    _require_fields(
+        category,
+        {
+            "value",
+            "reason",
+            "reason_codes",
+            "bant_factors",
+            "technical_factors",
+            "budget_factors",
+            "missing_facts",
+            "next_step",
+        },
+        path,
+        errors,
+    )
+    value_name = category.get("value")
+    _expect_enum(value_name, f"{path}.value", {"A", "B", "C", "D", "E", "unknown"}, errors)
+    _expect_non_empty_string(category.get("reason"), f"{path}.reason", errors)
+    _expect_non_empty_string(category.get("next_step"), f"{path}.next_step", errors)
+    reason_codes = _validate_short_text_list(category.get("reason_codes"), f"{path}.reason_codes", 7, errors)
+    invalid_reasons = [reason for reason in reason_codes if reason not in LEAD_CATEGORY_REASONS]
+    if invalid_reasons:
+        errors.append(f"invalid lead category reason_codes: {invalid_reasons!r}")
+    for field in ("bant_factors", "technical_factors", "budget_factors", "missing_facts"):
+        _validate_short_text_list(category.get(field), f"{path}.{field}", 7, errors)
+    if value_name == "D" and (not reason_codes or any(reason not in LEAD_D_REASONS for reason in reason_codes)):
+        errors.append("qualification_assessment.lead_category.value=D requires only confirmed D reason_codes")
+    if value_name == "E" and (not reason_codes or any(reason not in LEAD_E_REASONS for reason in reason_codes)):
+        errors.append("qualification_assessment.lead_category.value=E requires only confirmed E reason_codes")
+    if value_name not in {"D", "E"} and reason_codes:
+        errors.append("qualification_assessment.lead_category.reason_codes are reserved for D/E grounds")
+    if value_name == "unknown" and not category.get("missing_facts"):
+        errors.append("qualification_assessment.lead_category.missing_facts must not be empty for unknown")
+
+
+def _validate_lead_route(value: Any, errors: list[str]) -> None:
+    path = "qualification_assessment.lead_route"
+    route = _expect_dict(value, path, errors)
+    if not route:
+        return
+    _require_fields(
+        route,
+        {
+            "current_route",
+            "recommended_route",
+            "status",
+            "reason",
+            "controlled_return_required",
+            "controlled_return_date",
+            "evidence",
+        },
+        path,
+        errors,
+    )
+    _expect_enum(route.get("current_route"), f"{path}.current_route", LEAD_ROUTES, errors)
+    _expect_enum(route.get("recommended_route"), f"{path}.recommended_route", LEAD_ROUTES, errors)
+    _expect_enum(
+        route.get("status"),
+        f"{path}.status",
+        {"allowed", "violation", "needs_clarification", "unknown"},
+        errors,
+    )
+    _expect_non_empty_string(route.get("reason"), f"{path}.reason", errors)
+    _expect_bool(route.get("controlled_return_required"), f"{path}.controlled_return_required", errors)
+    _validate_optional_question(route.get("controlled_return_date"), f"{path}.controlled_return_date", errors)
+    _validate_short_text_list(route.get("evidence"), f"{path}.evidence", 7, errors)
+    if route.get("controlled_return_required") and route.get("controlled_return_date") is None:
+        errors.append(f"{path}.controlled_return_date is required when controlled_return_required=true")
+
+
+def _bant_statuses(assessment: dict[str, Any]) -> list[Any]:
+    bant = assessment.get("bant")
+    if not isinstance(bant, dict):
+        return []
+    return [bant.get(name, {}).get("status") if isinstance(bant.get(name), dict) else None for name in (
+        "budget",
+        "authority",
+        "need",
+        "timeframe",
+    )]
 
 
 def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: list[str]) -> None:
     lead_state = analysis.get("lead_state")
     assessment = analysis.get("qualification_assessment")
     loss = analysis.get("loss_diagnosis")
-    if not isinstance(lead_state, dict) or lead_state.get("qualification") != "D":
-        return
     if not isinstance(assessment, dict) or not isinstance(loss, dict):
         return
-
+    if not isinstance(lead_state, dict):
+        return
+    category = assessment.get("lead_category")
+    route = assessment.get("lead_route")
+    bant = assessment.get("bant")
     solution_fit = assessment.get("solution_fit")
     commercial_fit = assessment.get("commercial_fit")
+    if not isinstance(category, dict) or not isinstance(route, dict) or not isinstance(bant, dict):
+        return
+    category_value = category.get("value")
+    if lead_state.get("qualification") != category_value:
+        errors.append("lead_state.qualification must match qualification_assessment.lead_category.value")
+    statuses = _bant_statuses(assessment)
+    timeframe = bant.get("timeframe") if isinstance(bant.get("timeframe"), dict) else {}
+    purchase_window = timeframe.get("purchase_window")
+    reason_codes = category.get("reason_codes") if isinstance(category.get("reason_codes"), list) else []
+    overall_status = bant.get("overall_status")
+    if statuses == ["confirmed", "confirmed", "confirmed", "confirmed"] and overall_status != "confirmed":
+        errors.append("qualification_assessment.bant.overall_status must be confirmed when all criteria are confirmed")
+    if any(status == "negative" for status in statuses) and overall_status != "negative":
+        errors.append("qualification_assessment.bant.overall_status must be negative when a criterion is negative")
+    if any(status in {"not_confirmed", "unknown"} for status in statuses) and overall_status == "confirmed":
+        errors.append("qualification_assessment.bant.overall_status cannot be confirmed with incomplete criteria")
+
+    if category_value == "A":
+        if statuses != ["confirmed", "confirmed", "confirmed", "confirmed"]:
+            errors.append("lead category A requires all four BANT criteria confirmed")
+        if purchase_window != "up_to_60_days":
+            errors.append("lead category A requires timeframe up_to_60_days")
+        if not isinstance(solution_fit, dict) or solution_fit.get("status") != "compatible":
+            errors.append("lead category A requires compatible solution_fit")
+        if not isinstance(commercial_fit, dict) or commercial_fit.get("new_equipment_budget_status") != "sufficient":
+            errors.append("lead category A requires sufficient confirmed new-equipment budget")
+    elif category_value == "B":
+        if statuses[2:3] != ["confirmed"]:
+            errors.append("lead category B requires confirmed real need")
+        if purchase_window not in {"up_to_60_days", "days_61_to_89"}:
+            errors.append("lead category B requires a timeframe shorter than three months")
+        needs_clarification = any(status in {"not_confirmed", "unknown"} for status in statuses) or (
+            isinstance(solution_fit, dict) and solution_fit.get("status") == "needs_technical_data"
+        )
+        if not needs_clarification:
+            errors.append("lead category B requires an incomplete BANT criterion or missing technical data")
+        if any(status == "negative" for status in statuses):
+            errors.append("lead category B does not allow a confirmed negative BANT criterion")
+        if isinstance(solution_fit, dict) and solution_fit.get("status") == "not_compatible":
+            errors.append("lead category B does not allow confirmed technical mismatch")
+        if isinstance(commercial_fit, dict) and commercial_fit.get("new_equipment_budget_status") == "below_minimum":
+            errors.append("lead category B does not allow confirmed budget below the new-equipment minimum")
+    elif category_value == "C":
+        if purchase_window != "months_3_to_12":
+            errors.append("lead category C requires timeframe months_3_to_12")
+        if route.get("controlled_return_required") is not True or not route.get("controlled_return_date"):
+            errors.append("lead category C requires a dated controlled return")
+        if isinstance(solution_fit, dict) and solution_fit.get("status") == "not_compatible":
+            errors.append("lead category C does not override confirmed technical mismatch")
+        if isinstance(commercial_fit, dict) and commercial_fit.get("new_equipment_budget_status") == "below_minimum":
+            errors.append("lead category C does not override confirmed budget below the new-equipment minimum")
+    elif category_value == "D":
+        confirmed_reasons: set[str] = set()
+        if purchase_window == "over_12_months":
+            confirmed_reasons.add("timeframe_over_12_months")
+        if isinstance(solution_fit, dict) and solution_fit.get("reason_code") == "technical_mismatch":
+            confirmed_reasons.add("technical_mismatch")
+        if isinstance(commercial_fit, dict) and commercial_fit.get("reason_code") == "budget_below_new_equipment_minimum":
+            confirmed_reasons.add("budget_below_new_equipment_minimum")
+        if set(reason_codes) != confirmed_reasons:
+            errors.append("lead category D reason_codes must exactly match confirmed D grounds")
+    elif category_value == "E":
+        if not route.get("evidence"):
+            errors.append("lead category E requires evidence of spam, invalid contact, or completed call cycle")
+        call_attempt = analysis.get("call_attempt_recommendation")
+        if (
+            "call_cycle_completed_no_contact" in reason_codes
+            and (not isinstance(call_attempt, dict) or call_attempt.get("cycle_status") != "completed")
+        ):
+            errors.append("call_cycle_completed_no_contact requires call_attempt_recommendation.cycle_status=completed")
+    elif category_value == "unknown":
+        looks_ready_for_a = (
+            statuses == ["confirmed", "confirmed", "confirmed", "confirmed"]
+            and purchase_window == "up_to_60_days"
+            and isinstance(solution_fit, dict)
+            and solution_fit.get("status") == "compatible"
+            and isinstance(commercial_fit, dict)
+            and commercial_fit.get("new_equipment_budget_status") == "sufficient"
+        )
+        if looks_ready_for_a:
+            errors.append("lead category unknown cannot be used when category A is fully confirmed")
+
+    full_bant = statuses == ["confirmed", "confirmed", "confirmed", "confirmed"]
+    one_unconfirmed = sum(status in {"not_confirmed", "unknown"} for status in statuses) == 1 and all(
+        status != "negative" for status in statuses
+    )
+    current_route = route.get("current_route")
+    route_status = route.get("status")
+    expected_route_quality = {
+        "allowed": "correct",
+        "violation": "violation",
+        "needs_clarification": "needs_clarification",
+        "unknown": "unknown",
+    }.get(route_status)
+    if expected_route_quality and loss.get("route_quality") != expected_route_quality:
+        errors.append("loss_diagnosis.route_quality must match qualification_assessment.lead_route.status")
+    if current_route == "ordinary_deal" and not full_bant and route_status != "violation":
+        errors.append("ordinary_deal with incomplete BANT must be marked as route violation")
+    if current_route == "ordinary_deal" and full_bant and route_status == "violation":
+        errors.append("ordinary_deal with full BANT must not be marked as route violation")
+    if current_route == "op2" and one_unconfirmed and route_status == "violation":
+        errors.append("op2 with exactly one unconfirmed BANT criterion is allowed")
+    if current_route == "op2" and not one_unconfirmed and route_status == "allowed":
+        errors.append("op2 is allowed only with exactly one unconfirmed BANT criterion")
+
+    if category_value != "D":
+        return
     reason_to_verdict = {
         "technical_mismatch": "technical_mismatch",
         "budget_below_new_equipment_minimum": "budget_below_new_equipment_minimum",
+        "timeframe_over_12_months": "timeframe_over_12_months",
     }
-    reasons = []
-    if isinstance(solution_fit, dict) and solution_fit.get("reason_code") == "technical_mismatch":
-        reasons.append("technical_mismatch")
-    if isinstance(commercial_fit, dict) and commercial_fit.get("reason_code") == "budget_below_new_equipment_minimum":
-        reasons.append("budget_below_new_equipment_minimum")
-    if len(reasons) != 1:
-        errors.append("lead_state.qualification=D requires exactly one technical or budget reason_code")
-        return
-    expected_verdict = reason_to_verdict[reasons[0]]
-    if loss.get("final_verdict") != expected_verdict:
+    expected_verdicts = {reason_to_verdict[reason] for reason in reason_codes if reason in reason_to_verdict}
+    if loss.get("final_verdict") not in expected_verdicts:
         errors.append(
-            "loss_diagnosis.final_verdict must match the single D reason_code: "
-            f"expected {expected_verdict}, got {loss.get('final_verdict')!r}"
+            "loss_diagnosis.final_verdict must match one confirmed D reason_code: "
+            f"expected one of {sorted(expected_verdicts)!r}, got {loss.get('final_verdict')!r}"
         )
 
 
@@ -907,6 +1301,16 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _require_fields(analysis, LEAD_REQUIRED_FIELDS, "", errors)
     _expect_dict(analysis.get("lead_state"), "lead_state", errors)
     _expect_dict(analysis.get("activity_summary"), "activity_summary", errors)
+    call_attempt = _expect_dict(
+        analysis.get("call_attempt_recommendation"), "call_attempt_recommendation", errors
+    )
+    if call_attempt:
+        _expect_enum(
+            call_attempt.get("cycle_status"),
+            "call_attempt_recommendation.cycle_status",
+            {"not_started", "in_progress", "completed", "not_applicable", "unknown"},
+            errors,
+        )
     loss = _expect_dict(analysis.get("loss_diagnosis"), "loss_diagnosis", errors)
     if loss:
         _expect_enum(loss.get("lead_quality"), "loss_diagnosis.lead_quality", {"good", "weak", "bad", "unknown"}, errors)
@@ -925,13 +1329,19 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
         _expect_enum(
             loss.get("call_attempt_quality"),
             "loss_diagnosis.call_attempt_quality",
-            {"enough", "not_enough", "wrong_channel", "unknown"},
+            {"enough", "not_enough", "wrong_channel", "not_applicable", "unknown"},
             errors,
         )
         _expect_enum(
             loss.get("next_step_quality"),
             "loss_diagnosis.next_step_quality",
             {"clear", "missing", "too_generic", "unknown"},
+            errors,
+        )
+        _expect_enum(
+            loss.get("route_quality"),
+            "loss_diagnosis.route_quality",
+            {"correct", "violation", "needs_clarification", "unknown"},
             errors,
         )
         _expect_enum(
@@ -945,6 +1355,8 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
                 "ready_for_deal",
                 "technical_mismatch",
                 "budget_below_new_equipment_minimum",
+                "timeframe_over_12_months",
+                "no_contact_after_full_cycle",
                 "unknown",
             },
             errors,
@@ -952,7 +1364,7 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
         evidence = _expect_max_list_length(loss.get("evidence"), "loss_diagnosis.evidence", 7, errors)
         if not evidence:
             errors.append("loss_diagnosis.evidence must not be empty")
-    _validate_qualification_assessment(analysis, errors)
+    _validate_qualification_assessment(analysis, errors, lead_contract=True)
     _validate_lead_qualification_consistency(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:

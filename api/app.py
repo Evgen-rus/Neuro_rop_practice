@@ -488,6 +488,9 @@ def _enrich_report_row(item: dict[str, Any]) -> dict[str, Any]:
             row["attention_reason"] = summary.get("attention_reason")
         if not row.get("recommended_action"):
             row["recommended_action"] = summary.get("recommended_action")
+        if entity_type == "lead":
+            row["lead_category"] = summary.get("lead_category")
+            row["lead_route_status"] = summary.get("lead_route_status")
     return row
 
 

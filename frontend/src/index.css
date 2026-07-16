@@ -695,6 +695,224 @@ p {
   color: var(--dark);
 }
 
+.lead-qualification {
+  margin-top: 16px;
+  border: 1px solid #c9dfd2;
+  border-radius: 12px;
+  background: #f7fcf8;
+  padding: 18px;
+}
+
+.lead-qualification h3 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.assessment-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #eef4f0;
+  color: #385545;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.assessment-status.status-confirmed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.assessment-status.status-negative {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.bant-dashboard {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bant-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-left: 4px solid #94a3b8;
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px;
+}
+
+.bant-card.status-confirmed {
+  border-left-color: #16a34a;
+}
+
+.bant-card.status-not_confirmed,
+.bant-card.status-unknown,
+.bant-card.status-missing {
+  border-left-color: #d97706;
+}
+
+.bant-card.status-negative {
+  border-left-color: #dc2626;
+}
+
+.bant-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.bant-letter {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 9px;
+  background: #eaf3ed;
+  color: #244c33;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.bant-name {
+  color: var(--dark);
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.bant-status {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.bant-summary {
+  margin: 12px 0;
+  color: var(--dark);
+  line-height: 1.4;
+}
+
+.bant-detail + .bant-detail {
+  margin-top: 10px;
+}
+
+.bant-detail .label,
+.lead-category-card .label,
+.lead-route-card .label {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.bant-detail ul,
+.lead-category-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.bant-next {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: #f5f9ff;
+  padding: 10px 12px;
+  color: var(--dark);
+  font-weight: 700;
+}
+
+.bant-next span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.lead-category-card {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 14px;
+  border: 1px solid #bfe0ff;
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px;
+}
+
+.lead-category-value span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.lead-category-value strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--dark);
+  font-size: 42px;
+  line-height: 1;
+}
+
+.lead-category-content p {
+  margin: 0;
+}
+
+.category-factor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.category-next-step {
+  margin-top: 14px;
+  border-radius: 8px;
+  background: #eefcf5;
+  padding: 12px;
+  font-weight: 750;
+}
+
+.lead-route-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid #d7e5f5;
+  border-left: 4px solid #64748b;
+  border-radius: 9px;
+  background: #f8fbff;
+  padding: 13px 14px;
+}
+
+.lead-route-card.route-violation {
+  border-left-color: #dc2626;
+  background: #fff7f7;
+}
+
+.lead-route-card.route-allowed {
+  border-left-color: #16a34a;
+}
+
+.lead-route-card > div:nth-child(2) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.lead-route-card p {
+  margin: 0;
+}
+
+.controlled-return {
+  font-weight: 800;
+}
+
 .qualification-summary {
   margin-top: 12px;
   border: 1px solid #c9dfd2;
@@ -1210,10 +1428,16 @@ ul.facts.bad li:before {
   .two,
   .cards,
   .qualification-cards,
+  .bant-dashboard,
+  .category-factor-grid,
   .actions,
   .pipeline,
   .filters,
   .checks {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-category-card {
     grid-template-columns: 1fr;
   }
 

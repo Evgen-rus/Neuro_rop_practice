@@ -96,7 +96,26 @@ const BANT_STATUS_RU: Record<string, string> = {
   confirmed: 'подтверждён',
   incomplete: 'неполный',
   missing: 'не хватает данных',
+  not_confirmed: 'не подтверждён',
+  negative: 'подтверждён стоп-фактор',
   unknown: 'нет данных',
+}
+
+const LEAD_ROUTE_STATUS_RU: Record<string, string> = {
+  allowed: 'маршрут допустим',
+  violation: 'нарушение маршрута',
+  needs_clarification: 'маршрут нужно уточнить',
+  unknown: 'маршрут не определён',
+}
+
+const LEAD_ROUTE_RU: Record<string, string> = {
+  ordinary_deal: 'Обычная сделка',
+  op2: 'ОП2',
+  clarification: 'Довыяснение',
+  auto_reminder: 'Автонапоминание',
+  deferred_demand: 'Отложенный спрос',
+  disqualified: 'Дисквалификация',
+  unknown: 'Не определён',
 }
 
 const SOLUTION_FIT_STATUS_RU: Record<string, string> = {
@@ -1604,6 +1623,8 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const bant = asRecord(qualificationAssessment.bant)
   const solutionFit = asRecord(qualificationAssessment.solution_fit)
   const commercialFit = asRecord(qualificationAssessment.commercial_fit)
+  const leadCategory = asRecord(qualificationAssessment.lead_category)
+  const leadRoute = asRecord(qualificationAssessment.lead_route)
   const dealMode = asRecord(analysis?.deal_mode)
   const priority = asRecord(analysis?.priority_recommendation)
 
@@ -1612,8 +1633,8 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const riskType = asString(mainRisk.risk_type)
   const verdict = asString(loss.final_verdict)
   const client = asString(leadState.client) || asString(dealState.client) || '—'
-  const qualification = asString(leadState.qualification) || '—'
-  const qualificationReason = asString(leadState.qualification_reason)
+  const qualification = asString(leadCategory.value) || asString(leadState.qualification) || 'Unknown'
+  const qualificationReason = asString(leadCategory.reason) || asString(leadState.qualification_reason)
   const hasQualificationAssessment = Object.keys(qualificationAssessment).length > 0
   const bantStatus = assessmentLabel(asString(bant.overall_status), BANT_STATUS_RU)
   const solutionFitStatus = assessmentLabel(asString(solutionFit.status), SOLUTION_FIT_STATUS_RU)
@@ -1624,6 +1645,22 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const confirmedBudget = formatMoney(commercialFit.confirmed_budget_rub)
   const minimumBudget = formatMoney(commercialFit.new_equipment_minimum_rub) || '1 000 000 ₽'
   const nextQualificationQuestion = formatMoneyText(asString(bant.next_question))
+  const bantItems = [
+    { key: 'budget', letter: 'B', fallbackLabel: 'Budget · Бюджет и финансовая готовность' },
+    { key: 'authority', letter: 'A', fallbackLabel: 'Authority · ЛПР и влияние на решение' },
+    { key: 'need', letter: 'N', fallbackLabel: 'Need · Актуальная потребность' },
+    { key: 'timeframe', letter: 'T', fallbackLabel: 'Timeframe · Срок покупки или запуска' },
+  ].map((definition) => ({ ...definition, value: asRecord(bant[definition.key]) }))
+  const categoryBantFactors = asStringList(leadCategory.bant_factors).map(formatMoneyText)
+  const categoryTechnicalFactors = asStringList(leadCategory.technical_factors).map(formatMoneyText)
+  const categoryBudgetFactors = asStringList(leadCategory.budget_factors).map(formatMoneyText)
+  const categoryMissingFacts = asStringList(leadCategory.missing_facts).map(formatMoneyText)
+  const categoryNextStep = formatMoneyText(
+    asString(leadCategory.next_step) || asString(rop.check_for_rop) || asString(rop.message_to_manager),
+  )
+  const routeStatus = assessmentLabel(asString(leadRoute.status), LEAD_ROUTE_STATUS_RU)
+  const currentRoute = assessmentLabel(asString(leadRoute.current_route), LEAD_ROUTE_RU)
+  const recommendedRoute = assessmentLabel(asString(leadRoute.recommended_route), LEAD_ROUTE_RU)
   const amount = formatMoney(dealState.amount)
   const stage = asString(dealState.stage) || '—'
   const attention =
@@ -1662,7 +1699,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           hint: riskType || (verdict ? verdictLabelRu(verdict) : undefined),
         },
         {
-          label: 'Квалификация',
+          label: 'Категория лида',
           value: qualification,
           hint: formatMoneyText(qualificationReason) || undefined,
         },
@@ -1700,6 +1737,86 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           ) : null}
         </div>
 
+        {isLead && hasQualificationAssessment ? (
+          <section className="lead-qualification" aria-label="BANT и категория лида">
+            <div className="qualification-summary-head">
+              <div>
+                <h3>BANT</h3>
+                <p>Сначала факты по бюджету, ЛПР, потребности и сроку. Отсутствие данных не считается отказом.</p>
+              </div>
+              <span className={`assessment-status status-${asString(bant.overall_status, 'unknown')}`}>
+                {bantStatus}
+              </span>
+            </div>
+            <div className="bant-dashboard">
+              {bantItems.map((item) => {
+                const status = asString(item.value.status, 'unknown')
+                const evidence = asStringList(item.value.evidence).map(formatMoneyText)
+                const missing = asStringList(item.value.missing_facts).map(formatMoneyText)
+                const question = formatMoneyText(
+                  asString(item.value.next_question_or_action) ||
+                    (status !== 'confirmed' ? nextQualificationQuestion : ''),
+                )
+                const explanation = formatMoneyText(
+                  asString(item.value.summary) || evidence[0] || 'В сохранённом анализе нет отдельного объяснения.',
+                )
+                return (
+                  <article className={`bant-card status-${status}`} key={item.key}>
+                    <div className="bant-card-head">
+                      <span className="bant-letter">{item.letter}</span>
+                      <div>
+                        <div className="bant-name">{asString(item.value.label) || item.fallbackLabel}</div>
+                        <div className="bant-status">{assessmentLabel(status, BANT_STATUS_RU)}</div>
+                      </div>
+                    </div>
+                    <p className="bant-summary">{explanation}</p>
+                    <div className="bant-detail">
+                      <div className="label">Подтверждающие факты</div>
+                      {evidence.length ? <ul>{evidence.map((fact) => <li key={fact}>{fact}</li>)}</ul> : <div className="muted">Нет подтверждённых фактов</div>}
+                    </div>
+                    <div className="bant-detail">
+                      <div className="label">Чего не хватает</div>
+                      {missing.length ? <ul>{missing.map((fact) => <li key={fact}>{fact}</li>)}</ul> : <div className="muted">Ничего не указано</div>}
+                    </div>
+                    {question ? <div className="bant-next"><span>Вопрос / действие</span>{question}</div> : null}
+                  </article>
+                )
+              })}
+            </div>
+
+            <div className="lead-category-card">
+              <div className="lead-category-value">
+                <span>Категория лида</span>
+                <strong>{qualification}</strong>
+              </div>
+              <div className="lead-category-content">
+                <div>
+                  <div className="label">Почему присвоена</div>
+                  <p>{formatMoneyText(qualificationReason) || 'В старом анализе структурированное объяснение отсутствует.'}</p>
+                </div>
+                <div className="category-factor-grid">
+                  <div><div className="label">BANT-факторы</div>{categoryBantFactors.length ? <ul>{categoryBantFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span className="muted">См. BANT выше</span>}</div>
+                  <div><div className="label">Техника</div>{categoryTechnicalFactors.length ? <ul>{categoryTechnicalFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span>{solutionFitStatus}</span>}</div>
+                  <div><div className="label">Бюджет нового оборудования</div>{categoryBudgetFactors.length ? <ul>{categoryBudgetFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span>{commercialFitStatus}</span>}</div>
+                </div>
+                {categoryMissingFacts.length ? <div><div className="label">Недостающие сведения</div><ul>{categoryMissingFacts.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+                <div className="category-next-step"><div className="label">Следующий шаг</div>{categoryNextStep || 'Проверить факты и определить следующий шаг.'}</div>
+              </div>
+            </div>
+
+            {Object.keys(leadRoute).length ? (
+              <div className={`lead-route-card route-${asString(leadRoute.status, 'unknown')}`}>
+                <div><div className="label">Маршрут лида</div><strong>{routeStatus}</strong></div>
+                <div><span>Сейчас: {currentRoute}</span><span>Рекомендуется: {recommendedRoute}</span></div>
+                <p>{formatMoneyText(asString(leadRoute.reason))}</p>
+                {leadRoute.controlled_return_required === true ? (
+                  <div className="controlled-return">Контролируемый возврат: {asString(leadRoute.controlled_return_date, 'дата не указана')}</div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         <div className="reason-box">
           <div className="label">Причина внимания</div>
           <div className="reason-text">{attention}</div>
@@ -1709,7 +1826,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           <div className="label">Что сделать</div>
           <div className="value">{nextAction}</div>
         </div>
-        {hasQualificationAssessment ? (
+        {!isLead && hasQualificationAssessment ? (
           <section className="qualification-summary" aria-label="Квалификация и применимость">
             <div className="qualification-summary-head">
               <div>

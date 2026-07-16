@@ -185,6 +185,8 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
     risk = None
     attention = None
     action = None
+    lead_category = None
+    lead_route_status = None
     main_risk = analysis.get("main_risk") if isinstance(analysis.get("main_risk"), dict) else {}
     if main_risk:
         risk = str(main_risk.get("risk_level") or "") or None
@@ -195,10 +197,15 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         if not attention:
             attention = str(rop.get("why_it_matters") or "") or None
     if entity_type == "lead":
+        assessment = analysis.get("qualification_assessment") if isinstance(analysis.get("qualification_assessment"), dict) else {}
+        category = assessment.get("lead_category") if isinstance(assessment.get("lead_category"), dict) else {}
+        route = assessment.get("lead_route") if isinstance(assessment.get("lead_route"), dict) else {}
+        lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
+        lead_category = str(category.get("value") or lead_state.get("qualification") or "") or None
+        lead_route_status = str(route.get("status") or "") or None
         loss = analysis.get("loss_diagnosis") if isinstance(analysis.get("loss_diagnosis"), dict) else {}
         if loss and not attention:
             attention = str(loss.get("final_verdict") or "") or None
-        lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
         if lead_state and not attention:
             attention = str(lead_state.get("summary") or "") or None
     else:
@@ -212,6 +219,8 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         "risk_level": risk,
         "attention_reason": attention,
         "recommended_action": action,
+        "lead_category": lead_category,
+        "lead_route_status": lead_route_status,
     }
 
 
@@ -303,6 +312,8 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 "risk_level": summary.get("risk_level"),
                 "attention_reason": summary.get("attention_reason"),
                 "recommended_action": summary.get("recommended_action"),
+                "lead_category": summary.get("lead_category"),
+                "lead_route_status": summary.get("lead_route_status"),
                 "bitrix_url": bitrix_entity_url(entity_type, entity_id),
                 "analysis": analysis,
             }

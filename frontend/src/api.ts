@@ -179,6 +179,8 @@ export type JobResult = {
   risk_level?: string | null
   attention_reason?: string | null
   recommended_action?: string | null
+  lead_category?: string | null
+  lead_route_status?: string | null
   bitrix_url?: string | null
   analysis?: Record<string, unknown> | null
 }
@@ -205,6 +207,8 @@ export type UiReportListItem = {
   risk_level?: string | null
   attention_reason?: string | null
   recommended_action?: string | null
+  lead_category?: string | null
+  lead_route_status?: string | null
   analysis_path?: string | null
   report_path?: string | null
   job_id?: string | null
