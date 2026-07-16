@@ -6,14 +6,22 @@ import {
   asStringList,
   unwrapAnalysis,
   type AnalyzeOptions,
+  type AnalysisProfile,
   type Candidate,
   type CandidateFilter,
   type CandidatesResponse,
   type CrmPipeline,
   type JobState,
+  type DailyPreview,
+  type DailySummaryRun,
   type UiReportDetail,
   type UiReportListItem,
+  createAnalysisProfile,
+  createDailySummary,
+  deleteAnalysisProfile,
+  fetchAnalysisProfiles,
   fetchCandidateFilter,
+  fetchDailySummary,
   fetchCompactEvidence,
   fetchCompactJob,
   fetchCompactReview,
@@ -22,16 +30,20 @@ import {
   fetchReport,
   fetchReportMarkdown,
   fetchReports,
+  previewAnalysisProfile,
   saveDecision,
   saveCompactFeedback,
   saveOutcome,
   searchCandidates,
+  selectAnalysisProfile,
+  startDailySummary,
   startAnalyze,
   startCompactRun,
+  updateAnalysisProfile,
   type CompactReview,
 } from './api'
 
-type Tab = 'dashboard' | 'manual' | 'history'
+type Tab = 'summary' | 'dashboard' | 'manual' | 'history'
 
 type ManualEntityType = 'lead' | 'deal' | 'auto'
 type CandidateReviewView = 'active' | 'reviewed' | 'all'
@@ -293,8 +305,16 @@ function ropRecommendations(analysis: Record<string, unknown> | null | undefined
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('dashboard')
+  const [tab, setTab] = useState<Tab>('summary')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+
+  const [analysisProfiles, setAnalysisProfiles] = useState<AnalysisProfile[]>([])
+  const [activeProfile, setActiveProfile] = useState<AnalysisProfile | null>(null)
+  const [dailyPreview, setDailyPreview] = useState<DailyPreview | null>(null)
+  const [dailySelected, setDailySelected] = useState<Set<string>>(new Set())
+  const [dailyRun, setDailyRun] = useState<DailySummaryRun | null>(null)
+  const [dailyLoading, setDailyLoading] = useState(false)
+  const [dailyError, setDailyError] = useState<string | null>(null)
 
   const [createdDays, setCreatedDays] = useState(15)
   const [modifiedDays, setModifiedDays] = useState(15)
@@ -326,7 +346,7 @@ export default function App() {
     redownload_audio: false,
     transcribe_audio: true,
     analyze: true,
-    force_llm: true,
+    force_llm: false,
     transcript_mode: 'all',
   })
   const [job, setJob] = useState<JobState | null>(null)
@@ -538,35 +558,26 @@ export default function App() {
       setCandidatesError(null)
       setHistoryError(null)
       try {
-        const [pipelines, savedFilter, reports] = await Promise.all([
+        const [pipelines, savedFilter, reports, profiles] = await Promise.all([
           fetchPipelines(),
           fetchCandidateFilter(),
           fetchReports(50),
+          fetchAnalysisProfiles(),
         ])
         if (cancelled) return
         setDealPipelines(pipelines.deal_pipelines || [])
         setLeadPipeline(pipelines.lead_pipeline || null)
         setHistory(reports.items)
+        setAnalysisProfiles(profiles.items)
+        setActiveProfile(profiles.selected)
 
         const filter = savedFilter.filter
         applyFilterState(filter)
         setFiltersReady(true)
 
-        // Ищем только если в сохранённом фильтре уже выбраны этапы (и воронки для сделок).
-        const data = await searchCandidates({
-          entity_type: filter.entity_type === 'deal' ? 'deal' : 'lead',
-          created_days: Number(filter.created_days) || 15,
-          modified_days: Number(filter.modified_days) || 15,
-          limit: Number(filter.limit) || 20,
-          priority: filter.priority || null,
-          review_view: filter.review_view || 'active',
-          pipeline_ids: filter.pipeline_ids || [],
-          stage_ids: filter.stage_ids || [],
-          save: false,
-        })
-        if (cancelled) return
-        setCandidatesData(data)
-        setSelectedCandidate(data.candidates[0] || null)
+        // Live Bitrix discovery остаётся ручным: не запускаем его только из-за открытия UI.
+        setCandidatesData(null)
+        setSelectedCandidate(null)
       } catch (error) {
         if (cancelled) return
         const message = error instanceof Error ? error.message : String(error)
@@ -615,7 +626,11 @@ export default function App() {
     const firstId = ids.split(/[\s,;]+/).find(Boolean) || ids.trim()
     setPendingAnalyzeMeta({ entity_type: entityType, entity_id: firstId || '—' })
     try {
-      const started = await startAnalyze({ ...options, ids, entity_type: entityType })
+      const confirmPaid = options.force_llm
+        ? window.confirm('Ручной ID может быть вне активного профиля. Подтвердить принудительный платный LLM-анализ?')
+        : true
+      if (!confirmPaid) return
+      const started = await startAnalyze({ ...options, ids, entity_type: entityType, confirm_paid: options.force_llm })
       setJob(started)
       setTab('manual')
       toast('Анализ запущен', setToastMessage)
@@ -687,6 +702,132 @@ export default function App() {
     toast('Исход сохранён', setToastMessage)
   }
 
+  function patchActiveProfile(patch: Partial<AnalysisProfile['profile']>) {
+    setActiveProfile((current) => current ? { ...current, profile: { ...current.profile, ...patch } } : current)
+    setDailyPreview(null)
+    setDailyRun(null)
+  }
+
+  async function saveActiveProfile() {
+    if (!activeProfile) return
+    setDailyError(null)
+    try {
+      const result = await updateAnalysisProfile(activeProfile)
+      setActiveProfile(result.profile)
+      setAnalysisProfiles((items) => items.map((item) => item.id === result.profile.id ? result.profile : item))
+      setDailyPreview(null)
+      toast('Профиль сохранён', setToastMessage)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function saveProfileAs() {
+    if (!activeProfile) return
+    const name = window.prompt('Название нового профиля', `${activeProfile.name} — копия`)?.trim()
+    if (!name) return
+    setDailyError(null)
+    try {
+      const result = await createAnalysisProfile(name, activeProfile.profile)
+      setAnalysisProfiles((items) => [...items, result.profile])
+      setActiveProfile(result.profile)
+      setDailyPreview(null)
+      toast('Новый профиль создан', setToastMessage)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function removeActiveProfile() {
+    if (!activeProfile || !window.confirm(`Удалить профиль «${activeProfile.name}»?`)) return
+    setDailyError(null)
+    try {
+      const result = await deleteAnalysisProfile(activeProfile.id)
+      setAnalysisProfiles(result.items)
+      setActiveProfile(result.selected)
+      setDailyPreview(null)
+      toast('Профиль удалён', setToastMessage)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function chooseProfile(profileId: number) {
+    const local = analysisProfiles.find((item) => item.id === profileId)
+    if (local) setActiveProfile(local)
+    setDailyPreview(null)
+    setDailyRun(null)
+    try {
+      const result = await selectAnalysisProfile(profileId)
+      setActiveProfile(result.selected)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function loadDailyPreview() {
+    if (!activeProfile) return
+    setDailyLoading(true)
+    setDailyError(null)
+    setDailyRun(null)
+    try {
+      const data = await previewAnalysisProfile(activeProfile.id)
+      setDailyPreview(data)
+      setDailySelected(new Set(data.candidates.filter((item) => item.workset_selected).map((item) => item.journey_key || `${item.entity_type}:${item.entity_id}`)))
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDailyLoading(false)
+    }
+  }
+
+  async function freezeDailySummary() {
+    if (!activeProfile || !dailyPreview || !dailySelected.size) return
+    setDailyLoading(true)
+    setDailyError(null)
+    try {
+      const run = await createDailySummary(activeProfile, dailyPreview, [...dailySelected])
+      setDailyRun(run)
+      toast('Snapshot сводки сохранён', setToastMessage)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDailyLoading(false)
+    }
+  }
+
+  async function launchDailySummary() {
+    if (!dailyRun) return
+    const paid = dailyRun.llm_allowed_count > 0
+    if (paid && !window.confirm(`Подтвердить платный анализ максимум ${dailyRun.llm_allowed_count} карточек? Остальные останутся в резерве.`)) return
+    setDailyLoading(true)
+    setDailyError(null)
+    try {
+      const result = await startDailySummary(dailyRun.id, paid)
+      setDailyRun(result.summary)
+      if (result.jobs[0]) {
+        setJob(result.jobs[0])
+      }
+      toast(`Запущено карточек: ${result.jobs.length}`, setToastMessage)
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDailyLoading(false)
+    }
+  }
+
+  const dailyRunId = dailyRun?.id
+  const dailyRunStatus = dailyRun?.status
+  useEffect(() => {
+    if (!dailyRunId || dailyRunStatus !== 'analyzing') return
+    const timer = window.setInterval(() => {
+      void fetchDailySummary(dailyRunId)
+        .then((value) => setDailyRun(value))
+        .catch((error) => setDailyError(error instanceof Error ? error.message : String(error)))
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [dailyRunId, dailyRunStatus])
+
   const summary = candidatesData?.summary
   const manualInput = parseManualInput(manualIds, options.entity_type)
   const managerBrief = getManagerBrief(activeAnalysis)
@@ -709,6 +850,9 @@ export default function App() {
           Помощник РОПа Практик-М
         </div>
         <div className="nav">
+          <button className={tab === 'summary' ? 'active' : ''} onClick={() => setTab('summary')}>
+            Ежедневная сводка
+          </button>
           <button className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>
             Кандидаты
           </button>
@@ -729,6 +873,141 @@ export default function App() {
           <p>Риск в сделке, действие и готовое поручение менеджеру.</p>
         </div>
       </section>
+
+      {tab === 'summary' && (
+        <div className="daily-layout">
+          <aside className="panel daily-profile-panel">
+            <div className="panel-head">
+              <div><h3>Профиль анализа</h3><p>Последний выбранный профиль загрузится автоматически.</p></div>
+            </div>
+            <div className="field">
+              <label>Профиль</label>
+              <select value={activeProfile?.id || ''} onChange={(event) => void chooseProfile(Number(event.target.value))}>
+                {analysisProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+              </select>
+            </div>
+            {activeProfile ? <>
+              <div className="field">
+                <label>Название</label>
+                <input value={activeProfile.name} onChange={(event) => setActiveProfile({ ...activeProfile, name: event.target.value })} />
+              </div>
+              <div className="field">
+                <label>Период по Москве</label>
+                <select value={activeProfile.profile.period_preset} onChange={(event) => patchActiveProfile({ period_preset: event.target.value as AnalysisProfile['profile']['period_preset'] })}>
+                  <option value="today">Только сегодня</option>
+                  <option value="yesterday">Только вчера</option>
+                  <option value="today_and_yesterday">Сегодня + вчера</option>
+                </select>
+              </div>
+              <div className="daily-limits">
+                {([
+                  ['workset', 'Выделить карточек'],
+                  ['new_slots', 'Новых'],
+                  ['backlog_slots', 'Backlog'],
+                  ['paid_per_run', 'Платных / запуск'],
+                  ['paid_per_day', 'Платных / день'],
+                ] as const).map(([key, label]) => <div className="field" key={key}>
+                  <label>{label}</label>
+                  <input type="number" min={0} max={100} value={activeProfile.profile.limits[key]} onChange={(event) => patchActiveProfile({ limits: { ...activeProfile.profile.limits, [key]: Math.max(0, Number(event.target.value) || 0) } })} />
+                </div>)}
+              </div>
+              <details className="profile-stages">
+                <summary>Этапы лидов</summary>
+                <label><input type="checkbox" checked={Boolean(activeProfile.profile.lead.all_stages)} onChange={(event) => patchActiveProfile({ lead: { ...activeProfile.profile.lead, all_stages: event.target.checked } })} /> Все этапы, кроме исключённых категорий</label>
+                {!activeProfile.profile.lead.all_stages ? <div className="profile-stage-list">{(leadPipeline?.stages || []).map((stage) => {
+                  const selectedStages = ((activeProfile.profile.lead.stage_ids as string[]) || []).map(String)
+                  return <label key={stage.id}><input type="checkbox" checked={selectedStages.includes(stage.id)} onChange={() => patchActiveProfile({ lead: { ...activeProfile.profile.lead, stage_ids: toggleId(selectedStages, stage.id) } })} /> {stage.name}</label>
+                })}</div> : null}
+              </details>
+              <details className="profile-stages">
+                <summary>Воронки и этапы сделок</summary>
+                <p className="muted">Старые активные сделки выбранной воронки остаются в портфеле независимо от даты создания.</p>
+                {dealPipelines.map((pipeline) => {
+                  const selectedPipelines = ((activeProfile.profile.deal.pipeline_ids as string[]) || []).map(String)
+                  const checked = selectedPipelines.includes(pipeline.id)
+                  return <div className="profile-pipeline" key={pipeline.id}>
+                    <label><input type="checkbox" checked={checked} onChange={() => patchActiveProfile({ deal: { ...activeProfile.profile.deal, pipeline_ids: toggleId(selectedPipelines, pipeline.id) } })} /> {pipeline.name}</label>
+                    {checked ? <div className="profile-stage-list">{pipeline.stages.map((stage) => {
+                      const selectedStages = ((activeProfile.profile.deal.stage_ids as string[]) || []).map(String)
+                      return <label key={stage.id}><input type="checkbox" checked={selectedStages.includes(stage.id)} onChange={() => patchActiveProfile({ deal: { ...activeProfile.profile.deal, stage_ids: toggleId(selectedStages, stage.id) } })} /> {stage.name}</label>
+                    })}</div> : null}
+                  </div>
+                })}
+              </details>
+              <div className="profile-actions">
+                <button className="btn secondary" onClick={() => void saveActiveProfile()}>Сохранить</button>
+                <button className="btn ghost" onClick={() => void saveProfileAs()}>Сохранить как</button>
+                <button className="btn ghost" onClick={() => void removeActiveProfile()}>Удалить</button>
+              </div>
+              <button className="btn" disabled={dailyLoading} onClick={() => void loadDailyPreview()}>{dailyLoading ? 'Собираем live-данные…' : 'Обновить кандидатов без LLM'}</button>
+            </> : <p className="muted">Профиль загружается…</p>}
+          </aside>
+
+          <main>
+            <section className="section daily-head">
+              <div>
+                <div className="hero-label">Ручной MVP · Bitrix read-only</div>
+                <h2>Кандидаты ежедневной сводки</h2>
+                <p className="muted">Весь список виден. Синим выделен рабочий набор; резерв можно добавить вручную.</p>
+              </div>
+              {dailyPreview ? <div className="daily-stats">
+                <span>Всего <b>{dailyPreview.summary.total ?? 0}</b></span>
+                <span>Выделено <b>{dailySelected.size}</b></span>
+                <span>Нужен LLM <b>{dailyPreview.summary.llm_required ?? 0}</b></span>
+                <span>Лимит сейчас <b>{asString(dailyPreview.cost_preview.paid_entity_limit, '0')}</b></span>
+              </div> : null}
+            </section>
+            {dailyError ? <div className="alert error"><strong>Ошибка:</strong> {dailyError}</div> : null}
+            {dailyPreview && asString(asRecord(dailyPreview.scope.handoff_warning).message) ? <div className="alert">
+              {asString(asRecord(dailyPreview.scope.handoff_warning).message)} Количество: {asString(asRecord(dailyPreview.scope.handoff_warning).outside_profile_count, '0')}.
+            </div> : null}
+            {dailyPreview && asString(asRecord(dailyPreview.scope.profile_drift).message) ? <div className="alert error">
+              {asString(asRecord(dailyPreview.scope.profile_drift).message)}
+            </div> : null}
+            {dailyPreview ? <>
+              <div className="daily-cards">
+                {dailyPreview.candidates.map((candidate) => {
+                  const key = candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`
+                  const checked = dailySelected.has(key)
+                  return <article className={`daily-candidate ${checked ? 'selected' : 'reserve'}`} key={key}>
+                    <label className="daily-select">
+                      <input type="checkbox" checked={checked} onChange={() => setDailySelected((current) => {
+                        const next = new Set(current)
+                        if (next.has(key)) next.delete(key); else next.add(key)
+                        return next
+                      })} />
+                      {checked ? 'В рабочем наборе' : 'Добавить из резерва'}
+                    </label>
+                    <div className="daily-card-title"><span className={`risk-dot ${candidate.priority}`} /> <b>{candidate.title}</b></div>
+                    <div className="candidate-meta">{candidate.entity_type === 'lead' ? 'Лид' : 'Сделка'} {candidate.entity_id} · {candidate.status} · {candidate.lifecycle || 'new'}</div>
+                    <p>{candidate.attention_reason}</p>
+                    <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
+                    <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
+                    {candidate.bitrix_url ? <a className="bitrix-link" href={candidate.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
+                  </article>
+                })}
+              </div>
+              {!dailyPreview.candidates.length ? <div className="section"><p className="muted">По текущему профилю сигналов не найдено.</p></div> : null}
+              <section className="section daily-run-bar">
+                <div>
+                  <b>Платный gate</b>
+                  <p>{asString(dailyPreview.cost_preview.message)} Оценка текущего запуска: {asString(dailyPreview.cost_preview.estimated_cost_rub_total, 'неизвестно')} ₽. Зарезервировано сегодня: {asString(dailyPreview.cost_preview.paid_used_today, '0')}.</p>
+                </div>
+                {!dailyRun ? <button className="btn" disabled={!dailySelected.size || dailyLoading} onClick={() => void freezeDailySummary()}>Зафиксировать snapshot</button> : <button className="btn" disabled={dailyLoading || dailyRun.status !== 'draft'} onClick={() => void launchDailySummary()}>{dailyRun.status === 'draft' ? 'Подтвердить и запустить выбранные' : `Статус: ${dailyRun.status}`}</button>}
+              </section>
+              {dailyRun?.results?.length ? <section className="section">
+                <h3>Результаты сводки</h3>
+                <div className="daily-result-list">{dailyRun.results.map((result) => <article key={`${result.entity_type}:${result.entity_id}`}>
+                  <b>{result.entity_type === 'lead' ? 'Лид' : 'Сделка'} {result.entity_id}</b>
+                  <span>{result.attention_reason || (result.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</span>
+                  {result.recommended_action ? <p>{result.recommended_action}</p> : null}
+                  {result.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(result.report_id))}>Открыть отчёт</button> : null}
+                </article>)}</div>
+              </section> : null}
+            </> : <section className="section"><p className="muted">Настройте профиль и нажмите «Обновить кандидатов без LLM». Старые анализы не используются как источник очереди.</p></section>}
+          </main>
+        </div>
+      )}
 
       {tab === 'dashboard' && (
         <div className="grid">
@@ -1016,7 +1295,7 @@ export default function App() {
         <div className="grid">
           <aside className="panel">
             <h3>Ручной запуск</h3>
-            <p>Для срочной проверки конкретного лида или сделки.</p>
+            <p>Для срочной проверки конкретного лида или сделки. ID может быть вне активного профиля и не попадёт в snapshot сводки автоматически.</p>
             <div className="field">
               <label>ID или ссылка Bitrix</label>
               <textarea

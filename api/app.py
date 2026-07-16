@@ -5,6 +5,7 @@ FastAPI entrypoint for local ROP assistant UI.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -14,7 +15,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from api.candidates import DEFAULT_DAYS, DEFAULT_LIMIT, list_crm_pipelines, search_candidates
+from api.candidates import (
+    DEFAULT_DAYS,
+    DEFAULT_LIMIT,
+    list_crm_pipelines,
+    profile_candidates_preview,
+    search_candidates,
+)
 from api.jobs import (
     AnalyzeOptions,
     extract_summary_fields,
@@ -30,11 +37,20 @@ from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    attach_job_to_daily_summary,
+    create_daily_summary_run,
+    create_analysis_profile,
+    delete_analysis_profile,
+    get_analysis_profile,
+    get_daily_summary_run,
+    get_last_analysis_profile,
     get_candidate_filter,
     get_candidate_review_states,
     get_compact_shadow_run,
     get_ui_report,
     init_db,
+    list_analysis_profiles,
+    list_daily_summary_runs,
     list_outcomes,
     list_rop_decisions,
     list_ui_reports,
@@ -42,6 +58,8 @@ from storage.rop_db import (
     save_compact_shadow_feedback,
     save_outcome,
     save_rop_decision,
+    set_last_analysis_profile,
+    update_analysis_profile,
     upsert_candidate_review_state,
 )
 
@@ -74,7 +92,8 @@ class AnalyzeRequest(BaseModel):
     redownload_audio: bool = False
     transcribe_audio: bool = True
     analyze: bool = True
-    force_llm: bool = True
+    force_llm: bool = False
+    confirm_paid: bool = False
     transcript_mode: Literal["all", "latest", "none"] = "all"
 
 
@@ -122,6 +141,22 @@ class CandidateFilterSaveRequest(BaseModel):
     review_view: Literal["active", "reviewed", "all"] = "active"
 
 
+class AnalysisProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class DailySummaryCreateRequest(BaseModel):
+    profile_id: int
+    profile_version: int
+    preview: dict[str, Any]
+    selected_journey_keys: list[str] = Field(default_factory=list)
+
+
+class DailySummaryStartRequest(BaseModel):
+    confirm_paid: bool = False
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
@@ -157,6 +192,187 @@ def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
         },
     )
     return {"ok": True, "filter": saved}
+
+
+@app.get("/api/analysis-profiles")
+def analysis_profiles() -> dict[str, Any]:
+    return {
+        "items": list_analysis_profiles(DEFAULT_DB_PATH),
+        "selected": get_last_analysis_profile(DEFAULT_DB_PATH),
+    }
+
+
+@app.post("/api/analysis-profiles")
+def analysis_profile_create(body: AnalysisProfileRequest) -> dict[str, Any]:
+    try:
+        profile = create_analysis_profile(
+            DEFAULT_DB_PATH,
+            name=body.name,
+            profile=body.profile,
+        )
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="Профиль с таким названием уже существует") from error
+    selected = set_last_analysis_profile(DEFAULT_DB_PATH, int(profile["id"]))
+    return {"ok": True, "profile": selected}
+
+
+@app.put("/api/analysis-profiles/{profile_id}")
+def analysis_profile_update(profile_id: int, body: AnalysisProfileRequest) -> dict[str, Any]:
+    if not get_analysis_profile(DEFAULT_DB_PATH, profile_id):
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+    try:
+        profile = update_analysis_profile(
+            DEFAULT_DB_PATH,
+            profile_id,
+            name=body.name,
+            profile=body.profile,
+        )
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="Профиль с таким названием уже существует") from error
+    return {"ok": True, "profile": profile}
+
+
+@app.delete("/api/analysis-profiles/{profile_id}")
+def analysis_profile_delete(profile_id: int) -> dict[str, Any]:
+    if not get_analysis_profile(DEFAULT_DB_PATH, profile_id):
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+    try:
+        selected_id = delete_analysis_profile(DEFAULT_DB_PATH, profile_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {
+        "ok": True,
+        "selected": get_analysis_profile(DEFAULT_DB_PATH, selected_id),
+        "items": list_analysis_profiles(DEFAULT_DB_PATH),
+    }
+
+
+@app.put("/api/analysis-profiles/{profile_id}/selected")
+def analysis_profile_select(profile_id: int) -> dict[str, Any]:
+    try:
+        profile = set_last_analysis_profile(DEFAULT_DB_PATH, profile_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Профиль не найден") from error
+    return {"ok": True, "selected": profile}
+
+
+@app.post("/api/analysis-profiles/{profile_id}/preview")
+def analysis_profile_preview(profile_id: int) -> dict[str, Any]:
+    profile = get_analysis_profile(DEFAULT_DB_PATH, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+    try:
+        return profile_candidates_preview(profile, db_path=DEFAULT_DB_PATH)
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/api/daily-summaries")
+def daily_summary_create(body: DailySummaryCreateRequest) -> dict[str, Any]:
+    profile = get_analysis_profile(DEFAULT_DB_PATH, body.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+    if int(profile.get("version") or 0) != body.profile_version:
+        raise HTTPException(status_code=409, detail="Профиль изменился после preview — обновите список кандидатов")
+    candidates = body.preview.get("candidates")
+    period = body.preview.get("period")
+    scope = body.preview.get("scope")
+    cost_preview = body.preview.get("cost_preview")
+    if not isinstance(candidates, list) or not isinstance(period, dict) or not isinstance(scope, dict) or not isinstance(cost_preview, dict):
+        raise HTTPException(status_code=400, detail="Некорректный snapshot preview")
+    known_keys = {str(item.get("journey_key") or "") for item in candidates if isinstance(item, dict)}
+    unknown = [key for key in body.selected_journey_keys if key not in known_keys]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Неизвестные кандидаты: {', '.join(unknown[:5])}")
+    return create_daily_summary_run(
+        DEFAULT_DB_PATH,
+        profile=profile,
+        period=period,
+        scope=scope,
+        candidates=[item for item in candidates if isinstance(item, dict)],
+        selected_journey_keys=body.selected_journey_keys,
+        cost_preview=cost_preview,
+    )
+
+
+@app.get("/api/daily-summaries")
+def daily_summaries(limit: int = Query(default=30, ge=1, le=100)) -> dict[str, Any]:
+    return {"items": list_daily_summary_runs(DEFAULT_DB_PATH, limit=limit)}
+
+
+@app.get("/api/daily-summaries/{run_id}")
+def daily_summary(run_id: int) -> dict[str, Any]:
+    value = get_daily_summary_run(DEFAULT_DB_PATH, run_id)
+    if not value:
+        raise HTTPException(status_code=404, detail="Сводка не найдена")
+    job_ids = [item for item in str(value.get("job_id") or "").split(",") if item]
+    job_states = [job for job_id in job_ids if (job := get_job(job_id))]
+    results = [result for job in job_states for result in job.get("results") or []]
+    if job_states:
+        statuses = {str(job.get("status") or "") for job in job_states}
+        if statuses <= {"done"}:
+            value["status"] = "done"
+        elif "error" in statuses and statuses <= {"done", "error"}:
+            value["status"] = "completed_with_errors"
+        else:
+            value["status"] = "analyzing"
+    value["job_states"] = job_states
+    value["results"] = results
+    return value
+
+
+@app.post("/api/daily-summaries/{run_id}/start")
+def daily_summary_start(run_id: int, body: DailySummaryStartRequest) -> dict[str, Any]:
+    run = get_daily_summary_run(DEFAULT_DB_PATH, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Сводка не найдена")
+    if run.get("status") != "draft":
+        raise HTTPException(status_code=409, detail="Эта сводка уже была запущена")
+    selected = [item for item in run.get("items") or [] if item.get("selected")]
+    paid = [
+        item for item in selected
+        if str((item.get("candidate") or {}).get("analysis_freshness") or "missing") in {"missing", "changed", "failed"}
+    ]
+    if paid and not body.confirm_paid:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Требуется подтверждение платного анализа: до {run.get('llm_allowed_count', 0)} карточек",
+        )
+    paid_allowed = int(run.get("llm_allowed_count") or 0)
+    paid_keys = {str(item.get("journey_key")) for item in paid[:paid_allowed]}
+    eligible: list[dict[str, Any]] = []
+    for item in selected:
+        candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
+        requires_paid = str(item.get("journey_key")) in paid_keys
+        if str(candidate.get("analysis_freshness") or "missing") in {"missing", "changed", "failed"} and not requires_paid:
+            continue
+        eligible.append(item)
+    options_payload = run.get("profile_snapshot") if isinstance(run.get("profile_snapshot"), dict) else {}
+    analysis = options_payload.get("analysis") if isinstance(options_payload.get("analysis"), dict) else {}
+    jobs_started = []
+    for entity_type in ("lead", "deal"):
+        ids = [str(item.get("entity_id") or "") for item in eligible if item.get("entity_type") == entity_type]
+        if not ids:
+            continue
+        options = AnalyzeOptions(
+            entity_type=entity_type,
+            ids=ids,
+            history_days=int(analysis.get("history_days") or 60),
+            include_related=bool(analysis.get("include_related", True)),
+            include_internal=bool(analysis.get("include_internal", True)),
+            download_audio=bool(analysis.get("download_audio", True)),
+            redownload_audio=bool(analysis.get("redownload_audio", False)),
+            transcribe_audio=bool(analysis.get("transcribe_audio", True)),
+            analyze=True,
+            force_llm=False,
+            transcript_mode=str(analysis.get("transcript_mode") or "all"),
+        )
+        jobs_started.append(start_analyze_job(options))
+    if not jobs_started and selected:
+        raise HTTPException(status_code=409, detail="Платный лимит равен нулю или все новые карточки ждут ёмкости")
+    job_ids = [str(job.get("job_id") or "") for job in jobs_started]
+    updated = attach_job_to_daily_summary(DEFAULT_DB_PATH, run_id, ",".join(job_ids))
+    return {"summary": updated, "jobs": jobs_started}
 
 
 @app.get("/api/candidates")
@@ -224,6 +440,8 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
     ids = parse_ids(body.ids)
     if not ids:
         raise HTTPException(status_code=400, detail="Укажите хотя бы один ID")
+    if body.force_llm and not body.confirm_paid:
+        raise HTTPException(status_code=409, detail="Для принудительного LLM-анализа подтвердите платный запуск")
     options = AnalyzeOptions(
         entity_type=body.entity_type,
         ids=ids,

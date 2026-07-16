@@ -26,6 +26,71 @@ export type Candidate = {
   review_decision?: string
   reviewed_at?: string
   crm_updated_after_review?: boolean
+  journey_key?: string
+  origin_lead_id?: string | null
+  reason_codes?: string[]
+  analysis_freshness?: 'fresh' | 'changed' | 'date_modified_only' | 'missing' | 'failed' | 'reviewed' | 'snoozed'
+  lifecycle?: 'new' | 'backlog' | 'reactivation'
+  workset_selected?: boolean
+  capacity_state?: 'waiting_for_capacity'
+  call_method?: Record<string, unknown>
+}
+
+export type AnalysisProfileSettings = {
+  timezone: string
+  period_preset: 'today' | 'yesterday' | 'today_and_yesterday'
+  lead: Record<string, unknown>
+  deal: Record<string, unknown>
+  signals: Record<string, boolean>
+  review_view: 'active' | 'reviewed' | 'all'
+  limits: {
+    workset: number
+    new_slots: number
+    backlog_slots: number
+    paid_per_run: number
+    paid_per_day: number
+  }
+  analysis: Record<string, unknown>
+}
+
+export type AnalysisProfile = {
+  id: number
+  name: string
+  version: number
+  profile: AnalysisProfileSettings
+  created_at: string
+  updated_at: string
+}
+
+export type DailyPreview = {
+  profile: { id: number; name: string; version: number }
+  period: Record<string, string>
+  scope: Record<string, unknown>
+  summary: Record<string, number>
+  cost_preview: Record<string, unknown>
+  candidates: Candidate[]
+  generated_at: string
+  llm_called: false
+}
+
+export type DailySummaryRun = {
+  id: number
+  profile_id: number
+  profile_name: string
+  profile_version: number
+  profile_snapshot: AnalysisProfileSettings
+  period: Record<string, string>
+  scope: Record<string, unknown>
+  cost_preview: Record<string, unknown>
+  status: string
+  selected_count: number
+  llm_required_count: number
+  llm_allowed_count: number
+  job_id?: string | null
+  created_at: string
+  items?: Array<Record<string, unknown>>
+  job_states?: JobState[]
+  results?: JobResult[]
 }
 
 export type CandidatesResponse = {
@@ -93,6 +158,7 @@ export type AnalyzeOptions = {
   transcribe_audio: boolean
   analyze: boolean
   force_llm: boolean
+  confirm_paid?: boolean
   transcript_mode: 'all' | 'latest' | 'none'
 }
 
@@ -223,6 +289,69 @@ export function saveCandidateFilter(body: CandidateFilter) {
   return api<{ ok: boolean; filter: CandidateFilter }>('/api/candidate-filters', {
     method: 'PUT',
     body: JSON.stringify(body),
+  })
+}
+
+export function fetchAnalysisProfiles() {
+  return api<{ items: AnalysisProfile[]; selected: AnalysisProfile }>('/api/analysis-profiles')
+}
+
+export function createAnalysisProfile(name: string, profile: AnalysisProfileSettings) {
+  return api<{ ok: boolean; profile: AnalysisProfile }>('/api/analysis-profiles', {
+    method: 'POST',
+    body: JSON.stringify({ name, profile }),
+  })
+}
+
+export function updateAnalysisProfile(profile: AnalysisProfile) {
+  return api<{ ok: boolean; profile: AnalysisProfile }>(`/api/analysis-profiles/${profile.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: profile.name, profile: profile.profile }),
+  })
+}
+
+export function deleteAnalysisProfile(profileId: number) {
+  return api<{ ok: boolean; selected: AnalysisProfile; items: AnalysisProfile[] }>(`/api/analysis-profiles/${profileId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function selectAnalysisProfile(profileId: number) {
+  return api<{ ok: boolean; selected: AnalysisProfile }>(`/api/analysis-profiles/${profileId}/selected`, { method: 'PUT' })
+}
+
+export function previewAnalysisProfile(profileId: number) {
+  return api<DailyPreview>(`/api/analysis-profiles/${profileId}/preview`, { method: 'POST' })
+}
+
+export function createDailySummary(
+  profile: AnalysisProfile,
+  preview: DailyPreview,
+  selectedJourneyKeys: string[],
+) {
+  return api<DailySummaryRun>('/api/daily-summaries', {
+    method: 'POST',
+    body: JSON.stringify({
+      profile_id: profile.id,
+      profile_version: profile.version,
+      preview,
+      selected_journey_keys: selectedJourneyKeys,
+    }),
+  })
+}
+
+export function fetchDailySummaries(limit = 30) {
+  return api<{ items: DailySummaryRun[] }>(`/api/daily-summaries?limit=${limit}`)
+}
+
+export function fetchDailySummary(runId: number) {
+  return api<DailySummaryRun>(`/api/daily-summaries/${runId}`)
+}
+
+export function startDailySummary(runId: number, confirmPaid: boolean) {
+  return api<{ summary: DailySummaryRun; jobs: JobState[] }>(`/api/daily-summaries/${runId}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ confirm_paid: confirmPaid }),
   })
 }
 

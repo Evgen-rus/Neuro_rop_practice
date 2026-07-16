@@ -37,7 +37,7 @@ class AnalyzeOptions:
     redownload_audio: bool = False
     transcribe_audio: bool = True
     analyze: bool = True
-    force_llm: bool = True
+    force_llm: bool = False
     transcript_mode: str = "all"
 
 
