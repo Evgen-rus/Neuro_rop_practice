@@ -43,6 +43,15 @@ run_rop_assistant.py -> lead/deal pipeline -> context diagnostics -> missing aud
 React UI -> FastAPI api/ -> candidates scoring | analyze job -> run_rop_assistant.py / analysis JSON -> UI report + SQLite feedback
 ```
 
+Ручная ежедневная сводка использует отдельный pre-LLM этап отбора:
+
+```text
+именованный analysis profile -> Moscow calendar period -> Bitrix lead/deal preview без LLM
+-> lead-to-deal journey deduplication -> signals + lifecycle + workset/capacity
+-> immutable daily summary snapshot -> явное подтверждение платных карточек
+-> analyze jobs с force_llm=false -> analysis JSON / ROP report
+```
+
 Отдельный ручной compact-контур не участвует в штатном pipeline:
 
 ```text
@@ -72,7 +81,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - FastAPI entrypoint: `api/app.py`
 - Analyze jobs / CLI adapter: `api/jobs.py`
 - Compact shadow job и evidence lookup: `api/compact_shadow.py`
-- Candidates scoring (без LLM): `api/candidates.py`
+- Candidates scoring, profile preview, lead-to-deal journey и лимиты workset (без LLM): `api/candidates.py`
 - React UI: `frontend/src/App.tsx`, API-клиент `frontend/src/api.ts`
 - Визуальный референс демо: `praktikm_rop_assistant_demo.html`
 - ТЗ UI (продуктовый ориентир, не source-of-truth кода): `tz_front.md`
@@ -106,7 +115,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
 - Проверка evidence compact-ответа относительно переданного контекста: `openai_api/llm/evidence_coverage.py`
 - Детерминированные playbooks compact-анализа: `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`
-- SQLite-хранилище состояния ROP assistant + UI feedback и текущего статуса проверки кандидата: `storage/rop_db.py`
+- SQLite-хранилище change detection, UI feedback, analysis profiles, lifecycle кандидатов и immutable snapshots ежедневных сводок: `storage/rop_db.py`
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
 - Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal CRM stage policy / closed-lost classification: `openai_api/change_detection/stage_policy.py`
@@ -137,7 +146,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 12. Workspace-структура должна быть одинаковой по смыслу для `lead_*` и `deal_*`: `history/`, `raw/`, `audio/`, `transcripts/`, `analysis/`, `index.json`.
 13. `latest` transcript выбирается по времени изменения файла. Если в папке несколько транскриптов, это может повлиять на анализ.
 14. `ffmpeg` и `ffprobe` — внешние зависимости, они не ставятся через `requirements.txt`.
-15. SQLite — локальное MVP-хранилище: change detection (`entity_state`, `analysis_runs`, …), UI feedback (`ui_reports`, `rop_decisions`, `outcomes`), статус проверки конкретного кандидата (`candidate_review_state`) и сохранённый фильтр (`ui_candidate_filters`). Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
+15. SQLite — локальное MVP-хранилище: change detection (`entity_state`, `analysis_runs`, …), UI feedback (`ui_reports`, `rop_decisions`, `outcomes`), review state (`candidate_review_state`), legacy-фильтр (`ui_candidate_filters`), именованные профили (`analysis_profiles`), lifecycle journey (`candidate_cases`) и snapshots ручных сводок (`daily_summary_runs`, `daily_summary_items`). Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
 16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
 17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
 18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
@@ -172,7 +181,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 47. UI читает текущий `*_analysis.json` как есть; отдельный UI-only JSON-контракт поверх LLM пока не вводим. Для converted lead результат job обязан возвращать связанную сделку, если её полный анализ создан штатным handoff, а не пустой lead-результат.
 48. `reports/` не раздаётся frontend'у целиком: UI получает analysis/report только через API; полный markdown — по запросу, не на первом экране.
 49. Первый экран UI показывает кандидатов на внимание (Bitrix-фильтр + scoring без LLM), а не технический pipeline.
-50. Candidates scoring v1 — дешёвый pre-LLM слой: тип по умолчанию `lead`, окна `created_days`/`modified_days` (по умолчанию 15/15), топ-20; воронка/этапы из реальной CRM-карты обязательны — без выбора поиск не запускается; выбранный фильтр сохраняется в `ui_candidate_filters`. Это «кандидат на разбор», не финальный вердикт модели.
+50. Основной candidates preview ручной сводки — дешёвый pre-LLM слой на базе выбранного `analysis_profile`: календарный период `today|yesterday|today_and_yesterday` считается по `Europe/Moscow`; preview читает Bitrix и SQLite, но не вызывает OpenAI. Legacy `/api/candidates` и `ui_candidate_filters` сохраняются для совместимости ручного экрана.
 51. Звонки короче 20 секунд считаются `short_no_answer` (недозвон/автоответчик): duration через `ffprobe` пишется в audio manifest, такие файлы по умолчанию не транскрибируются.
 52. Локальный UI на первом этапе без авторизации, только localhost.
 53. Решения РОПа и outcomes сохраняются локально в SQLite (`rop_decisions`, `outcomes`) и не пишутся в Bitrix.
@@ -186,6 +195,13 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 61. Перед сохранением успешного compact-результата обязательны: structured-output contract, entity-specific deterministic playbook/materialization и `validate_evidence_context_coverage`. При непокрытом evidence или ошибке класс fallback — `full_fallback_recommended`; автоматически повторять платный вызов нельзя.
 62. Compact diagnostics ограничивают использование evidence, но не являются фактами о клиенте: отсутствие источника нельзя интерпретировать как отсутствие события или намерения клиента.
 63. Compact knowledge packs выбираются только по типу сущности (`core + lead` или `core + deal`) и должны оставаться воспроизводимыми. Полная OKF-база legacy-анализа не подменяется этими пакетами.
+64. Профиль анализа именованный и версионируемый; UI сохраняет последний выбранный профиль. Изменение профиля после preview инвалидирует создание сводки по старой версии.
+65. Lead scope ограничен календарным периодом создания, исключает live-resolved источники DMP/DMP1 и настроенные негативные категории. Входящие звонки остаются частью activity context и сигнала методики дозвона.
+66. Deal scope настраивается воронками и этапами профиля и может включать старые активные сделки независимо от даты создания. Источник DMP/DMP1 не исключает уже созданную сделку.
+67. Лид и созданная из него сделка образуют один `journey_key`; в основной карточке предпочтительна сделка, а исходный lead сохраняется как origin. Сделка вне выбранного deal scope не подменяет карточку и показывается только как handoff warning.
+68. Preview показывает весь найденный список, но `workset_selected` выделяет ограниченный набор по priority, lifecycle и слотам `new/backlog`. Остальные карточки остаются видимыми и могут быть добавлены вручную.
+69. `daily_summary_runs` и `daily_summary_items` хранят immutable snapshot профиля и кандидатов на момент создания. Повторное чтение Bitrix не должно незаметно менять уже созданную сводку.
+70. Полный LLM-анализ запускается только после явного подтверждения платных карточек и в пределах `paid_per_run`/`paid_per_day`. Штатный запуск сводки передаёт `force_llm=false`; свежий analysis переиспользуется, а changed/missing/failed требуют доступной платной ёмкости.
 
 ## 4) Key Domain Objects
 
@@ -216,8 +232,13 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - `Manager action block` — совместимый блок `manager_action_block`: `primary_text` содержит готовое сообщение клиенту, а `manager_checklist` — CRM-факты, которые менеджер фиксирует после контакта. Это вспомогательный материал, не главный результат отчёта.
 - `ROP report` — человекочитаемый Markdown-отчёт в `analysis/*_rop_report.md`.
 - `Workspace index` — `index.json`, фиксирует тип сущности, ID и локальные папки.
-- `Candidate` — pre-LLM карточка внимания из `api/candidates.py`: entity, статус/стадия, priority/score, attention_reason, Bitrix URL, флаг `analyzed`.
-- `Candidate filter` — сохранённый UI-фильтр кандидатов в `ui_candidate_filters`: тип lead/deal, окна дат, multi-select воронок/этапов, priority, limit.
+- `Candidate` — pre-LLM карточка внимания из `api/candidates.py`: entity, journey/origin, статус/стадия, priority, reason codes, analysis freshness, lifecycle, Bitrix URL и признак попадания в workset.
+- `Candidate journey` — единый путь клиента с устойчивым `journey_key`; после конвертации одна карточка связывает origin lead с текущей deal и не допускает двойного анализа одного пути.
+- `Analysis profile` — именованная версионируемая конфигурация в `analysis_profiles`: московский период, lead/deal scope, сигналы, review view, workset/paid limits и параметры анализа. Последний выбранный ID хранится в `ui_preferences`.
+- `Workset` — ограниченный выделенный набор кандидатов внутри полного preview; overflow остаётся видимым и доступным для ручного выбора.
+- `Daily summary snapshot` — неизменяемая запись `daily_summary_runs` + `daily_summary_items` с версией/снимком профиля, периодом, scope, кандидатами, выбранными journey и зарезервированной платной ёмкостью.
+- `Candidate case` — локальный lifecycle journey в `candidate_cases`: `new`, `backlog` или `reactivation`, определяемый по first seen и signal hash.
+- `Candidate filter` — legacy-сохранённый фильтр ручного экрана в `ui_candidate_filters`: тип lead/deal, окна дат, multi-select воронок/этапов, priority, limit.
 - `Candidate review state` — текущее локальное состояние конкретного lead/deal после решения РОПа: `reviewed`, `snoozed` или `active`, снимок стадии/суммы и дата следующего контроля. Не является записью в Bitrix и не переносит правило на похожие сущности.
 - `Manual input` — значение ручного запуска: один или несколько числовых ID либо канонических ссылок Bitrix. UI извлекает ID из ссылки и подставляет тип `lead` или `deal`.
 - `Analyze job` — фоновая задача UI/API (`api/jobs.py`): опции как в CLI, live stages, results, `report_ids`.
@@ -342,26 +363,31 @@ UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
 - `GET /api/pipelines` — справочник воронок/этапов из `crm_pipeline_map.json`
 - `GET|PUT /api/candidate-filters` — сохранённый фильтр кандидатов в SQLite, включая режим очереди `active|reviewed|all`
 - `GET|POST /api/candidates` / `candidates/search` — Bitrix list + scoring без LLM; без выбранных этапов (и воронок для сделок) возвращает `ready=false`; применяет локальный `candidate_review_state`
-- `POST /api/analyze` — фоновый job с опциями как в CLI; auto = сначала lead, потом deal
+- `GET|POST|PUT|DELETE /api/analysis-profiles` — именованные версионируемые настройки периода, lead/deal scope, сигналов и лимитов; последний выбранный профиль хранится в SQLite
+- `POST /api/analysis-profiles/{id}/preview` — read-only Bitrix/SQLite preview без LLM: journeys, сигналы, lifecycle, workset и предварительная стоимость
+- `POST /api/daily-summaries`, `GET /api/daily-summaries[/{id}]` — immutable snapshot выбранного preview и история ручных сводок
+- `POST /api/daily-summaries/{id}/start` — явное подтверждение платных карточек, применение дневного/разового лимита и запуск lead/deal jobs с `force_llm=false`
+- `POST /api/analyze` — фоновый job с опциями как в CLI; `force_llm=true` требует `confirm_paid=true`; auto = сначала lead, потом deal
 - `GET /api/jobs/{job_id}` — live stages/progress
 - `GET /api/reports`, `GET /api/reports/{id}` — история UI-отчётов
 - `GET /api/reports/{id}/markdown` — полный markdown по запросу
 - `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
 
-UI экраны: кандидаты (первый экран), ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
+UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Preview показывает весь список и визуально выделяет ограниченный workset; платный старт требует отдельного подтверждения. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
 
 ### G) Candidates Scoring
 
-Pre-LLM слой внимания (`api/candidates.py`):
+Основной pre-LLM слой ручной сводки (`api/candidates.py`):
 
 ```text
-saved filter / UI multi-select + review view -> crm_pipeline_map stages
--> Bitrix crm.lead.list (STATUS_ID) / crm.deal.list (CATEGORY_ID + STAGE_ID)
--> DATE_CREATE + DATE_MODIFY windows -> stage_policy codes + stale heuristics -> priority/score
--> candidate_review_state: hide reviewed / return stage-or-amount changes / top N
+analysis_profile + Moscow period -> live CRM source/status resolution + crm_pipeline_map stages
+-> fresh leads + configured deal portfolio + activities
+-> lead-to-deal journey deduplication
+-> deterministic signals + analysis freshness + lifecycle
+-> priority ordering -> highlighted workset + visible overflow + paid capacity preview
 ```
 
-По умолчанию: `entity_type=lead`, `created_days=15`, `modified_days=15`, `limit=20`, `review_view=active`, воронка/этапы пустые (`ready=false` до выбора). High-сигналы сделок включают `wrong_qualification` (`C15:4`), `no_response`, зависание открытых сделок; medium — `price_lost`, `lost_to_competitor`, `postponed` и др. Это triage до LLM, не замена analysis JSON. Текущая v1 не делает дорогой semantic diff активности на каждом поиске: CRM-обновление после решения видно в reviewed-аудите, но само по себе не возвращает сущность в active.
+Default profile использует период `today_and_yesterday` по Москве, исключает DMP/DMP1 только для лидов, сохраняет входящие звонки, выбирает настроенные deal pipelines/stages и выделяет workset до 15 карточек. Сигналы включают просроченную задачу, сомнительное закрытие, негативный свежий лид, отсутствие датированного следующего шага, post-proposal/payment control и мягкий `call_method_gap`. Это triage до LLM, не замена analysis JSON. Legacy saved-filter scorer остаётся отдельным совместимым маршрутом.
 
 ### H) Compact Attention-Delta Shadow
 
@@ -413,6 +439,8 @@ full analysis envelope
 - Изменение FastAPI routes / CORS / report endpoints: `api/app.py`.
 - Изменение analyze job, auto lead→deal resolve, progress stages: `api/jobs.py`.
 - Изменение candidates scoring / фильтров / приоритетов и применения review state: `api/candidates.py`.
+- Изменение analysis profiles, Moscow period, lead/deal scope, journey deduplication, сигналов, lifecycle, workset или cost preview: `api/candidates.py`, `storage/rop_db.py`, `api/app.py`.
+- Изменение immutable daily summary snapshot, платных лимитов или запуска сводки: `storage/rop_db.py`, `api/app.py`, `api/jobs.py`.
 - Изменение состояния «проверено РОПом», отложенного контроля или возврата в очередь: `storage/rop_db.py` (`candidate_review_state`) и `api/app.py`.
 - Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа и режима очереди: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
 - Изменение распознавания ID и ссылок Bitrix в ручном запуске: `parseManualInput()` в `frontend/src/App.tsx`.
@@ -485,7 +513,7 @@ ROP assistant state:
 12. `ffmpeg`/`ffprobe` должны быть в `PATH`; без `ffprobe` short-call filter не сможет надёжно измерить duration.
 13. У converted lead без `CONTACT_ID` сделка может быть найдена только через `LEAD_ID`; не считать отсутствие contact link доказательством отсутствия сделки.
 14. По сделке, созданной из лида, звонки могут физически лежать в source lead; deal context/diagnostics должны сохранять source entity и Bitrix-ссылку на исходную активность.
-15. Candidates scoring может давать много high-карточек на широком окне дней: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт.
+15. Profile preview может давать много high-карточек при широком deal scope: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт. Ограничение workset выделяет приоритет, но не скрывает overflow.
 16. Analyze job из UI может быть долгим: это полный CLI-пайплайн, прогресс смотреть через `/api/jobs/{id}`.
 17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
 18. `candidate_review_state` применяется только к конкретной сущности. Нельзя скрывать всех кандидатов этапа после одного подтверждённого закрытия; перенос решения на похожие сущности требует отдельного накопленного feedback-паттерна.
@@ -498,8 +526,8 @@ ROP assistant state:
 
 - Нет Telegram Bot API и автоматической отправки отчётов/поручений менеджеру.
 - Нет auth/multi-user кабинета: UI локальный, только localhost.
-- Candidates scoring v1 грубый: нет полноценного учёта задач/следующего шага/счетов/оплат как отдельных CRM-сигналов в scorer.
-- SQLite feedback loop есть (`ui_reports` / `rop_decisions` / `outcomes` / `candidate_review_state` / `ui_candidate_filters`), но нет аналитики качества рекомендаций, semantic diff активностей для reviewed-сущностей и портфельной `deal_memory` / `lead_memory`.
+- Daily candidate engine учитывает задачи, следующий шаг и детерминированные сигналы, но счета/оплаты пока не загружаются как отдельный надёжный CRM-источник; payment-сигнал зависит от доступных полей/активностей.
+- SQLite-контур включает profiles, candidate lifecycle, daily summary snapshots и feedback, но нет аналитики качества рекомендаций, полноценного semantic diff всех CRM-активностей и портфельной `deal_memory` / `lead_memory`.
 - Compact attention-delta работает только как isolated shadow/review: он не включён в штатный CLI/change-detection flow и не может заменить legacy report без отдельной валидации и продуктового решения.
 - Нет автоматического отбора безопасных compact cases, batch-режима и автоматического принятия compact-результата; coverage failure ведёт только к `full_fallback_recommended`.
 - Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.
