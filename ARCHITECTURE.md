@@ -107,7 +107,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Общая логика транскрибации: `openai_api/audio/transcribe_core.py`
 - Short-call / недозвон filter: `openai_api/audio/short_call.py`
 - Deal LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_deal.py`
-- Lead LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
+- Lead LLM-анализ, детальный BANT, `lead_category`, `lead_route`, техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
 - OpenAI JSON client: `openai_api/llm/llm_client.py`
 - Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead- и deal-анализа: `openai_api/llm/validation.py`
 - Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
@@ -346,6 +346,18 @@ Bitrix24 -> raw context/customer_history_bundle -> customer_path.md -> workspace
 
 Перед сохранением итогового отчёта JSON проходит нормализацию и валидацию: длинные списки, для которых контракт задаёт максимум, ужимаются до лимита, а факт изменения пишется в `model_metadata.normalization_changes`. Сырой ответ модели всё равно сохраняется в `analysis/*_raw_model_output.txt`.
 
+Полный lead-контракт квалификации:
+
+1. `qualification_assessment.bant` содержит четыре независимых критерия `budget`, `authority`, `need`, `timeframe`. Каждый критерий возвращает заметное название, статус, краткий вывод, evidence, недостающие факты и один вопрос/действие. Lead-статусы: `confirmed|not_confirmed|negative|unknown`; отсутствие информации не является `negative`.
+2. `timeframe.purchase_window` нормализует горизонт в `up_to_60_days|days_61_to_89|months_3_to_12|over_12_months|unknown`. Ровно три месяца относится к `months_3_to_12`.
+3. `solution_fit` и `commercial_fit` не входят в BANT: нехватка технических данных означает `needs_technical_data`, а бюджетный стоп-фактор допустим только для явно названного бюджета нового оборудования ниже 1 000 000 ₽.
+4. `lead_category.value` содержит `A|B|C|D|E|unknown`, объяснение, BANT/технические/бюджетные факторы, недостающие сведения и следующий шаг. `lead_state.qualification` остаётся обязательным legacy-дублем того же значения.
+5. `lead_route` отдельно фиксирует текущий и рекомендуемый маршрут, статус `allowed|violation|needs_clarification|unknown`, evidence и контролируемый возврат. `ordinary_deal` разрешён только при полном BANT; `op2` — ровно при одном `not_confirmed|unknown` без `negative`; C требует даты возврата.
+6. `loss_diagnosis` независимо оценивает качество лида, обработки, дозвона, следующего шага и маршрута. При состоявшемся контакте `call_attempt_quality=not_applicable` является валидным состоянием; это не пропуск проверки.
+7. Для нового LLM-ответа расширенный lead-контракт обязателен. `allow_legacy_qualification_assessment` применяется только при чтении старых сохранённых результатов и материализует безопасный `unknown` fallback; новый анализ не может использовать этот обход.
+
+Deal-контракт сохраняет общий `qualification_assessment.bant|solution_fit|commercial_fit`, но не содержит и не вычисляет `lead_category` или `lead_route`; управленческими сущностями сделки остаются `deal_mode`, `priority_recommendation`, `payment_blocker`, `closed_deal_review` и другие deal-блоки.
+
 ### F) Local UI And API Adapter
 
 Локальный экран РОПа поверх текущего backend/CLI:
@@ -374,7 +386,7 @@ UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
 - `GET /api/reports/{id}/markdown` — полный markdown по запросу
 - `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
 
-UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. Preview показывает весь список и визуально выделяет ограниченный workset; платный старт требует отдельного подтверждения. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
+UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. В lead-карточке первым аналитическим блоком выводится BANT-микродашборд из четырёх самостоятельных критериев, затем отдельные `Категория лида` и маршрут; причины внимания, качество обработки и остальные рекомендации идут ниже. В deal-карточке этот lead-интерфейс не создаётся. `api/jobs.py` и `api/app.py` передают полный analysis JSON без параллельной схемы, а в summary дополнительно публикуют `lead_category` и `lead_route_status`; frontend старого отчёта использует fallback на `lead_state.qualification` и безопасно скрывает отсутствующие новые блоки. Preview показывает весь список и визуально выделяет ограниченный workset; платный старт требует отдельного подтверждения. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
 
 ### G) Candidates Scoring
 
@@ -522,6 +534,9 @@ ROP assistant state:
 20. Compact review не является доказательством готовности заменить legacy analysis: он доступен лишь при сохранённых full-analysis inputs, а `full_fallback_recommended`, error или устаревший snapshot требуют вернуться к полному контуру.
 21. Запуск compact run из UI платный и ручной; API preflight не гарантирует достаточность фактов, а только проверяет наличие зафиксированных входов. Не добавлять автоматические retry или batch-вызовы без отдельного продуктового решения.
 22. `benchmarks/local/` и `benchmarks/results/` намеренно игнорируются Git. В них допустимы только локальные чувствительные артефакты; в tracked manifest нельзя добавлять реальные CRM-выгрузки, транскрипты, телефоны, имена или отчёты.
+23. Не связывать категорию с количеством подтверждённых критериев или процентом BANT. Категория определяется совместно BANT, горизонтом, технической применимостью и доказанным бюджетным/контактным основанием.
+24. `not_confirmed`, `negative` и `unknown` имеют разные значения: неподтверждённость и нехватка данных не доказывают отказ. Для E по недозвону нужен `call_attempt_recommendation.cycle_status=completed`; обычный или незавершённый цикл остаётся `unknown`.
+25. Реальные `analysis/*.json`, Markdown, raw model output, аудио и транскрипты остаются в игнорируемом `reports/`; успешный локальный прогон не должен добавлять эти артефакты в Git.
 
 ## 10) Current Gaps
 
