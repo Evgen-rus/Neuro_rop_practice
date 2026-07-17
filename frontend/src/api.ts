@@ -6,6 +6,12 @@ export type LeadQualificationSummary = {
   confirmed_count: number
   total_count: number
   statuses: Record<'budget' | 'authority' | 'need' | 'timeframe', string>
+  decision_timing?: string | null
+  need_or_launch_timing?: string | null
+  route_status?: string | null
+  controlled_return_status?: string | null
+  controlled_return_date?: string | null
+  recommended_return_date?: string | null
 }
 
 export type Candidate = {

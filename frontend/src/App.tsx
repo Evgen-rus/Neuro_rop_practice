@@ -202,6 +202,10 @@ function LeadQualificationStrip({
           return <span className={`bant-mini status-${status}`} title={`${label}: ${BANT_STATUS_RU[status] || status}`} key={key}>{label}{status === 'confirmed' ? '✓' : status === 'negative' ? '×' : '?'}</span>
         })}
       </span>
+      {summary.category === 'C' ? <span className={`summary-return status-${summary.controlled_return_status || 'unknown'}`}>
+        Возврат: {assessmentLabel(summary.controlled_return_status || 'unknown', CONTROLLED_RETURN_STATUS_RU)}
+        {summary.controlled_return_date ? ` · CRM ${summary.controlled_return_date}` : summary.recommended_return_date ? ` · рекомендуется ${summary.recommended_return_date}` : ''}
+      </span> : null}
     </div>
   )
 }
@@ -221,6 +225,13 @@ const LEAD_ROUTE_RU: Record<string, string> = {
   deferred_demand: 'Отложенный спрос',
   disqualified: 'Дисквалификация',
   unknown: 'Не определён',
+}
+
+const CONTROLLED_RETURN_STATUS_RU: Record<string, string> = {
+  confirmed_in_crm: 'подтверждён в CRM',
+  missing_in_crm: 'действие в CRM отсутствует',
+  needs_clarification: 'нужно проверить CRM',
+  not_required: 'не требуется',
 }
 
 const SOLUTION_FIT_STATUS_RU: Record<string, string> = {
@@ -1180,8 +1191,27 @@ export default function App() {
                   {dailyProgressStats.skipped ? <span>Не запущено: {dailyProgressStats.skipped}</span> : null}
                 </div> : null}
               </div>
-              <div className="daily-cards">
-                {dailyPreview.candidates.map((candidate) => {
+              <div className="daily-groups">
+                {([
+                  {
+                    key: 'new',
+                    title: 'Новые случаи',
+                    description: 'Проблемы и риски, впервые попавшие в текущую сводку.',
+                    candidates: dailyPreview.candidates.filter((candidate) => (candidate.lifecycle || 'new') === 'new'),
+                  },
+                  {
+                    key: 'backlog',
+                    title: 'Накопившиеся и вернувшиеся в контроль',
+                    description: 'Неразобранные случаи прошлых запусков и случаи со значимыми изменениями.',
+                    candidates: dailyPreview.candidates.filter((candidate) => (candidate.lifecycle || 'new') !== 'new'),
+                  },
+                ] as const).map((group) => <section className={`daily-group daily-group-${group.key}`} key={group.key}>
+                  <div className="daily-group-head">
+                    <div><h3>{group.title}</h3><p>{group.description}</p></div>
+                    <span>{group.candidates.length}</span>
+                  </div>
+                  <div className="daily-cards">
+                  {group.candidates.map((candidate) => {
                   const key = candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`
                   const entityKey = `${candidate.entity_type}:${candidate.entity_id}`
                   const checked = dailySelected.has(key)
@@ -1197,7 +1227,7 @@ export default function App() {
                       {checked ? 'В рабочем наборе' : 'Добавить из резерва'}
                     </label>
                     <div className="daily-card-title"><span className={`risk-dot ${candidate.priority}`} /> <b>{candidate.title}</b></div>
-                    <div className="candidate-meta">{candidate.entity_type === 'lead' ? 'Лид' : 'Сделка'} {candidate.entity_id} · {candidate.status} · {candidate.lifecycle || 'new'}</div>
+                    <div className="candidate-meta">{candidate.entity_type === 'lead' ? 'Лид' : 'Сделка'} {candidate.entity_id} · {candidate.status} · {(candidate.lifecycle || 'new') === 'new' ? 'новый случай' : candidate.lifecycle === 'reactivation' ? 'вернулся в контроль' : 'накопившийся случай'}</div>
                     {runResult ? <>
                       <p>{runResult.attention_reason || (runResult.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</p>
                       {runResult.entity_type === 'lead' ? <LeadQualificationStrip summary={runResult.lead_qualification} hasAnalysis={runResult.has_analysis} category={runResult.lead_category} /> : null}
@@ -1211,7 +1241,10 @@ export default function App() {
                     </>}
                     {candidate.bitrix_url ? <a className="bitrix-link" href={candidate.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
                   </article>
-                })}
+                  })}
+                  {!group.candidates.length ? <p className="daily-group-empty">Сейчас случаев в этом разделе нет.</p> : null}
+                  </div>
+                </section>)}
               </div>
               {!dailyPreview.candidates.length ? <div className="section"><p className="muted">По текущему профилю сигналов не найдено.</p></div> : null}
               <section className="section daily-run-bar">
@@ -1873,6 +1906,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const rop = asRecord(analysis?.rop_manager_message_block)
   const qualificationAssessment = asRecord(analysis?.qualification_assessment)
   const bant = asRecord(qualificationAssessment.bant)
+  const timeframeAssessment = asRecord(bant.timeframe)
   const solutionFit = asRecord(qualificationAssessment.solution_fit)
   const commercialFit = asRecord(qualificationAssessment.commercial_fit)
   const leadCategory = asRecord(qualificationAssessment.lead_category)
@@ -1939,6 +1973,25 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const needsAttention = Boolean(meta && (riskLevel === 'high' || riskLevel === 'medium_high' || attention !== '—'))
   const hasAnalysis = Boolean(analysis)
   const latestQualificationReview = props.qualificationReviews?.[0]
+  const controlledReturnStatus = assessmentLabel(asString(leadRoute.controlled_return_status), CONTROLLED_RETURN_STATUS_RU)
+  const controlledReturnExistingDate = asString(leadRoute.controlled_return_date)
+  const controlledReturnRecommendedDate = asString(leadRoute.recommended_return_date)
+  const ropControlBlock = hasAnalysis ? (
+    <section className="rop-control-card" aria-label="Контроль РОПа">
+      <div className="rop-control-head">
+        <div><div className="hero-label">Управленческое действие</div><h3>Контроль РОПа</h3></div>
+        <span>{formatMoneyText(asString(rop.deadline)) || 'срок не указан'}</span>
+      </div>
+      <div className="rop-control-grid">
+        <div><div className="label">Что проверить</div><p>{formatMoneyText(asString(rop.check_for_rop)) || nextAction}</p></div>
+        <div><div className="label">Почему важно</div><p>{formatMoneyText(asString(rop.why_it_matters)) || attention}</p></div>
+        <div className="rop-control-wide"><div className="label">Поручение менеджеру</div><p>{formatMoneyText(asString(rop.message_to_manager)) || '—'}</p></div>
+        <div><div className="label">Ожидаемый факт в CRM</div><p>{formatMoneyText(asString(rop.expected_crm_update)) || '—'}</p></div>
+        <div><div className="label">Критерий выполнения</div><p>{formatMoneyText(asString(rop.success_condition)) || '—'}</p></div>
+      </div>
+      <div className="rop-control-evidence"><div className="label">Основание</div>{asStringList(rop.evidence).length ? <ul>{asStringList(rop.evidence).map((item) => <li key={item}>{formatMoneyText(item)}</li>)}</ul> : <span className="muted">Evidence не указано</span>}</div>
+    </section>
+  ) : null
 
   function toggleQualificationIssue(field: string) {
     setQualificationIssueFields((current) => current.includes(field) ? current.filter((item) => item !== field) : [...current, field])
@@ -1995,6 +2048,8 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           ) : null}
         </div>
 
+        {!isLead ? ropControlBlock : null}
+
         {isLead && hasQualificationAssessment ? (
           <section className="lead-qualification" aria-label="BANT и категория лида">
             <div className="qualification-summary-head">
@@ -2037,6 +2092,10 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                       {missing.length ? <ul>{missing.map((fact) => <li key={fact}>{fact}</li>)}</ul> : <div className="muted">Ничего не указано</div>}
                     </div>
                     {question ? <div className="bant-next"><span>Вопрос / действие</span>{question}</div> : null}
+                    {item.key === 'timeframe' ? <div className="timing-facts">
+                      <div><span>Когда клиент принимает решение</span><strong>{formatMoneyText(asString(timeframeAssessment.decision_timing)) || 'не выяснено'}</strong></div>
+                      <div><span>Когда нужно оборудование или запуск</span><strong>{formatMoneyText(asString(timeframeAssessment.need_or_launch_timing)) || 'не выяснено'}</strong></div>
+                    </div> : null}
                   </article>
                 )
               })}
@@ -2068,7 +2127,12 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                 <div><span>Сейчас: {currentRoute}</span><span>Рекомендуется: {recommendedRoute}</span></div>
                 <p>{formatMoneyText(asString(leadRoute.reason))}</p>
                 {leadRoute.controlled_return_required === true ? (
-                  <div className="controlled-return">Контролируемый возврат: {asString(leadRoute.controlled_return_date, 'дата не указана')}</div>
+                  <div className={`controlled-return return-${asString(leadRoute.controlled_return_status, 'legacy')}`}>
+                    <strong>Контролируемый возврат: {controlledReturnStatus || 'статус не разделён в старом анализе'}</strong>
+                    {controlledReturnExistingDate ? <span>В CRM: {controlledReturnExistingDate}</span> : null}
+                    {controlledReturnRecommendedDate ? <span>Рекомендуемая дата: {controlledReturnRecommendedDate}</span> : null}
+                    {!controlledReturnExistingDate && !controlledReturnRecommendedDate ? <span>Дата не указана</span> : null}
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -2077,7 +2141,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
               <div className="qualification-review-card">
                 <div>
                   <div className="label">Проверка РОПом</div>
-                  <strong>Оценка BANT и категория клиента верны?</strong>
+                  <strong>Оценка BANT и категория лида верны?</strong>
                   {latestQualificationReview ? (
                     <p className="muted">
                       Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}
@@ -2116,7 +2180,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                     ))}
                     {qualificationIssueFields.includes('category') ? (
                       <div className="field qualification-correction-field">
-                        <label>Правильная категория клиента</label>
+                        <label>Правильная категория лида</label>
                         <select value={correctedCategory} onChange={(event) => setCorrectedCategory(event.target.value)}>
                           <option value="">Не указывать</option>
                           {['A', 'B', 'C', 'D', 'E', 'unknown'].map((value) => <option value={value} key={value}>{value === 'unknown' ? 'Unknown' : value}</option>)}
@@ -2143,16 +2207,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
             ) : null}
           </section>
         ) : null}
-
-        <div className="reason-box">
-          <div className="label">Причина внимания</div>
-          <div className="reason-text">{attention}</div>
-        </div>
-
-        <div className="action-banner">
-          <div className="label">Что сделать</div>
-          <div className="value">{nextAction}</div>
-        </div>
+        {isLead ? ropControlBlock : null}
         {!isLead && hasQualificationAssessment ? (
           <section className="qualification-summary" aria-label="Квалификация и применимость">
             <div className="qualification-summary-head">

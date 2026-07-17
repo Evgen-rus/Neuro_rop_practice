@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import ANY, patch
 
 from api.app import DailySummaryStartRequest, daily_summary_start
 
 
 class DailySummaryStartTests(unittest.TestCase):
+    def test_frontend_separates_new_and_backlog_sections(self) -> None:
+        frontend_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("Новые случаи", frontend_source)
+        self.assertIn("Накопившиеся и вернувшиеся в контроль", frontend_source)
+        self.assertIn("candidate.lifecycle === 'reactivation' ? 'вернулся в контроль'", frontend_source)
+
     def test_fresh_card_reuses_report_without_starting_pipeline_or_llm(self) -> None:
         run = {
             "id": 7,

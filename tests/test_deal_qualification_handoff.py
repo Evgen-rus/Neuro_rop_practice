@@ -22,6 +22,8 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertIn("qualification_assessment", prompt)
         self.assertIn("budget_below_new_equipment_minimum", prompt)
         self.assertIn("Не предполага", prompt)
+        self.assertIn("decision_timing", prompt)
+        self.assertIn("need_or_launch_timing", prompt)
 
     def test_converted_lead_handoff_uses_local_related_deal(self) -> None:
         with patch(

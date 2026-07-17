@@ -194,6 +194,10 @@ def _legacy_qualification_assessment() -> dict[str, Any]:
         }
         if name == "timeframe":
             item["purchase_window"] = "unknown"
+            item["decision_timing_status"] = "unknown"
+            item["decision_timing"] = None
+            item["need_or_launch_timing_status"] = "unknown"
+            item["need_or_launch_timing"] = None
         return item
 
     return {
@@ -242,7 +246,9 @@ def _legacy_qualification_assessment() -> dict[str, Any]:
             "status": "unknown",
             "reason": "В старом анализе нет структурированной проверки маршрута.",
             "controlled_return_required": False,
+            "controlled_return_status": "not_required",
             "controlled_return_date": None,
+            "recommended_return_date": None,
             "evidence": [],
         },
     }
@@ -275,6 +281,21 @@ def _normalize_qualification_assessment(
             if item.get("evidence") is None:
                 item["evidence"] = []
                 changes.append({"path": f"qualification_assessment.bant.{name}.evidence", "action": "null_to_empty_list"})
+            if name == "timeframe" and allow_legacy_qualification_assessment:
+                for field, default in (
+                    ("decision_timing_status", "unknown"),
+                    ("decision_timing", None),
+                    ("need_or_launch_timing_status", "unknown"),
+                    ("need_or_launch_timing", None),
+                ):
+                    if field not in item:
+                        item[field] = default
+                        changes.append(
+                            {
+                                "path": f"qualification_assessment.bant.timeframe.{field}",
+                                "action": "added_legacy_fallback",
+                            }
+                        )
         if bant.get("overall_status") is None:
             bant["overall_status"] = "unknown"
             changes.append({"path": "qualification_assessment.bant.overall_status", "action": "null_to_unknown"})
@@ -329,6 +350,23 @@ def _normalize_qualification_assessment(
                     "removed_items": len(reason_codes),
                 }
             )
+
+    lead_route = assessment.get("lead_route")
+    if isinstance(lead_route, dict) and allow_legacy_qualification_assessment:
+        legacy_date = lead_route.get("controlled_return_date")
+        defaults = {
+            "controlled_return_status": "needs_clarification" if lead_route.get("controlled_return_required") else "not_required",
+            "recommended_return_date": None,
+        }
+        for field, default in defaults.items():
+            if field not in lead_route:
+                lead_route[field] = default
+                changes.append(
+                    {"path": f"qualification_assessment.lead_route.{field}", "action": "added_legacy_fallback"}
+                )
+        if legacy_date and lead_route.get("controlled_return_status") == "needs_clarification":
+            lead_route["recommended_return_date"] = legacy_date
+            lead_route["controlled_return_date"] = None
 
 
 def _require_fields(value: dict[str, Any], required_fields: set[str], parent: str, errors: list[str]) -> None:
@@ -504,6 +542,13 @@ def _validate_bant_item(
     if not item:
         return
     required = {"status", "evidence"}
+    if name == "timeframe":
+        required |= {
+            "decision_timing_status",
+            "decision_timing",
+            "need_or_launch_timing_status",
+            "need_or_launch_timing",
+        }
     if lead_contract:
         required |= {"label", "summary", "missing_facts", "next_question_or_action"}
         if name == "timeframe":
@@ -516,6 +561,21 @@ def _validate_bant_item(
         "unknown",
     }
     _expect_enum(status, f"{path}.status", statuses, errors)
+    if name == "timeframe":
+        for prefix in ("decision_timing", "need_or_launch_timing"):
+            timing_status = item.get(f"{prefix}_status")
+            _expect_enum(
+                timing_status,
+                f"{path}.{prefix}_status",
+                {"confirmed", "not_confirmed", "unknown"},
+                errors,
+            )
+            timing_value = item.get(prefix)
+            _validate_optional_question(timing_value, f"{path}.{prefix}", errors)
+            if timing_status == "confirmed" and timing_value is None:
+                errors.append(f"{path}.{prefix} is required when {prefix}_status=confirmed")
+            if timing_status != "confirmed" and timing_value is not None:
+                errors.append(f"{path}.{prefix} must be null unless {prefix}_status=confirmed")
     empty_allowed = {"not_confirmed", "unknown"} if lead_contract else {"missing", "unknown"}
     _validate_qualification_evidence(item.get("evidence"), f"{path}.evidence", status, empty_allowed, errors)
     if not lead_contract:
@@ -833,7 +893,9 @@ def _validate_lead_route(value: Any, errors: list[str]) -> None:
             "status",
             "reason",
             "controlled_return_required",
+            "controlled_return_status",
             "controlled_return_date",
+            "recommended_return_date",
             "evidence",
         },
         path,
@@ -849,10 +911,36 @@ def _validate_lead_route(value: Any, errors: list[str]) -> None:
     )
     _expect_non_empty_string(route.get("reason"), f"{path}.reason", errors)
     _expect_bool(route.get("controlled_return_required"), f"{path}.controlled_return_required", errors)
+    return_status = route.get("controlled_return_status")
+    _expect_enum(
+        return_status,
+        f"{path}.controlled_return_status",
+        {"confirmed_in_crm", "missing_in_crm", "needs_clarification", "not_required"},
+        errors,
+    )
     _validate_optional_question(route.get("controlled_return_date"), f"{path}.controlled_return_date", errors)
+    _validate_optional_question(route.get("recommended_return_date"), f"{path}.recommended_return_date", errors)
     _validate_short_text_list(route.get("evidence"), f"{path}.evidence", 7, errors)
-    if route.get("controlled_return_required") and route.get("controlled_return_date") is None:
-        errors.append(f"{path}.controlled_return_date is required when controlled_return_required=true")
+    if route.get("controlled_return_required") is False and return_status != "not_required":
+        errors.append(f"{path}.controlled_return_status must be not_required when controlled_return_required=false")
+    if route.get("controlled_return_required") is True and return_status == "not_required":
+        errors.append(f"{path}.controlled_return_status cannot be not_required when controlled_return_required=true")
+    if return_status == "confirmed_in_crm":
+        if route.get("controlled_return_date") is None:
+            errors.append(f"{path}.controlled_return_date is required when controlled_return_status=confirmed_in_crm")
+        if not route.get("evidence"):
+            errors.append(f"{path}.evidence must confirm the existing CRM return action")
+        if route.get("recommended_return_date") is not None:
+            errors.append(f"{path}.recommended_return_date must be null when return is confirmed in CRM")
+    if return_status == "missing_in_crm":
+        if route.get("controlled_return_date") is not None:
+            errors.append(f"{path}.controlled_return_date must be null when controlled_return_status=missing_in_crm")
+        if route.get("recommended_return_date") is None:
+            errors.append(f"{path}.recommended_return_date is required when controlled_return_status=missing_in_crm")
+    if return_status == "not_required" and (
+        route.get("controlled_return_date") is not None or route.get("recommended_return_date") is not None
+    ):
+        errors.append(f"{path} return dates must be null when controlled_return_status=not_required")
 
 
 def _bant_statuses(assessment: dict[str, Any]) -> list[Any]:
@@ -925,8 +1013,15 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
     elif category_value == "C":
         if purchase_window != "months_3_to_12":
             errors.append("lead category C requires timeframe months_3_to_12")
-        if route.get("controlled_return_required") is not True or not route.get("controlled_return_date"):
-            errors.append("lead category C requires a dated controlled return")
+        if route.get("controlled_return_required") is not True:
+            errors.append("lead category C requires controlled_return_required=true")
+        return_status = route.get("controlled_return_status")
+        if return_status == "confirmed_in_crm" and not route.get("controlled_return_date"):
+            errors.append("lead category C requires an existing CRM return date when return is confirmed")
+        if return_status == "missing_in_crm" and route.get("status") != "violation":
+            errors.append("lead category C without a CRM return action must be marked as route violation")
+        if return_status == "needs_clarification" and route.get("status") != "needs_clarification":
+            errors.append("lead category C with unclear return action must use needs_clarification route status")
         if isinstance(solution_fit, dict) and solution_fit.get("status") == "not_compatible":
             errors.append("lead category C does not override confirmed technical mismatch")
         if isinstance(commercial_fit, dict) and commercial_fit.get("new_equipment_budget_status") == "below_minimum":

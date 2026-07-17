@@ -231,6 +231,8 @@ def extract_lead_qualification_summary(analysis: dict[str, Any]) -> dict[str, An
         return None
     bant = assessment.get("bant") if isinstance(assessment.get("bant"), dict) else {}
     category = assessment.get("lead_category") if isinstance(assessment.get("lead_category"), dict) else {}
+    route = assessment.get("lead_route") if isinstance(assessment.get("lead_route"), dict) else {}
+    timeframe = bant.get("timeframe") if isinstance(bant.get("timeframe"), dict) else {}
     lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
     statuses = {
         key: str(value.get("status") or "unknown")
@@ -246,6 +248,12 @@ def extract_lead_qualification_summary(analysis: dict[str, Any]) -> dict[str, An
         "confirmed_count": confirmed_count,
         "total_count": 4,
         "statuses": statuses,
+        "decision_timing": timeframe.get("decision_timing"),
+        "need_or_launch_timing": timeframe.get("need_or_launch_timing"),
+        "route_status": str(route.get("status") or "unknown"),
+        "controlled_return_status": str(route.get("controlled_return_status") or "unknown"),
+        "controlled_return_date": route.get("controlled_return_date"),
+        "recommended_return_date": route.get("recommended_return_date"),
     }
 
 

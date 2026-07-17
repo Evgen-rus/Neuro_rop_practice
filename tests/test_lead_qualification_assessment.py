@@ -25,6 +25,10 @@ def qualification_assessment() -> dict:
         }
         if purchase_window is not None:
             item["purchase_window"] = purchase_window
+            item["decision_timing_status"] = "confirmed"
+            item["decision_timing"] = "в течение 30 дней"
+            item["need_or_launch_timing_status"] = "confirmed"
+            item["need_or_launch_timing"] = "в течение 60 дней"
         return item
 
     return {
@@ -77,7 +81,9 @@ def qualification_assessment() -> dict:
             "status": "allowed",
             "reason": "Полный BANT подтверждён.",
             "controlled_return_required": False,
+            "controlled_return_status": "not_required",
             "controlled_return_date": None,
+            "recommended_return_date": None,
             "evidence": ["Все четыре критерия BANT подтверждены."],
         },
     }
@@ -160,6 +166,15 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
                 "next_question_or_action": "Подтвердите этот критерий, пожалуйста.",
             }
         )
+        if name == "timeframe":
+            item.update(
+                {
+                    "decision_timing_status": "unknown",
+                    "decision_timing": None,
+                    "need_or_launch_timing_status": "unknown",
+                    "need_or_launch_timing": None,
+                }
+            )
         assessment["bant"]["overall_status"] = "incomplete"
         assessment["bant"]["missing_facts"] = ["Нужно подтвердить критерий."]
         assessment["bant"]["next_question"] = "Подтвердите этот критерий, пожалуйста."
@@ -250,7 +265,9 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
             "status": "allowed",
             "reason": "Для ОП2 не подтверждено больше одного критерия.",
             "controlled_return_required": False,
+            "controlled_return_status": "not_required",
             "controlled_return_date": None,
+            "recommended_return_date": None,
             "evidence": ["ЛПР и бюджет не подтверждены."],
         }
         analysis["loss_diagnosis"]["route_quality"] = "correct"
@@ -277,12 +294,68 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
                 "current_route": "auto_reminder",
                 "recommended_route": "auto_reminder",
                 "controlled_return_required": True,
+                "controlled_return_status": "confirmed_in_crm",
                 "controlled_return_date": "2026-10-15",
+                "recommended_return_date": None,
+                "evidence": ["В CRM есть задача возврата на 2026-10-15."],
             }
         )
         analysis["loss_diagnosis"]["final_verdict"] = "needs_nurture"
 
         validate_lead_analysis(analysis)
+
+    def test_category_c_without_crm_return_stays_c_and_marks_route_violation(self) -> None:
+        analysis = lead_analysis()
+        assessment = analysis["qualification_assessment"]
+        assessment["bant"]["timeframe"]["purchase_window"] = "months_3_to_12"
+        assessment["lead_category"].update(
+            {
+                "value": "C",
+                "reason": "Потребность подтверждена через восемь месяцев.",
+                "next_step": "Согласовать дату возврата и создать задачу в CRM.",
+            }
+        )
+        analysis["lead_state"]["qualification"] = "C"
+        assessment["lead_route"].update(
+            {
+                "current_route": "deferred_demand",
+                "recommended_route": "deferred_demand",
+                "status": "violation",
+                "reason": "В CRM нет дела или задачи возврата.",
+                "controlled_return_required": True,
+                "controlled_return_status": "missing_in_crm",
+                "controlled_return_date": None,
+                "recommended_return_date": "2027-01-15",
+                "evidence": [],
+            }
+        )
+        analysis["loss_diagnosis"].update({"route_quality": "violation", "final_verdict": "needs_nurture"})
+
+        validate_lead_analysis(analysis)
+
+        self.assertEqual(assessment["lead_category"]["value"], "C")
+        self.assertIsNone(assessment["lead_route"]["controlled_return_date"])
+
+    def test_category_c_missing_return_cannot_claim_existing_crm_date(self) -> None:
+        analysis = lead_analysis()
+        assessment = analysis["qualification_assessment"]
+        assessment["bant"]["timeframe"]["purchase_window"] = "months_3_to_12"
+        assessment["lead_category"].update({"value": "C", "reason": "Отложенная потребность."})
+        analysis["lead_state"]["qualification"] = "C"
+        assessment["lead_route"].update(
+            {
+                "status": "violation",
+                "controlled_return_required": True,
+                "controlled_return_status": "missing_in_crm",
+                "controlled_return_date": "2027-01-15",
+                "recommended_return_date": "2027-01-15",
+                "evidence": [],
+            }
+        )
+        analysis["loss_diagnosis"]["route_quality"] = "violation"
+
+        with self.assertRaises(AnalysisValidationError):
+            validate_lead_analysis(analysis)
 
     def test_confirmed_technical_stop_factor_uses_technical_mismatch(self) -> None:
         analysis = lead_analysis()
@@ -616,12 +689,17 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertEqual(summary["total_count"], 4)
         self.assertEqual(summary["category"], "B")
         self.assertEqual(summary["statuses"]["authority"], "unknown")
+        self.assertEqual(summary["decision_timing"], "в течение 30 дней")
+        self.assertEqual(summary["need_or_launch_timing"], "в течение 60 дней")
 
     def test_frontend_surfaces_bant_count_and_qualification_review(self) -> None:
         frontend_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
 
         self.assertIn("{confirmedBantCount} из 4", frontend_source)
-        self.assertIn("Оценка BANT и категория клиента верны?", frontend_source)
+        self.assertIn("Оценка BANT и категория лида верны?", frontend_source)
+        self.assertIn("Когда клиент принимает решение", frontend_source)
+        self.assertIn("Когда нужно оборудование или запуск", frontend_source)
+        self.assertIn("Контроль РОПа", frontend_source)
         self.assertIn("BANT-фильтр применяется только к анализам с четырьмя структурированными критериями.", frontend_source)
 
 

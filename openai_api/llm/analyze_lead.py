@@ -154,13 +154,13 @@ def build_prompt(
    - need: конкретная актуальная потребность;
    - timeframe: назван срок закупки или запуска.
    Статусы критериев: confirmed — критерий доказательно подтверждён; not_confirmed — доступные факты не подтверждают критерий, но отрицательного ответа нет; negative — есть подтверждённый отрицательный ответ/стоп-фактор именно по критерию; unknown — данных недостаточно. Отсутствие информации всегда unknown или not_confirmed, но не negative.
-   Для timeframe отдельно выбери purchase_window: up_to_60_days, days_61_to_89, months_3_to_12, over_12_months или unknown. Ровно 3 месяца относится к months_3_to_12.
+   Для timeframe отдельно выбери purchase_window: up_to_60_days, days_61_to_89, months_3_to_12, over_12_months или unknown. Ровно 3 месяца относится к months_3_to_12. Не смешивай два разных срока: decision_timing — когда клиент примет решение, need_or_launch_timing — когда нужно оборудование или запуск. Для каждого укажи status=confirmed|not_confirmed|unknown и значение только по фактам; если срока нет, value=null.
 2. Для каждого критерия верни заметное русское label, краткий summary, evidence, missing_facts и один конкретный next_question_or_action при нехватке данных. Общий bant.next_question оставь как один главный вопрос для обратной совместимости.
 3. Техническая применимость оценивается отдельно от BANT по типу оборудования и известным параметрам из OKF technical_data.md. Ожидание заключения технического специалиста и нехватка параметров означают needs_technical_data/insufficient, а не техническую несовместимость и не категорию D. technical_mismatch допустим только при подтверждённом конкретном стоп-факторе из CRM-истории или транскрибации.
 4. Коммерческая проверка относится только к явно названному бюджету нового оборудования. below_minimum и budget_below_new_equipment_minimum допустимы только при явно названной числовой сумме менее 1000000 рублей. Формулировки без точного числа вроде «десятки тысяч», «сотни тысяч», «дорого» или отказ от озвученной менеджером цены не являются названным бюджетом клиента: в таком случае ставь budget_named=false, new_equipment_budget_status=unknown и confirmed_budget_rub=null. Не извлекай, не округляй и не предполагай бюджет. Лизинг, рассрочка, аренда, б/у или более доступная комплектация могут быть рекомендацией, но не меняют категорию сами по себе.
 5. Категория A: одновременно полный confirmed BANT, compatible, явно подтверждённый бюджет нового оборудования от 1000000 рублей и timeframe up_to_60_days.
 6. Категория B: проект реален (need=confirmed), срок up_to_60_days или days_61_to_89, не хватает части BANT либо технических данных, и нет подтверждённого стоп-фактора.
-7. Категория C: подтверждённая отложенная потребность со сроком months_3_to_12. Обязателен контролируемый возврат с датой: CRM-дело, задача или предусмотренное системой действие. Даже если срок более 6 месяцев соответствует браковочной стадии текущей воронки, возврат должен остаться управляемым.
+7. Категория C: подтверждённая отложенная потребность со сроком months_3_to_12. Категория остаётся C, даже если менеджер не создал CRM-дело или задачу возврата. Существующий возврат подтверждай только CRM-evidence и храни его дату в controlled_return_date. Если действия в CRM нет, ставь controlled_return_status=missing_in_crm, controlled_return_date=null, маршрут violation и предлагай recommended_return_date как рекомендацию, а не как существующий факт. Даже если срок более 6 месяцев соответствует браковочной стадии текущей воронки, возврат должен остаться управляемым.
 8. Категория D допустима только для одной или нескольких подтверждённых причин: timeframe_over_12_months, technical_mismatch, budget_below_new_equipment_minimum. Причины храни в lead_category.reason_codes; нехватка технических данных не является D.
 9. Категория E допустима только для подтверждённой причины: spam, invalid_contact или call_cycle_completed_no_contact. Используй существующую рекомендацию поставщика из call_attempt_rules.md как цикл дозвона и не придумывай новый норматив. Пока цикл не завершён, ставь unknown, не E.
 10. Категория unknown: нет содержательного контакта, реальность проекта не доказана, цикл дозвона не завершён или данных недостаточно для A–E. Обязательны missing_facts и конкретный next_step. Для категорий A, B, C и unknown поле lead_category.reason_codes всегда должно быть пустым списком []; оно предназначено только для подтверждённых причин D/E.
@@ -194,7 +194,7 @@ def build_prompt(
       "budget": {{"label": "Бюджет и финансовая готовность", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": ["факт из CRM или коммуникации"], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
       "authority": {{"label": "ЛПР и влияние на решение", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
       "need": {{"label": "Актуальная потребность", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
-      "timeframe": {{"label": "Срок покупки или запуска", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "purchase_window": "up_to_60_days|days_61_to_89|months_3_to_12|over_12_months|unknown", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
+      "timeframe": {{"label": "Срок решения и потребности", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "purchase_window": "up_to_60_days|days_61_to_89|months_3_to_12|over_12_months|unknown", "decision_timing_status": "confirmed|not_confirmed|unknown", "decision_timing": "срок/дата решения клиента или null", "need_or_launch_timing_status": "confirmed|not_confirmed|unknown", "need_or_launch_timing": "срок/дата потребности или запуска или null", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
       "overall_status": "confirmed|incomplete|negative|unknown",
       "missing_facts": ["что именно нужно выяснить"],
       "next_question": "один конкретный вопрос клиенту или null"
@@ -235,7 +235,9 @@ def build_prompt(
       "status": "allowed|violation|needs_clarification|unknown",
       "reason": "почему маршрут корректен или нарушен",
       "controlled_return_required": false,
-      "controlled_return_date": "YYYY-MM-DD или null",
+      "controlled_return_status": "confirmed_in_crm|missing_in_crm|needs_clarification|not_required",
+      "controlled_return_date": "существующая дата CRM-дела/задачи или null",
+      "recommended_return_date": "предлагаемая дата или null",
       "evidence": ["факт о текущем маршруте или следующем CRM-действии"]
     }}
   }},
@@ -421,6 +423,8 @@ def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
         ]
         if name == "timeframe":
             detail_lines.insert(2, f"  - Горизонт: {_report_value(item.get('purchase_window'))}")
+            detail_lines.insert(3, f"  - Решение клиента: {_report_value(item.get('decision_timing'))} ({_report_value(item.get('decision_timing_status'))})")
+            detail_lines.insert(4, f"  - Оборудование/запуск нужны: {_report_value(item.get('need_or_launch_timing'))} ({_report_value(item.get('need_or_launch_timing_status'))})")
         bant_items.append("\n".join(detail_lines))
 
     gaps_present = (
@@ -490,7 +494,9 @@ def render_qualification_assessment_section(analysis: dict[str, Any]) -> str:
 - Проверка маршрута: {_report_value(lead_route.get('status'))}
 - Причина: {_report_value(lead_route.get('reason'))}
 - Контролируемый возврат: {_report_value(lead_route.get('controlled_return_required'))}
-- Дата возврата: {_report_value(lead_route.get('controlled_return_date'))}{next_action}"""
+- Статус возврата в CRM: {_report_value(lead_route.get('controlled_return_status'))}
+- Существующая дата возврата в CRM: {_report_value(lead_route.get('controlled_return_date'))}
+- Рекомендуемая дата возврата: {_report_value(lead_route.get('recommended_return_date'))}{next_action}"""
 
 
 def render_report(

@@ -238,6 +238,7 @@ def build_prompt(
 - Не поручай менеджеру подтверждать техническую применимость, причину стопа по матрице или решение о возврате стадии, если это должен подтвердить РОП/техспециалист. В поручении менеджеру оставляй только контакт с клиентом и фиксацию его фактов; внутреннюю проверку указывай в check_for_rop/resource_control.
 - manager_action_block.primary_text — готовый текст именно для клиента, без инструкций менеджеру, без фраз "внеси в CRM", "по сделке" и без служебных запретов. Он должен звучать как естественное деловое сообщение или сценарий звонка.
 - Для сделки вопросы в одном контакте должны относиться к нашему КП и составу решения, сумме/бюджету, тому, что клиент сравнивает, ЛПР и сроку решения. Спрашивай только факты, которых нет в истории.
+- Не смешивай дату решения клиента с датой потребности в оборудовании или запуска. Заполняй обе отдельно только по фактам, а следующий шаг и deadline назначай по сроку принятия решения.
 - manager_action_block.manager_checklist — короткий список того, что внести в CRM сразу после контакта. Не повторяй в нём задачу или текст клиенту.
 
 Правила сравнения технических чисел:
@@ -342,7 +343,7 @@ def build_prompt(
       "budget": {{"status": "confirmed|missing|unknown", "evidence": []}},
       "authority": {{"status": "confirmed|missing|unknown", "evidence": []}},
       "need": {{"status": "confirmed|missing|unknown", "evidence": []}},
-      "timeframe": {{"status": "confirmed|missing|unknown", "evidence": []}},
+      "timeframe": {{"status": "confirmed|missing|unknown", "decision_timing_status": "confirmed|not_confirmed|unknown", "decision_timing": "срок/дата решения клиента или null", "need_or_launch_timing_status": "confirmed|not_confirmed|unknown", "need_or_launch_timing": "срок/дата потребности или запуска или null", "evidence": []}},
       "overall_status": "confirmed|incomplete|unknown",
       "missing_facts": [],
       "next_question": "один вопрос клиенту или null"
@@ -621,6 +622,7 @@ def render_report(
         bant = value.get("bant") if isinstance(value.get("bant"), dict) else {}
         solution = value.get("solution_fit") if isinstance(value.get("solution_fit"), dict) else {}
         commercial = value.get("commercial_fit") if isinstance(value.get("commercial_fit"), dict) else {}
+        timeframe = bant.get("timeframe") if isinstance(bant.get("timeframe"), dict) else {}
         def status(name: str) -> str:
             item = bant.get(name) if isinstance(bant.get(name), dict) else {}
             return str(item.get("status") or "нет данных")
@@ -632,6 +634,8 @@ def render_report(
 - Полномочия: {status('authority')}
 - Потребность: {status('need')}
 - Срок: {status('timeframe')}
+- Решение клиента: {human_value(timeframe.get('decision_timing'))} ({human_value(timeframe.get('decision_timing_status'))})
+- Оборудование/запуск нужны: {human_value(timeframe.get('need_or_launch_timing'))} ({human_value(timeframe.get('need_or_launch_timing_status'))})
 - Общий статус: {bant.get('overall_status', 'нет данных')}
 - Недостающие факты:
 {bullet_list(bant.get('missing_facts'))}
