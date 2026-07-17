@@ -163,9 +163,9 @@ class PromptBudgetTests(unittest.TestCase):
         budget_path = root / "deal_DEMO" / "analysis" / "deal_DEMO_prompt_budget.json"
         self.assertTrue(budget_path.exists())
         budget = json.loads(budget_path.read_text(encoding="utf-8"))
-        self.assertEqual(budget["actual_usage"]["input_tokens"], metadata["usage"]["input_tokens"])
-        self.assertEqual(budget["actual_usage"]["cached_input_tokens"], 7)
-        self.assertEqual(budget["cost"]["estimated_cost_rub"], 0.42)
+        self.assertEqual(budget["actual_usage"]["input_tokens"], metadata["usage"]["input_tokens"] * 2)
+        self.assertEqual(budget["actual_usage"]["cached_input_tokens"], 14)
+        self.assertEqual(budget["cost"]["estimated_cost_rub"], 0.84)
         return budget_path
 
     def test_usage_is_saved_for_model_json_parse_error(self) -> None:

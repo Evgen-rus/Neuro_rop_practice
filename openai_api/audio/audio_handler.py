@@ -14,11 +14,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from openai_api.config import OPENAI_API_KEY, TRANSCRIPTION_MODEL, logger
 from openai_api.logging_utils import log_model_binary_payload
+from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry_async
 
 # Инициализация клиента OpenAI
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY, max_retries=0)
 
-async def transcribe_voice(voice_data: bytes, file_name: str = "voice.ogg", language: str = "ru") -> str:
+async def transcribe_voice(
+    voice_data: bytes,
+    file_name: str = "voice.ogg",
+    language: str = "ru",
+    retry_callback: RetryCallback | None = None,
+) -> str:
     """
     Асинхронная функция для транскрибации голосового сообщения в текст.
     
@@ -45,10 +51,15 @@ async def transcribe_voice(voice_data: bytes, file_name: str = "voice.ogg", lang
         )
         
         # Отправляем запрос на транскрибацию
-        transcript = await client.audio.transcriptions.create(
-            model=TRANSCRIPTION_MODEL,
-            file=(file_name, voice_data),
-            language=language
+        transcript = await run_with_retry_async(
+            lambda: client.audio.transcriptions.create(
+                model=TRANSCRIPTION_MODEL,
+                file=(file_name, voice_data),
+                language=language,
+            ),
+            operation_name=f"openai:audio.transcriptions.create:{file_name}",
+            policy=DEFAULT_TRANSPORT_RETRY,
+            on_event=retry_callback,
         )
         
         # Получаем и логируем результат
@@ -62,10 +73,15 @@ async def transcribe_voice(voice_data: bytes, file_name: str = "voice.ogg", lang
         if "invalid model ID" in str(e):
             logger.warning(f"Модель {TRANSCRIPTION_MODEL} недоступна, используем whisper-1")
             try:
-                transcript = await client.audio.transcriptions.create(
-                    model="whisper-1",  # Запасная модель
-                    file=(file_name, voice_data),
-                    language=language
+                transcript = await run_with_retry_async(
+                    lambda: client.audio.transcriptions.create(
+                        model="whisper-1",  # Запасная модель
+                        file=(file_name, voice_data),
+                        language=language,
+                    ),
+                    operation_name=f"openai:audio.transcriptions.create:whisper-1:{file_name}",
+                    policy=DEFAULT_TRANSPORT_RETRY,
+                    on_event=retry_callback,
                 )
                 text = transcript.text
                 logger.info(f"Голосовое сообщение транскрибировано запасной моделью: {text[:50]}...")

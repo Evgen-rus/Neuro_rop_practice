@@ -99,9 +99,40 @@ export type DailySummaryRun = {
   llm_allowed_count: number
   job_id?: string | null
   created_at: string
-  items?: Array<Record<string, unknown>>
+  completed_at?: string | null
+  actual_cost?: Record<string, unknown> | null
+  items?: DailySummaryItem[]
   job_states?: JobState[]
   results?: JobResult[]
+}
+
+export type EntityProgress = {
+  key?: string
+  entity_type: 'lead' | 'deal'
+  entity_id: string
+  stage: string
+  status: string
+  detail?: string
+  current?: number | null
+  total?: number | null
+  attempt?: number | null
+  max_attempts?: number | null
+  error?: string | null
+  started_at?: string | null
+  updated_at?: string | null
+}
+
+export type DailySummaryItem = {
+  id: number
+  journey_key: string
+  entity_type: 'lead' | 'deal'
+  entity_id: string
+  selected: number
+  processing_status: string
+  progress?: Partial<EntityProgress>
+  report_id?: number | null
+  error?: string | null
+  candidate?: Candidate
 }
 
 export type CandidatesResponse = {
@@ -197,6 +228,11 @@ export type JobResult = {
   lead_qualification?: LeadQualificationSummary | null
   bitrix_url?: string | null
   analysis?: Record<string, unknown> | null
+  actual_cost?: {
+    estimated_cost_usd?: number | null
+    estimated_cost_rub?: number | null
+    semantic_attempt_count?: number | null
+  } | null
 }
 
 export type JobState = {
@@ -210,6 +246,7 @@ export type JobState = {
   results: JobResult[]
   report_ids: number[]
   logs: string[]
+  entity_progress?: Record<string, EntityProgress>
   error?: string | null
 }
 
@@ -369,7 +406,7 @@ export function fetchDailySummary(runId: number) {
 }
 
 export function startDailySummary(runId: number, confirmPaid: boolean) {
-  return api<{ summary: DailySummaryRun; jobs: JobState[] }>(`/api/daily-summaries/${runId}/start`, {
+  return api<{ summary: DailySummaryRun; jobs: JobState[]; started_count: number; reused_count: number }>(`/api/daily-summaries/${runId}/start`, {
     method: 'POST',
     body: JSON.stringify({ confirm_paid: confirmPaid }),
   })

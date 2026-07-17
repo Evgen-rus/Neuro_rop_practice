@@ -16,8 +16,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openai_api.bitrix_links import bitrix_entity_url
+from progress_events import PROGRESS_PREFIX, progress_key
 from setup import BASE_DIR, MSK_TZ
-from storage.rop_db import DEFAULT_DB_PATH, save_ui_report
+from storage.rop_db import (
+    DEFAULT_DB_PATH,
+    complete_daily_summary_item,
+    register_daily_summary_job,
+    record_daily_summary_actual_cost,
+    save_ui_report,
+    update_daily_summary_item_progress,
+)
 
 
 PROJECT_ROOT = BASE_DIR
@@ -39,6 +47,7 @@ class AnalyzeOptions:
     analyze: bool = True
     force_llm: bool = False
     transcript_mode: str = "all"
+    daily_summary_run_id: int | None = None
 
 
 @dataclass
@@ -53,6 +62,7 @@ class JobState:
     results: list[dict[str, Any]] = field(default_factory=list)
     report_ids: list[int] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+    entity_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
     error: str | None = None
 
 
@@ -83,6 +93,39 @@ def _set_stage(job: JobState, key: str, label: str, status: str, detail: str = "
             }
         )
     job.current_stage = key if status == "running" else job.current_stage
+    _touch(job)
+
+
+def parse_progress_event(text: str) -> dict[str, Any] | None:
+    marker = text.find(PROGRESS_PREFIX)
+    if marker < 0:
+        return None
+    raw = text[marker + len(PROGRESS_PREFIX):].strip()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    entity_type = str(value.get("entity_type") or "")
+    entity_id = str(value.get("entity_id") or "")
+    stage = str(value.get("stage") or "")
+    if entity_type not in {"lead", "deal"} or not entity_id or not stage:
+        return None
+    return value
+
+
+def _apply_progress_event(job: JobState, event: dict[str, Any]) -> None:
+    key = progress_key(str(event.get("entity_type")), str(event.get("entity_id")))
+    previous = job.entity_progress.get(key) or {}
+    started_at = previous.get("started_at") or event.get("updated_at") or datetime.now(MSK_TZ).isoformat(timespec="seconds")
+    meaningful_event = {field: value for field, value in event.items() if value is not None}
+    job.entity_progress[key] = {
+        **previous,
+        **meaningful_event,
+        "key": key,
+        "started_at": started_at,
+    }
     _touch(job)
 
 
@@ -147,6 +190,7 @@ def analysis_paths(entity_type: str, entity_id: str) -> dict[str, Path]:
         "analysis_json": analysis_dir / f"{entity_type}_{entity_id}_analysis.json",
         "report_md": analysis_dir / f"{entity_type}_{entity_id}_rop_report.md",
         "raw_output": analysis_dir / f"{entity_type}_{entity_id}_raw_model_output.txt",
+        "error_json": analysis_dir / f"{entity_type}_{entity_id}_analysis_error.json",
     }
 
 
@@ -313,6 +357,18 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
             except (OSError, json.JSONDecodeError):
                 envelope = None
         analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
+        model_metadata = envelope.get("model_metadata") if isinstance(envelope, dict) and isinstance(envelope.get("model_metadata"), dict) else {}
+        key = progress_key(entity_type, entity_id)
+        progress = job.entity_progress.get(key) or {}
+        if progress.get("status") == "error":
+            analysis = None
+            if paths["error_json"].exists():
+                try:
+                    error_payload = json.loads(paths["error_json"].read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    error_payload = {}
+                if isinstance(error_payload.get("model_metadata"), dict):
+                    model_metadata = error_payload["model_metadata"]
         summary = extract_summary_fields(analysis or {}, entity_type)
         report_id = None
         if analysis is not None:
@@ -347,6 +403,35 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 "analysis": analysis,
             }
         )
+        run_id = job.options.get("daily_summary_run_id")
+        actual_cost = None
+        if progress.get("attempt") and model_metadata:
+            actual_cost = {
+                "estimated_cost_usd": model_metadata.get("estimated_cost_usd"),
+                "estimated_cost_rub": model_metadata.get("estimated_cost_rub"),
+                "semantic_attempt_count": model_metadata.get("semantic_attempt_count", 1),
+            }
+            if run_id:
+                record_daily_summary_actual_cost(
+                    DEFAULT_DB_PATH,
+                    int(run_id),
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    cost=actual_cost,
+                )
+        if run_id:
+            progress_error = progress.get("error") if progress.get("status") == "error" else None
+            if analysis is None and not progress_error:
+                progress_error = "Анализ не сформирован"
+            complete_daily_summary_item(
+                DEFAULT_DB_PATH,
+                int(run_id),
+                entity_type=entity_type,
+                entity_id=entity_id,
+                report_id=report_id,
+                error=str(progress_error) if progress_error else None,
+            )
+        job.results[-1]["actual_cost"] = actual_cost
 
 
 def _converted_lead_handoffs(lead_ids: list[str]) -> dict[str, str]:
@@ -380,6 +465,16 @@ def _run_job(job_id: str) -> None:
     def log_line(text: str) -> None:
         with _LOCK:
             current = _JOBS[job_id]
+            progress_event = parse_progress_event(text)
+            if progress_event is not None:
+                _apply_progress_event(current, progress_event)
+                run_id = current.options.get("daily_summary_run_id")
+                if run_id:
+                    merged_progress = current.entity_progress.get(
+                        progress_key(str(progress_event.get("entity_type")), str(progress_event.get("entity_id")))
+                    ) or progress_event
+                    update_daily_summary_item_progress(DEFAULT_DB_PATH, int(run_id), merged_progress)
+                return
             current.logs.append(text[-MAX_JOB_LOG_LINE_CHARS:])
             if len(current.logs) > MAX_JOB_LOG_LINES:
                 del current.logs[:-MAX_JOB_LOG_LINES]
@@ -458,6 +553,32 @@ def _run_job(job_id: str) -> None:
                     )
             job.status = "error"
             job.error = str(error)
+            run_id = job.options.get("daily_summary_run_id")
+            if run_id:
+                for entity_type, ids in groups.items():
+                    for entity_id in ids:
+                        key = progress_key(entity_type, entity_id)
+                        progress = job.entity_progress.get(key) or {}
+                        if progress.get("status") in {"done", "error"}:
+                            continue
+                        failed_progress = {
+                            "entity_type": entity_type,
+                            "entity_id": entity_id,
+                            "stage": "error",
+                            "status": "error",
+                            "detail": "Пайплайн завершился с ошибкой",
+                            "error": str(error),
+                            "updated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
+                        }
+                        _apply_progress_event(job, failed_progress)
+                        complete_daily_summary_item(
+                            DEFAULT_DB_PATH,
+                            int(run_id),
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            report_id=None,
+                            error=str(error),
+                        )
             _set_stage(job, "error", "Ошибка", "error", str(error))
             job.stages.append(
                 {
@@ -481,9 +602,34 @@ def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
 
     job_id = uuid.uuid4().hex[:12]
     job = JobState(job_id=job_id, options=asdict(options))
+    for entity_id in options.ids:
+        key = progress_key(options.entity_type, entity_id)
+        job.entity_progress[key] = {
+            "key": key,
+            "entity_type": options.entity_type,
+            "entity_id": str(entity_id),
+            "stage": "queued",
+            "status": "queued",
+            "detail": "Ожидает запуска",
+            "current": None,
+            "total": None,
+            "attempt": None,
+            "max_attempts": None,
+            "error": None,
+            "started_at": job.created_at,
+            "updated_at": job.created_at,
+        }
     with _LOCK:
         _JOBS[job_id] = job
         _set_stage(job, "queued", "В очереди", "queued")
+    if options.daily_summary_run_id:
+        register_daily_summary_job(
+            DEFAULT_DB_PATH,
+            int(options.daily_summary_run_id),
+            job_id,
+            options.entity_type,
+            options.ids,
+        )
     thread = threading.Thread(target=_run_job, args=(job_id,), daemon=True)
     thread.start()
     return asdict(job)

@@ -33,6 +33,7 @@ from bitrix.deals.download_deals_call_audio import (
     summarize_manifest,
 )
 from openai_api.audio.short_call import enrich_manifest_calls
+from progress_events import emit_progress, retry_progress_callback
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -136,13 +137,17 @@ def build_manifest(
     timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
     existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
-    return {
-        "lead_id": str(lead_id),
-        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
-        "raw_path": str(raw_path),
-        "audio_dir": str(lead_audio_dir),
-        "missing_only": bool(missing_only),
-        "calls": [
+    processed_calls = []
+    for index, activity in enumerate(calls, start=1):
+        emit_progress(
+            "lead",
+            lead_id,
+            "audio_download",
+            detail=f"Проверяет звонок {index} из {len(calls)}",
+            current=index,
+            total=len(calls),
+        )
+        processed_calls.append(
             process_call(
                 client,
                 lead_audio_dir,
@@ -152,8 +157,14 @@ def build_manifest(
                 existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,
             )
-            for activity in calls
-        ],
+        )
+    return {
+        "lead_id": str(lead_id),
+        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
+        "raw_path": str(raw_path),
+        "audio_dir": str(lead_audio_dir),
+        "missing_only": bool(missing_only),
+        "calls": processed_calls,
     }
 
 
@@ -169,6 +180,9 @@ def main() -> None:
 
     manifests = []
     for lead_id in args.lead_ids:
+        client.retry_callback = retry_progress_callback(
+            "lead", str(lead_id), "audio_download", detail="Запрос аудио к Bitrix"
+        )
         raw_path = context_path(raw_dir, str(lead_id))
         if not raw_path.exists():
             logger.warning("Raw bundle not found: %s", raw_path)

@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from progress_events import emit_progress
 from setup import BASE_DIR
 
 
@@ -589,12 +590,38 @@ def transcribe_missing_audio(options: WorkflowOptions) -> None:
         gaps = transcribable_gaps(options.entity_type, entity_id)
         if not gaps:
             print(f"Транскрибация: {options.entity_type}_{entity_id} - нет локальных аудио без transcript.")
+            emit_progress(
+                options.entity_type,
+                entity_id,
+                "transcription",
+                status="done",
+                detail="Новых аудио для транскрибации нет",
+                current=0,
+                total=0,
+            )
             continue
         print(f"Транскрибация: {options.entity_type}_{entity_id} - файлов к обработке: {len(gaps)}")
-        for gap in gaps:
+        for index, gap in enumerate(gaps, start=1):
             any_transcribed = True
+            emit_progress(
+                options.entity_type,
+                entity_id,
+                "transcription",
+                detail=f"Транскрибирует звонок {index} из {len(gaps)}",
+                current=index,
+                total=len(gaps),
+            )
             title = f"Транскрибация activity_id={gap.get('activity_id')}"
             run_command(transcribe_command(options.entity_type, entity_id, gap), title)
+        emit_progress(
+            options.entity_type,
+            entity_id,
+            "transcription",
+            status="done",
+            detail="Транскрибация завершена",
+            current=len(gaps),
+            total=len(gaps),
+        )
     if any_transcribed:
         refresh_diagnostics(options.entity_type, options.entity_ids)
 
@@ -621,6 +648,7 @@ def analyze_command(options: WorkflowOptions, entity_id: str) -> list[str]:
 def run_analysis(options: WorkflowOptions) -> list[AnalysisFailure]:
     failures: list[AnalysisFailure] = []
     for entity_id in options.entity_ids:
+        emit_progress(options.entity_type, entity_id, "llm_analysis", detail="Готовит анализ")
         try:
             run_command(analyze_command(options, entity_id), f"LLM-анализ {options.entity_type}_{entity_id}")
         except subprocess.CalledProcessError as error:
@@ -628,6 +656,22 @@ def run_analysis(options: WorkflowOptions) -> list[AnalysisFailure]:
             print(
                 f"Ошибка анализа {options.entity_type}_{entity_id}: exit code {error.returncode}. "
                 "Продолжаю остальные сущности."
+            )
+            emit_progress(
+                options.entity_type,
+                entity_id,
+                "error",
+                status="error",
+                detail="Анализ не сформирован",
+                error=f"exit code {error.returncode}",
+            )
+        else:
+            emit_progress(
+                options.entity_type,
+                entity_id,
+                "done",
+                status="done",
+                detail="Отчёт готов" if report_path(options.entity_type, entity_id).exists() else "Контекст подготовлен",
             )
     return failures
 

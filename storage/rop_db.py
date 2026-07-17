@@ -57,6 +57,12 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+    columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     with connect(db_path) as conn:
         conn.executescript(
@@ -223,6 +229,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 llm_allowed_count INTEGER NOT NULL,
                 cost_preview_json TEXT NOT NULL,
                 job_id TEXT,
+                completed_at TEXT,
+                actual_cost_json TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(profile_id) REFERENCES analysis_profiles(id) ON DELETE SET NULL
             );
@@ -238,6 +246,11 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 selected INTEGER NOT NULL,
                 candidate_snapshot_json TEXT NOT NULL,
                 report_id INTEGER,
+                job_id TEXT,
+                processing_status TEXT NOT NULL DEFAULT 'draft',
+                progress_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT,
+                updated_at TEXT,
                 FOREIGN KEY(run_id) REFERENCES daily_summary_runs(id) ON DELETE CASCADE,
                 FOREIGN KEY(report_id) REFERENCES ui_reports(id)
             );
@@ -286,6 +299,13 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             );
             """
         )
+        _ensure_column(conn, "daily_summary_runs", "completed_at", "TEXT")
+        _ensure_column(conn, "daily_summary_runs", "actual_cost_json", "TEXT")
+        _ensure_column(conn, "daily_summary_items", "job_id", "TEXT")
+        _ensure_column(conn, "daily_summary_items", "processing_status", "TEXT NOT NULL DEFAULT 'draft'")
+        _ensure_column(conn, "daily_summary_items", "progress_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "daily_summary_items", "error", "TEXT")
+        _ensure_column(conn, "daily_summary_items", "updated_at", "TEXT")
 
 
 def _row_to_state(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -589,6 +609,26 @@ def get_ui_report(db_path: str | Path, report_id: int) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:
         row = conn.execute("SELECT * FROM ui_reports WHERE id = ?", (int(report_id),)).fetchone()
+    return _row_to_ui_report(row)
+
+
+def get_latest_ui_report(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM ui_reports
+            WHERE entity_type = ? AND entity_id = ? AND report_json IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(entity_type), str(entity_id)),
+        ).fetchone()
     return _row_to_ui_report(row)
 
 
@@ -1100,11 +1140,60 @@ def _normalize_analysis_profile(payload: dict[str, Any] | None) -> dict[str, Any
     return base
 
 
+def _repair_utf8_mojibake_text(value: str) -> str:
+    """Восстанавливает UTF-8, однажды ошибочно декодированный как Latin-1."""
+    repaired = str(value)
+    for _ in range(3):
+        has_c1_controls = any(0x80 <= ord(char) <= 0x9F for char in repaired)
+        has_utf8_markers = repaired.count("Ð") + repaired.count("Ñ") >= 2
+        if not has_c1_controls and not has_utf8_markers:
+            break
+        try:
+            candidate = repaired.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if candidate == repaired:
+            break
+        repaired = candidate
+    return repaired
+
+
+def _repair_utf8_mojibake(value: Any) -> Any:
+    if isinstance(value, str):
+        return _repair_utf8_mojibake_text(value)
+    if isinstance(value, list):
+        return [_repair_utf8_mojibake(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _repair_utf8_mojibake(item) for key, item in value.items()}
+    return value
+
+
+def _repair_analysis_profile_rows(conn: sqlite3.Connection) -> int:
+    """Однократно исправляет уже сохранённые повреждённые строки профилей."""
+    repaired_count = 0
+    rows = conn.execute("SELECT id, name, profile_json FROM analysis_profiles").fetchall()
+    for row in rows:
+        name = str(row["name"] or "")
+        profile = loads_json(row["profile_json"], {})
+        repaired_name = _repair_utf8_mojibake_text(name)
+        repaired_profile = _repair_utf8_mojibake(profile)
+        if repaired_name == name and repaired_profile == profile:
+            continue
+        conn.execute(
+            "UPDATE analysis_profiles SET name = ?, profile_json = ? WHERE id = ?",
+            (repaired_name, dumps_json(repaired_profile), int(row["id"])),
+        )
+        repaired_count += 1
+    return repaired_count
+
+
 def _row_to_analysis_profile(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     value = dict(row)
-    value["profile"] = _normalize_analysis_profile(loads_json(value.pop("profile_json"), {}))
+    value["name"] = _repair_utf8_mojibake_text(str(value.get("name") or ""))
+    profile = _repair_utf8_mojibake(loads_json(value.pop("profile_json"), {}))
+    value["profile"] = _normalize_analysis_profile(profile)
     return value
 
 
@@ -1139,6 +1228,7 @@ def ensure_default_analysis_profile(db_path: str | Path) -> dict[str, Any]:
     """Создаёт согласованный default; старый фильтр сохраняет отдельным импортированным профилем."""
     init_db(db_path)
     with connect(db_path) as conn:
+        _repair_analysis_profile_rows(conn)
         row = conn.execute("SELECT * FROM analysis_profiles ORDER BY id LIMIT 1").fetchone()
         if row:
             return _row_to_analysis_profile(row) or {}
@@ -1196,7 +1286,7 @@ def create_analysis_profile(
     profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
-    clean_name = str(name or "").strip()
+    clean_name = _repair_utf8_mojibake_text(str(name or "").strip())
     if not clean_name:
         raise ValueError("Название профиля обязательно")
     now = utcish_now()
@@ -1206,7 +1296,7 @@ def create_analysis_profile(
             INSERT INTO analysis_profiles (name, profile_json, version, created_at, updated_at)
             VALUES (?, ?, 1, ?, ?)
             """,
-            (clean_name, dumps_json(_normalize_analysis_profile(profile)), now, now),
+            (clean_name, dumps_json(_normalize_analysis_profile(_repair_utf8_mojibake(profile))), now, now),
         )
         profile_id = int(cursor.lastrowid)
         row = conn.execute("SELECT * FROM analysis_profiles WHERE id = ?", (profile_id,)).fetchone()
@@ -1221,7 +1311,7 @@ def update_analysis_profile(
     profile: dict[str, Any],
 ) -> dict[str, Any]:
     init_db(db_path)
-    clean_name = str(name or "").strip()
+    clean_name = _repair_utf8_mojibake_text(str(name or "").strip())
     if not clean_name:
         raise ValueError("Название профиля обязательно")
     with connect(db_path) as conn:
@@ -1231,7 +1321,12 @@ def update_analysis_profile(
             SET name = ?, profile_json = ?, version = version + 1, updated_at = ?
             WHERE id = ?
             """,
-            (clean_name, dumps_json(_normalize_analysis_profile(profile)), utcish_now(), int(profile_id)),
+            (
+                clean_name,
+                dumps_json(_normalize_analysis_profile(_repair_utf8_mojibake(profile))),
+                utcish_now(),
+                int(profile_id),
+            ),
         )
         if cursor.rowcount == 0:
             raise KeyError("Профиль не найден")
@@ -1441,8 +1536,9 @@ def create_daily_summary_run(
                 """
                 INSERT INTO daily_summary_items (
                     run_id, journey_key, entity_type, entity_id, origin_lead_id,
-                    lifecycle_state, selected, candidate_snapshot_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    lifecycle_state, selected, candidate_snapshot_json,
+                    processing_status, progress_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
                 """,
                 (
                     run_id,
@@ -1453,6 +1549,8 @@ def create_daily_summary_run(
                     str(item.get("lifecycle") or "new"),
                     int(str(item.get("journey_key") or "") in selected),
                     dumps_json(item),
+                    "draft" if str(item.get("journey_key") or "") in selected else "reserve",
+                    now,
                 ),
             )
     return get_daily_summary_run(db_path, run_id) or {}
@@ -1466,6 +1564,7 @@ def _row_to_daily_summary(row: sqlite3.Row | None) -> dict[str, Any] | None:
     value["period"] = loads_json(value.pop("period_json"), {})
     value["scope"] = loads_json(value.pop("scope_snapshot_json"), {})
     value["cost_preview"] = loads_json(value.pop("cost_preview_json"), {})
+    value["actual_cost"] = loads_json(value.pop("actual_cost_json", None), None)
     return value
 
 
@@ -1484,6 +1583,7 @@ def get_daily_summary_run(db_path: str | Path, run_id: int) -> dict[str, Any] | 
     for item_row in item_rows:
         item = dict(item_row)
         item["candidate"] = loads_json(item.pop("candidate_snapshot_json"), {})
+        item["progress"] = loads_json(item.pop("progress_json", None), {})
         items.append(item)
     value["items"] = items
     return value
@@ -1503,12 +1603,267 @@ def attach_job_to_daily_summary(db_path: str | Path, run_id: int, job_id: str) -
     init_db(db_path)
     with connect(db_path) as conn:
         cursor = conn.execute(
-            "UPDATE daily_summary_runs SET status = 'analyzing', job_id = ? WHERE id = ? AND status = 'draft'",
+            """
+            UPDATE daily_summary_runs
+            SET status = CASE WHEN status = 'draft' THEN 'analyzing' ELSE status END, job_id = ?
+            WHERE id = ? AND job_id IS NULL
+            """,
             (str(job_id), int(run_id)),
         )
         if cursor.rowcount == 0:
             raise ValueError("Сводка уже запущена или не найдена")
     return get_daily_summary_run(db_path, run_id) or {}
+
+
+def prepare_daily_summary_items(
+    db_path: str | Path,
+    run_id: int,
+    eligible_journey_keys: list[str],
+) -> None:
+    init_db(db_path)
+    eligible = {str(item) for item in eligible_journey_keys}
+    now = utcish_now()
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, journey_key FROM daily_summary_items WHERE run_id = ? AND selected = 1",
+            (int(run_id),),
+        ).fetchall()
+        for row in rows:
+            status = "queued" if str(row["journey_key"]) in eligible else "skipped_limit"
+            detail = "Ожидает запуска" if status == "queued" else "Не запущено из-за платного лимита"
+            progress = {
+                "stage": "queued" if status == "queued" else "skipped",
+                "status": status,
+                "detail": detail,
+                "updated_at": now,
+            }
+            conn.execute(
+                """
+                UPDATE daily_summary_items
+                SET processing_status = ?, progress_json = ?, error = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, dumps_json(progress), now, int(row["id"])),
+            )
+
+
+def register_daily_summary_job(
+    db_path: str | Path,
+    run_id: int,
+    job_id: str,
+    entity_type: str,
+    entity_ids: list[str],
+) -> None:
+    init_db(db_path)
+    now = utcish_now()
+    ids = {str(item) for item in entity_ids}
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, entity_id FROM daily_summary_items WHERE run_id = ? AND entity_type = ? AND selected = 1",
+            (int(run_id), str(entity_type)),
+        ).fetchall()
+        for row in rows:
+            if str(row["entity_id"]) not in ids:
+                continue
+            conn.execute(
+                """
+                UPDATE daily_summary_items
+                SET job_id = ?, processing_status = 'queued', updated_at = ?
+                WHERE id = ?
+                """,
+                (str(job_id), now, int(row["id"])),
+            )
+
+
+def update_daily_summary_item_progress(
+    db_path: str | Path,
+    run_id: int,
+    progress: dict[str, Any],
+) -> None:
+    init_db(db_path)
+    status = str(progress.get("status") or "running")
+    stage = str(progress.get("stage") or "")
+    if status == "error" or stage == "error":
+        processing_status = "error"
+    elif status == "done" and stage == "done":
+        processing_status = "done"
+    else:
+        processing_status = "running"
+    now = str(progress.get("updated_at") or utcish_now())
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE daily_summary_items
+            SET processing_status = ?, progress_json = ?, error = ?, updated_at = ?
+            WHERE run_id = ? AND entity_type = ? AND entity_id = ? AND selected = 1
+            """,
+            (
+                processing_status,
+                dumps_json(progress),
+                progress.get("error") if processing_status == "error" else None,
+                now,
+                int(run_id),
+                str(progress.get("entity_type") or ""),
+                str(progress.get("entity_id") or ""),
+            ),
+        )
+    refresh_daily_summary_run_status(db_path, run_id)
+
+
+def complete_daily_summary_item(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    entity_type: str,
+    entity_id: str,
+    report_id: int | None,
+    error: str | None = None,
+) -> None:
+    init_db(db_path)
+    now = utcish_now()
+    status = "error" if error else "done"
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT progress_json FROM daily_summary_items
+            WHERE run_id = ? AND entity_type = ? AND entity_id = ? AND selected = 1
+            """,
+            (int(run_id), str(entity_type), str(entity_id)),
+        ).fetchone()
+        previous_progress = loads_json(row[0] if row else None, {})
+        progress = {
+            **previous_progress,
+            "entity_type": str(entity_type),
+            "entity_id": str(entity_id),
+            "stage": "error" if error else "done",
+            "status": status,
+            "detail": "Анализ не сформирован" if error else "Отчёт готов",
+            "error": error,
+            "updated_at": now,
+        }
+        conn.execute(
+            """
+            UPDATE daily_summary_items
+            SET processing_status = ?, progress_json = ?, report_id = COALESCE(?, report_id),
+                error = ?, updated_at = ?
+            WHERE run_id = ? AND entity_type = ? AND entity_id = ? AND selected = 1
+            """,
+            (status, dumps_json(progress), report_id, error, now, int(run_id), str(entity_type), str(entity_id)),
+        )
+    refresh_daily_summary_run_status(db_path, run_id)
+
+
+def record_daily_summary_actual_cost(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    entity_type: str,
+    entity_id: str,
+    cost: dict[str, Any],
+) -> dict[str, Any]:
+    init_db(db_path)
+    key = f"{entity_type}:{entity_id}"
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT actual_cost_json FROM daily_summary_runs WHERE id = ?",
+            (int(run_id),),
+        ).fetchone()
+        payload = loads_json(row[0] if row else None, {})
+        entities = payload.get("entities") if isinstance(payload.get("entities"), dict) else {}
+        entities[key] = dict(cost)
+        total_rub = round(sum(float(item.get("estimated_cost_rub") or 0) for item in entities.values()), 2)
+        total_usd = round(sum(float(item.get("estimated_cost_usd") or 0) for item in entities.values()), 6)
+        payload = {
+            "entities": entities,
+            "estimated_cost_rub": total_rub,
+            "estimated_cost_usd": total_usd,
+            "updated_at": utcish_now(),
+        }
+        conn.execute(
+            "UPDATE daily_summary_runs SET actual_cost_json = ? WHERE id = ?",
+            (dumps_json(payload), int(run_id)),
+        )
+    return payload
+
+
+def refresh_daily_summary_run_status(db_path: str | Path, run_id: int) -> str:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT processing_status FROM daily_summary_items WHERE run_id = ? AND selected = 1",
+            (int(run_id),),
+        ).fetchall()
+        statuses = [str(row[0] or "draft") for row in rows]
+        if not statuses:
+            status = "done"
+        elif any(item in {"draft", "queued", "running"} for item in statuses):
+            status = "analyzing"
+        else:
+            errors = sum(item == "error" for item in statuses)
+            completed = sum(item in {"done", "skipped_limit"} for item in statuses)
+            if errors and completed:
+                status = "completed_with_errors"
+            elif errors:
+                status = "error"
+            else:
+                status = "done"
+        completed_at = utcish_now() if status in {"done", "completed_with_errors", "error"} else None
+        conn.execute(
+            "UPDATE daily_summary_runs SET status = ?, completed_at = COALESCE(?, completed_at) WHERE id = ?",
+            (status, completed_at, int(run_id)),
+        )
+    return status
+
+
+def fail_orphaned_daily_summary_items(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    active_job_ids: set[str] | None = None,
+) -> int:
+    """Завершает зависшие карточки, фоновые jobs которых исчезли после рестарта API."""
+    init_db(db_path)
+    active = {str(item) for item in (active_job_ids or set()) if item}
+    now = utcish_now()
+    error = "Процесс анализа прерван перезапуском сервера. Запустите новую сводку."
+    updated = 0
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, entity_type, entity_id, job_id, progress_json
+            FROM daily_summary_items
+            WHERE run_id = ? AND selected = 1
+              AND COALESCE(processing_status, 'queued') IN ('draft', 'queued', 'running')
+            """,
+            (int(run_id),),
+        ).fetchall()
+        for row in rows:
+            item_job_id = str(row["job_id"] or "")
+            if item_job_id and item_job_id in active:
+                continue
+            previous_progress = loads_json(row["progress_json"], {})
+            progress = {
+                **previous_progress,
+                "entity_type": str(row["entity_type"]),
+                "entity_id": str(row["entity_id"]),
+                "stage": "error",
+                "status": "error",
+                "detail": "Анализ прерван перезапуском сервера",
+                "error": error,
+                "updated_at": now,
+            }
+            conn.execute(
+                """
+                UPDATE daily_summary_items
+                SET processing_status = 'error', progress_json = ?, error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (dumps_json(progress), error, now, int(row["id"])),
+            )
+            updated += 1
+    if updated:
+        refresh_daily_summary_run_status(db_path, run_id)
+    return updated
 
 
 def daily_paid_capacity_used(db_path: str | Path, *, day_prefix: str) -> int:

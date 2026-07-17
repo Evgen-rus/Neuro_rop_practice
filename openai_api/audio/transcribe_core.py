@@ -11,6 +11,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 import soundfile as sf
@@ -40,6 +41,7 @@ async def transcribe_file_async(
     filepath: str,
     max_segment_concurrency: int = 1,
     chunk_overlap_seconds: int = CHUNK_OVERLAP_SECONDS,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     """
     Асинхронно транскрибирует аудиофайл.
@@ -143,6 +145,16 @@ async def transcribe_file_async(
             f"{start_time_sec:.1f}–{end_time_sec:.1f} сек "
             f"({chunk_duration_sec:.1f} сек)"
         )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "status": "segment",
+                    "current": idx + 1,
+                    "total": total_chunks,
+                    "attempt": 1,
+                    "max_attempts": 3,
+                }
+            )
 
         # 3. Пишем сегмент во временный WAV в память (байтовый поток)
         buffer = io.BytesIO()
@@ -161,10 +173,15 @@ async def transcribe_file_async(
 
         try:
             async with semaphore:
+                def segment_retry_callback(event: dict[str, Any]) -> None:
+                    if progress_callback is not None:
+                        progress_callback({**event, "current": idx + 1, "total": total_chunks})
+
                 segment_text = await transcribe_voice(
                     wav_bytes,
                     file_name=segment_file_name,
                     language="ru",
+                    retry_callback=segment_retry_callback,
                 )
         except Exception as e:  # noqa: BLE001 — хотим залогировать и продолжить другие сегменты
             logger.error(f"Ошибка при транскрибации сегмента {idx + 1}: {e}")

@@ -14,6 +14,7 @@ import {
   type JobState,
   type DailyPreview,
   type DailySummaryRun,
+  type EntityProgress,
   type UiReportDetail,
   type UiReportListItem,
   createAnalysisProfile,
@@ -91,6 +92,51 @@ const VERDICT_RU: Record<string, string> = {
   technical_mismatch: 'техническое несоответствие',
   budget_below_new_equipment_minimum: 'бюджет ниже минимума для нового оборудования',
   unknown: 'неясно',
+}
+
+const LLM_REQUIRED_FRESHNESS = new Set(['missing', 'changed', 'failed'])
+
+const PROGRESS_STAGE_RU: Record<string, string> = {
+  queued: 'В очереди',
+  crm_context: 'Собирается история CRM',
+  audio_lookup: 'Ищутся звонки',
+  audio_download: 'Загружается аудио',
+  transcription: 'Транскрибируется аудио',
+  llm_analysis: 'Выполняется LLM-анализ',
+  validation: 'Проверяется ответ модели',
+  report: 'Формируется отчёт',
+  done: 'Готово',
+  error: 'Ошибка',
+  skipped: 'Не запущено',
+}
+
+function candidateNeedsLlm(candidate: Candidate) {
+  return LLM_REQUIRED_FRESHNESS.has(candidate.analysis_freshness || 'missing')
+}
+
+function EntityProgressView({ progress }: { progress: Partial<EntityProgress> }) {
+  const stage = progress.stage || 'queued'
+  const status = progress.status || 'queued'
+  const current = Number(progress.current || 0)
+  const total = Number(progress.total || 0)
+  const attempt = Number(progress.attempt || 0)
+  const maxAttempts = Number(progress.max_attempts || 0)
+  const started = progress.started_at ? Date.parse(progress.started_at) : Number.NaN
+  const elapsedSeconds = Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : null
+  const elapsed = elapsedSeconds === null ? null : `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`
+  return <div className={`entity-progress ${status}`}>
+    <div className="entity-progress-head">
+      <strong>{PROGRESS_STAGE_RU[stage] || stage}</strong>
+      {elapsed ? <span>{elapsed}</span> : null}
+    </div>
+    {progress.detail ? <p>{progress.detail}</p> : null}
+    <div className="entity-progress-meta">
+      {total > 0 ? <span>{current} из {total}</span> : null}
+      {maxAttempts > 1 && attempt > 0 ? <span>Попытка {attempt} из {maxAttempts}</span> : null}
+      {progress.updated_at ? <span>Обновлено {new Date(progress.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> : null}
+    </div>
+    {progress.error ? <div className="entity-progress-error">{progress.error}</div> : null}
+  </div>
 }
 
 const BANT_STATUS_RU: Record<string, string> = {
@@ -393,6 +439,45 @@ export default function App() {
   const [dailyRun, setDailyRun] = useState<DailySummaryRun | null>(null)
   const [dailyLoading, setDailyLoading] = useState(false)
   const [dailyError, setDailyError] = useState<string | null>(null)
+  const dailySelectedCandidates = useMemo(
+    () => (dailyPreview?.candidates || []).filter((candidate) => dailySelected.has(candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`)),
+    [dailyPreview, dailySelected],
+  )
+  const dailySelectedLlmCount = useMemo(
+    () => dailySelectedCandidates.filter(candidateNeedsLlm).length,
+    [dailySelectedCandidates],
+  )
+  const dailyPaidLimit = Number(dailyPreview?.cost_preview.paid_entity_limit || 0)
+  const dailyWillLaunchPaid = Math.min(dailySelectedLlmCount, dailyPaidLimit)
+  const dailyEstimatedCost = Math.round(Number(dailyPreview?.cost_preview.estimated_cost_rub_per_entity || 0) * dailyWillLaunchPaid * 100) / 100
+  const dailyProgressByKey = useMemo(() => {
+    const rows = new Map<string, Partial<EntityProgress>>()
+    for (const item of dailyRun?.items || []) {
+      if (item.progress) {
+        rows.set(`${item.entity_type}:${item.entity_id}`, item.progress)
+        rows.set(item.journey_key, item.progress)
+      }
+    }
+    for (const jobState of dailyRun?.job_states || []) {
+      for (const progress of Object.values(jobState.entity_progress || {})) {
+        rows.set(`${progress.entity_type}:${progress.entity_id}`, progress)
+      }
+    }
+    return rows
+  }, [dailyRun])
+  const dailyResultByKey = useMemo(() => new Map(
+    (dailyRun?.results || []).map((result) => [`${result.entity_type}:${result.entity_id}`, result]),
+  ), [dailyRun])
+  const dailyProgressStats = useMemo(() => {
+    const selectedItems = (dailyRun?.items || []).filter((item) => Boolean(item.selected))
+    return {
+      done: selectedItems.filter((item) => item.processing_status === 'done').length,
+      running: selectedItems.filter((item) => ['queued', 'running'].includes(item.processing_status)).length,
+      errors: selectedItems.filter((item) => item.processing_status === 'error').length,
+      skipped: selectedItems.filter((item) => item.processing_status === 'skipped_limit').length,
+      total: selectedItems.length || dailyRun?.selected_count || 0,
+    }
+  }, [dailyRun])
 
   const [createdDays, setCreatedDays] = useState(15)
   const [modifiedDays, setModifiedDays] = useState(15)
@@ -886,6 +971,21 @@ export default function App() {
     }
   }
 
+  function clearDailySelection() {
+    if (dailyRun) return
+    setDailySelected(new Set())
+  }
+
+  function selectDailyToLimit() {
+    if (!dailyPreview || dailyRun) return
+    const limit = Math.max(0, Number(dailyPreview.cost_preview.paid_entity_limit || 0))
+    const keys = dailyPreview.candidates
+      .filter(candidateNeedsLlm)
+      .slice(0, limit)
+      .map((candidate) => candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`)
+    setDailySelected(new Set(keys))
+  }
+
   async function freezeDailySummary() {
     if (!activeProfile || !dailyPreview || !dailySelected.size) return
     setDailyLoading(true)
@@ -910,10 +1010,8 @@ export default function App() {
     try {
       const result = await startDailySummary(dailyRun.id, paid)
       setDailyRun(result.summary)
-      if (result.jobs[0]) {
-        setJob(result.jobs[0])
-      }
-      toast(`Запущено карточек: ${result.jobs.length}`, setToastMessage)
+      const reusedSuffix = result.reused_count ? `, готовых отчётов взято: ${result.reused_count}` : ''
+      toast(`Обработано карточек: ${result.started_count}${reusedSuffix}`, setToastMessage)
     } catch (error) {
       setDailyError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1057,9 +1155,11 @@ export default function App() {
               </div>
               {dailyPreview ? <div className="daily-stats">
                 <span>Всего <b>{dailyPreview.summary.total ?? 0}</b></span>
-                <span>Выделено <b>{dailySelected.size}</b></span>
-                <span>Нужен LLM <b>{dailyPreview.summary.llm_required ?? 0}</b></span>
-                <span>Лимит сейчас <b>{asString(dailyPreview.cost_preview.paid_entity_limit, '0')}</b></span>
+                <span>Выбрано <b>{dailySelected.size}</b></span>
+                <span>Нужен LLM всего <b>{dailyPreview.summary.llm_required ?? 0}</b></span>
+                <span>В выбранных <b>{dailySelectedLlmCount}</b></span>
+                <span>Будет платных <b>{dailyWillLaunchPaid}</b></span>
+                <span>Доступно сегодня <b>{asString(dailyPreview.cost_preview.paid_entity_limit, '0')}</b></span>
               </div> : null}
             </section>
             {dailyError ? <div className="alert error"><strong>Ошибка:</strong> {dailyError}</div> : null}
@@ -1070,13 +1170,26 @@ export default function App() {
               {asString(asRecord(dailyPreview.scope.profile_drift).message)}
             </div> : null}
             {dailyPreview ? <>
+              <div className="daily-selection-actions">
+                <button className="btn ghost" type="button" disabled={Boolean(dailyRun) || !dailySelected.size} onClick={clearDailySelection}>Снять всё</button>
+                <button className="btn secondary" type="button" disabled={Boolean(dailyRun) || dailyPaidLimit <= 0} onClick={selectDailyToLimit}>Выбрать до лимита</button>
+                {dailyRun && dailyRun.status !== 'draft' ? <div className="daily-live-summary">
+                  <strong>Готово {dailyProgressStats.done} из {dailyProgressStats.total}</strong>
+                  <span>В работе: {dailyProgressStats.running}</span>
+                  {dailyProgressStats.errors ? <span>Ошибок: {dailyProgressStats.errors}</span> : null}
+                  {dailyProgressStats.skipped ? <span>Не запущено: {dailyProgressStats.skipped}</span> : null}
+                </div> : null}
+              </div>
               <div className="daily-cards">
                 {dailyPreview.candidates.map((candidate) => {
                   const key = candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`
+                  const entityKey = `${candidate.entity_type}:${candidate.entity_id}`
                   const checked = dailySelected.has(key)
+                  const runResult = dailyResultByKey.get(entityKey)
+                  const progress = dailyProgressByKey.get(entityKey) || dailyProgressByKey.get(key)
                   return <article className={`daily-candidate ${checked ? 'selected' : 'reserve'}`} key={key}>
                     <label className="daily-select">
-                      <input type="checkbox" checked={checked} onChange={() => setDailySelected((current) => {
+                      <input type="checkbox" checked={checked} disabled={Boolean(dailyRun)} onChange={() => setDailySelected((current) => {
                         const next = new Set(current)
                         if (next.has(key)) next.delete(key); else next.add(key)
                         return next
@@ -1085,10 +1198,17 @@ export default function App() {
                     </label>
                     <div className="daily-card-title"><span className={`risk-dot ${candidate.priority}`} /> <b>{candidate.title}</b></div>
                     <div className="candidate-meta">{candidate.entity_type === 'lead' ? 'Лид' : 'Сделка'} {candidate.entity_id} · {candidate.status} · {candidate.lifecycle || 'new'}</div>
-                    <p>{candidate.attention_reason}</p>
-                    <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
-                    <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
-                    {candidate.entity_type === 'lead' ? <LeadQualificationStrip summary={candidate.lead_qualification} hasAnalysis={Boolean(candidate.lead_analysis_available || candidate.analyzed)} category={candidate.lead_category} /> : null}
+                    {runResult ? <>
+                      <p>{runResult.attention_reason || (runResult.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</p>
+                      {runResult.entity_type === 'lead' ? <LeadQualificationStrip summary={runResult.lead_qualification} hasAnalysis={runResult.has_analysis} category={runResult.lead_category} /> : null}
+                      {runResult.recommended_action ? <p>{runResult.recommended_action}</p> : null}
+                      {runResult.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(runResult.report_id))}>Открыть отчёт</button> : null}
+                    </> : <>
+                      <p>{candidate.attention_reason}</p>
+                      <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
+                      <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
+                      {progress && checked && dailyRun?.status !== 'draft' ? <EntityProgressView progress={progress} /> : candidate.entity_type === 'lead' ? <LeadQualificationStrip summary={candidate.lead_qualification} hasAnalysis={Boolean(candidate.lead_analysis_available || candidate.analyzed)} category={candidate.lead_category} /> : null}
+                    </>}
                     {candidate.bitrix_url ? <a className="bitrix-link" href={candidate.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
                   </article>
                 })}
@@ -1097,20 +1217,11 @@ export default function App() {
               <section className="section daily-run-bar">
                 <div>
                   <b>Платный gate</b>
-                  <p>{asString(dailyPreview.cost_preview.message)} Оценка текущего запуска: {asString(dailyPreview.cost_preview.estimated_cost_rub_total, 'неизвестно')} ₽. Зарезервировано сегодня: {asString(dailyPreview.cost_preview.paid_used_today, '0')}.</p>
+                  <p>{asString(dailyPreview.cost_preview.message)} Оценка выбранного запуска: {dailyEstimatedCost} ₽. Зарезервировано сегодня: {asString(dailyPreview.cost_preview.paid_used_today, '0')}.</p>
+                  {dailyRun?.actual_cost ? <p>Фактическая стоимость завершённых анализов: {asString(asRecord(dailyRun.actual_cost).estimated_cost_rub, '0')} ₽.</p> : null}
                 </div>
                 {!dailyRun ? <button className="btn" disabled={!dailySelected.size || dailyLoading} onClick={() => void freezeDailySummary()}>Зафиксировать snapshot</button> : <button className="btn" disabled={dailyLoading || dailyRun.status !== 'draft'} onClick={() => void launchDailySummary()}>{dailyRun.status === 'draft' ? 'Подтвердить и запустить выбранные' : `Статус: ${dailyRun.status}`}</button>}
               </section>
-              {dailyRun?.results?.length ? <section className="section">
-                <h3>Результаты сводки</h3>
-                <div className="daily-result-list">{dailyRun.results.map((result) => <article key={`${result.entity_type}:${result.entity_id}`}>
-                  <b>{result.entity_type === 'lead' ? 'Лид' : 'Сделка'} {result.entity_id}</b>
-                  <span>{result.attention_reason || (result.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</span>
-                  {result.entity_type === 'lead' ? <LeadQualificationStrip summary={result.lead_qualification} hasAnalysis={result.has_analysis} category={result.lead_category} /> : null}
-                  {result.recommended_action ? <p>{result.recommended_action}</p> : null}
-                  {result.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(result.report_id))}>Открыть отчёт</button> : null}
-                </article>)}</div>
-              </section> : null}
             </> : <section className="section"><p className="muted">Настройте профиль и нажмите «Обновить кандидатов без LLM». Старые анализы не используются как источник очереди.</p></section>}
           </main>
         </div>

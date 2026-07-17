@@ -11,7 +11,7 @@
 - Обновляй `ARCHITECTURE.md` только когда пользователь прямо просит обновить архитектуру или явно просит зафиксировать новое архитектурное состояние. Не обновляй его автоматически после каждой правки кода.
 - При обновлении сохраняй средний размер и убирай явное дублирование: здесь должны быть стабильные правила, карта потоков и ссылки на подробные документы.
 
-Last updated: 2026-07-13
+Last updated: 2026-07-17
 
 ## 1) System At A Glance
 
@@ -48,8 +48,9 @@ React UI -> FastAPI api/ -> candidates scoring | analyze job -> run_rop_assistan
 ```text
 именованный analysis profile -> Moscow calendar period -> Bitrix lead/deal preview без LLM
 -> lead-to-deal journey deduplication -> signals + lifecycle + workset/capacity
--> immutable daily summary snapshot -> явное подтверждение платных карточек
--> analyze jobs с force_llm=false -> analysis JSON / ROP report
+-> immutable daily summary snapshot -> жёсткий платный gate
+-> fresh/date_modified_only: последний сохранённый UI report без pipeline/LLM
+-> missing/changed/failed в пределах лимита: analyze jobs -> structured progress -> SQLite status/cost -> результат в той же карточке
 ```
 
 Отдельный ручной compact-контур не участвует в штатном pipeline:
@@ -108,14 +109,16 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - Short-call / недозвон filter: `openai_api/audio/short_call.py`
 - Deal LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_deal.py`
 - Lead LLM-анализ, детальный BANT, `lead_category`, `lead_route`, техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
-- OpenAI JSON client: `openai_api/llm/llm_client.py`
+- OpenAI JSON client и единичный corrective retry после невалидного JSON/бизнес-ответа: `openai_api/llm/llm_client.py`
+- Общий bounded transport retry для временных ошибок Bitrix/OpenAI/скачивания аудио: `reliability/retry.py`
+- Машиночитаемые события прогресса CLI/jobs: `progress_events.py`
 - Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead- и deal-анализа: `openai_api/llm/validation.py`
 - Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
 - Compact OKF packs: `openai_api/llm/attention_delta_knowledge.py`, `knowledge/clients/praktikm/attention_delta_*.md`
 - Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
 - Проверка evidence compact-ответа относительно переданного контекста: `openai_api/llm/evidence_coverage.py`
 - Детерминированные playbooks compact-анализа: `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`
-- SQLite-хранилище change detection, UI feedback, analysis profiles, lifecycle кандидатов и immutable snapshots ежедневных сводок: `storage/rop_db.py`
+- SQLite-хранилище change detection, UI feedback, analysis profiles, lifecycle кандидатов, immutable snapshots, статусов/прогресса карточек и фактической стоимости ежедневных сводок: `storage/rop_db.py`
 - Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
 - Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
 - Deal CRM stage policy / closed-lost classification: `openai_api/change_detection/stage_policy.py`
@@ -202,6 +205,12 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 68. Preview показывает весь найденный список, но `workset_selected` выделяет ограниченный набор по priority, lifecycle и слотам `new/backlog`. Остальные карточки остаются видимыми и могут быть добавлены вручную.
 69. `daily_summary_runs` и `daily_summary_items` хранят immutable snapshot профиля и кандидатов на момент создания. Повторное чтение Bitrix не должно незаметно менять уже созданную сводку.
 70. Полный LLM-анализ запускается только после явного подтверждения платных карточек и в пределах `paid_per_run`/`paid_per_day`. Штатный запуск сводки передаёт `force_llm=false`; свежий analysis переиспользуется, а changed/missing/failed требуют доступной платной ёмкости.
+71. Transport retry применяется только к временным сетевым/серверным ошибкам и ограничен тремя попытками с `Retry-After` либо exponential backoff. Встроенный retry OpenAI-клиента отключён, чтобы попытки не перемножались скрыто.
+72. Невалидный JSON или ответ, не прошедший бизнес-валидацию, получает не более одного corrective LLM-повтора. Usage и стоимость суммируются по обеим попыткам; отчёт не сохраняется до валидного результата.
+73. Платный gate ежедневной сводки проверяется до pipeline: только `missing`, `changed` и `failed` из подтверждённого набора могут запустить анализ. `fresh` и `date_modified_only` переиспользуют последний сохранённый UI report и не должны расходовать LLM.
+74. События прогресса передаются строками с маркером `@@ROP_PROGRESS@@` и ASCII-safe JSON. `api/jobs.py` отделяет их от пользовательского лога и сохраняет текущий этап по каждой сущности.
+75. Статус, прогресс, `job_id`, `report_id`, ошибка и фактическая стоимость каждой карточки сводки сохраняются в SQLite. После перезапуска API осиротевший активный item переводится в явную ошибку, а уже готовые результаты остаются доступны.
+76. Имена и настройки analysis profiles сохраняются в UTF-8; слой хранения исправляет известный UTF-8/CP1251 mojibake при чтении и записи, не меняя корректный текст.
 
 ## 4) Key Domain Objects
 
@@ -378,15 +387,15 @@ UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
 - `GET|POST /api/candidates` / `candidates/search` — Bitrix list + scoring без LLM; без выбранных этапов (и воронок для сделок) возвращает `ready=false`; применяет локальный `candidate_review_state`
 - `GET|POST|PUT|DELETE /api/analysis-profiles` — именованные версионируемые настройки периода, lead/deal scope, сигналов и лимитов; последний выбранный профиль хранится в SQLite
 - `POST /api/analysis-profiles/{id}/preview` — read-only Bitrix/SQLite preview без LLM: journeys, сигналы, lifecycle, workset и предварительная стоимость
-- `POST /api/daily-summaries`, `GET /api/daily-summaries[/{id}]` — immutable snapshot выбранного preview и история ручных сводок
-- `POST /api/daily-summaries/{id}/start` — явное подтверждение платных карточек, применение дневного/разового лимита и запуск lead/deal jobs с `force_llm=false`
+- `POST /api/daily-summaries`, `GET /api/daily-summaries[/{id}]` — immutable snapshot выбранного preview, история сводок и сохранённые per-item status/progress/result/cost
+- `POST /api/daily-summaries/{id}/start` — жёсткий платный gate: переиспользование сохранённых fresh/date_modified_only reports и запуск lead/deal jobs только для подтверждённых missing/changed/failed в пределах дневного/разового лимита
 - `POST /api/analyze` — фоновый job с опциями как в CLI; `force_llm=true` требует `confirm_paid=true`; auto = сначала lead, потом deal
 - `GET /api/jobs/{job_id}` — live stages/progress
 - `GET /api/reports`, `GET /api/reports/{id}` — история UI-отчётов
 - `GET /api/reports/{id}/markdown` — полный markdown по запросу
 - `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
 
-UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. В lead-карточке первым аналитическим блоком выводится BANT-микродашборд из четырёх самостоятельных критериев, затем отдельные `Категория лида` и маршрут; причины внимания, качество обработки и остальные рекомендации идут ниже. В deal-карточке этот lead-интерфейс не создаётся. `api/jobs.py` и `api/app.py` передают полный analysis JSON без параллельной схемы, а в summary дополнительно публикуют `lead_category` и `lead_route_status`; frontend старого отчёта использует fallback на `lead_state.qualification` и безопасно скрывает отсутствующие новые блоки. Preview показывает весь список и визуально выделяет ограниченный workset; платный старт требует отдельного подтверждения. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
+UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. В lead-карточке первым аналитическим блоком выводится BANT-микродашборд из четырёх самостоятельных критериев, затем отдельные `Категория лида` и маршрут; причины внимания, качество обработки и остальные рекомендации идут ниже. В deal-карточке этот lead-интерфейс не создаётся. `api/jobs.py` и `api/app.py` передают полный analysis JSON без параллельной схемы, а в summary дополнительно публикуют `lead_category` и `lead_route_status`; frontend старого отчёта использует fallback на `lead_state.qualification` и безопасно скрывает отсутствующие новые блоки. Preview показывает весь список, точные счётчики и ограниченный workset; пользователь может очистить выбор или выбрать карточки до доступного лимита. После старта каждая карточка в том же окне показывает текущий этап, результат либо ошибку без перехода на другой экран; fresh/date_modified_only карточки сразу получают последний сохранённый отчёт. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
 
 ### G) Candidates Scoring
 
@@ -509,6 +518,8 @@ ROP assistant state:
 - Не заменять русский текст транслитом или Unicode escape без крайней необходимости.
 - Если терминал показывает битую кириллицу, не копировать её обратно в исходники без проверки файла.
 - Markdown-отчёты и JSON сохранять с `ensure_ascii=False`, чтобы русский текст оставался читаемым.
+- Исключение для межпроцессных progress-событий: JSON после `@@ROP_PROGRESS@@` намеренно ASCII-safe, а после разбора снова является обычным Unicode-текстом.
+- Analysis profiles проходят мягкое исправление известного UTF-8/CP1251 mojibake на границе SQLite; корректная кириллица не перекодируется повторно.
 
 ## 9) Known Pitfalls
 
@@ -527,7 +538,7 @@ ROP assistant state:
 13. У converted lead без `CONTACT_ID` сделка может быть найдена только через `LEAD_ID`; не считать отсутствие contact link доказательством отсутствия сделки.
 14. По сделке, созданной из лида, звонки могут физически лежать в source lead; deal context/diagnostics должны сохранять source entity и Bitrix-ссылку на исходную активность.
 15. Profile preview может давать много high-карточек при широком deal scope: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт. Ограничение workset выделяет приоритет, но не скрывает overflow.
-16. Analyze job из UI может быть долгим: это полный CLI-пайплайн, прогресс смотреть через `/api/jobs/{id}`.
+16. Analyze job из UI может быть долгим: это полный CLI-пайплайн со скачиванием и возможной транскрибацией аудио. Ручной запуск отслеживается через `/api/jobs/{id}`, а ежедневная сводка — через `/api/daily-summaries/{id}` с per-item прогрессом прямо в карточках.
 17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
 18. `candidate_review_state` применяется только к конкретной сущности. Нельзя скрывать всех кандидатов этапа после одного подтверждённого закрытия; перенос решения на похожие сущности требует отдельного накопленного feedback-паттерна.
 19. Текущий candidates scorer видит изменение стадии/воронки/суммы напрямую. Новый звонок, письмо, комментарий или внутренний чат после решения РОПа требуют semantic diff полного контекста; пока они не должны автоматически возвращать сущность только по `DATE_MODIFY`.
@@ -537,13 +548,16 @@ ROP assistant state:
 23. Не связывать категорию с количеством подтверждённых критериев или процентом BANT. Категория определяется совместно BANT, горизонтом, технической применимостью и доказанным бюджетным/контактным основанием.
 24. `not_confirmed`, `negative` и `unknown` имеют разные значения: неподтверждённость и нехватка данных не доказывают отказ. Для E по недозвону нужен `call_attempt_recommendation.cycle_status=completed`; обычный или незавершённый цикл остаётся `unknown`.
 25. Реальные `analysis/*.json`, Markdown, raw model output, аудио и транскрипты остаются в игнорируемом `reports/`; успешный локальный прогон не должен добавлять эти артефакты в Git.
+26. Transport retry не исправляет постоянные `4xx`, ошибки контракта и бизнес-валидации. Для последней предусмотрен отдельный единственный corrective LLM-повтор; бесконечно перезапускать платную карточку автоматически нельзя.
+27. API хранит фоновые subprocess jobs в памяти. После перезапуска они не возобновляются автоматически: SQLite-reconciliation помечает осиротевшие карточки ошибкой, после чего повторный запуск требует явного действия пользователя.
+28. Строки progress transport должны оставаться ASCII-safe: это защищает долгий Windows subprocess от падения на несовпадении кодировок консоли и не разрешает сохранять остальной русский текст в escape-виде.
 
 ## 10) Current Gaps
 
 - Нет Telegram Bot API и автоматической отправки отчётов/поручений менеджеру.
 - Нет auth/multi-user кабинета: UI локальный, только localhost.
 - Daily candidate engine учитывает задачи, следующий шаг и детерминированные сигналы, но счета/оплаты пока не загружаются как отдельный надёжный CRM-источник; payment-сигнал зависит от доступных полей/активностей.
-- SQLite-контур включает profiles, candidate lifecycle, daily summary snapshots и feedback, но нет аналитики качества рекомендаций, полноценного semantic diff всех CRM-активностей и портфельной `deal_memory` / `lead_memory`.
+- SQLite-контур включает profiles, candidate lifecycle, daily summary snapshots, per-item progress/final status/actual cost и feedback, но нет аналитики качества рекомендаций, полноценного semantic diff всех CRM-активностей и портфельной `deal_memory` / `lead_memory`.
 - Compact attention-delta работает только как isolated shadow/review: он не включён в штатный CLI/change-detection flow и не может заменить legacy report без отдельной валидации и продуктового решения.
 - Нет автоматического отбора безопасных compact cases, batch-режима и автоматического принятия compact-результата; coverage failure ведёт только к `full_fallback_recommended`.
 - Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.

@@ -21,11 +21,12 @@ from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
-from openai_api.llm.llm_client import ModelJsonParseError, call_analysis_json
+from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
+from progress_events import emit_progress, retry_progress_callback
 from setup import MSK_TZ
 
 
@@ -1060,52 +1061,45 @@ def main() -> None:
     raw_path = analysis_dir / f"deal_{args.deal_id}_raw_model_output.txt"
     error_path = analysis_dir / f"deal_{args.deal_id}_analysis_error.json"
 
+    emit_progress("deal", str(args.deal_id), "llm_analysis", detail="Анализирует OpenAI")
     try:
-        analysis, metadata = call_analysis_json(prompt, model=args.model)
-    except ModelJsonParseError as error:
+        analysis, metadata = call_validated_analysis_json(
+            prompt,
+            validator=validate_deal_analysis,
+            normalizer=normalize_analysis_for_validation,
+            validation_error_types=(AnalysisValidationError,),
+            model=args.model,
+            retry_callback=retry_progress_callback(
+                "deal", str(args.deal_id), "llm_analysis", detail="Запрос OpenAI"
+            ),
+            semantic_callback=retry_progress_callback(
+                "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
+            ),
+            analysis_caller=call_analysis_json,
+        )
+    except ValidatedAnalysisFailure as error:
         write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, error.metadata))
         raw_path.write_text(error.raw_output_text, encoding="utf-8")
+        error_payload = {
+            "generated_at": generated_at,
+            "deal_id": str(args.deal_id),
+            "error": str(error),
+            "model_metadata": {
+                key: value for key, value in error.metadata.items() if key != "raw_output_text"
+            },
+        }
+        if error.analysis is not None:
+            error_payload["analysis"] = error.analysis
         save_json(
             error_path,
-            {
-                "generated_at": generated_at,
-                "deal_id": str(args.deal_id),
-                "error": str(error),
-                "model_metadata": {
-                    key: value for key, value in error.metadata.items() if key != "raw_output_text"
-                },
-            },
+            error_payload,
         )
-        print(f"Model returned invalid JSON. Raw output saved: {raw_path}")
+        print(f"Model analysis failed after correction attempt. Raw output saved: {raw_path}")
         print(f"Error details saved: {error_path}")
         raise
 
     write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, metadata))
-
-    normalization_changes = normalize_analysis_for_validation(analysis)
-    if normalization_changes:
-        metadata["normalization_changes"] = normalization_changes
-        logger.warning("Normalized deal analysis before validation: %s", normalization_changes)
-
-    try:
-        validate_deal_analysis(analysis)
-    except AnalysisValidationError as error:
-        raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
-        save_json(
-            error_path,
-            {
-                "generated_at": generated_at,
-                "deal_id": str(args.deal_id),
-                "error": str(error),
-                "model_metadata": {
-                    key: value for key, value in metadata.items() if key != "raw_output_text"
-                },
-                "analysis": analysis,
-            },
-        )
-        print(f"Model analysis failed validation. Raw output saved: {raw_path}")
-        print(f"Error details saved: {error_path}")
-        raise
+    emit_progress("deal", str(args.deal_id), "validation", status="done", detail="Ответ прошёл проверку")
 
     output_payload = {
         "generated_at": generated_at,
@@ -1123,9 +1117,11 @@ def main() -> None:
         "analysis": analysis,
     }
 
+    emit_progress("deal", str(args.deal_id), "report", detail="Формирует отчёт")
     save_json(analysis_path, output_payload)
     report_path.write_text(render_report(analysis, metadata, context_diagnostics_payload), encoding="utf-8")
     raw_path.write_text(metadata.get("raw_output_text", ""), encoding="utf-8")
+    emit_progress("deal", str(args.deal_id), "done", status="done", detail="Отчёт готов")
 
     logger.info("Saved deal analysis JSON: %s", analysis_path)
     logger.info("Saved ROP report markdown: %s", report_path)

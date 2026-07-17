@@ -39,6 +39,7 @@ from openai_api.audio.transcribe_core import (
 )
 from openai_api.logging_utils import log_model_file_payload
 from openai_api.pricing import format_usd_rub
+from progress_events import emit_progress
 
 
 def parse_args() -> argparse.Namespace:
@@ -182,10 +183,33 @@ def main() -> None:
     )
 
     try:
+        def transcription_progress(event: dict[str, Any]) -> None:
+            if not entity_id:
+                return
+            status = str(event.get("status") or "")
+            current = int(event.get("current") or 1)
+            total = int(event.get("total") or 1)
+            attempt = int(event.get("attempt") or 1)
+            max_attempts = int(event.get("max_attempts") or 3)
+            detail = f"Сегмент {current} из {total}"
+            if status == "retry_wait":
+                detail += f": повторная попытка {attempt + 1} из {max_attempts}"
+            emit_progress(
+                entity_type,
+                str(entity_id),
+                "transcription",
+                detail=detail,
+                current=current,
+                total=total,
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+
         text = asyncio.run(
             transcribe_file_async(
                 str(transcribed_audio_path),
                 max_segment_concurrency=args.max_segment_concurrency,
+                progress_callback=transcription_progress,
             )
         )
     except Exception as e:

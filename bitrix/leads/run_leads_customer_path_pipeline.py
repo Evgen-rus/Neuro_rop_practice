@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from setup import BASE_DIR, get_logger
 from bitrix.customer_history import DEFAULT_HISTORY_DAYS
+from progress_events import emit_progress
 
 
 DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_lead_path" / "raw"
@@ -79,6 +80,8 @@ def main() -> None:
     audio_dir = Path(args.audio_dir)
     workspace_root = Path(args.workspace_root)
 
+    for lead_id in args.lead_ids:
+        emit_progress("lead", lead_id, "crm_context", detail="Собирает историю CRM")
     run_step(
         [
             sys.executable,
@@ -121,7 +124,11 @@ def main() -> None:
                 *args.lead_ids,
             ]
         )
+    for lead_id in args.lead_ids:
+        emit_progress("lead", lead_id, "crm_context", status="done", detail="История CRM подготовлена")
     if not args.skip_audio_download:
+        for lead_id in args.lead_ids:
+            emit_progress("lead", lead_id, "audio_download", detail="Ищет и загружает звонки")
         run_step(
             [
                 sys.executable,
@@ -135,6 +142,11 @@ def main() -> None:
                 *(["--redownload"] if args.redownload_audio else []),
             ]
         )
+        for lead_id in args.lead_ids:
+            emit_progress("lead", lead_id, "audio_download", status="done", detail="Звонки проверены")
+    else:
+        for lead_id in args.lead_ids:
+            emit_progress("lead", lead_id, "audio_download", status="done", detail="Загрузка аудио отключена")
     run_step(
         [
             sys.executable,

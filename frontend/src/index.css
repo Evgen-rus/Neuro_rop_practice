@@ -222,6 +222,27 @@ textarea {
   white-space: nowrap;
 }
 
+.daily-selection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.daily-live-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+  padding: 8px 12px;
+  border: 1px solid #c7defc;
+  border-radius: 10px;
+  background: #edf5ff;
+  font-size: 13px;
+}
+
 .daily-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -262,6 +283,51 @@ textarea {
   align-items: center;
   gap: 8px;
   font-size: 16px;
+}
+
+.entity-progress {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 11px;
+  border: 1px solid #b9d4fb;
+  border-radius: 10px;
+  background: #eaf3ff;
+}
+
+.entity-progress.done {
+  border-color: #9bd7b2;
+  background: #edf9f1;
+}
+
+.entity-progress.error {
+  border-color: #f2b8b5;
+  background: #fff1f0;
+}
+
+.entity-progress-head,
+.entity-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.entity-progress p,
+.entity-progress-error {
+  margin: 0;
+}
+
+.entity-progress-meta {
+  justify-content: flex-start;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.entity-progress-error {
+  color: #a4262c;
+  font-size: 12px;
 }
 
 .reason-codes {
@@ -308,6 +374,11 @@ textarea {
   .daily-run-bar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .daily-live-summary {
+    margin-left: 0;
+    width: 100%;
   }
 }
 

@@ -33,6 +33,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, save_json
 from openai_api.audio.short_call import enrich_download_with_duration, enrich_manifest_calls
+from reliability.retry import DEFAULT_TRANSPORT_RETRY, run_with_retry
+from progress_events import emit_progress, retry_progress_callback
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -273,62 +275,90 @@ def deterministic_output_path(output_dir: Path, response: requests.Response, fal
     return path.with_suffix(extension)
 
 
-def try_download_url(url: str, output_dir: Path, fallback_name: str) -> dict[str, Any]:
-    response = requests.get(url, stream=True, timeout=60, allow_redirects=True)
-    content_type = response.headers.get("content-type", "")
+def try_download_url(
+    url: str,
+    output_dir: Path,
+    fallback_name: str,
+    retry_callback: Any = None,
+) -> dict[str, Any]:
+    def download_once() -> dict[str, Any]:
+        response = requests.get(url, stream=True, timeout=60, allow_redirects=True)
+        try:
+            content_type = response.headers.get("content-type", "")
+            if response.status_code in {408, 409, 429} or response.status_code >= 500:
+                response.raise_for_status()
+            if response.status_code != 200:
+                return {
+                    "ok": False,
+                    "status": "download_http_error",
+                    "http_status": response.status_code,
+                    "content_type": content_type,
+                    "url": url,
+                }
 
-    if response.status_code != 200:
-        return {
-            "ok": False,
-            "status": "download_http_error",
-            "http_status": response.status_code,
-            "content_type": content_type,
-            "url": url,
-        }
+            chunks = response.iter_content(1024 * 256)
+            first_chunk = next(chunks, b"")
+            if b"<html" in first_chunk[:256].lower() or "text/html" in content_type.lower():
+                return {
+                    "ok": False,
+                    "status": "download_returned_html_auth_required",
+                    "http_status": response.status_code,
+                    "content_type": content_type,
+                    "url": url,
+                }
 
-    first_chunk = next(response.iter_content(8192), b"")
-    if b"<html" in first_chunk[:256].lower() or "text/html" in content_type.lower():
-        return {
-            "ok": False,
-            "status": "download_returned_html_auth_required",
-            "http_status": response.status_code,
-            "content_type": content_type,
-            "url": url,
-        }
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = deterministic_output_path(output_dir, response, fallback_name)
+            if output_path.exists():
+                return enrich_download_with_duration(
+                    {
+                        "ok": True,
+                        "status": "already_downloaded",
+                        "http_status": response.status_code,
+                        "content_type": content_type,
+                        "url": url,
+                        "local_path": str(output_path),
+                        "size_bytes": output_path.stat().st_size,
+                    }
+                )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = deterministic_output_path(output_dir, response, fallback_name)
+            temporary_path = output_path.with_name(f"{output_path.name}.part")
+            if temporary_path.exists():
+                temporary_path.unlink()
+            try:
+                with temporary_path.open("wb") as file:
+                    if first_chunk:
+                        file.write(first_chunk)
+                    for chunk in chunks:
+                        if chunk:
+                            file.write(chunk)
+                if not temporary_path.exists() or temporary_path.stat().st_size == 0:
+                    raise OSError("Downloaded audio file is empty")
+                temporary_path.replace(output_path)
+            except BaseException:
+                if temporary_path.exists():
+                    temporary_path.unlink()
+                raise
 
-    if output_path.exists():
-        return enrich_download_with_duration(
-            {
-                "ok": True,
-                "status": "already_downloaded",
-                "http_status": response.status_code,
-                "content_type": content_type,
-                "url": url,
-                "local_path": str(output_path),
-                "size_bytes": output_path.stat().st_size,
-            }
-        )
+            return enrich_download_with_duration(
+                {
+                    "ok": True,
+                    "status": "downloaded",
+                    "http_status": response.status_code,
+                    "content_type": content_type,
+                    "url": url,
+                    "local_path": str(output_path),
+                    "size_bytes": output_path.stat().st_size,
+                }
+            )
+        finally:
+            response.close()
 
-    with output_path.open("wb") as file:
-        if first_chunk:
-            file.write(first_chunk)
-        for chunk in response.iter_content(1024 * 256):
-            if chunk:
-                file.write(chunk)
-
-    return enrich_download_with_duration(
-        {
-            "ok": True,
-            "status": "downloaded",
-            "http_status": response.status_code,
-            "content_type": content_type,
-            "url": url,
-            "local_path": str(output_path),
-            "size_bytes": output_path.stat().st_size,
-        }
+    return run_with_retry(
+        download_once,
+        operation_name="bitrix:audio_download",
+        policy=DEFAULT_TRANSPORT_RETRY,
+        on_event=retry_callback,
     )
 
 
@@ -497,7 +527,7 @@ def process_call(
             continue
 
         try:
-            result = try_download_url(str(download_url), deal_audio_dir, fallback_name)
+            result = try_download_url(str(download_url), deal_audio_dir, fallback_name, client.retry_callback)
         except requests.RequestException as error:
             result = {"ok": False, "status": "download_request_error", "error": str(error), "url": download_url}
 
@@ -514,7 +544,7 @@ def process_call(
     for index, record in enumerate(record_urls, start=1):
         fallback_name = f"activity_{activity_id}_voximplant_{index}"
         try:
-            result = try_download_url(record["url"], deal_audio_dir, fallback_name)
+            result = try_download_url(record["url"], deal_audio_dir, fallback_name, client.retry_callback)
         except requests.RequestException as error:
             result = {"ok": False, "status": "download_request_error", "error": str(error), "url": record["url"]}
 
@@ -548,13 +578,17 @@ def build_manifest(
     timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
     existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
-    return {
-        "deal_id": str(deal_id),
-        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
-        "raw_path": str(raw_path),
-        "audio_dir": str(deal_audio_dir),
-        "missing_only": bool(missing_only),
-        "calls": [
+    processed_calls = []
+    for index, activity in enumerate(calls, start=1):
+        emit_progress(
+            "deal",
+            deal_id,
+            "audio_download",
+            detail=f"Проверяет звонок {index} из {len(calls)}",
+            current=index,
+            total=len(calls),
+        )
+        processed_calls.append(
             process_call(
                 client,
                 deal_audio_dir,
@@ -564,8 +598,14 @@ def build_manifest(
                 existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,
             )
-            for activity in calls
-        ],
+        )
+    return {
+        "deal_id": str(deal_id),
+        "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
+        "raw_path": str(raw_path),
+        "audio_dir": str(deal_audio_dir),
+        "missing_only": bool(missing_only),
+        "calls": processed_calls,
     }
 
 
@@ -598,6 +638,9 @@ def main() -> None:
 
     manifests = []
     for deal_id in args.deal_ids:
+        client.retry_callback = retry_progress_callback(
+            "deal", str(deal_id), "audio_download", detail="Запрос аудио к Bitrix"
+        )
         raw_path = raw_dir / f"deal_{deal_id}_context.json"
         if not raw_path.exists():
             logger.warning("Raw bundle not found: %s", raw_path)

@@ -38,12 +38,15 @@ from setup import BASE_DIR
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     attach_job_to_daily_summary,
+    complete_daily_summary_item,
     create_daily_summary_run,
     create_analysis_profile,
     delete_analysis_profile,
+    fail_orphaned_daily_summary_items,
     get_analysis_profile,
     get_daily_summary_run,
     get_last_analysis_profile,
+    get_latest_ui_report,
     get_candidate_filter,
     get_candidate_review_states,
     get_compact_shadow_run,
@@ -55,6 +58,7 @@ from storage.rop_db import (
     list_qualification_reviews,
     list_rop_decisions,
     list_ui_reports,
+    prepare_daily_summary_items,
     save_candidate_filter,
     save_compact_shadow_feedback,
     save_outcome,
@@ -313,6 +317,18 @@ def daily_summary_create(body: DailySummaryCreateRequest) -> dict[str, Any]:
 
 @app.get("/api/daily-summaries")
 def daily_summaries(limit: int = Query(default=30, ge=1, le=100)) -> dict[str, Any]:
+    items = list_daily_summary_runs(DEFAULT_DB_PATH, limit=limit)
+    for item in items:
+        if item.get("status") != "analyzing":
+            continue
+        job_ids = {value for value in str(item.get("job_id") or "").split(",") if value}
+        active_job_ids = {job_id for job_id in job_ids if get_job(job_id)}
+        if active_job_ids != job_ids:
+            fail_orphaned_daily_summary_items(
+                DEFAULT_DB_PATH,
+                int(item["id"]),
+                active_job_ids=active_job_ids,
+            )
     return {"items": list_daily_summary_runs(DEFAULT_DB_PATH, limit=limit)}
 
 
@@ -323,11 +339,54 @@ def daily_summary(run_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Сводка не найдена")
     job_ids = [item for item in str(value.get("job_id") or "").split(",") if item]
     job_states = [job for job_id in job_ids if (job := get_job(job_id))]
+    if value.get("status") == "analyzing" and len(job_states) < len(job_ids):
+        fail_orphaned_daily_summary_items(
+            DEFAULT_DB_PATH,
+            run_id,
+            active_job_ids={str(job.get("job_id") or "") for job in job_states},
+        )
+        value = get_daily_summary_run(DEFAULT_DB_PATH, run_id) or value
     results = [result for job in job_states for result in job.get("results") or []]
-    if job_states:
+    seen_results = {(str(item.get("entity_type")), str(item.get("entity_id"))) for item in results}
+    for item in value.get("items") or []:
+        report_id = item.get("report_id")
+        result_key = (str(item.get("entity_type")), str(item.get("entity_id")))
+        if not report_id or result_key in seen_results:
+            continue
+        report = get_ui_report(DEFAULT_DB_PATH, int(report_id))
+        if not report:
+            continue
+        analysis = report.get("report_json") if isinstance(report.get("report_json"), dict) else None
+        summary = extract_summary_fields(analysis or {}, result_key[0])
+        results.append(
+            {
+                "entity_type": result_key[0],
+                "entity_id": result_key[1],
+                "report_id": int(report_id),
+                "has_analysis": analysis is not None,
+                "has_markdown": bool(report.get("report_path")),
+                "risk_level": summary.get("risk_level"),
+                "attention_reason": summary.get("attention_reason"),
+                "recommended_action": summary.get("recommended_action"),
+                "lead_category": summary.get("lead_category"),
+                "lead_route_status": summary.get("lead_route_status"),
+                "lead_qualification": summary.get("lead_qualification"),
+                "bitrix_url": bitrix_entity_url(result_key[0], result_key[1]),
+                "analysis": analysis,
+            }
+        )
+        seen_results.add(result_key)
+    if job_states and value.get("status") in {"draft", "analyzing"}:
         statuses = {str(job.get("status") or "") for job in job_states}
         if statuses <= {"done"}:
             value["status"] = "done"
+        elif statuses <= {"error"}:
+            has_partial_result = any(
+                result.get("report_id") or result.get("has_analysis")
+                for job in job_states
+                for result in job.get("results") or []
+            )
+            value["status"] = "completed_with_errors" if has_partial_result else "error"
         elif "error" in statuses and statuses <= {"done", "error"}:
             value["status"] = "completed_with_errors"
         else:
@@ -363,11 +422,50 @@ def daily_summary_start(run_id: int, body: DailySummaryStartRequest) -> dict[str
         if str(candidate.get("analysis_freshness") or "missing") in {"missing", "changed", "failed"} and not requires_paid:
             continue
         eligible.append(item)
+    prepare_daily_summary_items(
+        DEFAULT_DB_PATH,
+        run_id,
+        [str(item.get("journey_key") or "") for item in eligible],
+    )
+    paid_eligible = [item for item in eligible if str(item.get("journey_key")) in paid_keys]
+    reused_count = 0
+    for item in eligible:
+        if str(item.get("journey_key")) in paid_keys:
+            continue
+        entity_type = str(item.get("entity_type") or "")
+        entity_id = str(item.get("entity_id") or "")
+        report = get_latest_ui_report(
+            DEFAULT_DB_PATH,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+        if report:
+            complete_daily_summary_item(
+                DEFAULT_DB_PATH,
+                run_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                report_id=int(report["id"]),
+            )
+            reused_count += 1
+        else:
+            complete_daily_summary_item(
+                DEFAULT_DB_PATH,
+                run_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                report_id=None,
+                error="Свежий сохранённый отчёт не найден; платный анализ не запускался.",
+            )
     options_payload = run.get("profile_snapshot") if isinstance(run.get("profile_snapshot"), dict) else {}
     analysis = options_payload.get("analysis") if isinstance(options_payload.get("analysis"), dict) else {}
     jobs_started = []
     for entity_type in ("lead", "deal"):
-        ids = [str(item.get("entity_id") or "") for item in eligible if item.get("entity_type") == entity_type]
+        ids = [
+            str(item.get("entity_id") or "")
+            for item in paid_eligible
+            if item.get("entity_type") == entity_type
+        ]
         if not ids:
             continue
         options = AnalyzeOptions(
@@ -382,13 +480,23 @@ def daily_summary_start(run_id: int, body: DailySummaryStartRequest) -> dict[str
             analyze=True,
             force_llm=False,
             transcript_mode=str(analysis.get("transcript_mode") or "all"),
+            daily_summary_run_id=run_id,
         )
         jobs_started.append(start_analyze_job(options))
-    if not jobs_started and selected:
+    if not jobs_started and not eligible and selected:
         raise HTTPException(status_code=409, detail="Платный лимит равен нулю или все новые карточки ждут ёмкости")
     job_ids = [str(job.get("job_id") or "") for job in jobs_started]
-    updated = attach_job_to_daily_summary(DEFAULT_DB_PATH, run_id, ",".join(job_ids))
-    return {"summary": updated, "jobs": jobs_started}
+    updated = (
+        attach_job_to_daily_summary(DEFAULT_DB_PATH, run_id, ",".join(job_ids))
+        if job_ids
+        else get_daily_summary_run(DEFAULT_DB_PATH, run_id) or {}
+    )
+    return {
+        "summary": updated,
+        "jobs": jobs_started,
+        "started_count": len(eligible),
+        "reused_count": reused_count,
+    }
 
 
 @app.get("/api/candidates")

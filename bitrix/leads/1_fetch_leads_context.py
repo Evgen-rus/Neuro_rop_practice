@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, save_json
+from progress_events import retry_progress_callback
 from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle, is_real_id
 from setup import BASE_DIR, MSK_TZ, get_logger
 
@@ -169,6 +170,9 @@ def main() -> None:
 
     index_items = []
     for lead_id in args.lead_ids:
+        client.retry_callback = retry_progress_callback(
+            "lead", str(lead_id), "crm_context", detail="Запрос к Bitrix"
+        )
         bundle = fetch_lead_bundle(client, str(lead_id))
         output_path = output_dir / f"lead_{lead_id}_context.json"
         save_json(output_path, bundle)

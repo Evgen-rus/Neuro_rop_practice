@@ -11,30 +11,57 @@ from typing import Any
 
 import requests
 
+from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, RetryPolicy, run_with_retry
+
 
 PAGE_SIZE = 50
 
 
+class BitrixTransientError(RuntimeError):
+    status_code = 429
+
+
 class BitrixReadOnlyClient:
-    def __init__(self, webhook_url: str, timeout: int = 30):
+    def __init__(
+        self,
+        webhook_url: str,
+        timeout: int = 30,
+        retry_callback: RetryCallback | None = None,
+        retry_policy: RetryPolicy = DEFAULT_TRANSPORT_RETRY,
+    ):
         self.webhook_url = webhook_url.rstrip("/")
         self.timeout = timeout
+        self.retry_callback = retry_callback
+        self.retry_policy = retry_policy
 
     def method_url(self, method: str) -> str:
         return f"{self.webhook_url}/{method}"
 
     def call(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = requests.post(
-            self.method_url(method),
-            json=payload or {},
-            headers={"Content-Type": "application/json"},
-            timeout=self.timeout,
-        )
+        def request_once() -> tuple[requests.Response, dict[str, Any]]:
+            response = requests.post(
+                self.method_url(method),
+                json=payload or {},
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+            if response.status_code in {408, 409, 429} or response.status_code >= 500:
+                response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            error_code = str(data.get("error") or "").upper()
+            if error_code in {"QUERY_LIMIT_EXCEEDED", "TOO_MANY_REQUESTS", "OPERATION_TIME_LIMIT"}:
+                raise BitrixTransientError(f"{method}: {data.get('error_description') or error_code}")
+            return response, data
 
-        try:
-            data = response.json()
-        except ValueError:
-            data = {}
+        response, data = run_with_retry(
+            request_once,
+            operation_name=f"bitrix:{method}",
+            policy=self.retry_policy,
+            on_event=self.retry_callback,
+        )
 
         if not response.ok:
             error_text = data.get("error_description") or data.get("error") or response.text
