@@ -180,13 +180,39 @@ def unwrap_analysis_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     return payload
 
 
-def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[str, str | None]:
+def extract_lead_qualification_summary(analysis: dict[str, Any]) -> dict[str, Any] | None:
+    analysis = unwrap_analysis_payload(analysis)
+    assessment = analysis.get("qualification_assessment")
+    if not isinstance(assessment, dict):
+        return None
+    bant = assessment.get("bant") if isinstance(assessment.get("bant"), dict) else {}
+    category = assessment.get("lead_category") if isinstance(assessment.get("lead_category"), dict) else {}
+    lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
+    statuses = {
+        key: str(value.get("status") or "unknown")
+        for key in ("budget", "authority", "need", "timeframe")
+        if isinstance((value := bant.get(key)), dict)
+    }
+    for key in ("budget", "authority", "need", "timeframe"):
+        statuses.setdefault(key, "unknown")
+    confirmed_count = sum(1 for status in statuses.values() if status == "confirmed")
+    return {
+        "category": str(category.get("value") or lead_state.get("qualification") or "unknown"),
+        "overall_status": str(bant.get("overall_status") or "unknown"),
+        "confirmed_count": confirmed_count,
+        "total_count": 4,
+        "statuses": statuses,
+    }
+
+
+def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[str, Any]:
     analysis = unwrap_analysis_payload(analysis)
     risk = None
     attention = None
     action = None
     lead_category = None
     lead_route_status = None
+    lead_qualification = None
     main_risk = analysis.get("main_risk") if isinstance(analysis.get("main_risk"), dict) else {}
     if main_risk:
         risk = str(main_risk.get("risk_level") or "") or None
@@ -203,6 +229,7 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
         lead_category = str(category.get("value") or lead_state.get("qualification") or "") or None
         lead_route_status = str(route.get("status") or "") or None
+        lead_qualification = extract_lead_qualification_summary(analysis)
         loss = analysis.get("loss_diagnosis") if isinstance(analysis.get("loss_diagnosis"), dict) else {}
         if loss and not attention:
             attention = str(loss.get("final_verdict") or "") or None
@@ -221,6 +248,7 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         "recommended_action": action,
         "lead_category": lead_category,
         "lead_route_status": lead_route_status,
+        "lead_qualification": lead_qualification,
     }
 
 
@@ -314,6 +342,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 "recommended_action": summary.get("recommended_action"),
                 "lead_category": summary.get("lead_category"),
                 "lead_route_status": summary.get("lead_route_status"),
+                "lead_qualification": summary.get("lead_qualification"),
                 "bitrix_url": bitrix_entity_url(entity_type, entity_id),
                 "analysis": analysis,
             }

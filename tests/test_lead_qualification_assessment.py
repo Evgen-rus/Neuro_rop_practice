@@ -10,7 +10,7 @@ from openai_api.llm.validation import (
     normalize_analysis_for_validation,
     validate_lead_analysis,
 )
-from api.jobs import extract_summary_fields
+from api.jobs import extract_lead_qualification_summary, extract_summary_fields
 
 
 def qualification_assessment() -> dict:
@@ -187,6 +187,8 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("Сначала заполни qualification_assessment", prompt)
         self.assertIn("budget_below_new_equipment_minimum", prompt)
         self.assertIn("не предполагай бюджет", prompt)
+        self.assertIn("«десятки тысяч»", prompt)
+        self.assertIn("JSON boolean true", prompt)
 
     def test_confirmed_bant_compatible_solution_and_sufficient_budget_is_valid(self) -> None:
         analysis = lead_analysis()
@@ -602,6 +604,25 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         prompt = build_prompt("1", "История", "Транскрипция", "Диагностика", [])
 
         self.assertIn("Для категорий A, B, C и unknown поле lead_category.reason_codes всегда должно быть пустым", prompt)
+
+    def test_lead_qualification_summary_counts_confirmed_bant_without_mapping_category(self) -> None:
+        analysis = lead_analysis()
+        analysis["qualification_assessment"]["bant"]["authority"]["status"] = "unknown"
+        analysis["qualification_assessment"]["lead_category"]["value"] = "B"
+
+        summary = extract_lead_qualification_summary(analysis)
+
+        self.assertEqual(summary["confirmed_count"], 3)
+        self.assertEqual(summary["total_count"], 4)
+        self.assertEqual(summary["category"], "B")
+        self.assertEqual(summary["statuses"]["authority"], "unknown")
+
+    def test_frontend_surfaces_bant_count_and_qualification_review(self) -> None:
+        frontend_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("{confirmedBantCount} из 4", frontend_source)
+        self.assertIn("Оценка BANT и категория клиента верны?", frontend_source)
+        self.assertIn("BANT-фильтр применяется только к анализам с четырьмя структурированными критериями.", frontend_source)
 
 
 if __name__ == "__main__":

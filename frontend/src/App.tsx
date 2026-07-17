@@ -34,6 +34,7 @@ import {
   saveDecision,
   saveCompactFeedback,
   saveOutcome,
+  saveQualificationReview,
   searchCandidates,
   selectAnalysisProfile,
   startDailySummary,
@@ -99,6 +100,64 @@ const BANT_STATUS_RU: Record<string, string> = {
   not_confirmed: 'не подтверждён',
   negative: 'подтверждён стоп-фактор',
   unknown: 'нет данных',
+}
+
+const BANT_SHORT_LABELS: Record<string, string> = {
+  budget: 'B',
+  authority: 'A',
+  need: 'N',
+  timeframe: 'T',
+}
+
+const QUALIFICATION_ISSUE_LABELS: Record<string, string> = {
+  budget: 'Budget',
+  authority: 'Authority',
+  need: 'Need',
+  timeframe: 'Timeframe',
+  category: 'Категория клиента',
+  solution_fit: 'Техническая применимость',
+  commercial_fit: 'Бюджетный стоп-фактор',
+}
+
+const BANT_FILTER_RU: Record<string, string> = {
+  complete: 'полный',
+  incomplete: 'неполный',
+  budget: 'не подтверждён Budget',
+  authority: 'не подтверждён Authority',
+  need: 'не подтверждён Need',
+  timeframe: 'не подтверждён Timeframe',
+  negative: 'есть отрицательный ответ',
+  unknown: 'есть критерий без данных',
+}
+
+function LeadQualificationStrip({
+  summary,
+  hasAnalysis = false,
+  category,
+}: {
+  summary?: Candidate['lead_qualification'] | null
+  hasAnalysis?: boolean
+  category?: string | null
+}) {
+  if (!summary) {
+    return (
+      <div className="lead-qualification-strip empty">
+        {hasAnalysis ? 'BANT: нет структурированных данных в старом анализе' : 'BANT: анализ не выполнен'} · Категория: {category || 'не определена'}
+      </div>
+    )
+  }
+  return (
+    <div className="lead-qualification-strip">
+      <span className="lead-category-chip">Категория {summary.category === 'unknown' ? 'Unknown' : summary.category}</span>
+      <span className="bant-count-chip">BANT {summary.confirmed_count} из {summary.total_count || 4}</span>
+      <span className="bant-mini-statuses">
+        {Object.entries(BANT_SHORT_LABELS).map(([key, label]) => {
+          const status = summary.statuses?.[key as keyof typeof summary.statuses] || 'unknown'
+          return <span className={`bant-mini status-${status}`} title={`${label}: ${BANT_STATUS_RU[status] || status}`} key={key}>{label}{status === 'confirmed' ? '✓' : status === 'negative' ? '×' : '?'}</span>
+        })}
+      </span>
+    </div>
+  )
 }
 
 const LEAD_ROUTE_STATUS_RU: Record<string, string> = {
@@ -340,6 +399,8 @@ export default function App() {
   const [entityFilter, setEntityFilter] = useState<'lead' | 'deal'>('lead')
   const [priorityFilter, setPriorityFilter] = useState<string>('')
   const [reviewView, setReviewView] = useState<CandidateReviewView>('active')
+  const [leadCategories, setLeadCategories] = useState<string[]>([])
+  const [bantFilter, setBantFilter] = useState<CandidateFilter['bant_filter']>('')
   const [pipelineIds, setPipelineIds] = useState<string[]>([])
   const [stageIds, setStageIds] = useState<string[]>([])
   const [dealPipelines, setDealPipelines] = useState<CrmPipeline[]>([])
@@ -454,6 +515,8 @@ export default function App() {
     setModifiedDays(Number(filter.modified_days) || 15)
     setPriorityFilter(filter.priority || '')
     setReviewView(filter.review_view || 'active')
+    setLeadCategories(Array.isArray(filter.lead_categories) ? filter.lead_categories.map(String) : [])
+    setBantFilter(filter.bant_filter || '')
     setPipelineIds(Array.isArray(filter.pipeline_ids) ? filter.pipeline_ids.map(String) : [])
     setStageIds(Array.isArray(filter.stage_ids) ? filter.stage_ids.map(String) : [])
   }
@@ -519,6 +582,8 @@ export default function App() {
     review_view?: CandidateReviewView
     pipeline_ids?: string[]
     stage_ids?: string[]
+    lead_categories?: string[]
+    bant_filter?: CandidateFilter['bant_filter']
   }) {
     setCandidatesLoading(true)
     setCandidatesError(null)
@@ -532,6 +597,8 @@ export default function App() {
         review_view: overrides?.review_view ?? reviewView,
         pipeline_ids: overrides?.pipeline_ids ?? pipelineIds,
         stage_ids: overrides?.stage_ids ?? stageIds,
+        lead_categories: overrides?.lead_categories ?? leadCategories,
+        bant_filter: overrides?.bant_filter ?? bantFilter,
         save: true,
       })
       setCandidatesData(data)
@@ -719,6 +786,25 @@ export default function App() {
       setSelectedReport(detail)
     }
     toast('Исход сохранён', setToastMessage)
+  }
+
+  async function onQualificationReview(payload: {
+    is_correct: boolean
+    issue_fields?: string[]
+    corrected_statuses?: Record<string, string>
+    corrected_category?: string | null
+    comment?: string | null
+  }) {
+    if (!activeMeta?.report_id) {
+      toast('Сначала нужен сохранённый отчёт анализа', setToastMessage)
+      return
+    }
+    await saveQualificationReview(activeMeta.report_id, payload)
+    if (selectedReport?.id === activeMeta.report_id) {
+      const detail = await fetchReport(activeMeta.report_id, false)
+      setSelectedReport(detail)
+    }
+    toast('Проверка квалификации сохранена', setToastMessage)
   }
 
   function patchActiveProfile(patch: Partial<AnalysisProfile['profile']>) {
@@ -1002,6 +1088,7 @@ export default function App() {
                     <p>{candidate.attention_reason}</p>
                     <div className="reason-codes">{(candidate.reason_codes || []).map((code) => <span key={code}>{code}</span>)}</div>
                     <div className="candidate-meta">Анализ: {candidate.analysis_freshness || 'missing'} · звонки: {asString(candidate.call_method?.attempts, '0')} · входящие: {asString(candidate.call_method?.incoming, '0')} · исходящие: {asString(candidate.call_method?.outgoing, '0')}</div>
+                    {candidate.entity_type === 'lead' ? <LeadQualificationStrip summary={candidate.lead_qualification} hasAnalysis={Boolean(candidate.lead_analysis_available || candidate.analyzed)} category={candidate.lead_category} /> : null}
                     {candidate.bitrix_url ? <a className="bitrix-link" href={candidate.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
                   </article>
                 })}
@@ -1019,6 +1106,7 @@ export default function App() {
                 <div className="daily-result-list">{dailyRun.results.map((result) => <article key={`${result.entity_type}:${result.entity_id}`}>
                   <b>{result.entity_type === 'lead' ? 'Лид' : 'Сделка'} {result.entity_id}</b>
                   <span>{result.attention_reason || (result.has_analysis ? 'Анализ готов' : 'Контекст собран без нового анализа')}</span>
+                  {result.entity_type === 'lead' ? <LeadQualificationStrip summary={result.lead_qualification} hasAnalysis={result.has_analysis} category={result.lead_category} /> : null}
                   {result.recommended_action ? <p>{result.recommended_action}</p> : null}
                   {result.report_id ? <button className="btn ghost" onClick={() => void openHistoryReport(Number(result.report_id))}>Открыть отчёт</button> : null}
                 </article>)}</div>
@@ -1057,6 +1145,8 @@ export default function App() {
             <div className="filter-summary">
               {entityFilter === 'deal' ? 'Сделки' : 'Лиды'} · создано {createdDays} дн. · изменено {modifiedDays} дн.
               {priorityFilter ? ` · ${riskLabelRu(priorityFilter)}` : ''}
+              {entityFilter === 'lead' && leadCategories.length ? ` · категория ${leadCategories.join(', ')}` : ''}
+              {entityFilter === 'lead' && bantFilter ? ` · BANT: ${BANT_FILTER_RU[bantFilter] || bantFilter}` : ''}
               {` · ${reviewViewLabel(reviewView)}`}
               {entityFilter === 'deal' ? ` · ${shortListSummary(selectedPipelineNames(), 'воронки не выбраны')}` : ''}
               {` · ${shortListSummary(selectedStageNames(), 'этапы не выбраны')}`}
@@ -1091,6 +1181,8 @@ export default function App() {
                     // При смене типа сбрасываем воронки/этапы — иначе можно искать «не то».
                     setPipelineIds([])
                     setStageIds([])
+                    setLeadCategories([])
+                    setBantFilter('')
                     setShowPipelinePicker(false)
                     setShowStagePicker(false)
                     setCandidatesData(null)
@@ -1118,6 +1210,33 @@ export default function App() {
                   <option value="all">Все</option>
                 </select>
               </div>
+
+              {entityFilter === 'lead' ? (
+                <>
+                  <div className="field">
+                    <label>Категория клиента</label>
+                    <select value={leadCategories[0] || ''} onChange={(event) => setLeadCategories(event.target.value ? [event.target.value] : [])}>
+                      <option value="">Любая</option>
+                      {['A', 'B', 'C', 'D', 'E', 'unknown'].map((value) => <option value={value} key={value}>{value === 'unknown' ? 'Unknown' : value}</option>)}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label>BANT</label>
+                    <select value={bantFilter} onChange={(event) => setBantFilter(event.target.value as CandidateFilter['bant_filter'])}>
+                      <option value="">Любой</option>
+                      <option value="complete">Полный BANT</option>
+                      <option value="incomplete">Неполный BANT</option>
+                      <option value="budget">Не подтверждён Budget</option>
+                      <option value="authority">Не подтверждён Authority</option>
+                      <option value="need">Не подтверждён Need</option>
+                      <option value="timeframe">Не подтверждён Timeframe</option>
+                      <option value="negative">Есть отрицательный ответ</option>
+                      <option value="unknown">Есть критерий без данных</option>
+                    </select>
+                    <span className="muted">BANT-фильтр применяется только к анализам с четырьмя структурированными критериями.</span>
+                  </div>
+                </>
+              ) : null}
 
               {entityFilter === 'deal' && (
                 <div className="field field-multi">
@@ -1234,6 +1353,7 @@ export default function App() {
                     {formatMoneyText(item.attention_reason)}
                     {item.crm_updated_after_review ? <><br />CRM обновлена после решения РОПа</> : null}
                   </small>
+                  {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis={Boolean(item.lead_analysis_available || item.analyzed)} category={item.lead_category} /> : null}
                   <span className={`priority ${item.priority}`}>{priorityLabelRu(item.priority)}</span>
                 </button>
                 {item.analyzed ? (
@@ -1303,6 +1423,8 @@ export default function App() {
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
+              onQualificationReview={(payload) => void onQualificationReview(payload)}
+              qualificationReviews={selectedReport?.qualification_reviews}
               decisions={selectedReport?.decisions}
               outcomes={selectedReport?.outcomes}
             />
@@ -1466,6 +1588,7 @@ export default function App() {
                           {result.entity_type} {result.entity_id}
                         </strong>
                         <small>{result.attention_reason || (result.has_analysis ? 'анализ готов' : 'нет analysis')}</small>
+                        {result.entity_type === 'lead' ? <LeadQualificationStrip summary={result.lead_qualification} hasAnalysis={result.has_analysis} category={result.lead_category} /> : null}
                       </button>
                     ))}
                   </>
@@ -1492,6 +1615,8 @@ export default function App() {
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
+              onQualificationReview={(payload) => void onQualificationReview(payload)}
+              qualificationReviews={selectedReport?.qualification_reviews}
             />
           </main>
         </div>
@@ -1521,6 +1646,7 @@ export default function App() {
                     #{item.id} · {item.entity_type} {item.entity_id}
                   </strong>
                   <small>{reportPreview(item)}</small>
+                  {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis category={item.lead_category} /> : null}
                 </button>
               ))}
               {!history.length && !historyError && <p className="muted">Пока нет сохранённых отчётов.</p>}
@@ -1545,6 +1671,8 @@ export default function App() {
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
+              onQualificationReview={(payload) => void onQualificationReview(payload)}
+              qualificationReviews={selectedReport?.qualification_reviews}
               decisions={selectedReport?.decisions}
               outcomes={selectedReport?.outcomes}
             />
@@ -1581,8 +1709,16 @@ type ReportPanelsProps = {
   onToggleMarkdown: () => void
   onDecision: (value: string) => void
   onOutcome: (value: string) => void
+  onQualificationReview: (payload: {
+    is_correct: boolean
+    issue_fields?: string[]
+    corrected_statuses?: Record<string, string>
+    corrected_category?: string | null
+    comment?: string | null
+  }) => void
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
+  qualificationReviews?: Array<Record<string, unknown>>
 }
 
 function ReportPanels(props: ReportPanelsProps) {
@@ -1612,6 +1748,11 @@ function ReportPanels(props: ReportPanelsProps) {
 }
 
 function FullAnalysisPanels(props: ReportPanelsProps) {
+  const [showQualificationCorrection, setShowQualificationCorrection] = useState(false)
+  const [qualificationIssueFields, setQualificationIssueFields] = useState<string[]>([])
+  const [correctedStatuses, setCorrectedStatuses] = useState<Record<string, string>>({})
+  const [correctedCategory, setCorrectedCategory] = useState('')
+  const [qualificationComment, setQualificationComment] = useState('')
   const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
@@ -1651,6 +1792,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
     { key: 'need', letter: 'N', fallbackLabel: 'Need · Актуальная потребность' },
     { key: 'timeframe', letter: 'T', fallbackLabel: 'Timeframe · Срок покупки или запуска' },
   ].map((definition) => ({ ...definition, value: asRecord(bant[definition.key]) }))
+  const confirmedBantCount = bantItems.filter((item) => asString(item.value.status) === 'confirmed').length
   const categoryBantFactors = asStringList(leadCategory.bant_factors).map(formatMoneyText)
   const categoryTechnicalFactors = asStringList(leadCategory.technical_factors).map(formatMoneyText)
   const categoryBudgetFactors = asStringList(leadCategory.budget_factors).map(formatMoneyText)
@@ -1685,6 +1827,11 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const bitrixUrl = meta?.bitrix_url || ''
   const needsAttention = Boolean(meta && (riskLevel === 'high' || riskLevel === 'medium_high' || attention !== '—'))
   const hasAnalysis = Boolean(analysis)
+  const latestQualificationReview = props.qualificationReviews?.[0]
+
+  function toggleQualificationIssue(field: string) {
+    setQualificationIssueFields((current) => current.includes(field) ? current.filter((item) => item !== field) : [...current, field])
+  }
 
   const metricCards = isLead
     ? [
@@ -1745,7 +1892,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                 <p>Сначала факты по бюджету, ЛПР, потребности и сроку. Отсутствие данных не считается отказом.</p>
               </div>
               <span className={`assessment-status status-${asString(bant.overall_status, 'unknown')}`}>
-                {bantStatus}
+                {bantStatus} · {confirmedBantCount} из 4
               </span>
             </div>
             <div className="bant-dashboard">
@@ -1811,6 +1958,75 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                 <p>{formatMoneyText(asString(leadRoute.reason))}</p>
                 {leadRoute.controlled_return_required === true ? (
                   <div className="controlled-return">Контролируемый возврат: {asString(leadRoute.controlled_return_date, 'дата не указана')}</div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {meta?.report_id ? (
+              <div className="qualification-review-card">
+                <div>
+                  <div className="label">Проверка РОПом</div>
+                  <strong>Оценка BANT и категория клиента верны?</strong>
+                  {latestQualificationReview ? (
+                    <p className="muted">
+                      Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="qualification-review-actions">
+                  <button className="btn secondary" onClick={() => {
+                    setShowQualificationCorrection(false)
+                    props.onQualificationReview({ is_correct: true })
+                  }}>Да, верна</button>
+                  <button className="btn ghost" onClick={() => setShowQualificationCorrection(true)}>Нет, исправить</button>
+                </div>
+                {showQualificationCorrection ? (
+                  <div className="qualification-correction-form">
+                    <div className="label">Где ошибка</div>
+                    <div className="qualification-issue-grid">
+                      {Object.entries(QUALIFICATION_ISSUE_LABELS).map(([field, label]) => (
+                        <label key={field}>
+                          <input type="checkbox" checked={qualificationIssueFields.includes(field)} onChange={() => toggleQualificationIssue(field)} />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    {(['budget', 'authority', 'need', 'timeframe'] as const).filter((field) => qualificationIssueFields.includes(field)).map((field) => (
+                      <div className="field qualification-correction-field" key={field}>
+                        <label>Правильный статус {BANT_SHORT_LABELS[field]}</label>
+                        <select value={correctedStatuses[field] || ''} onChange={(event) => setCorrectedStatuses((current) => ({ ...current, [field]: event.target.value }))}>
+                          <option value="">Не указывать</option>
+                          <option value="confirmed">Подтверждён</option>
+                          <option value="not_confirmed">Не подтверждён</option>
+                          <option value="negative">Подтверждён стоп-фактор</option>
+                          <option value="unknown">Нет данных</option>
+                        </select>
+                      </div>
+                    ))}
+                    {qualificationIssueFields.includes('category') ? (
+                      <div className="field qualification-correction-field">
+                        <label>Правильная категория клиента</label>
+                        <select value={correctedCategory} onChange={(event) => setCorrectedCategory(event.target.value)}>
+                          <option value="">Не указывать</option>
+                          {['A', 'B', 'C', 'D', 'E', 'unknown'].map((value) => <option value={value} key={value}>{value === 'unknown' ? 'Unknown' : value}</option>)}
+                        </select>
+                      </div>
+                    ) : null}
+                    <div className="field qualification-correction-field">
+                      <label>Комментарий</label>
+                      <textarea value={qualificationComment} maxLength={800} onChange={(event) => setQualificationComment(event.target.value)} placeholder="Как должно быть и на каком факте это основано" />
+                    </div>
+                    <button className="btn" disabled={!qualificationIssueFields.length} onClick={() => {
+                      props.onQualificationReview({
+                        is_correct: false,
+                        issue_fields: qualificationIssueFields,
+                        corrected_statuses: correctedStatuses,
+                        corrected_category: correctedCategory || null,
+                        comment: qualificationComment.trim() || null,
+                      })
+                      setShowQualificationCorrection(false)
+                    }}>Сохранить исправление</button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

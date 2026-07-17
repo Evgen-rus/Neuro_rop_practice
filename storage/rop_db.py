@@ -134,6 +134,18 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 FOREIGN KEY(report_id) REFERENCES ui_reports(id)
             );
 
+            CREATE TABLE IF NOT EXISTS qualification_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL,
+                is_correct INTEGER NOT NULL,
+                issue_fields_json TEXT NOT NULL,
+                corrected_statuses_json TEXT NOT NULL,
+                corrected_category TEXT,
+                comment TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
             CREATE TABLE IF NOT EXISTS outcomes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 report_id INTEGER NOT NULL,
@@ -616,6 +628,65 @@ def list_rop_decisions(db_path: str | Path, report_id: int) -> list[dict[str, An
     return [dict(row) for row in rows]
 
 
+def save_qualification_review(
+    db_path: str | Path,
+    *,
+    report_id: int,
+    is_correct: bool,
+    issue_fields: list[str] | None = None,
+    corrected_statuses: dict[str, str] | None = None,
+    corrected_category: str | None = None,
+    comment: str | None = None,
+) -> int:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO qualification_reviews (
+                report_id,
+                is_correct,
+                issue_fields_json,
+                corrected_statuses_json,
+                corrected_category,
+                comment,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(report_id),
+                1 if is_correct else 0,
+                dumps_json(issue_fields or []),
+                dumps_json(corrected_statuses or {}),
+                corrected_category,
+                comment,
+                utcish_now(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_qualification_reviews(db_path: str | Path, report_id: int) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM qualification_reviews
+            WHERE report_id = ?
+            ORDER BY id DESC
+            """,
+            (int(report_id),),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["is_correct"] = bool(item.get("is_correct"))
+        item["issue_fields"] = loads_json(item.pop("issue_fields_json", None), [])
+        item["corrected_statuses"] = loads_json(item.pop("corrected_statuses_json", None), {})
+        result.append(item)
+    return result
+
+
 def save_outcome(
     db_path: str | Path,
     *,
@@ -884,6 +955,8 @@ def default_candidate_filter() -> dict[str, Any]:
         "pipeline_ids": [],
         "stage_ids": [],
         "review_view": "active",
+        "lead_categories": [],
+        "bant_filter": "",
         "limit": 20,
     }
 

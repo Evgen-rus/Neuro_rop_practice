@@ -1,5 +1,13 @@
 export type Priority = 'high' | 'medium' | 'low'
 
+export type LeadQualificationSummary = {
+  category: 'A' | 'B' | 'C' | 'D' | 'E' | 'unknown'
+  overall_status: string
+  confirmed_count: number
+  total_count: number
+  statuses: Record<'budget' | 'authority' | 'need' | 'timeframe', string>
+}
+
 export type Candidate = {
   entity_type: 'lead' | 'deal'
   entity_id: string
@@ -34,6 +42,9 @@ export type Candidate = {
   workset_selected?: boolean
   capacity_state?: 'waiting_for_capacity'
   call_method?: Record<string, unknown>
+  lead_category?: string | null
+  lead_analysis_available?: boolean
+  lead_qualification?: LeadQualificationSummary | null
 }
 
 export type AnalysisProfileSettings = {
@@ -145,6 +156,8 @@ export type CandidateFilter = {
   pipeline_ids: string[]
   stage_ids: string[]
   review_view: 'active' | 'reviewed' | 'all'
+  lead_categories: string[]
+  bant_filter: '' | 'complete' | 'incomplete' | 'budget' | 'authority' | 'need' | 'timeframe' | 'negative' | 'unknown'
 }
 
 export type AnalyzeOptions = {
@@ -181,6 +194,7 @@ export type JobResult = {
   recommended_action?: string | null
   lead_category?: string | null
   lead_route_status?: string | null
+  lead_qualification?: LeadQualificationSummary | null
   bitrix_url?: string | null
   analysis?: Record<string, unknown> | null
 }
@@ -209,6 +223,7 @@ export type UiReportListItem = {
   recommended_action?: string | null
   lead_category?: string | null
   lead_route_status?: string | null
+  lead_qualification?: LeadQualificationSummary | null
   analysis_path?: string | null
   report_path?: string | null
   job_id?: string | null
@@ -220,6 +235,7 @@ export type UiReportDetail = UiReportListItem & {
   report_markdown?: string | null
   decisions?: Array<Record<string, unknown>>
   outcomes?: Array<Record<string, unknown>>
+  qualification_reviews?: Array<Record<string, unknown>>
   candidate_review?: Record<string, unknown> | null
 }
 
@@ -369,6 +385,8 @@ export function fetchCandidates(params: {
   pipeline_ids?: string[]
   stage_ids?: string[]
   review_view?: 'active' | 'reviewed' | 'all'
+  lead_categories?: string[]
+  bant_filter?: string
 }) {
   const query = new URLSearchParams()
   if (params.entity_type) query.set('entity_type', params.entity_type)
@@ -380,6 +398,8 @@ export function fetchCandidates(params: {
   for (const id of params.pipeline_ids || []) query.append('pipeline_ids', id)
   for (const id of params.stage_ids || []) query.append('stage_ids', id)
   if (params.review_view) query.set('review_view', params.review_view)
+  for (const value of params.lead_categories || []) query.append('lead_categories', value)
+  if (params.bant_filter) query.set('bant_filter', params.bant_filter)
   return api<CandidatesResponse>(`/api/candidates?${query.toString()}`)
 }
 
@@ -392,6 +412,8 @@ export function searchCandidates(body: {
   pipeline_ids: string[]
   stage_ids: string[]
   review_view?: 'active' | 'reviewed' | 'all'
+  lead_categories?: string[]
+  bant_filter?: string
   save?: boolean
 }) {
   return api<CandidatesResponse>('/api/candidates/search', {
@@ -441,6 +463,22 @@ export function saveOutcome(reportId: number, outcome_type: string, notes?: stri
       method: 'POST',
       body: JSON.stringify({ outcome_type, notes: notes || null }),
     },
+  )
+}
+
+export function saveQualificationReview(
+  reportId: number,
+  body: {
+    is_correct: boolean
+    issue_fields?: string[]
+    corrected_statuses?: Record<string, string>
+    corrected_category?: string | null
+    comment?: string | null
+  },
+) {
+  return api<{ ok: boolean; qualification_reviews: Array<Record<string, unknown>> }>(
+    `/api/reports/${reportId}/qualification-review`,
+    { method: 'POST', body: JSON.stringify(body) },
   )
 }
 

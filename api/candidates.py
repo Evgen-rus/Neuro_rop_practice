@@ -512,6 +512,58 @@ def mark_analyzed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return candidates
 
 
+def attach_saved_lead_qualification(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Adds saved BANT metadata for display/filtering without calling CRM or LLM."""
+    from api.jobs import extract_lead_qualification_summary, extract_summary_fields
+
+    root = BASE_DIR / "reports" / "rop_assistant" / "leads"
+    for item in candidates:
+        if item.get("entity_type") != "lead":
+            continue
+        entity_id = str(item.get("entity_id") or "")
+        path = root / f"lead_{entity_id}" / "analysis" / f"lead_{entity_id}_analysis.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        item["lead_analysis_available"] = True
+        legacy_summary = extract_summary_fields(payload, "lead")
+        item["lead_category"] = legacy_summary.get("lead_category")
+        summary = extract_lead_qualification_summary(payload)
+        if summary:
+            item["lead_qualification"] = summary
+            item["lead_category"] = summary.get("category")
+    return candidates
+
+
+def lead_qualification_matches(item: dict[str, Any], *, categories: set[str], bant_filter: str) -> bool:
+    if item.get("entity_type") != "lead":
+        return not categories and not bant_filter
+    summary = item.get("lead_qualification") if isinstance(item.get("lead_qualification"), dict) else None
+    category = str(item.get("lead_category") or (summary or {}).get("category") or "unknown")
+    if categories and category not in categories:
+        return False
+    if not summary:
+        return not bant_filter
+    if not bant_filter:
+        return True
+    statuses = summary.get("statuses") if isinstance(summary.get("statuses"), dict) else {}
+    values = [str(statuses.get(key) or "unknown") for key in ("budget", "authority", "need", "timeframe")]
+    if bant_filter == "complete":
+        return all(value == "confirmed" for value in values)
+    if bant_filter == "incomplete":
+        return any(value != "confirmed" for value in values)
+    if bant_filter in {"budget", "authority", "need", "timeframe"}:
+        return str(statuses.get(bant_filter) or "unknown") != "confirmed"
+    if bant_filter == "negative":
+        return "negative" in values
+    if bant_filter == "unknown":
+        return "unknown" in values
+    return True
+
+
 def apply_candidate_review_states(
     candidates: list[dict[str, Any]],
     *,
@@ -1197,6 +1249,7 @@ def profile_candidates_preview(
         if card:
             cards.append(card)
     cards = deduplicate_journeys(cards)
+    attach_saved_lead_qualification(cards)
     cards, review_summary = apply_profile_review_states(cards, view=str(profile.get("review_view") or "active"), db_path=db_path)
     for item in cards:
         stable_signal = {
@@ -1345,6 +1398,8 @@ def search_candidates(
     pipeline_ids: list[str] | None = None,
     stage_ids: list[str] | None = None,
     review_view: str = "active",
+    lead_categories: list[str] | None = None,
+    bant_filter: str = "",
 ) -> dict[str, Any]:
     # Обратная совместимость: старый параметр days задаёт окно CREATE.
     if days is not None:
@@ -1356,6 +1411,8 @@ def search_candidates(
     pipelines = _normalize_id_list(pipeline_ids)
     stages = _normalize_id_list(stage_ids)
     review_view = review_view if review_view in {"active", "reviewed", "all"} else "active"
+    categories = {str(value) for value in (lead_categories or []) if str(value) in {"A", "B", "C", "D", "E", "unknown"}}
+    bant_filter = bant_filter if bant_filter in {"", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"} else ""
 
     ready, ready_message = candidates_filter_ready(
         entity_type=entity_type,
@@ -1383,6 +1440,8 @@ def search_candidates(
         "pipeline_ids": pipelines,
         "stage_ids": stages,
         "review_view": review_view,
+        "lead_categories": sorted(categories),
+        "bant_filter": bant_filter,
         "ready": ready,
         "ready_message": ready_message,
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
@@ -1419,6 +1478,12 @@ def search_candidates(
         period_override=period_override,
     )
     scored = [item for item in preview["candidates"] if item.get("entity_type") == entity_type]
+    if entity_type == "lead" and (categories or bant_filter):
+        scored = [
+            item
+            for item in scored
+            if lead_qualification_matches(item, categories=categories, bant_filter=bant_filter)
+        ]
     if priority in {"high", "medium", "low"}:
         scored = [item for item in scored if item.get("priority") == priority]
     review_summary = {

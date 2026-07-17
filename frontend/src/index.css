@@ -758,6 +758,56 @@ p {
   border-left-color: #dc2626;
 }
 
+.lead-qualification-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--dark);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.lead-qualification-strip.empty {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.lead-category-chip,
+.bant-count-chip,
+.bant-mini {
+  border: 1px solid #c9dfd2;
+  border-radius: 999px;
+  background: #f7fcf8;
+  padding: 3px 7px;
+}
+
+.bant-mini-statuses {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.bant-mini.status-confirmed {
+  border-color: #86c89a;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.bant-mini.status-negative {
+  border-color: #f0a3a3;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.bant-mini.status-not_confirmed,
+.bant-mini.status-unknown,
+.bant-mini.status-missing {
+  border-color: #f1ca79;
+  background: #fff7df;
+  color: #8a4b08;
+}
+
 .bant-card-head {
   display: flex;
   align-items: flex-start;
@@ -877,6 +927,46 @@ p {
   background: #eefcf5;
   padding: 12px;
   font-weight: 750;
+}
+
+.qualification-review-card {
+  margin-top: 14px;
+  border: 1px solid #bcd8ff;
+  border-radius: 10px;
+  background: #f5f9ff;
+  padding: 14px;
+}
+
+.qualification-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.qualification-correction-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border-top: 1px solid #c8daf2;
+  padding-top: 14px;
+}
+
+.qualification-issue-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.qualification-issue-grid label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 650;
+}
+
+.qualification-correction-field {
+  max-width: 640px;
 }
 
 .lead-route-card {
@@ -1430,6 +1520,7 @@ ul.facts.bad li:before {
   .qualification-cards,
   .bant-dashboard,
   .category-factor-grid,
+  .qualification-issue-grid,
   .actions,
   .pipeline,
   .filters,

@@ -52,11 +52,13 @@ from storage.rop_db import (
     list_analysis_profiles,
     list_daily_summary_runs,
     list_outcomes,
+    list_qualification_reviews,
     list_rop_decisions,
     list_ui_reports,
     save_candidate_filter,
     save_compact_shadow_feedback,
     save_outcome,
+    save_qualification_review,
     save_rop_decision,
     set_last_analysis_profile,
     update_analysis_profile,
@@ -117,6 +119,14 @@ class CompactFeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=800)
 
 
+class QualificationReviewRequest(BaseModel):
+    is_correct: bool
+    issue_fields: list[Literal["budget", "authority", "need", "timeframe", "category", "solution_fit", "commercial_fit"]] = Field(default_factory=list)
+    corrected_statuses: dict[str, Literal["confirmed", "not_confirmed", "negative", "unknown"]] = Field(default_factory=dict)
+    corrected_category: Literal["A", "B", "C", "D", "E", "unknown"] | None = None
+    comment: str | None = Field(default=None, max_length=800)
+
+
 class CandidatesSearchRequest(BaseModel):
     entity_type: Literal["lead", "deal"] = "lead"
     created_days: int = Field(default=DEFAULT_DAYS, ge=0)
@@ -127,6 +137,8 @@ class CandidatesSearchRequest(BaseModel):
     pipeline_ids: list[str] = Field(default_factory=list)
     stage_ids: list[str] = Field(default_factory=list)
     review_view: Literal["active", "reviewed", "all"] = "active"
+    lead_categories: list[Literal["A", "B", "C", "D", "E", "unknown"]] = Field(default_factory=list)
+    bant_filter: Literal["", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"] = ""
     save: bool = True
 
 
@@ -139,6 +151,8 @@ class CandidateFilterSaveRequest(BaseModel):
     pipeline_ids: list[str] = Field(default_factory=list)
     stage_ids: list[str] = Field(default_factory=list)
     review_view: Literal["active", "reviewed", "all"] = "active"
+    lead_categories: list[Literal["A", "B", "C", "D", "E", "unknown"]] = Field(default_factory=list)
+    bant_filter: Literal["", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"] = ""
 
 
 class AnalysisProfileRequest(BaseModel):
@@ -189,6 +203,8 @@ def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
             "pipeline_ids": body.pipeline_ids,
             "stage_ids": body.stage_ids,
             "review_view": body.review_view,
+            "lead_categories": body.lead_categories,
+            "bant_filter": body.bant_filter,
         },
     )
     return {"ok": True, "filter": saved}
@@ -386,6 +402,8 @@ def candidates(
     pipeline_ids: list[str] = Query(default=[]),
     stage_ids: list[str] = Query(default=[]),
     review_view: Literal["active", "reviewed", "all"] = "active",
+    lead_categories: list[Literal["A", "B", "C", "D", "E", "unknown"]] = Query(default=[]),
+    bant_filter: Literal["", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"] = "",
 ) -> dict[str, Any]:
     try:
         return search_candidates(
@@ -398,6 +416,8 @@ def candidates(
             pipeline_ids=pipeline_ids,
             stage_ids=stage_ids,
             review_view=review_view,
+            lead_categories=lead_categories,
+            bant_filter=bant_filter,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -418,6 +438,8 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
                     "pipeline_ids": body.pipeline_ids,
                     "stage_ids": body.stage_ids,
                     "review_view": body.review_view,
+                    "lead_categories": body.lead_categories,
+                    "bant_filter": body.bant_filter,
                 },
             )
         return search_candidates(
@@ -430,6 +452,8 @@ def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
             pipeline_ids=body.pipeline_ids,
             stage_ids=body.stage_ids,
             review_view=body.review_view,
+            lead_categories=body.lead_categories,
+            bant_filter=body.bant_filter,
         )
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -491,6 +515,7 @@ def _enrich_report_row(item: dict[str, Any]) -> dict[str, Any]:
         if entity_type == "lead":
             row["lead_category"] = summary.get("lead_category")
             row["lead_route_status"] = summary.get("lead_route_status")
+            row["lead_qualification"] = summary.get("lead_qualification")
     return row
 
 
@@ -527,6 +552,7 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
         raise HTTPException(status_code=404, detail="Report not found")
     payload = _enrich_report_row(report)
     payload["decisions"] = list_rop_decisions(DEFAULT_DB_PATH, report_id)
+    payload["qualification_reviews"] = list_qualification_reviews(DEFAULT_DB_PATH, report_id)
     payload["outcomes"] = list_outcomes(DEFAULT_DB_PATH, report_id)
     payload["candidate_review"] = get_candidate_review_states(
         DEFAULT_DB_PATH,
@@ -629,6 +655,40 @@ def report_outcome(report_id: int, body: OutcomeRequest) -> dict[str, Any]:
         notes=body.notes,
     )
     return {"ok": True, "outcome_id": outcome_id, "outcomes": list_outcomes(DEFAULT_DB_PATH, report_id)}
+
+
+@app.post("/api/reports/{report_id}/qualification-review")
+def report_qualification_review(report_id: int, body: QualificationReviewRequest) -> dict[str, Any]:
+    report = get_ui_report(DEFAULT_DB_PATH, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if str(report.get("entity_type") or "") != "lead":
+        raise HTTPException(status_code=400, detail="Qualification review is available only for leads")
+    if body.is_correct and (body.issue_fields or body.corrected_statuses or body.corrected_category or body.comment):
+        raise HTTPException(status_code=400, detail="Correct review must not contain corrections")
+    if not body.is_correct and not body.issue_fields:
+        raise HTTPException(status_code=400, detail="Incorrect review requires at least one issue field")
+    bant_fields = {"budget", "authority", "need", "timeframe"}
+    if set(body.corrected_statuses) - bant_fields:
+        raise HTTPException(status_code=400, detail="Corrected statuses are allowed only for BANT fields")
+    if set(body.corrected_statuses) - set(body.issue_fields):
+        raise HTTPException(status_code=400, detail="Corrected BANT field must be selected as an issue")
+    if body.corrected_category and "category" not in body.issue_fields:
+        raise HTTPException(status_code=400, detail="Corrected category requires category issue field")
+    review_id = save_qualification_review(
+        DEFAULT_DB_PATH,
+        report_id=report_id,
+        is_correct=body.is_correct,
+        issue_fields=list(body.issue_fields),
+        corrected_statuses=dict(body.corrected_statuses),
+        corrected_category=body.corrected_category,
+        comment=body.comment,
+    )
+    return {
+        "ok": True,
+        "review_id": review_id,
+        "qualification_reviews": list_qualification_reviews(DEFAULT_DB_PATH, report_id),
+    }
 
 
 @app.get("/api/entity/{entity_type}/{entity_id}/analysis")
