@@ -331,6 +331,16 @@ def _converted_lead_handoffs(lead_ids: list[str]) -> dict[str, str]:
     }
 
 
+def _collect_group_results(job: JobState, entity_type: str, ids: list[str]) -> None:
+    if entity_type == "lead":
+        handoffs = _converted_lead_handoffs(ids)
+        remaining_lead_ids = [entity_id for entity_id in ids if entity_id not in handoffs]
+        _collect_results(job, "lead", remaining_lead_ids)
+        _collect_results(job, "deal", list(handoffs.values()))
+        return
+    _collect_results(job, entity_type, ids)
+
+
 def _run_job(job_id: str) -> None:
     with _LOCK:
         job = _JOBS[job_id]
@@ -349,9 +359,10 @@ def _run_job(job_id: str) -> None:
                 current.stages[-1]["detail"] = text[-300:]
             _touch(current)
 
+    groups: dict[str, list[str]] = {"lead": [], "deal": []}
+    collected_groups: set[str] = set()
     try:
         # Group IDs by resolved type for auto mode.
-        groups: dict[str, list[str]] = {"lead": [], "deal": []}
         with _LOCK:
             _set_stage(_JOBS[job_id], "resolve", "Определение типа сущностей", "running")
         for entity_id in options.ids:
@@ -383,13 +394,8 @@ def _run_job(job_id: str) -> None:
             with _LOCK:
                 _set_stage(_JOBS[job_id], stage_key, f"Pipeline {entity_type}", "done")
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "running")
-                if entity_type == "lead":
-                    handoffs = _converted_lead_handoffs(ids)
-                    remaining_lead_ids = [entity_id for entity_id in ids if entity_id not in handoffs]
-                    _collect_results(_JOBS[job_id], "lead", remaining_lead_ids)
-                    _collect_results(_JOBS[job_id], "deal", list(handoffs.values()))
-                else:
-                    _collect_results(_JOBS[job_id], entity_type, ids)
+                _collect_group_results(_JOBS[job_id], entity_type, ids)
+                collected_groups.add(entity_type)
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
         with _LOCK:
@@ -400,6 +406,27 @@ def _run_job(job_id: str) -> None:
     except Exception as error:  # noqa: BLE001 - surface to UI
         with _LOCK:
             job = _JOBS[job_id]
+            for entity_type, ids in groups.items():
+                if not ids or entity_type in collected_groups:
+                    continue
+                try:
+                    _collect_group_results(job, entity_type, ids)
+                except Exception as collection_error:  # noqa: BLE001 - keep the original job failure visible
+                    _set_stage(
+                        job,
+                        f"collect_{entity_type}",
+                        f"Частичный сбор результатов ({entity_type})",
+                        "error",
+                        f"Не удалось собрать частичные результаты: {collection_error}",
+                    )
+                else:
+                    _set_stage(
+                        job,
+                        f"collect_{entity_type}",
+                        f"Частичный сбор результатов ({entity_type})",
+                        "done",
+                        "Собраны результаты, созданные до ошибки пакетного запуска.",
+                    )
             job.status = "error"
             job.error = str(error)
             _set_stage(job, "error", "Ошибка", "error", str(error))

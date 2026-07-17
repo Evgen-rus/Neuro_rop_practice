@@ -41,6 +41,13 @@ class WorkflowOptions:
     transcript_mode: str
 
 
+@dataclass(frozen=True)
+class AnalysisFailure:
+    entity_type: str
+    entity_id: str
+    returncode: int
+
+
 def configure_console() -> None:
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name)
@@ -611,16 +618,26 @@ def analyze_command(options: WorkflowOptions, entity_id: str) -> list[str]:
     return command
 
 
-def run_analysis(options: WorkflowOptions) -> None:
+def run_analysis(options: WorkflowOptions) -> list[AnalysisFailure]:
+    failures: list[AnalysisFailure] = []
     for entity_id in options.entity_ids:
-        run_command(analyze_command(options, entity_id), f"LLM-анализ {options.entity_type}_{entity_id}")
+        try:
+            run_command(analyze_command(options, entity_id), f"LLM-анализ {options.entity_type}_{entity_id}")
+        except subprocess.CalledProcessError as error:
+            failures.append(AnalysisFailure(options.entity_type, entity_id, error.returncode))
+            print(
+                f"Ошибка анализа {options.entity_type}_{entity_id}: exit code {error.returncode}. "
+                "Продолжаю остальные сущности."
+            )
+    return failures
 
 
-def run_post_pipeline_steps(options: WorkflowOptions) -> None:
+def run_post_pipeline_steps(options: WorkflowOptions) -> list[AnalysisFailure]:
     if options.transcribe_audio:
         transcribe_missing_audio(options)
     if options.analyze:
-        run_analysis(options)
+        return run_analysis(options)
+    return []
 
 
 def report_path(entity_type: str, entity_id: str) -> Path:
@@ -662,9 +679,11 @@ def main() -> None:
     args = parse_args()
     options = options_from_args(args)
     run_command(pipeline_command(options), "Сбор истории, аудио и диагностики")
+    failures: list[AnalysisFailure] = []
     if options.entity_type != "lead":
-        run_post_pipeline_steps(options)
+        failures.extend(run_post_pipeline_steps(options))
         print_final_status(options)
+        raise_for_analysis_failures(failures)
         return
 
     converted = converted_lead_deals(options.entity_ids)
@@ -672,19 +691,29 @@ def main() -> None:
     remaining_lead_ids = [lead_id for lead_id in options.entity_ids if lead_id not in converted_lead_ids]
 
     if remaining_lead_ids:
-        run_post_pipeline_steps(options_for_entity(options, "lead", remaining_lead_ids))
+        failures.extend(run_post_pipeline_steps(options_for_entity(options, "lead", remaining_lead_ids)))
 
     if converted:
         print_converted_switch(converted)
         deal_ids = unique_ordered([str(deal.get("id")) for deal in converted.values() if deal.get("id")])
         deal_options = options_for_converted_deals(options, deal_ids)
         run_command(pipeline_command(deal_options), "Сбор истории, аудио и диагностики по сделкам сконвертированных лидов")
-        run_post_pipeline_steps(deal_options)
+        failures.extend(run_post_pipeline_steps(deal_options))
 
     print_final_status(options_for_entity(options, "lead", remaining_lead_ids), show_report=True) if remaining_lead_ids else None
     if converted:
         print_final_status(options_for_entity(options, "lead", list(converted_lead_ids)), show_report=False)
         print_final_status(options_for_entity(options, "deal", unique_ordered([str(deal.get("id")) for deal in converted.values() if deal.get("id")])))
+    raise_for_analysis_failures(failures)
+
+
+def raise_for_analysis_failures(failures: list[AnalysisFailure]) -> None:
+    if not failures:
+        return
+    failed_entities = ", ".join(f"{item.entity_type}_{item.entity_id}" for item in failures)
+    print("")
+    print(f"Анализ завершён с ошибками: {failed_entities}")
+    raise subprocess.CalledProcessError(1, ["analysis-batch", failed_entities])
 
 
 if __name__ == "__main__":

@@ -315,6 +315,21 @@ def _normalize_qualification_assessment(
             commercial_fit["evidence"] = []
             changes.append({"path": "qualification_assessment.commercial_fit.evidence", "action": "null_to_empty_list"})
 
+    lead_category = assessment.get("lead_category")
+    if isinstance(lead_category, dict):
+        category_value = lead_category.get("value")
+        reason_codes = lead_category.get("reason_codes")
+        if category_value in {"A", "B", "C", "unknown"} and isinstance(reason_codes, list) and reason_codes:
+            lead_category["reason_codes"] = []
+            changes.append(
+                {
+                    "path": "qualification_assessment.lead_category.reason_codes",
+                    "action": "cleared_non_rejection_reason_codes",
+                    "category": category_value,
+                    "removed_items": len(reason_codes),
+                }
+            )
+
 
 def _require_fields(value: dict[str, Any], required_fields: set[str], parent: str, errors: list[str]) -> None:
     for field in sorted(required_fields):

@@ -62,23 +62,28 @@ class MoscowTimedRotatingFileHandler(TimedRotatingFileHandler):
             self.baseFilename + "." + time.strftime(self.suffix, suffix_time)
         )
 
-        if Path(self.baseFilename).exists():
-            if Path(dfn).exists():
-                Path(dfn).unlink()
-            self.rotate(self.baseFilename, dfn)
+        try:
+            if Path(self.baseFilename).exists():
+                if Path(dfn).exists():
+                    Path(dfn).unlink()
+                self.rotate(self.baseFilename, dfn)
 
-        if self.backupCount > 0:
-            for old_log in self.getFilesToDelete():
-                Path(old_log).unlink(missing_ok=True)
+            if self.backupCount > 0:
+                for old_log in self.getFilesToDelete():
+                    Path(old_log).unlink(missing_ok=True)
+        except PermissionError:
+            # On Windows another API/CLI process can keep the shared log file open.
+            # Skipping this rotation is safer than breaking the active analysis log.
+            pass
+        finally:
+            if not self.delay:
+                self.stream = self._open()
 
-        if not self.delay:
-            self.stream = self._open()
-
-        current_time = time.time()
-        new_rollover_at = self.computeRollover(current_time)
-        while new_rollover_at <= current_time:
-            new_rollover_at += self.interval
-        self.rolloverAt = new_rollover_at
+            current_time = time.time()
+            new_rollover_at = self.computeRollover(current_time)
+            while new_rollover_at <= current_time:
+                new_rollover_at += self.interval
+            self.rolloverAt = new_rollover_at
 
 
 def _normalize_script_name(script_name: str) -> str:

@@ -577,6 +577,32 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         with self.assertRaises(AnalysisValidationError):
             validate_lead_analysis(analysis)
 
+    def test_non_rejection_category_reason_codes_are_cleared_before_validation(self) -> None:
+        analysis = lead_analysis()
+        analysis["qualification_assessment"]["lead_category"]["reason_codes"] = [
+            "incomplete_bant",
+            "insufficient_technical_data",
+        ]
+
+        changes = normalize_analysis_for_validation(analysis)
+        validate_lead_analysis(analysis)
+
+        self.assertEqual(analysis["qualification_assessment"]["lead_category"]["reason_codes"], [])
+        self.assertIn(
+            {
+                "path": "qualification_assessment.lead_category.reason_codes",
+                "action": "cleared_non_rejection_reason_codes",
+                "category": "A",
+                "removed_items": 2,
+            },
+            changes,
+        )
+
+    def test_lead_prompt_requires_empty_reason_codes_for_non_rejection_categories(self) -> None:
+        prompt = build_prompt("1", "История", "Транскрипция", "Диагностика", [])
+
+        self.assertIn("Для категорий A, B, C и unknown поле lead_category.reason_codes всегда должно быть пустым", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
