@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import api.app as api_app
+import api.jobs as jobs
+from storage.rop_db import (
+    get_candidate_review_states,
+    get_lead_workflow_state,
+    get_ui_report,
+    save_ui_report,
+    upsert_lead_workflow_state,
+)
+
+
+class LeadWorkflowStorageTests(unittest.TestCase):
+    def test_round_trip_and_lead_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            first = upsert_lead_workflow_state(
+                db_path,
+                lead_id="101",
+                source_report_id=None,
+                manager_review_text="Разбор",
+                manager_task_text="Задача",
+                review_completed=True,
+                task_completed=False,
+                control_mode="days",
+                control_days=3,
+                control_date=None,
+                control_completed=False,
+                final_decision=None,
+            )
+            self.assertEqual(first["lead_id"], "101")
+            self.assertTrue(first["review_completed"])
+            self.assertEqual(first["control_days"], 3)
+            self.assertIsNone(get_lead_workflow_state(db_path, "202"))
+
+    def test_report_snapshots_are_optional_and_decoded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            old_id = save_ui_report(db_path, entity_type="lead", entity_id="1", report_json={"lead_state": {}})
+            new_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="2",
+                report_json={"lead_state": {}},
+                report_meta={"stage_name": "Новый"},
+                technical_log={"status": "done"},
+            )
+            self.assertIsNone(get_ui_report(db_path, old_id)["report_meta"])
+            self.assertEqual(get_ui_report(db_path, new_id)["report_meta"]["stage_name"], "Новый")
+            self.assertEqual(get_ui_report(db_path, new_id)["technical_log"]["status"], "done")
+
+
+class LeadWorkflowApiTests(unittest.TestCase):
+    def test_control_and_final_decision_sync_candidate_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="77",
+                report_json={
+                    "lead_state": {"summary": "Нужна проверка"},
+                    "rop_manager_message_block": {"message_to_manager": "Позвонить клиенту"},
+                },
+            )
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                control = api_app.save_lead_workflow(
+                    "77",
+                    api_app.LeadWorkflowRequest(
+                        source_report_id=report_id,
+                        review_completed=True,
+                        task_completed=True,
+                        control_mode="days",
+                        control_days=2,
+                    ),
+                )
+                self.assertEqual(control["status_label"], "На контроле")
+                review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
+                self.assertEqual(review["state"], "snoozed")
+
+                final = api_app.save_lead_workflow(
+                    "77",
+                    api_app.LeadWorkflowRequest(control_completed=True, final_decision="no_attention"),
+                )
+                self.assertEqual(final["status_label"], "Не требует внимания")
+                review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
+                self.assertEqual(review["state"], "reviewed")
+
+
+class LeadReportSnapshotTests(unittest.TestCase):
+    def test_metadata_uses_local_bundle_and_russian_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lead_dir = root / "reports" / "rop_assistant" / "leads" / "lead_5" / "raw"
+            lead_dir.mkdir(parents=True)
+            (root / "crm_pipeline_map.json").write_text(
+                json.dumps({"lead_pipeline": {"stages": [{"status_id": "NEW", "name": "Новый"}]}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            bundle = {
+                "generated_at": "2026-07-20T10:00:00+07:00",
+                "lead": {"response": {"result": {"ID": "5", "TITLE": "Лид 5", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "9"}}},
+                "client_touchpoints": [{"event_type": "call", "when": "2026-07-19", "subject": "Звонок", "text": "Обсудили задачу"}],
+                "tasks_and_control": [{"event_type": "task", "when": "2026-07-21", "subject": "Перезвонить", "completed": False}],
+            }
+            (lead_dir / "lead_5_customer_history_bundle.json").write_text(
+                json.dumps(bundle, ensure_ascii=False), encoding="utf-8"
+            )
+            with patch.object(jobs, "PROJECT_ROOT", root):
+                metadata = jobs.build_lead_report_meta("5")
+            self.assertEqual(metadata["stage_name"], "Новый")
+            self.assertEqual(metadata["last_contact"]["type"], "Звонок")
+            self.assertEqual(metadata["current_task"]["subject"], "Перезвонить")
+
+
+if __name__ == "__main__":
+    unittest.main()

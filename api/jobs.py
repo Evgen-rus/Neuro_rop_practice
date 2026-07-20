@@ -5,6 +5,7 @@ Background analyze jobs that wrap existing CLI orchestration.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -191,6 +192,130 @@ def analysis_paths(entity_type: str, entity_id: str) -> dict[str, Path]:
         "report_md": analysis_dir / f"{entity_type}_{entity_id}_rop_report.md",
         "raw_output": analysis_dir / f"{entity_type}_{entity_id}_raw_model_output.txt",
         "error_json": analysis_dir / f"{entity_type}_{entity_id}_analysis_error.json",
+    }
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _response_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    response = payload.get("response")
+    result = response.get("result") if isinstance(response, dict) else None
+    return result if isinstance(result, dict) else {}
+
+
+def _lead_stage_name(status_id: str) -> str | None:
+    mapping = _load_json_object(PROJECT_ROOT / "crm_pipeline_map.json")
+    pipeline = mapping.get("lead_pipeline") if isinstance(mapping.get("lead_pipeline"), dict) else {}
+    for item in pipeline.get("stages") or []:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("status_id") or item.get("STATUS_ID") or item.get("id") or "")
+        if item_id == status_id:
+            return str(item.get("name") or item.get("NAME") or status_id)
+    return None
+
+
+def _short_text(value: Any, limit: int = 600) -> str | None:
+    text = " ".join(str(value or "").split())
+    return text[:limit] or None
+
+
+def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
+    bundle_path = workspace_dir("lead", lead_id) / "raw" / f"lead_{lead_id}_customer_history_bundle.json"
+    bundle = _load_json_object(bundle_path)
+    if not bundle:
+        context_path = workspace_dir("lead", lead_id) / "raw" / f"lead_{lead_id}_context.json"
+        context = _load_json_object(context_path)
+        lead = _response_result(context.get("lead"))
+        touchpoints: list[dict[str, Any]] = []
+        tasks: list[dict[str, Any]] = []
+    else:
+        lead = _response_result(bundle.get("lead"))
+        touchpoints = [item for item in bundle.get("client_touchpoints") or [] if isinstance(item, dict)]
+        tasks = [item for item in bundle.get("tasks_and_control") or [] if isinstance(item, dict)]
+    if not lead and not bundle:
+        return None
+
+    def activity_time(item: dict[str, Any]) -> str:
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        return str(item.get("when") or raw.get("DEADLINE") or raw.get("START_TIME") or raw.get("LAST_UPDATED") or "")
+
+    last_contact = max(touchpoints, key=activity_time, default=None)
+    open_tasks = [item for item in tasks if not bool(item.get("completed"))]
+    current_task = max(open_tasks or tasks, key=activity_time, default=None)
+
+    def activity_snapshot(item: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not item:
+            return None
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        activity_type = str(item.get("event_type") or item.get("category") or "").lower()
+        type_label = {
+            "call": "Звонок",
+            "email": "Письмо",
+            "message": "Сообщение",
+            "task": "Задача",
+            "comment": "Комментарий",
+        }.get(activity_type, activity_type)
+        return {
+            "type": _short_text(type_label, 80),
+            "date": _short_text(item.get("when") or raw.get("DEADLINE") or raw.get("START_TIME"), 80),
+            "subject": _short_text(item.get("subject"), 240),
+            "text": _short_text(item.get("text") or raw.get("DESCRIPTION"), 600),
+            "completed": bool(item.get("completed")),
+        }
+
+    status_id = str(lead.get("STATUS_ID") or "")
+    client_name = " ".join(str(lead.get(key) or "") for key in ("NAME", "LAST_NAME")).strip()
+    return {
+        "client_name": _short_text(client_name or lead.get("TITLE"), 240),
+        "lead_title": _short_text(lead.get("TITLE"), 240),
+        "manager_id": _short_text(lead.get("ASSIGNED_BY_ID"), 80),
+        "stage_id": status_id or None,
+        "stage_name": _lead_stage_name(status_id) or status_id or None,
+        "last_contact": activity_snapshot(last_contact),
+        "current_task": activity_snapshot(current_task),
+        "snapshot_generated_at": _short_text(bundle.get("generated_at"), 80),
+    }
+
+
+_SENSITIVE_LOG_RE = re.compile(
+    r"(?i)(https?://\S+|(?:webhook|token|secret|api[_-]?key|authorization)\s*[:=]\s*\S+)"
+)
+
+
+def build_technical_log_snapshot(job: JobState, entity_type: str, entity_id: str) -> dict[str, Any]:
+    def clean(value: Any, limit: int) -> str:
+        return _SENSITIVE_LOG_RE.sub("[скрыто]", str(value or ""))[:limit]
+
+    key = progress_key(entity_type, entity_id)
+    progress = job.entity_progress.get(key) or {}
+    return {
+        "job_id": job.job_id,
+        "status": job.status,
+        "current_stage": job.current_stage,
+        "stages": [
+            {
+                "key": clean(item.get("key"), 80),
+                "label": clean(item.get("label"), 160),
+                "status": clean(item.get("status"), 40),
+                "detail": clean(item.get("detail"), 400),
+                "updated_at": clean(item.get("updated_at"), 80),
+            }
+            for item in job.stages[-20:]
+        ],
+        "entity_progress": {
+            key: clean(value, 500) for key, value in progress.items()
+            if key in {"stage", "status", "detail", "error", "updated_at", "attempt", "max_attempts"}
+        },
+        "log_tail": [clean(line, 500) for line in job.logs[-40:]],
     }
 
 
@@ -391,6 +516,8 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
                 # Store unwrapped analysis so UI history works without extra mapping.
                 report_json=analysis,
+                report_meta=build_lead_report_meta(entity_id) if entity_type == "lead" else None,
+                technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
                 job_id=job.job_id,
             )
             job.report_ids.append(report_id)

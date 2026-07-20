@@ -127,6 +127,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 analysis_path TEXT,
                 report_path TEXT,
                 report_json TEXT,
+                report_meta_json TEXT,
+                technical_log_json TEXT,
                 job_id TEXT
             );
 
@@ -179,6 +181,23 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (entity_type, entity_id),
                 FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS lead_workflow_state (
+                lead_id TEXT NOT NULL PRIMARY KEY,
+                source_report_id INTEGER,
+                manager_review_text TEXT,
+                manager_task_text TEXT,
+                review_completed INTEGER NOT NULL DEFAULT 0,
+                task_completed INTEGER NOT NULL DEFAULT 0,
+                control_mode TEXT,
+                control_days INTEGER,
+                control_date TEXT,
+                control_completed INTEGER NOT NULL DEFAULT 0,
+                final_decision TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
             );
 
             CREATE TABLE IF NOT EXISTS ui_candidate_filters (
@@ -299,6 +318,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             );
             """
         )
+        _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
+        _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "completed_at", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "actual_cost_json", "TEXT")
         _ensure_column(conn, "daily_summary_items", "job_id", "TEXT")
@@ -541,6 +562,8 @@ def _row_to_ui_report(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None
     value = dict(row)
     value["report_json"] = loads_json(value.get("report_json"), None)
+    value["report_meta"] = loads_json(value.pop("report_meta_json", None), None)
+    value["technical_log"] = loads_json(value.pop("technical_log_json", None), None)
     return value
 
 
@@ -555,6 +578,8 @@ def save_ui_report(
     analysis_path: str | None = None,
     report_path: str | None = None,
     report_json: dict[str, Any] | None = None,
+    report_meta: dict[str, Any] | None = None,
+    technical_log: dict[str, Any] | None = None,
     job_id: str | None = None,
 ) -> int:
     init_db(db_path)
@@ -571,9 +596,11 @@ def save_ui_report(
                 analysis_path,
                 report_path,
                 report_json,
+                report_meta_json,
+                technical_log_json,
                 job_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -585,6 +612,8 @@ def save_ui_report(
                 analysis_path,
                 report_path,
                 dumps_json(report_json) if report_json is not None else None,
+                dumps_json(report_meta) if report_meta is not None else None,
+                dumps_json(technical_log) if technical_log is not None else None,
                 job_id,
             ),
         )
@@ -630,6 +659,27 @@ def get_latest_ui_report(
             (str(entity_type), str(entity_id)),
         ).fetchone()
     return _row_to_ui_report(row)
+
+
+def list_entity_ui_reports(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ui_reports
+            WHERE entity_type = ? AND entity_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (str(entity_type), str(entity_id), int(limit)),
+        ).fetchall()
+    return [_row_to_ui_report(row) for row in rows if row is not None]
 
 
 def save_rop_decision(
@@ -926,6 +976,71 @@ def get_candidate_review_states(
     with connect(db_path) as conn:
         rows = conn.execute(query, params).fetchall()
     return {str(row["entity_id"]): dict(row) for row in rows}
+
+
+def get_lead_workflow_state(db_path: str | Path, lead_id: str) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM lead_workflow_state WHERE lead_id = ?",
+            (str(lead_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    value = dict(row)
+    for field in ("review_completed", "task_completed", "control_completed"):
+        value[field] = bool(value.get(field))
+    return value
+
+
+def upsert_lead_workflow_state(
+    db_path: str | Path,
+    *,
+    lead_id: str,
+    source_report_id: int | None,
+    manager_review_text: str | None,
+    manager_task_text: str | None,
+    review_completed: bool,
+    task_completed: bool,
+    control_mode: str | None,
+    control_days: int | None,
+    control_date: str | None,
+    control_completed: bool,
+    final_decision: str | None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO lead_workflow_state (
+                lead_id, source_report_id, manager_review_text, manager_task_text,
+                review_completed, task_completed, control_mode, control_days,
+                control_date, control_completed, final_decision, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(lead_id) DO UPDATE SET
+                source_report_id = excluded.source_report_id,
+                manager_review_text = excluded.manager_review_text,
+                manager_task_text = excluded.manager_task_text,
+                review_completed = excluded.review_completed,
+                task_completed = excluded.task_completed,
+                control_mode = excluded.control_mode,
+                control_days = excluded.control_days,
+                control_date = excluded.control_date,
+                control_completed = excluded.control_completed,
+                final_decision = excluded.final_decision,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(lead_id), source_report_id, manager_review_text, manager_task_text,
+                int(review_completed), int(task_completed), control_mode, control_days,
+                control_date, int(control_completed), final_decision, now, now,
+            ),
+        )
+    result = get_lead_workflow_state(db_path, str(lead_id))
+    assert result is not None
+    return result
 
 
 def upsert_candidate_review_state(

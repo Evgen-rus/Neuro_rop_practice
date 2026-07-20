@@ -280,6 +280,48 @@ export type UiReportDetail = UiReportListItem & {
   outcomes?: Array<Record<string, unknown>>
   qualification_reviews?: Array<Record<string, unknown>>
   candidate_review?: Record<string, unknown> | null
+  report_meta?: LeadReportMeta | null
+  technical_log?: Record<string, unknown> | null
+  workflow?: LeadWorkflowState | null
+  entity_history?: Array<Record<string, unknown>>
+  markdown_available?: boolean
+  technical_log_available?: boolean
+}
+
+export type LeadReportActivity = {
+  type?: string | null
+  date?: string | null
+  subject?: string | null
+  text?: string | null
+  completed?: boolean
+}
+
+export type LeadReportMeta = {
+  client_name?: string | null
+  lead_title?: string | null
+  manager_id?: string | null
+  stage_id?: string | null
+  stage_name?: string | null
+  last_contact?: LeadReportActivity | null
+  current_task?: LeadReportActivity | null
+  snapshot_generated_at?: string | null
+}
+
+export type LeadWorkflowState = {
+  lead_id: string
+  source_report_id?: number | null
+  manager_review_text?: string | null
+  manager_task_text?: string | null
+  review_completed: boolean
+  task_completed: boolean
+  control_mode?: 'days' | 'date' | 'daily' | null
+  control_days?: number | null
+  control_date?: string | null
+  control_completed: boolean
+  final_decision?: 'continue' | 'no_attention' | null
+  status_label: string
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export type CompactRun = {
@@ -497,6 +539,13 @@ export function saveDecision(reportId: number, decision: string, comment?: strin
       body: JSON.stringify({ decision, comment: comment || null }),
     },
   )
+}
+
+export function saveLeadWorkflow(leadId: string, payload: Partial<LeadWorkflowState>) {
+  return api<LeadWorkflowState>(`/api/leads/${encodeURIComponent(leadId)}/workflow`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function saveOutcome(reportId: number, outcome_type: string, notes?: string) {

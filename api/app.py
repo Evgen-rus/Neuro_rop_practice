@@ -24,6 +24,7 @@ from api.candidates import (
 )
 from api.jobs import (
     AnalyzeOptions,
+    build_lead_report_meta,
     extract_summary_fields,
     get_job,
     list_jobs,
@@ -49,6 +50,7 @@ from storage.rop_db import (
     get_latest_ui_report,
     get_candidate_filter,
     get_candidate_review_states,
+    get_lead_workflow_state,
     get_compact_shadow_run,
     get_ui_report,
     init_db,
@@ -57,6 +59,7 @@ from storage.rop_db import (
     list_outcomes,
     list_qualification_reviews,
     list_rop_decisions,
+    list_entity_ui_reports,
     list_ui_reports,
     prepare_daily_summary_items,
     save_candidate_filter,
@@ -67,6 +70,7 @@ from storage.rop_db import (
     set_last_analysis_profile,
     update_analysis_profile,
     upsert_candidate_review_state,
+    upsert_lead_workflow_state,
 )
 
 
@@ -107,6 +111,19 @@ class DecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
     next_control_date: str | None = None
+
+
+class LeadWorkflowRequest(BaseModel):
+    source_report_id: int | None = None
+    manager_review_text: str | None = Field(default=None, max_length=12000)
+    manager_task_text: str | None = Field(default=None, max_length=12000)
+    review_completed: bool | None = None
+    task_completed: bool | None = None
+    control_mode: Literal["days", "date", "daily"] | None = None
+    control_days: int | None = Field(default=None, ge=1, le=365)
+    control_date: str | None = Field(default=None, max_length=40)
+    control_completed: bool | None = None
+    final_decision: Literal["continue", "no_attention"] | None = None
 
 
 class OutcomeRequest(BaseModel):
@@ -641,6 +658,181 @@ def _candidate_review_values(report: dict[str, Any]) -> dict[str, str | None]:
     }
 
 
+def _report_markdown_path(report: dict[str, Any]) -> Path:
+    configured_value = str(report.get("report_path") or "").strip()
+    configured = Path(configured_value) if configured_value else Path("__missing_report__.md")
+    if configured.is_file():
+        return configured
+    entity_type = str(report.get("entity_type") or "")
+    entity_id = str(report.get("entity_id") or "")
+    return workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
+
+
+def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, str]:
+    analysis = unwrap_analysis_payload(report.get("report_json") if isinstance(report.get("report_json"), dict) else {})
+    manager_quality = analysis.get("manager_quality") if isinstance(analysis.get("manager_quality"), dict) else {}
+    rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
+    action = analysis.get("manager_action_block") if isinstance(analysis.get("manager_action_block"), dict) else {}
+
+    def lines(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value or "").strip()
+        return [text] if text else []
+
+    review_parts: list[str] = []
+    good = lines(manager_quality.get("what_done_well"))
+    missed = lines(manager_quality.get("missed_points"))
+    critical = lines(manager_quality.get("critical_mistake"))
+    if good:
+        review_parts.append("Что хорошо:\n" + "\n".join(f"• {item}" for item in good))
+    if missed or critical:
+        review_parts.append("Что нужно усилить:\n" + "\n".join(f"• {item}" for item in [*missed, *critical]))
+    if not review_parts:
+        fallback = str(rop.get("why_it_matters") or rop.get("check_for_rop") or "").strip()
+        if fallback:
+            review_parts.append(fallback)
+
+    task_parts = lines(rop.get("message_to_manager"))
+    checklist = lines(action.get("manager_checklist"))
+    expected = str(rop.get("expected_crm_update") or "").strip()
+    deadline = str(rop.get("deadline") or "").strip()
+    success = str(rop.get("success_condition") or "").strip()
+    if checklist:
+        task_parts.append("Что сделать:\n" + "\n".join(f"{index}. {item}" for index, item in enumerate(checklist, 1)))
+    if expected:
+        task_parts.append(f"Зафиксировать в CRM: {expected}")
+    if deadline:
+        task_parts.append(f"Срок: {deadline}")
+    if success:
+        task_parts.append(f"Результат: {success}")
+    return "\n\n".join(review_parts), "\n\n".join(task_parts)
+
+
+def _workflow_status(workflow: dict[str, Any], candidate_review: dict[str, Any] | None) -> str:
+    if workflow.get("final_decision") == "no_attention":
+        return "Не требует внимания"
+    if workflow.get("final_decision") == "continue":
+        return "Продолжать работу"
+    if workflow.get("control_mode") and not workflow.get("control_completed"):
+        return "На контроле"
+    if workflow.get("review_completed") or workflow.get("task_completed") or workflow.get("control_completed"):
+        return "В работе"
+    if candidate_review and candidate_review.get("state") == "reviewed":
+        return "Не требует внимания"
+    return "Готов к разбору"
+
+
+def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -> dict[str, Any]:
+    saved = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
+    if saved is not None:
+        workflow = saved
+    else:
+        review_text, task_text = _workflow_default_texts(report or {})
+        workflow = {
+            "lead_id": str(lead_id),
+            "source_report_id": report.get("id") if report else None,
+            "manager_review_text": review_text,
+            "manager_task_text": task_text,
+            "review_completed": False,
+            "task_completed": False,
+            "control_mode": None,
+            "control_days": 2,
+            "control_date": None,
+            "control_completed": False,
+            "final_decision": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+    candidate_review = get_candidate_review_states(
+        DEFAULT_DB_PATH, entity_type="lead", entity_ids=[str(lead_id)]
+    ).get(str(lead_id))
+    return {**workflow, "status_label": _workflow_status(workflow, candidate_review)}
+
+
+@app.get("/api/leads/{lead_id}/workflow")
+def lead_workflow(lead_id: str, report_id: int | None = None) -> dict[str, Any]:
+    report = get_ui_report(DEFAULT_DB_PATH, report_id) if report_id is not None else get_latest_ui_report(
+        DEFAULT_DB_PATH, entity_type="lead", entity_id=str(lead_id)
+    )
+    if report and (str(report.get("entity_type")) != "lead" or str(report.get("entity_id")) != str(lead_id)):
+        raise HTTPException(status_code=400, detail="Report does not belong to this lead")
+    return _lead_workflow_payload(str(lead_id), report)
+
+
+@app.put("/api/leads/{lead_id}/workflow")
+def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any]:
+    lead_id = str(lead_id)
+    changes = body.model_dump(exclude_unset=True)
+    existing = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
+    source_report_id = changes.get("source_report_id") or (existing or {}).get("source_report_id")
+    report = get_ui_report(DEFAULT_DB_PATH, int(source_report_id)) if source_report_id else get_latest_ui_report(
+        DEFAULT_DB_PATH, entity_type="lead", entity_id=lead_id
+    )
+    if not report or str(report.get("entity_type")) != "lead" or str(report.get("entity_id")) != lead_id:
+        raise HTTPException(status_code=400, detail="A lead report is required for workflow")
+    defaults = _lead_workflow_payload(lead_id, report)
+    merged = {**defaults, **changes, "source_report_id": int(source_report_id or report["id"])}
+    control_mode = merged.get("control_mode")
+    if control_mode == "days" and not merged.get("control_days"):
+        raise HTTPException(status_code=422, detail="control_days is required for days mode")
+    if control_mode == "date" and not merged.get("control_date"):
+        raise HTTPException(status_code=422, detail="control_date is required for date mode")
+    if merged.get("final_decision") and not merged.get("control_completed"):
+        raise HTTPException(status_code=422, detail="Complete control before final decision")
+
+    saved = upsert_lead_workflow_state(
+        DEFAULT_DB_PATH,
+        lead_id=lead_id,
+        source_report_id=merged["source_report_id"],
+        manager_review_text=merged.get("manager_review_text"),
+        manager_task_text=merged.get("manager_task_text"),
+        review_completed=bool(merged.get("review_completed")),
+        task_completed=bool(merged.get("task_completed")),
+        control_mode=control_mode,
+        control_days=merged.get("control_days"),
+        control_date=merged.get("control_date"),
+        control_completed=bool(merged.get("control_completed")),
+        final_decision=merged.get("final_decision"),
+    )
+
+    previous_final = (existing or {}).get("final_decision")
+    previous_control = (existing or {}).get("control_mode")
+    next_control_date: str | None = None
+    state = "active"
+    decision: str | None = None
+    if saved.get("final_decision") == "no_attention":
+        state, decision = "reviewed", "Не требует внимания"
+    elif saved.get("final_decision") == "continue":
+        state, decision = "active", "Продолжать работу"
+    elif saved.get("control_mode"):
+        state, decision = "snoozed", "Назначен контроль"
+        if saved.get("control_mode") == "days":
+            next_control_date = (datetime.now().date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
+        elif saved.get("control_mode") == "daily":
+            next_control_date = (datetime.now().date() + timedelta(days=1)).isoformat()
+        else:
+            next_control_date = str(saved.get("control_date") or "") or None
+    upsert_candidate_review_state(
+        DEFAULT_DB_PATH,
+        entity_type="lead",
+        entity_id=lead_id,
+        state=state,
+        report_id=int(report["id"]),
+        decision=decision,
+        next_control_date=next_control_date,
+        **_candidate_review_values(report),
+    )
+    if decision and (saved.get("final_decision") != previous_final or saved.get("control_mode") != previous_control):
+        save_rop_decision(
+            DEFAULT_DB_PATH,
+            report_id=int(report["id"]),
+            decision=decision,
+            next_control_date=next_control_date,
+        )
+    return {**saved, "status_label": _workflow_status(saved, {"state": state})}
+
+
 @app.get("/api/reports")
 def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     items = list_ui_reports(DEFAULT_DB_PATH, limit=limit)
@@ -649,6 +841,8 @@ def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     for item in items:
         row = _enrich_report_row(item)
         row.pop("report_json", None)
+        row.pop("report_meta", None)
+        row.pop("technical_log", None)
         light.append(row)
     return {"items": light}
 
@@ -659,6 +853,8 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     payload = _enrich_report_row(report)
+    if str(report.get("entity_type") or "") == "lead" and not payload.get("report_meta"):
+        payload["report_meta"] = build_lead_report_meta(str(report.get("entity_id") or ""))
     payload["decisions"] = list_rop_decisions(DEFAULT_DB_PATH, report_id)
     payload["qualification_reviews"] = list_qualification_reviews(DEFAULT_DB_PATH, report_id)
     payload["outcomes"] = list_outcomes(DEFAULT_DB_PATH, report_id)
@@ -667,6 +863,25 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
         entity_type=str(report.get("entity_type") or ""),
         entity_ids=[str(report.get("entity_id") or "")],
     ).get(str(report.get("entity_id") or ""))
+    if str(report.get("entity_type") or "") == "lead":
+        payload["workflow"] = _lead_workflow_payload(str(report.get("entity_id") or ""), report)
+    related_reports = list_entity_ui_reports(
+        DEFAULT_DB_PATH,
+        entity_type=str(report.get("entity_type") or ""),
+        entity_id=str(report.get("entity_id") or ""),
+        limit=20,
+    )
+    payload["entity_history"] = [
+        {
+            "id": item.get("id"),
+            "created_at": item.get("created_at"),
+            "risk_level": item.get("risk_level"),
+            "attention_reason": item.get("attention_reason"),
+        }
+        for item in related_reports
+    ]
+    payload["markdown_available"] = _report_markdown_path(report).exists()
+    payload["technical_log_available"] = bool(report.get("technical_log"))
     if include_markdown:
         md_path = Path(str(report.get("report_path") or ""))
         if md_path.exists():
@@ -681,12 +896,7 @@ def report_markdown(report_id: int) -> dict[str, Any]:
     report = get_ui_report(DEFAULT_DB_PATH, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    md_path = Path(str(report.get("report_path") or ""))
-    if not md_path.exists():
-        # Fallback to workspace convention.
-        entity_type = str(report.get("entity_type"))
-        entity_id = str(report.get("entity_id"))
-        md_path = workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
+    md_path = _report_markdown_path(report)
     if not md_path.exists():
         raise HTTPException(status_code=404, detail="Markdown report not found")
     return {
