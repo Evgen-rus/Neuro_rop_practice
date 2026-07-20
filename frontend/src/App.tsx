@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import './index.css'
 import {
   asRecord,
@@ -538,6 +539,8 @@ export default function App() {
   const [history, setHistory] = useState<UiReportListItem[]>([])
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedReport, setSelectedReport] = useState<UiReportDetail | null>(null)
+  const [leadWorkspaceOpen, setLeadWorkspaceOpen] = useState(false)
+  const closeLeadWorkspace = useCallback(() => setLeadWorkspaceOpen(false), [])
   const [markdown, setMarkdown] = useState<string | null>(null)
   const [showMarkdown, setShowMarkdown] = useState(false)
 
@@ -728,6 +731,7 @@ export default function App() {
         setMarkdown(null)
         const detail = await fetchReport(data.items[0].id, false)
         setSelectedReport(detail)
+        setLeadWorkspaceOpen(detail.entity_type === 'lead')
       }
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : String(error))
@@ -828,6 +832,7 @@ export default function App() {
     setMarkdown(null)
     const detail = await fetchReport(reportId, false)
     setSelectedReport(detail)
+    setLeadWorkspaceOpen(detail.entity_type === 'lead')
     setTab('history')
   }
 
@@ -1554,6 +1559,8 @@ export default function App() {
             <ReportPanels
               meta={activeMeta}
               reportDetail={selectedReport?.id === activeMeta?.report_id ? selectedReport : null}
+              leadWorkspaceOpen={leadWorkspaceOpen}
+              onCloseLeadWorkspace={closeLeadWorkspace}
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
@@ -1747,6 +1754,8 @@ export default function App() {
             <ReportPanels
               meta={activeMeta}
               reportDetail={selectedReport?.id === activeMeta?.report_id ? selectedReport : null}
+              leadWorkspaceOpen={leadWorkspaceOpen}
+              onCloseLeadWorkspace={closeLeadWorkspace}
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
@@ -1804,6 +1813,8 @@ export default function App() {
             <ReportPanels
               meta={activeMeta}
               reportDetail={selectedReport?.id === activeMeta?.report_id ? selectedReport : null}
+              leadWorkspaceOpen={leadWorkspaceOpen}
+              onCloseLeadWorkspace={closeLeadWorkspace}
               analysis={activeAnalysis}
               facts={facts}
               unknowns={unknowns}
@@ -1846,6 +1857,8 @@ type ReportPanelsProps = {
     candidate_review?: Record<string, unknown> | null
   } | null
   reportDetail?: UiReportDetail | null
+  leadWorkspaceOpen: boolean
+  onCloseLeadWorkspace: () => void
   analysis: Record<string, unknown> | null
   facts: string[]
   unknowns: string[]
@@ -1874,7 +1887,17 @@ type ReportPanelsProps = {
 function ReportPanels(props: ReportPanelsProps) {
   const [analysisTab, setAnalysisTab] = useState<'current' | 'compact' | 'comparison'>('current')
   if (props.meta?.entity_type === 'lead' && props.analysis) {
-    return <LeadWorkflowPanels {...props} />
+    if (!props.leadWorkspaceOpen) return null
+    return createPortal(
+      <div className="lead-workspace-backdrop" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) props.onCloseLeadWorkspace()
+      }}>
+        <section className="lead-workspace-window" role="dialog" aria-modal="true" aria-label={`Карточка лида ${props.meta.entity_id}`}>
+          <LeadWorkflowPanels {...props} />
+        </section>
+      </div>,
+      document.body,
+    )
   }
   return (
     <>
@@ -1912,7 +1935,7 @@ function formatLeadDate(value: string | null | undefined, includeTime = true): s
 }
 
 function LeadWorkflowPanels(props: ReportPanelsProps) {
-  const { meta, analysis, reportDetail } = props
+  const { meta, analysis, reportDetail, onCloseLeadWorkspace } = props
   const [workflow, setWorkflow] = useState<LeadWorkflowState | null>(reportDetail?.workflow || null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
@@ -1922,16 +1945,23 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   useEffect(() => {
     setWorkflow(reportDetail?.workflow || null)
+    setMaterialTab(null)
   }, [reportDetail?.id, reportDetail?.workflow])
 
   useEffect(() => {
-    if (!materialTab) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMaterialTab(null)
+      if (event.key !== 'Escape') return
+      if (materialTab) setMaterialTab(null)
+      else onCloseLeadWorkspace()
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [materialTab])
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [materialTab, onCloseLeadWorkspace])
 
   const leadState = asRecord(analysis?.lead_state)
   const rop = asRecord(analysis?.rop_manager_message_block)
@@ -2033,25 +2063,33 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               <span>Анализ: {formatLeadDate(reportDetail?.created_at)}</span>
             </div>
             {interest ? <div className="lead-context-line"><strong>Интерес:</strong> {interest}</div> : null}
-            {lastContact ? (
-              <details className="lead-context-line">
-                <summary><strong>Последний контакт:</strong> {lastContact.type || 'контакт'} · {formatLeadDate(lastContact.date)}{lastContact.subject ? ` · ${lastContact.subject}` : ''}</summary>
-                <p>{lastContact.text || 'Дополнительного текста нет.'}</p>
-              </details>
-            ) : <div className="lead-context-line muted">Последний контакт: нет данных</div>}
-            {currentTask ? (
-              <details className="lead-context-line">
-                <summary><strong>{currentTask.completed ? 'Последняя задача' : 'Актуальная задача'}:</strong> {formatLeadDate(currentTask.date)}{currentTask.subject ? ` · ${currentTask.subject}` : ''}</summary>
-                <p>{currentTask.text || 'Дополнительного текста нет.'}</p>
-              </details>
-            ) : <div className="lead-context-line muted">Актуальная задача: нет данных</div>}
           </div>
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
+            <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button>
           </div>
         </header>
+
+        <section className="lead-activity-strip" aria-label="Последняя активность в CRM">
+          <div className="lead-activity-card">
+            {lastContact ? (
+              <details>
+                <summary><strong>Последний контакт</strong><span>{lastContact.type || 'контакт'} · {formatLeadDate(lastContact.date)}{lastContact.subject ? ` · ${lastContact.subject}` : ''}</span></summary>
+                <p>{lastContact.text || 'Дополнительного текста нет.'}</p>
+              </details>
+            ) : <div><strong>Последний контакт</strong><span className="muted">Нет данных</span></div>}
+          </div>
+          <div className="lead-activity-card">
+            {currentTask ? (
+              <details>
+                <summary><strong>{currentTask.completed ? 'Последняя задача' : 'Актуальная задача'}</strong><span>{formatLeadDate(currentTask.date)}{currentTask.subject ? ` · ${currentTask.subject}` : ''}</span></summary>
+                <p>{currentTask.text || 'Дополнительного текста нет.'}</p>
+              </details>
+            ) : <div><strong>Актуальная задача</strong><span className="muted">Нет данных</span></div>}
+          </div>
+        </section>
 
         <section className="compact-bant" aria-label="Квалификация BANT">
           <div className="workflow-section-title">
@@ -2147,16 +2185,16 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
       </section>
 
       {materialTab ? (
-        <div className="analysis-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMaterialTab(null) }}>
-          <section className="analysis-modal" role="dialog" aria-modal="true" aria-label="Материалы анализа">
+        <div className="analysis-drawer-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setMaterialTab(null) }}>
+          <aside className="analysis-drawer" aria-label="Материалы анализа">
             <header><div><h2>Материалы анализа</h2><p>Лид #{meta.entity_id} · отчёт #{reportDetail?.id}</p></div><button onClick={() => setMaterialTab(null)}>Закрыть</button></header>
-            <nav className="analysis-modal-tabs">
+            <nav className="analysis-drawer-tabs">
               {([
                 ['summary', 'Краткий вывод'], ['bant', 'Полный BANT'], ['evidence', 'Доказательства'],
                 ['audit', 'Аудитный отчёт'], ['history', 'История'], ['technical', 'Техническая информация'],
               ] as Array<[LeadMaterialTab, string]>).map(([key, label]) => <button className={materialTab === key ? 'active' : ''} onClick={() => openMaterials(key)} key={key}>{label}</button>)}
             </nav>
-            <div className="analysis-modal-content">
+            <div className="analysis-drawer-content">
               {materialTab === 'summary' ? <div className="material-summary"><h3>Краткий вывод</h3><p><strong>Вывод:</strong> {formatMoneyText(asString(leadState.summary)) || meta.attention_reason || 'Нет данных'}</p><p><strong>Поручение:</strong> {formatMoneyText(asString(rop.message_to_manager)) || workflow.manager_task_text || 'Нет данных'}</p><p><strong>Критерий проверки:</strong> {formatMoneyText(asString(rop.success_condition)) || 'Нет данных'}</p></div> : null}
               {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article><div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div></div> : null}
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
@@ -2164,7 +2202,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {materialTab === 'history' ? <div><h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{asString(item.created_at)} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
               {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
             </div>
-          </section>
+          </aside>
         </div>
       ) : null}
     </>
