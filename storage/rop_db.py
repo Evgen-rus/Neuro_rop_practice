@@ -1169,7 +1169,7 @@ def default_analysis_profile() -> dict[str, Any]:
     """Согласованный профиль ручного пилота; все лимиты остаются редактируемыми."""
     return {
         "timezone": "Europe/Moscow",
-        "period_preset": "today_and_yesterday",
+        "period_preset": "today_and_previous_workday",
         "lead": {
             "enabled": True,
             "all_stages": True,
@@ -1248,6 +1248,11 @@ def _normalize_analysis_profile(payload: dict[str, Any] | None) -> dict[str, Any
     for key in ("timezone", "period_preset", "review_view"):
         if key in incoming:
             base[key] = incoming[key]
+    legacy_periods = {
+        "yesterday": "previous_workday",
+        "today_and_yesterday": "today_and_previous_workday",
+    }
+    base["period_preset"] = legacy_periods.get(str(base["period_preset"]), base["period_preset"])
     for section in ("lead", "deal", "signals", "limits", "analysis"):
         value = incoming.get(section)
         if isinstance(value, dict):

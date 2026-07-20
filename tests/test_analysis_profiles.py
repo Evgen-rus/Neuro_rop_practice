@@ -92,6 +92,7 @@ class AnalysisProfileStorageTests(unittest.TestCase):
             self.assertIn("C15:UC_TUYDP6", profile["profile"]["deal"]["stage_ids"])
             self.assertEqual(profile["profile"]["review_view"], "active")
             self.assertEqual(profile["profile"]["limits"]["workset"], 15)
+            self.assertEqual(profile["profile"]["period_preset"], "today_and_previous_workday")
             imported = next(item for item in list_analysis_profiles(db) if item["name"] == "Импортированный фильтр кандидатов")
             self.assertEqual(imported["profile"]["deal"]["stage_ids"], ["C15:NEW", "C15:4"])
             self.assertEqual(imported["profile"]["review_view"], "reviewed")
@@ -103,8 +104,8 @@ class AnalysisProfileStorageTests(unittest.TestCase):
             default = get_last_analysis_profile(db)
             second = create_analysis_profile(
                 db,
-                name="Утро за вчера",
-                profile={"period_preset": "yesterday", "limits": {"paid_per_run": 3}},
+                name="Утро за рабочий день",
+                profile={"period_preset": "previous_workday", "limits": {"paid_per_run": 3}},
             )
             set_last_analysis_profile(db, second["id"])
             updated = update_analysis_profile(
@@ -115,7 +116,7 @@ class AnalysisProfileStorageTests(unittest.TestCase):
             )
 
             self.assertEqual(updated["version"], 2)
-            self.assertEqual(updated["profile"]["period_preset"], "yesterday")
+            self.assertEqual(updated["profile"]["period_preset"], "previous_workday")
             self.assertEqual(updated["profile"]["limits"]["paid_per_run"], 4)
             self.assertEqual(get_last_analysis_profile(db)["id"], second["id"])
             self.assertEqual(len(list_analysis_profiles(db)), 2)
@@ -123,6 +124,24 @@ class AnalysisProfileStorageTests(unittest.TestCase):
             fallback_id = delete_analysis_profile(db, second["id"])
             self.assertEqual(fallback_id, default["id"])
             self.assertEqual(get_last_analysis_profile(db)["id"], default["id"])
+            gc.collect()
+
+    def test_legacy_calendar_periods_are_normalized_to_workdays(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "state.sqlite"
+            yesterday = create_analysis_profile(
+                db,
+                name="Старый вчера",
+                profile={"period_preset": "yesterday"},
+            )
+            combined = create_analysis_profile(
+                db,
+                name="Старый сегодня и вчера",
+                profile={"period_preset": "today_and_yesterday"},
+            )
+
+            self.assertEqual(yesterday["profile"]["period_preset"], "previous_workday")
+            self.assertEqual(combined["profile"]["period_preset"], "today_and_previous_workday")
             gc.collect()
 
     def test_daily_summary_keeps_immutable_profile_and_candidate_snapshot(self) -> None:
@@ -147,11 +166,11 @@ class AnalysisProfileStorageTests(unittest.TestCase):
                 selected_journey_keys=["lead:7"],
                 cost_preview={"paid_entity_limit": 1},
             )
-            profile["profile"]["period_preset"] = "yesterday"
+            profile["profile"]["period_preset"] = "previous_workday"
             candidate["title"] = "Изменённое название"
             stored = get_daily_summary_run(db, run["id"])
 
-            self.assertEqual(stored["profile_snapshot"]["period_preset"], "today_and_yesterday")
+            self.assertEqual(stored["profile_snapshot"]["period_preset"], "today_and_previous_workday")
             self.assertEqual(stored["items"][0]["candidate"]["title"], "Исходное название")
             self.assertEqual(stored["llm_required_count"], 1)
             self.assertEqual(stored["llm_allowed_count"], 1)

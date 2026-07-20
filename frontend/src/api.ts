@@ -53,9 +53,11 @@ export type Candidate = {
   lead_qualification?: LeadQualificationSummary | null
 }
 
+export type AnalysisPeriodPreset = 'today_and_previous_workday' | 'today' | 'previous_workday' | 'custom'
+
 export type AnalysisProfileSettings = {
   timezone: string
-  period_preset: 'today' | 'yesterday' | 'today_and_yesterday'
+  period_preset: AnalysisPeriodPreset
   lead: Record<string, unknown>
   deal: Record<string, unknown>
   signals: Record<string, boolean>
@@ -425,8 +427,14 @@ export function selectAnalysisProfile(profileId: number) {
   return api<{ ok: boolean; selected: AnalysisProfile }>(`/api/analysis-profiles/${profileId}/selected`, { method: 'PUT' })
 }
 
-export function previewAnalysisProfile(profileId: number) {
-  return api<DailyPreview>(`/api/analysis-profiles/${profileId}/preview`, { method: 'POST' })
+export function previewAnalysisProfile(
+  profileId: number,
+  period: { period_preset: AnalysisPeriodPreset; date_from?: string; date_to?: string },
+) {
+  return api<DailyPreview>(`/api/analysis-profiles/${profileId}/preview`, {
+    method: 'POST',
+    body: JSON.stringify(period),
+  })
 }
 
 export function createDailySummary(

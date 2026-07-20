@@ -644,18 +644,51 @@ def profile_period_bounds(
         current = current.replace(tzinfo=timezone)
     current = current.astimezone(timezone)
     today_start = datetime.combine(current.date(), time.min, timezone)
+    included_dates: list[date] = []
     if preset == "today":
         period_from, period_to = today_start, today_start + timedelta(days=1)
-    elif preset == "yesterday":
-        period_from, period_to = today_start - timedelta(days=1), today_start
+    elif preset in {"previous_workday", "today_and_previous_workday"}:
+        previous_date = current.date() - timedelta(days=1)
+        while previous_date.weekday() >= 5:
+            previous_date -= timedelta(days=1)
+        if preset == "previous_workday" or current.date().weekday() >= 5:
+            included_dates = [previous_date]
+        else:
+            included_dates = [previous_date, current.date()]
+        period_from = datetime.combine(included_dates[0], time.min, timezone)
+        period_to = datetime.combine(included_dates[-1] + timedelta(days=1), time.min, timezone)
     else:
-        preset = "today_and_yesterday"
-        period_from, period_to = today_start - timedelta(days=1), today_start + timedelta(days=1)
+        raise ValueError(f"Неизвестный период профиля: {preset}")
     return {
         "preset": preset,
         "timezone": timezone_name,
         "period_from": period_from.isoformat(),
         "period_to": period_to.isoformat(),
+        "as_of": current.isoformat(timespec="seconds"),
+        **({"included_dates": ",".join(item.isoformat() for item in included_dates)} if included_dates else {}),
+    }
+
+
+def custom_period_bounds(
+    date_from: date,
+    date_to: date,
+    *,
+    now: datetime | None = None,
+    timezone_name: str = "Europe/Moscow",
+) -> dict[str, str]:
+    """Возвращает включительный пользовательский диапазон дат как окно [from, to)."""
+    if date_from > date_to:
+        raise ValueError("Начало произвольного периода не может быть позже окончания")
+    timezone = ZoneInfo(timezone_name)
+    current = now or datetime.now(timezone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone)
+    current = current.astimezone(timezone)
+    return {
+        "preset": "custom",
+        "timezone": timezone_name,
+        "period_from": datetime.combine(date_from, time.min, timezone).isoformat(),
+        "period_to": datetime.combine(date_to + timedelta(days=1), time.min, timezone).isoformat(),
         "as_of": current.isoformat(timespec="seconds"),
     }
 
@@ -669,7 +702,11 @@ def _in_period(value: Any, period: dict[str, str]) -> bool:
         parsed = parsed.replace(tzinfo=timezone)
     start = datetime.fromisoformat(period["period_from"])
     end = datetime.fromisoformat(period["period_to"])
-    return start <= parsed.astimezone(timezone) < end
+    localized = parsed.astimezone(timezone)
+    if not (start <= localized < end):
+        return False
+    included_dates = {item for item in str(period.get("included_dates") or "").split(",") if item}
+    return not included_dates or localized.date().isoformat() in included_dates
 
 
 def resolve_excluded_lead_sources(
@@ -798,6 +835,7 @@ def fetch_profile_deals(
             "crm.deal.list",
             {"order": {"DATE_CREATE": "DESC", "ID": "DESC"}, "filter": fresh_filter, "select": select},
         )
+        fresh = [row for row in fresh if _in_period(row.get("DATE_CREATE"), period)]
     portfolio: list[dict[str, Any]] = []
     if deal_profile.get("include_portfolio", True) and deal_profile.get("include_all_active", True):
         portfolio_filter = {**common_filter, "CLOSED": "N"}
@@ -1192,7 +1230,11 @@ def profile_candidates_preview(
     """Live read-only discovery профиля. Не вызывает OpenAI и ничего не пишет в Bitrix."""
     profile = profile_record.get("profile") if isinstance(profile_record.get("profile"), dict) else profile_record
     timezone_name = str(profile.get("timezone") or "Europe/Moscow")
-    period = period_override or profile_period_bounds(str(profile.get("period_preset") or "today_and_yesterday"), now=now, timezone_name=timezone_name)
+    period = period_override or profile_period_bounds(
+        str(profile.get("period_preset") or "today_and_previous_workday"),
+        now=now,
+        timezone_name=timezone_name,
+    )
     crm = client or make_client()
     leads, lead_scope = fetch_profile_leads(crm, profile=profile, period=period)
     deals, deal_scope = fetch_profile_deals(crm, profile=profile, period=period)

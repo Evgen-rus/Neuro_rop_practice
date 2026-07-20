@@ -69,6 +69,17 @@ const DECISIONS = [
   'Недостаточно данных',
 ]
 
+function dateInTimeZone(timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${value.year}-${value.month}-${value.day}`
+}
+
 const OUTCOMES = [
   'задача выполнена',
   'задача не выполнена',
@@ -117,6 +128,10 @@ function candidateNeedsLlm(candidate: Candidate) {
   return LLM_REQUIRED_FRESHNESS.has(candidate.analysis_freshness || 'missing')
 }
 
+function ActivitySpinner() {
+  return <span className="activity-spinner" aria-hidden="true" />
+}
+
 function EntityProgressView({ progress }: { progress: Partial<EntityProgress> }) {
   const stage = progress.stage || 'queued'
   const status = progress.status || 'queued'
@@ -127,9 +142,10 @@ function EntityProgressView({ progress }: { progress: Partial<EntityProgress> })
   const started = progress.started_at ? Date.parse(progress.started_at) : Number.NaN
   const elapsedSeconds = Number.isFinite(started) ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : null
   const elapsed = elapsedSeconds === null ? null : `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`
+  const active = status === 'queued' || status === 'running'
   return <div className={`entity-progress ${status}`}>
     <div className="entity-progress-head">
-      <strong>{PROGRESS_STAGE_RU[stage] || stage}</strong>
+      <strong className="progress-stage-label">{active ? <ActivitySpinner /> : null}{PROGRESS_STAGE_RU[stage] || stage}</strong>
       {elapsed ? <span>{elapsed}</span> : null}
     </div>
     {progress.detail ? <p>{progress.detail}</p> : null}
@@ -453,6 +469,8 @@ export default function App() {
   const [dailyRun, setDailyRun] = useState<DailySummaryRun | null>(null)
   const [dailyLoading, setDailyLoading] = useState(false)
   const [dailyError, setDailyError] = useState<string | null>(null)
+  const [customPeriodFrom, setCustomPeriodFrom] = useState(() => dateInTimeZone('Europe/Moscow'))
+  const [customPeriodTo, setCustomPeriodTo] = useState(() => dateInTimeZone('Europe/Moscow'))
   const dailySelectedCandidates = useMemo(
     () => (dailyPreview?.candidates || []).filter((candidate) => dailySelected.has(candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`)),
     [dailyPreview, dailySelected],
@@ -492,6 +510,9 @@ export default function App() {
       total: selectedItems.length || dailyRun?.selected_count || 0,
     }
   }, [dailyRun])
+  const dailyIsAnalyzing = dailyRun?.status === 'analyzing'
+  const dailyIsDone = dailyRun?.status === 'done'
+  const dailyHasErrors = dailyRun?.status === 'completed_with_errors' || dailyRun?.status === 'error'
 
   const [createdDays, setCreatedDays] = useState(15)
   const [modifiedDays, setModifiedDays] = useState(15)
@@ -975,11 +996,19 @@ export default function App() {
 
   async function loadDailyPreview() {
     if (!activeProfile) return
+    const periodPreset = activeProfile.profile.period_preset
+    if (periodPreset === 'custom' && (!customPeriodFrom || !customPeriodTo || customPeriodFrom > customPeriodTo)) {
+      setDailyError('Укажите корректный произвольный период: дата начала не позже даты окончания')
+      return
+    }
     setDailyLoading(true)
     setDailyError(null)
     setDailyRun(null)
     try {
-      const data = await previewAnalysisProfile(activeProfile.id)
+      const data = await previewAnalysisProfile(activeProfile.id, {
+        period_preset: periodPreset,
+        ...(periodPreset === 'custom' ? { date_from: customPeriodFrom, date_to: customPeriodTo } : {}),
+      })
       setDailyPreview(data)
       setDailySelected(new Set(data.candidates.filter((item) => item.workset_selected).map((item) => item.journey_key || `${item.entity_type}:${item.entity_id}`)))
     } catch (error) {
@@ -1115,11 +1144,23 @@ export default function App() {
               <div className="field">
                 <label>Период по Москве</label>
                 <select value={activeProfile.profile.period_preset} onChange={(event) => patchActiveProfile({ period_preset: event.target.value as AnalysisProfile['profile']['period_preset'] })}>
+                  <option value="today_and_previous_workday">Сегодня + предыдущий рабочий день</option>
                   <option value="today">Только сегодня</option>
-                  <option value="yesterday">Только вчера</option>
-                  <option value="today_and_yesterday">Сегодня + вчера</option>
+                  <option value="previous_workday">Предыдущий рабочий день</option>
+                  <option value="custom">Произвольный период</option>
                 </select>
               </div>
+              {activeProfile.profile.period_preset === 'custom' ? <div className="daily-custom-period">
+                <div className="field">
+                  <label>Дата с</label>
+                  <input type="date" value={customPeriodFrom} onChange={(event) => { setCustomPeriodFrom(event.target.value); setDailyPreview(null); setDailyRun(null) }} />
+                </div>
+                <div className="field">
+                  <label>Дата по</label>
+                  <input type="date" value={customPeriodTo} onChange={(event) => { setCustomPeriodTo(event.target.value); setDailyPreview(null); setDailyRun(null) }} />
+                </div>
+                <p className="input-hint">Обе даты включаются в сводку и применяются только к текущему запуску.</p>
+              </div> : null}
               <div className="daily-limits">
                 {([
                   ['workset', 'Выделить карточек'],
@@ -1191,8 +1232,12 @@ export default function App() {
               <div className="daily-selection-actions">
                 <button className="btn ghost" type="button" disabled={Boolean(dailyRun) || !dailySelected.size} onClick={clearDailySelection}>Снять всё</button>
                 <button className="btn secondary" type="button" disabled={Boolean(dailyRun) || dailyPaidLimit <= 0} onClick={selectDailyToLimit}>Выбрать до лимита</button>
-                {dailyRun && dailyRun.status !== 'draft' ? <div className="daily-live-summary">
-                  <strong>Готово {dailyProgressStats.done} из {dailyProgressStats.total}</strong>
+                {dailyRun && dailyRun.status !== 'draft' ? <div className={`daily-live-summary ${dailyIsDone ? 'done' : dailyHasErrors ? 'error' : ''}`} role="status" aria-live="polite">
+                  <strong className="progress-stage-label">
+                    {dailyIsAnalyzing ? <ActivitySpinner /> : dailyIsDone ? <span className="status-check" aria-hidden="true">✓</span> : dailyHasErrors ? <span className="status-error" aria-hidden="true">!</span> : null}
+                    {dailyIsAnalyzing ? 'Анализ выполняется' : dailyIsDone ? 'Сводка готова' : dailyHasErrors ? 'Завершено с ошибками' : 'Обработка завершена'}
+                  </strong>
+                  <span>Готово {dailyProgressStats.done} из {dailyProgressStats.total}</span>
                   <span>В работе: {dailyProgressStats.running}</span>
                   {dailyProgressStats.errors ? <span>Ошибок: {dailyProgressStats.errors}</span> : null}
                   {dailyProgressStats.skipped ? <span>Не запущено: {dailyProgressStats.skipped}</span> : null}
@@ -1260,7 +1305,14 @@ export default function App() {
                   <p>{asString(dailyPreview.cost_preview.message)} Оценка выбранного запуска: {dailyEstimatedCost} ₽. Зарезервировано сегодня: {asString(dailyPreview.cost_preview.paid_used_today, '0')}.</p>
                   {dailyRun?.actual_cost ? <p>Фактическая стоимость завершённых анализов: {asString(asRecord(dailyRun.actual_cost).estimated_cost_rub, '0')} ₽.</p> : null}
                 </div>
-                {!dailyRun ? <button className="btn" disabled={!dailySelected.size || dailyLoading} onClick={() => void freezeDailySummary()}>Зафиксировать snapshot</button> : <button className="btn" disabled={dailyLoading || dailyRun.status !== 'draft'} onClick={() => void launchDailySummary()}>{dailyRun.status === 'draft' ? 'Подтвердить и запустить выбранные' : `Статус: ${dailyRun.status}`}</button>}
+                {!dailyRun ? <button className="btn" disabled={!dailySelected.size || dailyLoading} onClick={() => void freezeDailySummary()}>
+                  <span className="btn-content">{dailyLoading ? <ActivitySpinner /> : null}{dailyLoading ? 'Фиксируем сводку…' : 'Зафиксировать snapshot'}</span>
+                </button> : <button className={`btn daily-run-action ${dailyRun.status}`} disabled={dailyLoading || dailyRun.status !== 'draft'} onClick={() => void launchDailySummary()}>
+                  <span className="btn-content">
+                    {dailyLoading || dailyIsAnalyzing ? <ActivitySpinner /> : dailyIsDone ? <span className="status-check" aria-hidden="true">✓</span> : dailyHasErrors ? <span className="status-error" aria-hidden="true">!</span> : null}
+                    {dailyLoading ? 'Запускаем анализ…' : dailyRun.status === 'draft' ? 'Подтвердить и запустить выбранные' : dailyIsAnalyzing ? `Анализ выполняется · ${dailyProgressStats.done} из ${dailyProgressStats.total}` : dailyIsDone ? 'Сводка готова' : dailyHasErrors ? 'Завершено с ошибками' : `Статус: ${dailyRun.status}`}
+                  </span>
+                </button>}
               </section>
             </> : <section className="section"><p className="muted">Настройте профиль и нажмите «Обновить кандидатов без LLM». Старые анализы не используются как источник очереди.</p></section>}
           </main>

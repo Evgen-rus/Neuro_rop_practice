@@ -243,6 +243,16 @@ textarea {
   font-size: 13px;
 }
 
+.daily-live-summary.done {
+  border-color: #9bd7b2;
+  background: #edf9f1;
+}
+
+.daily-live-summary.error {
+  border-color: #f2b8b5;
+  background: #fff1f0;
+}
+
 .daily-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -363,6 +373,45 @@ textarea {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.progress-stage-label,
+.btn-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.activity-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: activity-spin .8s linear infinite;
+}
+
+.status-check,
+.status-error {
+  display: inline-grid;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.status-check { background: #27875f; }
+.status-error { background: #b83238; }
+
+@keyframes activity-spin {
+  to { transform: rotate(360deg); }
 }
 
 .entity-progress p,
@@ -709,6 +758,19 @@ p {
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.btn.daily-run-action:disabled {
+  opacity: 1;
+}
+
+.btn.daily-run-action.done {
+  background: #27875f;
+}
+
+.btn.daily-run-action.completed_with_errors,
+.btn.daily-run-action.error {
+  background: #b83238;
 }
 
 .btn.secondary {
@@ -1781,6 +1843,24 @@ ul.facts.bad li:before {
   .hero h1 {
     font-size: 30px;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
+    border-style: dotted;
+  }
+}
+
+.daily-custom-period {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.daily-custom-period .input-hint {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
 }
 
 /* Lead-only operational workflow. */

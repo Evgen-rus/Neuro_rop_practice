@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from api.candidates import (
+    custom_period_bounds,
     deduplicate_journeys,
     candidate_freshness,
     detect_candidate_signals,
@@ -70,13 +71,54 @@ class FakeBitrixClient:
 
 
 class DailyCandidateEngineTests(unittest.TestCase):
-    def test_period_presets_are_moscow_calendar_windows(self):
+    def test_period_presets_use_previous_moscow_workday(self):
         now = datetime(2026, 7, 16, 8, 30, tzinfo=MSK)
-        period = profile_period_bounds("today_and_yesterday", now=now)
+        period = profile_period_bounds("today_and_previous_workday", now=now)
         self.assertEqual(period["period_from"], "2026-07-15T00:00:00+03:00")
         self.assertEqual(period["period_to"], "2026-07-17T00:00:00+03:00")
-        yesterday = profile_period_bounds("yesterday", now=now)
-        self.assertEqual(yesterday["period_to"], "2026-07-16T00:00:00+03:00")
+        self.assertEqual(period["included_dates"], "2026-07-15,2026-07-16")
+
+        monday = profile_period_bounds(
+            "today_and_previous_workday",
+            now=datetime(2026, 7, 20, 8, 30, tzinfo=MSK),
+        )
+        self.assertEqual(monday["period_from"], "2026-07-17T00:00:00+03:00")
+        self.assertEqual(monday["period_to"], "2026-07-21T00:00:00+03:00")
+        self.assertEqual(monday["included_dates"], "2026-07-17,2026-07-20")
+
+        weekend = profile_period_bounds(
+            "today_and_previous_workday",
+            now=datetime(2026, 7, 19, 8, 30, tzinfo=MSK),
+        )
+        self.assertEqual(weekend["period_from"], "2026-07-17T00:00:00+03:00")
+        self.assertEqual(weekend["period_to"], "2026-07-18T00:00:00+03:00")
+        self.assertEqual(weekend["included_dates"], "2026-07-17")
+
+    def test_custom_period_is_inclusive_and_rejects_reversed_dates(self):
+        period = custom_period_bounds(date(2026, 7, 10), date(2026, 7, 12), now=datetime(2026, 7, 20, tzinfo=MSK))
+        self.assertEqual(period["period_from"], "2026-07-10T00:00:00+03:00")
+        self.assertEqual(period["period_to"], "2026-07-13T00:00:00+03:00")
+        with self.assertRaisesRegex(ValueError, "не может быть позже"):
+            custom_period_bounds(date(2026, 7, 12), date(2026, 7, 10))
+
+    def test_workday_period_excludes_weekend_rows_between_friday_and_monday(self):
+        profile = default_analysis_profile()
+        period = profile_period_bounds(
+            "today_and_previous_workday",
+            now=datetime(2026, 7, 20, 10, tzinfo=MSK),
+        )
+        client = FakeBitrixClient(
+            leads=[
+                {"ID": "1", "DATE_CREATE": "2026-07-17T10:00:00+03:00"},
+                {"ID": "2", "DATE_CREATE": "2026-07-18T10:00:00+03:00"},
+                {"ID": "3", "DATE_CREATE": "2026-07-19T10:00:00+03:00"},
+                {"ID": "4", "DATE_CREATE": "2026-07-20T10:00:00+03:00"},
+            ],
+        )
+
+        rows, _ = fetch_profile_leads(client, profile=profile, period=period)
+
+        self.assertEqual([row["ID"] for row in rows], ["1", "4"])
 
     def test_lead_scope_excludes_live_dmp_and_negative_categories(self):
         profile = default_analysis_profile()

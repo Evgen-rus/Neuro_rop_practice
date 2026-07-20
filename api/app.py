@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from dotenv import load_dotenv
@@ -18,7 +18,9 @@ from pydantic import BaseModel, Field
 from api.candidates import (
     DEFAULT_DAYS,
     DEFAULT_LIMIT,
+    custom_period_bounds,
     list_crm_pipelines,
+    profile_period_bounds,
     profile_candidates_preview,
     search_candidates,
 )
@@ -181,6 +183,12 @@ class AnalysisProfileRequest(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
 
 
+class AnalysisProfilePreviewRequest(BaseModel):
+    period_preset: Literal["today_and_previous_workday", "today", "previous_workday", "custom"] | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+
+
 class DailySummaryCreateRequest(BaseModel):
     profile_id: int
     profile_version: int
@@ -294,12 +302,23 @@ def analysis_profile_select(profile_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/analysis-profiles/{profile_id}/preview")
-def analysis_profile_preview(profile_id: int) -> dict[str, Any]:
+def analysis_profile_preview(profile_id: int, body: AnalysisProfilePreviewRequest | None = None) -> dict[str, Any]:
     profile = get_analysis_profile(DEFAULT_DB_PATH, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Профиль не найден")
     try:
-        return profile_candidates_preview(profile, db_path=DEFAULT_DB_PATH)
+        profile_settings = profile.get("profile") if isinstance(profile.get("profile"), dict) else {}
+        timezone_name = str(profile_settings.get("timezone") or "Europe/Moscow")
+        preset = body.period_preset if body and body.period_preset else str(profile_settings.get("period_preset") or "today_and_previous_workday")
+        if preset == "custom":
+            if not body or not body.date_from or not body.date_to:
+                raise ValueError("Для произвольного периода укажите обе даты")
+            period = custom_period_bounds(body.date_from, body.date_to, timezone_name=timezone_name)
+        else:
+            period = profile_period_bounds(preset, timezone_name=timezone_name)
+        return profile_candidates_preview(profile, db_path=DEFAULT_DB_PATH, period_override=period)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(error)) from error
 
