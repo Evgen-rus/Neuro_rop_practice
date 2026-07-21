@@ -2036,6 +2036,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const client = asString(leadState.client) || asString(reportMeta.client_name) || 'Нет данных'
   const categoryValue = asString(category.value) || asString(leadState.qualification) || 'Unknown'
   const interest = formatMoneyText(asString(leadState.need))
+  const currentSituation = formatMoneyText(asString(leadState.summary)) || formatMoneyText(asString(rop.why_it_matters)) || meta?.attention_reason || 'Нет данных'
   const latestQualificationReview = props.qualificationReviews?.[0]
 
   async function persist(patch: Partial<LeadWorkflowState>) {
@@ -2114,7 +2115,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {meta.risk_level ? <span>Риск: {riskLabelRu(meta.risk_level)}</span> : null}
               <span>Анализ: {formatLeadDate(reportDetail?.created_at)}</span>
             </div>
-            {interest ? <div className="lead-context-line"><strong>Интерес:</strong> {interest}</div> : null}
           </div>
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
@@ -2124,23 +2124,30 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
         </header>
 
-        <section className="lead-activity-strip" aria-label="Последняя активность в CRM">
-          <div className="lead-activity-card">
+        <section className="lead-summary-strip" aria-label="Краткая сводка по лиду">
+          <article className="lead-summary-card lead-summary-about">
+            <h3>Что за лид</h3>
+            <p className="lead-summary-primary">{interest || 'Интерес не зафиксирован'}</p>
+            <span>Клиент: {client}</span>
+          </article>
+          <article className="lead-summary-card lead-summary-situation">
+            <h3>Текущая ситуация</h3>
+            <p className="lead-summary-primary">{currentSituation}</p>
+            {currentTask ? (
+              <details>
+                <summary><strong>{currentTask.completed ? 'Последняя задача' : 'Актуальная задача'}</strong><span>{formatLeadDate(currentTask.date)}{currentTask.subject ? ` · ${currentTask.subject}` : ''}</span></summary>
+                <p>{currentTask.text || 'Дополнительного текста нет.'}</p>
+              </details>
+            ) : <span className="muted">Актуальная задача в CRM не найдена</span>}
+          </article>
+          <article className="lead-summary-card lead-summary-contact">
             {lastContact ? (
               <details>
                 <summary><strong>Последний контакт</strong><span>{lastContact.type || 'контакт'} · {formatLeadDate(lastContact.date)}{lastContact.subject ? ` · ${lastContact.subject}` : ''}</span></summary>
                 <p>{lastContact.text || 'Дополнительного текста нет.'}</p>
               </details>
             ) : <div><strong>Последний контакт</strong><span className="muted">Нет данных</span></div>}
-          </div>
-          <div className="lead-activity-card">
-            {currentTask ? (
-              <details>
-                <summary><strong>{currentTask.completed ? 'Последняя задача' : 'Актуальная задача'}</strong><span>{formatLeadDate(currentTask.date)}{currentTask.subject ? ` · ${currentTask.subject}` : ''}</span></summary>
-                <p>{currentTask.text || 'Дополнительного текста нет.'}</p>
-              </details>
-            ) : <div><strong>Актуальная задача</strong><span className="muted">Нет данных</span></div>}
-          </div>
+          </article>
         </section>
 
         <section className="compact-bant" aria-label="Квалификация BANT">
