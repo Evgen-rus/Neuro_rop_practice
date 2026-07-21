@@ -284,6 +284,7 @@ export type UiReportDetail = UiReportListItem & {
   candidate_review?: Record<string, unknown> | null
   report_meta?: LeadReportMeta | null
   technical_log?: Record<string, unknown> | null
+  model_context?: ModelContextSnapshot | null
   workflow?: LeadWorkflowState | null
   entity_history?: Array<Record<string, unknown>>
   markdown_available?: boolean
@@ -296,6 +297,12 @@ export type LeadReportActivity = {
   subject?: string | null
   text?: string | null
   completed?: boolean
+}
+
+export type ModelContextSnapshot = {
+  history_text?: string | null
+  transcript_text?: string | null
+  transcript_used?: boolean
 }
 
 export type LeadReportMeta = {
@@ -553,6 +560,13 @@ export function saveLeadWorkflow(leadId: string, payload: Partial<LeadWorkflowSt
   return api<LeadWorkflowState>(`/api/leads/${encodeURIComponent(leadId)}/workflow`, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+export function markLeadNoAttention(leadId: string, reportId: number) {
+  return api<{ workflow: LeadWorkflowState; candidate_review: Record<string, unknown> }>(`/api/leads/${encodeURIComponent(leadId)}/no-attention`, {
+    method: 'POST',
+    body: JSON.stringify({ report_id: reportId }),
   })
 }
 

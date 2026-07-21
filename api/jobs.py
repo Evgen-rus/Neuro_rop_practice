@@ -319,6 +319,34 @@ def build_technical_log_snapshot(job: JobState, entity_type: str, entity_id: str
     }
 
 
+def build_model_context_snapshot(envelope: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Keep the factual files used by one completed analysis, without prompts or OKF rules."""
+    if not isinstance(envelope, dict):
+        return None
+    input_files = envelope.get("input_files")
+    if not isinstance(input_files, dict):
+        return None
+
+    def read_source(key: str) -> str | None:
+        raw_path = input_files.get(key)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        try:
+            return Path(raw_path).read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    history_text = read_source("history")
+    transcript_text = read_source("transcript")
+    if history_text is None and transcript_text is None:
+        return None
+    return {
+        "history_text": history_text,
+        "transcript_text": transcript_text,
+        "transcript_used": transcript_text is not None,
+    }
+
+
 def unwrap_analysis_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     """
     LLM files are saved as envelope:
@@ -518,6 +546,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 report_json=analysis,
                 report_meta=build_lead_report_meta(entity_id) if entity_type == "lead" else None,
                 technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
+                model_context=build_model_context_snapshot(envelope),
                 job_id=job.job_id,
             )
             job.report_ids.append(report_id)

@@ -128,6 +128,10 @@ class LeadWorkflowRequest(BaseModel):
     final_decision: Literal["continue", "no_attention"] | None = None
 
 
+class LeadNoAttentionRequest(BaseModel):
+    report_id: int = Field(gt=0)
+
+
 class OutcomeRequest(BaseModel):
     outcome_type: str
     deal_stage_after: str | None = None
@@ -704,9 +708,12 @@ def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, str]:
     missed = lines(manager_quality.get("missed_points"))
     critical = lines(manager_quality.get("critical_mistake"))
     if good:
-        review_parts.append("Что хорошо:\n" + "\n".join(f"• {item}" for item in good))
+        review_parts.append("Сильные стороны:\n" + "\n".join(f"• {item}" for item in good))
     if missed or critical:
         review_parts.append("Что нужно усилить:\n" + "\n".join(f"• {item}" for item in [*missed, *critical]))
+    manager_focus = str(rop.get("message_to_manager") or rop.get("check_for_rop") or "").strip()
+    if manager_focus:
+        review_parts.append(f"Фокус следующего контакта:\n{manager_focus}")
     if not review_parts:
         fallback = str(rop.get("why_it_matters") or rop.get("check_for_rop") or "").strip()
         if fallback:
@@ -852,6 +859,39 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
     return {**saved, "status_label": _workflow_status(saved, {"state": state})}
 
 
+@app.post("/api/leads/{lead_id}/no-attention")
+def mark_lead_no_attention(lead_id: str, body: LeadNoAttentionRequest) -> dict[str, Any]:
+    lead_id = str(lead_id)
+    report = get_ui_report(DEFAULT_DB_PATH, body.report_id)
+    if not report or str(report.get("entity_type")) != "lead" or str(report.get("entity_id")) != lead_id:
+        raise HTTPException(status_code=400, detail="A lead report is required for this decision")
+
+    existing = get_candidate_review_states(
+        DEFAULT_DB_PATH, entity_type="lead", entity_ids=[lead_id]
+    ).get(lead_id)
+    review = upsert_candidate_review_state(
+        DEFAULT_DB_PATH,
+        entity_type="lead",
+        entity_id=lead_id,
+        state="reviewed",
+        report_id=body.report_id,
+        decision="Не требует внимания",
+        next_control_date=None,
+        **_candidate_review_values(report),
+    )
+    if not existing or existing.get("state") != "reviewed" or existing.get("decision") != "Не требует внимания":
+        save_rop_decision(
+            DEFAULT_DB_PATH,
+            report_id=body.report_id,
+            decision="Не требует внимания",
+            next_control_date=None,
+        )
+    return {
+        "workflow": _lead_workflow_payload(lead_id, report),
+        "candidate_review": review,
+    }
+
+
 @app.get("/api/reports")
 def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     items = list_ui_reports(DEFAULT_DB_PATH, limit=limit)
@@ -862,6 +902,7 @@ def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         row.pop("report_json", None)
         row.pop("report_meta", None)
         row.pop("technical_log", None)
+        row.pop("model_context", None)
         light.append(row)
     return {"items": light}
 

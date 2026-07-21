@@ -1940,8 +1940,12 @@ ul.facts.bad li:before {
   text-decoration: none;
 }
 .lead-header-actions .workspace-close { border-color: #cfd5dc; background: #22272d; color: white; }
+.lead-header-actions .no-attention { border-color: #efc18d; background: #fff9ef; color: #9a5a10; }
 .lead-summary-strip { display: grid; grid-template-columns: 1.05fr 1.25fr 1fr; gap: 9px; background: #f1f3f6; }
 .lead-summary-card { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; background: white; }
+.lead-summary-about { border-color: #cbdcf7; background: #f7fbff; }
+.lead-summary-situation { border-color: #ead9c6; background: #fffbf6; }
+.lead-summary-contact { border-color: #cfe5d8; background: #f8fcf9; }
 .lead-summary-card h3 { margin: 0 0 6px; font-size: 14px; }
 .lead-summary-card > span,
 .lead-summary-card > div { display: block; color: var(--muted); font-size: 12px; }
@@ -1956,6 +1960,7 @@ ul.facts.bad li:before {
 .workflow-section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .workflow-section-title h3 { margin: 0; font-size: 17px; }
 .workflow-section-title p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.compact-bant { margin: 10px 18px 0; padding: 14px 16px; border: 1px solid #dce4ed; border-radius: 12px; background: white; box-shadow: 0 4px 16px rgba(33, 55, 84, .04); }
 .compact-bant-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
 .compact-bant-card,
 .compact-bant-total { min-height: 72px; padding: 10px; text-align: left; border: 0; border-left: 3px solid #ee9a32; background: #fff4e9; }
@@ -1972,7 +1977,8 @@ ul.facts.bad li:before {
 .compact-bant-card.status-negative { border-left-color: #d65050; background: #fff0f0; }
 .compact-bant-total { border-left-color: #3898ef; background: #eef4fa; }
 .workflow-steps { padding-top: 14px; }
-.workflow-step { display: grid; grid-template-columns: 160px minmax(0, 1fr) 170px; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.workflow-step { display: grid; grid-template-columns: 160px minmax(0, 1fr) 170px; gap: 12px; padding: 12px; border: 1px solid #dce4ed; border-radius: 12px; background: white; box-shadow: 0 4px 16px rgba(33, 55, 84, .035); }
+.workflow-step + .workflow-step { margin-top: 10px; }
 .workflow-step-label { padding: 10px; border-left: 3px solid #369af3; background: #eaf3fc; }
 .workflow-step-label b { display: grid; place-items: center; width: 30px; height: 30px; margin-bottom: 8px; border-radius: 50%; background: white; }
 .workflow-step-label strong,
@@ -1987,8 +1993,21 @@ ul.facts.bad li:before {
 .workflow-step-actions label { font-size: 12.5px; }
 .workflow-step button.primary-dark { border-color: #22272d; background: #22272d; color: white; }
 .workflow-step button:disabled { cursor: not-allowed; opacity: .55; }
-.workflow-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-.workflow-tags button { border: 0; border-radius: 999px; background: #e6f2ff; color: #1684ef; padding: 4px 7px; font-size: 12px; }
+.review-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr); gap: 9px; }
+.review-card { min-width: 0; border: 1px solid #dce4ed; border-radius: 10px; padding: 10px; background: #f9fbfd; }
+.review-card h4 { margin: 0 0 7px; font-size: 13px; }
+.review-card ul { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
+.review-card li { line-height: 1.35; }
+.review-card.good { border-color: #cae7d5; background: #f7fcf9; }
+.review-card.good h4 { color: #1c8751; }
+.review-card.weak { border-color: #f0d4d4; background: #fff9f9; }
+.review-card.weak h4 { color: #bc4242; }
+.review-card.manager-review { border-color: #c7dcfa; background: #f4f8ff; }
+.manager-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.manager-review-heading > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.manager-review-heading button { padding: 4px 7px; font-size: 12px; }
+.review-card.manager-review p { margin: 0; white-space: pre-wrap; line-height: 1.4; }
+.review-card.manager-review textarea { min-height: 128px; margin-top: 9px; }
 .control-checklist { display: grid; gap: 3px; margin-bottom: 8px; }
 .control-fields { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 7px; }
 .control-fields label { display: grid; gap: 3px; font-size: 12px; }
@@ -2016,6 +2035,10 @@ ul.facts.bad li:before {
 .material-history span { display: block; color: var(--muted); font-size: 13px; }
 .material-history p { margin-bottom: 0; }
 .technical-log { overflow: auto; border-radius: 10px; padding: 12px; background: #111820; color: #dce7f3; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.model-context { display: grid; gap: 12px; }
+.model-context section { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fafbfd; }
+.model-context h5 { margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.model-context pre { max-height: 360px; margin: 0; overflow: auto; padding: 12px; background: #f7f9fc; color: #283445; font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1100px) {
   .lead-workflow-header { flex-direction: column; }
@@ -2024,6 +2047,8 @@ ul.facts.bad li:before {
   .compact-bant-total { grid-column: 1 / -1; }
   .workflow-step { grid-template-columns: 150px minmax(0, 1fr); }
   .workflow-step-actions { grid-column: 2; flex-direction: row; flex-wrap: wrap; }
+  .review-grid { grid-template-columns: 1fr 1fr; }
+  .review-card.manager-review { grid-column: 1 / -1; }
 }
 
 @media (max-width: 720px) {
@@ -2035,9 +2060,12 @@ ul.facts.bad li:before {
   .lead-meta-line { font-size: 13px; }
   .lead-summary-strip { grid-template-columns: 1fr; padding: 10px 16px; }
   .lead-summary-card summary { grid-template-columns: 1fr; gap: 3px; }
+  .compact-bant { margin: 10px 16px 0; padding: 14px; }
   .compact-bant-grid { grid-template-columns: 1fr; }
   .workflow-step { grid-template-columns: 1fr; }
   .workflow-step-actions { grid-column: 1; }
+  .review-grid { grid-template-columns: 1fr; }
+  .review-card.manager-review { grid-column: auto; }
   .workflow-step textarea { min-height: 108px; }
   .lead-header-actions a,
   .lead-header-actions button,

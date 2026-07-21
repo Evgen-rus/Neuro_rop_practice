@@ -129,6 +129,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 report_json TEXT,
                 report_meta_json TEXT,
                 technical_log_json TEXT,
+                model_context_json TEXT,
                 job_id TEXT
             );
 
@@ -320,6 +321,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         )
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
         _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
+        _ensure_column(conn, "ui_reports", "model_context_json", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "completed_at", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "actual_cost_json", "TEXT")
         _ensure_column(conn, "daily_summary_items", "job_id", "TEXT")
@@ -564,6 +566,7 @@ def _row_to_ui_report(row: sqlite3.Row | None) -> dict[str, Any] | None:
     value["report_json"] = loads_json(value.get("report_json"), None)
     value["report_meta"] = loads_json(value.pop("report_meta_json", None), None)
     value["technical_log"] = loads_json(value.pop("technical_log_json", None), None)
+    value["model_context"] = loads_json(value.pop("model_context_json", None), None)
     return value
 
 
@@ -580,6 +583,7 @@ def save_ui_report(
     report_json: dict[str, Any] | None = None,
     report_meta: dict[str, Any] | None = None,
     technical_log: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
     job_id: str | None = None,
 ) -> int:
     init_db(db_path)
@@ -598,9 +602,10 @@ def save_ui_report(
                 report_json,
                 report_meta_json,
                 technical_log_json,
+                model_context_json,
                 job_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -614,6 +619,7 @@ def save_ui_report(
                 dumps_json(report_json) if report_json is not None else None,
                 dumps_json(report_meta) if report_meta is not None else None,
                 dumps_json(technical_log) if technical_log is not None else None,
+                dumps_json(model_context) if model_context is not None else None,
                 job_id,
             ),
         )

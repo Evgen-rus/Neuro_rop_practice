@@ -51,10 +51,12 @@ class LeadWorkflowStorageTests(unittest.TestCase):
                 report_json={"lead_state": {}},
                 report_meta={"stage_name": "Новый"},
                 technical_log={"status": "done"},
+                model_context={"history_text": "История", "transcript_text": "Транскрипт", "transcript_used": True},
             )
             self.assertIsNone(get_ui_report(db_path, old_id)["report_meta"])
             self.assertEqual(get_ui_report(db_path, new_id)["report_meta"]["stage_name"], "Новый")
             self.assertEqual(get_ui_report(db_path, new_id)["technical_log"]["status"], "done")
+            self.assertEqual(get_ui_report(db_path, new_id)["model_context"]["transcript_text"], "Транскрипт")
 
 
 class LeadWorkflowApiTests(unittest.TestCase):
@@ -93,6 +95,19 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
                 self.assertEqual(review["state"], "reviewed")
 
+    def test_fast_no_attention_marks_only_this_lead_as_reviewed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(db_path, entity_type="lead", entity_id="88", report_json={"lead_state": {}})
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                result = api_app.mark_lead_no_attention(
+                    "88", api_app.LeadNoAttentionRequest(report_id=report_id)
+                )
+            self.assertEqual(result["workflow"]["status_label"], "Не требует внимания")
+            review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["88"])["88"]
+            self.assertEqual(review["state"], "reviewed")
+            self.assertEqual(review["decision"], "Не требует внимания")
+
 
 class LeadReportSnapshotTests(unittest.TestCase):
     def test_metadata_uses_local_bundle_and_russian_stage(self) -> None:
@@ -118,6 +133,26 @@ class LeadReportSnapshotTests(unittest.TestCase):
             self.assertEqual(metadata["stage_name"], "Новый")
             self.assertEqual(metadata["last_contact"]["type"], "Звонок")
             self.assertEqual(metadata["current_task"]["subject"], "Перезвонить")
+
+    def test_model_context_snapshot_reads_only_factual_input_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            history_path = root / "history.md"
+            transcript_path = root / "transcript.md"
+            history_path.write_text("История CRM", encoding="utf-8")
+            transcript_path.write_text("Транскрипт звонка", encoding="utf-8")
+            snapshot = jobs.build_model_context_snapshot(
+                {
+                    "input_files": {
+                        "history": str(history_path),
+                        "transcript": str(transcript_path),
+                        "knowledge": ["не должен попасть в snapshot"],
+                    }
+                }
+            )
+            self.assertEqual(snapshot["history_text"], "История CRM")
+            self.assertEqual(snapshot["transcript_text"], "Транскрипт звонка")
+            self.assertTrue(snapshot["transcript_used"])
 
 
 if __name__ == "__main__":

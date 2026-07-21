@@ -33,6 +33,7 @@ import {
   fetchReport,
   fetchReportMarkdown,
   fetchReports,
+  markLeadNoAttention,
   previewAnalysisProfile,
   saveDecision,
   saveLeadWorkflow,
@@ -1992,6 +1993,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [materialTab, setMaterialTab] = useState<LeadMaterialTab | null>(null)
+  const [showReviewEditor, setShowReviewEditor] = useState(false)
   const [qualificationIssues, setQualificationIssues] = useState<string[]>([])
   const [qualificationComment, setQualificationComment] = useState('')
 
@@ -2018,6 +2020,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const leadState = asRecord(analysis?.lead_state)
   const rop = asRecord(analysis?.rop_manager_message_block)
   const action = asRecord(analysis?.manager_action_block)
+  const managerQuality = asRecord(analysis?.manager_quality)
   const assessment = asRecord(analysis?.qualification_assessment)
   const bant = asRecord(assessment.bant)
   const category = asRecord(assessment.lead_category)
@@ -2037,6 +2040,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const categoryValue = asString(category.value) || asString(leadState.qualification) || 'Unknown'
   const interest = formatMoneyText(asString(leadState.need))
   const currentSituation = formatMoneyText(asString(leadState.summary)) || formatMoneyText(asString(rop.why_it_matters)) || meta?.attention_reason || 'Нет данных'
+  const strengths = asStringList(managerQuality.what_done_well).map(formatMoneyText)
+  const weaknesses = [...asStringList(managerQuality.missed_points), ...asStringList(managerQuality.critical_mistake)].map(formatMoneyText)
   const latestQualificationReview = props.qualificationReviews?.[0]
 
   async function persist(patch: Partial<LeadWorkflowState>) {
@@ -2069,6 +2074,22 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     setNotice('Функция в разработке')
   }
 
+  async function markNoAttention() {
+    if (!meta?.report_id || !workflow) return
+    if (!window.confirm('Убрать лид из основной очереди как не требующий внимания? Решение сохранится локально и лид вернётся при значимом изменении CRM.')) return
+    setSaving(true)
+    setNotice('')
+    try {
+      const result = await markLeadNoAttention(meta.entity_id, meta.report_id)
+      setWorkflow(result.workflow)
+      setNotice('Лид убран из основной очереди')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Не удалось сохранить решение')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   function openMaterials(tab: LeadMaterialTab) {
     setMaterialTab(tab)
     if (tab === 'audit' && !props.showMarkdown && reportDetail?.markdown_available) {
@@ -2087,6 +2108,14 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   const lastContact = reportMeta.last_contact
   const currentTask = reportMeta.current_task
+  const managerFocus = formatMoneyText(asString(rop.message_to_manager) || asString(rop.check_for_rop))
+  const defaultManagerReview = [
+    strengths.length ? `Сильные стороны:\n${strengths.map((item) => `• ${item}`).join('\n')}` : '',
+    weaknesses.length ? `Что нужно усилить:\n${weaknesses.map((item) => `• ${item}`).join('\n')}` : '',
+    managerFocus ? `Фокус следующего контакта:\n${managerFocus}` : '',
+  ].filter(Boolean).join('\n\n')
+  const isLegacyManagerReview = !workflow.manager_review_text || workflow.manager_review_text.startsWith('Что хорошо:')
+  const managerReviewText = isLegacyManagerReview ? defaultManagerReview : workflow.manager_review_text
   const taskEnabled = workflow.review_completed
   const controlEnabled = workflow.task_completed
   const finalEnabled = workflow.control_completed
@@ -2096,6 +2125,11 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     ...asStringList(rop.evidence).map(formatMoneyText),
     ...bantItems.flatMap((item) => asStringList(item.value.evidence).map(formatMoneyText)),
   ].filter(Boolean)
+
+  function editManagerReview() {
+    if (isLegacyManagerReview) setWorkflow((current) => current ? { ...current, manager_review_text: defaultManagerReview } : current)
+    setShowReviewEditor(true)
+  }
 
   return (
     <>
@@ -2118,6 +2152,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
+            <button className="no-attention" disabled={saving || workflow.status_label === 'Не требует внимания'} onClick={() => void markNoAttention()}>Не требует внимания</button>
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
             <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button>
@@ -2180,14 +2215,13 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           <article className={`workflow-step ${workflow.review_completed ? 'completed' : 'active'}`}>
             <div className="workflow-step-label"><b>1</b><strong>Разбор с менеджером</strong><span>Сильные и слабые стороны</span></div>
             <div className="workflow-step-body">
-              <p><strong>Цель:</strong> разобрать обработку лида и показать менеджеру, что нужно усилить.</p>
-              <div className="workflow-tags"><button onClick={() => openMaterials('evidence')}>Недожатые BANT-факторы</button><button onClick={() => openMaterials('evidence')}>Основание</button></div>
-              <label>Текст разбора менеджеру</label>
-              <textarea value={workflow.manager_review_text || ''} onChange={(event) => updateDraft('manager_review_text', event.target.value)} onBlur={() => void persist({ manager_review_text: workflow.manager_review_text })} />
+              <div className="review-grid">
+                <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
+                <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
+                <section className="review-card manager-review"><div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(managerReviewText || '', 'Разбор')}>Копировать</button><button onClick={() => showReviewEditor ? setShowReviewEditor(false) : editManagerReview()}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button></div></div><p>{managerReviewText || 'Разбор пока не сформирован.'}</p>{showReviewEditor ? <textarea aria-label="Готовый разбор для менеджера" value={workflow.manager_review_text || ''} onChange={(event) => updateDraft('manager_review_text', event.target.value)} onBlur={() => void persist({ manager_review_text: workflow.manager_review_text })} /> : null}</section>
+              </div>
             </div>
             <div className="workflow-step-actions">
-              <button onClick={() => copyValue(workflow.manager_review_text || '', 'Разбор')}>Копировать разбор</button>
-              <button className="primary-dark" onClick={developmentStub}>Отправить в Bitrix</button>
               <label><input type="checkbox" checked={workflow.review_completed} disabled={saving} onChange={(event) => void persist({ review_completed: event.target.checked })} /> Выполнено</label>
             </div>
           </article>
@@ -2259,7 +2293,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
               {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(props.markdown)}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
               {materialTab === 'history' ? <div><h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{asString(item.created_at)} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
-              {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
+              {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p><h4>Контекст, переданный модели</h4>{reportDetail?.model_context ? <div className="model-context"><section><h5>История CRM</h5><pre>{reportDetail.model_context.history_text || 'История CRM не была доступна в момент анализа.'}</pre></section><section><h5>Транскрипт, использованный в анализе</h5><pre>{reportDetail.model_context.transcript_used ? reportDetail.model_context.transcript_text || 'Текст транскрипта не сохранён.' : 'Для этого анализа транскрипт не использовался.'}</pre></section></div> : <p className="muted">Для этого старого отчёта снимок фактического контекста не сохранялся.</p>}<h4>Технический snapshot</h4>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
             </div>
           </aside>
         </div>
@@ -2391,7 +2425,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           value: qualification,
           hint: formatMoneyText(qualificationReason) || undefined,
         },
-      ]
+  ]
     : [
         {
           label: 'Сумма',
