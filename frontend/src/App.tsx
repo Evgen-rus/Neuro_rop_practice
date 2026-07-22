@@ -2064,6 +2064,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   const leadState = asRecord(analysis?.lead_state)
   const rop = asRecord(analysis?.rop_manager_message_block)
+  const closureReview = asRecord(analysis?.closure_review)
   const managerQuality = asRecord(analysis?.manager_quality)
   const assessment = asRecord(analysis?.qualification_assessment)
   const bant = asRecord(assessment.bant)
@@ -2148,10 +2149,16 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     ]),
   ].filter(Boolean).join('\n\n')
   const fullManagerReview = formatMoneyText(workflow.manager_full_review_text || generatedFullManagerReview)
-  const taskEnabled = workflow.review_completed
-  const controlEnabled = workflow.task_completed
+  const closureConfirmed = asString(closureReview.verdict) === 'confirmed_correct'
+    && closureReview.manager_task_required === false
+    && closureReview.client_contact_required === false
+  const taskEnabled = workflow.review_completed && !closureConfirmed
+  const controlEnabled = workflow.task_completed && !closureConfirmed
   const controlActive = Boolean(workflow.control_mode)
-  const workflowDone = [workflow.review_completed, workflow.task_completed, controlActive].filter(Boolean).length
+  const workflowDone = closureConfirmed
+    ? (workflow.review_completed ? 1 : 0)
+    : [workflow.review_completed, workflow.task_completed, controlActive].filter(Boolean).length
+  const workflowTotal = closureConfirmed ? 1 : 3
   const controlDeadline = workflow.control_mode === 'date'
     ? workflow.control_date
     : asString(rop.deadline) || null
@@ -2182,7 +2189,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           <div className="lead-workflow-heading">
             <div className="lead-title-line">
               <h2>Лид #{meta.entity_id}</h2>
-              <span className="attention-badge">Требует внимания РОПа</span>
+              <span className="attention-badge">{closureConfirmed ? 'Закрытие проверено' : 'Требует внимания РОПа'}</span>
               <span className="workflow-status">{workflow.status_label}</span>
             </div>
             <div className="lead-meta-line">
@@ -2251,8 +2258,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
         <section className="workflow-steps">
           <div className="workflow-section-title">
-            <div><h3>Работа РОПа по лиду</h3><p>Разобрать → поручить → поставить на контроль</p></div>
-            <span>{workflowDone} из 3 выполнено</span>
+            <div><h3>Работа РОПа по лиду</h3><p>{closureConfirmed ? 'Проверить корректность закрытия' : 'Разобрать → поручить → поставить на контроль'}</p></div>
+            <span>{workflowDone} из {workflowTotal} выполнено</span>
           </div>
 
           <article className={`workflow-step ${workflow.review_completed ? 'completed' : 'active'}`}>
@@ -2272,28 +2279,27 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             </div>
           </article>
 
-          <article className={`workflow-step ${workflow.task_completed ? 'completed' : taskEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>2</b><strong>Поставить задачу менеджеру</strong><span>Фиксация и план</span></div>
+          <article className={`workflow-step ${closureConfirmed || workflow.task_completed ? 'completed' : taskEnabled ? 'active' : 'disabled'}`}>
+            <div className="workflow-step-label"><b>2</b><strong>{closureConfirmed ? 'Задача менеджеру не требуется' : 'Поставить задачу менеджеру'}</strong><span>{closureConfirmed ? 'Закрытие соответствует фактам' : 'Фиксация и план'}</span></div>
             <div className="workflow-step-body">
-              <p><strong>Цель:</strong> дать менеджеру конкретное поручение для закрытия недостающих фактов.</p>
-              <label>Что нужно сделать</label>
-              <ExpandableText text={workflow.manager_task_text || 'Задача пока не сформирована.'} />
-              {showTaskEditor ? <textarea disabled={!taskEnabled} value={workflow.manager_task_text || ''} onChange={(event) => updateDraft('manager_task_text', event.target.value)} onBlur={() => void persist({ manager_task_text: workflow.manager_task_text })} /> : null}
+              {closureConfirmed ? (
+                <ExpandableText text={workflow.manager_task_text || 'Дополнительная задача менеджеру не требуется. Закрытие лида проверено и соответствует фактам CRM.'} />
+              ) : (
+                <><p><strong>Цель:</strong> дать менеджеру конкретное поручение для закрытия недостающих фактов.</p><label>Что нужно сделать</label><ExpandableText text={workflow.manager_task_text || 'Задача пока не сформирована.'} />{showTaskEditor ? <textarea disabled={!taskEnabled} value={workflow.manager_task_text || ''} onChange={(event) => updateDraft('manager_task_text', event.target.value)} onBlur={() => void persist({ manager_task_text: workflow.manager_task_text })} /> : null}</>
+              )}
             </div>
             <div className="workflow-step-actions">
-              <button disabled={!taskEnabled} onClick={() => copyValue(workflow.manager_task_text || '', 'Задача')}>Копировать задачу</button>
-              <button disabled={!taskEnabled} onClick={() => setShowTaskEditor((value) => !value)}>{showTaskEditor ? 'Скрыть редактор' : 'Редактировать'}</button>
-              <label><input type="checkbox" checked={workflow.task_completed} disabled={!taskEnabled || saving} onChange={(event) => void persist({ task_completed: event.target.checked })} /> Выполнено вручную</label>
+              {!closureConfirmed ? <><button disabled={!taskEnabled} onClick={() => copyValue(workflow.manager_task_text || '', 'Задача')}>Копировать задачу</button><button disabled={!taskEnabled} onClick={() => setShowTaskEditor((value) => !value)}>{showTaskEditor ? 'Скрыть редактор' : 'Редактировать'}</button><label><input type="checkbox" checked={workflow.task_completed} disabled={!taskEnabled || saving} onChange={(event) => void persist({ task_completed: event.target.checked })} /> Выполнено вручную</label></> : null}
             </div>
           </article>
 
-          <article className={`workflow-step ${controlActive ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>3</b><strong>Контроль и проверка</strong><span>{controlActive ? 'Карточка на контроле' : 'Поставить карточку на контроль'}</span></div>
+          <article className={`workflow-step ${closureConfirmed || controlActive ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
+            <div className="workflow-step-label"><b>3</b><strong>{closureConfirmed ? 'Дополнительный контроль не требуется' : 'Контроль и проверка'}</strong><span>{closureConfirmed ? 'Проверка завершена' : controlActive ? 'Карточка на контроле' : 'Поставить карточку на контроль'}</span></div>
             <div className="workflow-step-body">
-              <p>{controlActive ? `Контроль назначен${controlDeadline ? ` на ${formatLeadDate(controlDeadline, false)}` : ''}.` : `Карточка вернётся в активную очередь по сроку задачи${controlDeadline ? ` — ${formatLeadDate(controlDeadline, false)}` : ''}.`}</p>
+              <p>{closureConfirmed ? 'Причина закрытия подтверждена историей CRM; возвращать карточку на контроль не нужно.' : controlActive ? `Контроль назначен${controlDeadline ? ` на ${formatLeadDate(controlDeadline, false)}` : ''}.` : `Карточка вернётся в активную очередь по сроку задачи${controlDeadline ? ` — ${formatLeadDate(controlDeadline, false)}` : ''}.`}</p>
             </div>
             <div className="workflow-step-actions">
-              <button disabled={!controlEnabled || saving} className="primary-dark" onClick={() => void toggleControl()}>{controlActive ? 'Снять с контроля' : 'Поставить на контроль'}</button>
+              {!closureConfirmed ? <button disabled={!controlEnabled || saving} className="primary-dark" onClick={() => void toggleControl()}>{controlActive ? 'Снять с контроля' : 'Поставить на контроль'}</button> : null}
             </div>
           </article>
         </section>

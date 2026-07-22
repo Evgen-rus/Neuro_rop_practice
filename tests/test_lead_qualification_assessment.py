@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import copy
+import json
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from openai_api.llm.analyze_lead import build_prompt, render_report
+from openai_api.llm.analyze_lead import (
+    build_prompt,
+    load_lead_crm_state,
+    render_report,
+    validate_lead_analysis_for_crm_state,
+)
 from openai_api.llm.validation import (
     AnalysisValidationError,
     normalize_analysis_for_validation,
@@ -102,6 +110,17 @@ def lead_analysis() -> dict:
         },
         "qualification_assessment": qualification_assessment(),
         "activity_summary": {"meaningful_contact": True, "summary": "Проведён предметный разговор."},
+        "closure_review": {
+            "applicable": False,
+            "crm_status_id": "IN_PROCESS",
+            "crm_status_name": "В работе",
+            "crm_status_semantic_id": "P",
+            "verdict": "not_applicable",
+            "reason": "Лид не находится в закрытом провальном статусе.",
+            "client_contact_required": True,
+            "manager_task_required": True,
+            "evidence": [],
+        },
         "rop_manager_message_block": {
             "check_for_rop": "Проверить подготовку расчёта.",
             "why_it_matters": "Клиент готов перейти к КП.",
@@ -218,6 +237,67 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("Не превращай первое сообщение в анкету", prompt)
         self.assertIn("При отложенном спросе или паузе сначала подтверди актуальность", prompt)
         self.assertIn("полный список существенных недостающих квалификационных или технических фактов", prompt)
+        self.assertIn("обязательно оцени корректность уже выполненного закрытия", prompt)
+        self.assertIn('"is_closed_lost": false', prompt)
+
+    def test_lead_crm_state_uses_semantic_for_closure_and_catalog_for_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lead_dir = root / "reports" / "lead_230059"
+            raw_dir = lead_dir / "raw"
+            raw_dir.mkdir(parents=True)
+            (raw_dir / "lead_230059_customer_history_bundle.json").write_text(
+                json.dumps(
+                    {
+                        "lead": {
+                            "response": {
+                                "result": {
+                                    "ID": "230059",
+                                    "STATUS_ID": "UC_O3KB71",
+                                    "STATUS_SEMANTIC_ID": "F",
+                                }
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (root / "crm_pipeline_map.json").write_text(
+                json.dumps(
+                    {
+                        "lead_pipeline": {
+                            "stages": [
+                                {"status_id": "UC_O3KB71", "name": "Не наш профиль производства"}
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("openai_api.llm.analyze_lead.PROJECT_ROOT", root):
+                crm_state = load_lead_crm_state(lead_dir)
+
+        self.assertTrue(crm_state["is_closed_lost"])
+        self.assertFalse(crm_state["is_converted"])
+        self.assertEqual(crm_state["status_name"], "Не наш профиль производства")
+
+    def test_lead_closure_review_must_match_deterministic_crm_state(self) -> None:
+        analysis = lead_analysis()
+        crm_state = {
+            "status_id": "IN_PROCESS",
+            "status_name": "В работе",
+            "status_semantic_id": "P",
+            "is_closed_lost": False,
+        }
+
+        validate_lead_analysis_for_crm_state(analysis, crm_state)
+
+        analysis["closure_review"]["crm_status_name"] = "Не наш профиль производства"
+        with self.assertRaisesRegex(AnalysisValidationError, "must match deterministic CRM state"):
+            validate_lead_analysis_for_crm_state(analysis, crm_state)
 
     def test_confirmed_bant_compatible_solution_and_sufficient_budget_is_valid(self) -> None:
         analysis = lead_analysis()
@@ -265,6 +345,83 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         analysis = lead_analysis()
         analysis["rop_manager_message_block"]["deadline"] = "завтра"
         with self.assertRaisesRegex(AnalysisValidationError, "YYYY-MM-DD format"):
+            validate_lead_analysis(analysis)
+
+    def test_confirmed_correct_closure_requires_no_task_or_client_messages(self) -> None:
+        analysis = lead_analysis()
+        analysis["lead_state"].update(
+            {"status": "Не наш профиль производства", "qualification": "D", "qualification_reason": "Подтверждена техническая несовместимость."}
+        )
+        assessment = analysis["qualification_assessment"]
+        assessment["solution_fit"] = {
+            "equipment_type": "filling_line",
+            "status": "not_compatible",
+            "technical_data_status": "sufficient",
+            "reason_code": "technical_mismatch",
+            "evidence": ["Клиенту обязательна пастеризация, которую компания не производит."],
+            "missing_facts": [],
+            "next_question_or_action": None,
+        }
+        assessment["lead_category"].update(
+            {"value": "D", "reason": "Подтверждена техническая несовместимость.", "reason_codes": ["technical_mismatch"]}
+        )
+        assessment["lead_route"].update(
+            {
+                "current_route": "disqualified",
+                "recommended_route": "disqualified",
+                "status": "allowed",
+                "reason": "Причина закрытия подтверждена.",
+                "evidence": ["CRM-этап соответствует техническому стоп-фактору."],
+            }
+        )
+        analysis["closure_review"] = {
+            "applicable": True,
+            "crm_status_id": "UC_O3KB71",
+            "crm_status_name": "Не наш профиль производства",
+            "crm_status_semantic_id": "F",
+            "verdict": "confirmed_correct",
+            "reason": "Причина закрытия подтверждена коммуникацией с клиентом.",
+            "client_contact_required": False,
+            "manager_task_required": False,
+            "evidence": ["Клиент не рассматривает решение без пастеризации."],
+        }
+        analysis["loss_diagnosis"].update({"route_quality": "correct", "final_verdict": "technical_mismatch"})
+        analysis["rop_manager_message_block"].update(
+            {
+                "message_to_manager": "Дополнительная задача менеджеру не требуется. Закрытие соответствует фактам CRM.",
+                "expected_crm_update": "Дополнительное обновление CRM не требуется.",
+                "deadline": None,
+                "success_condition": "Корректность закрытия подтверждена evidence.",
+            }
+        )
+        analysis["manager_action_block"].update(
+            {"goal": "Контакт с клиентом не требуется.", "primary_text": None, "backup_texts": [], "manager_checklist": []}
+        )
+        analysis["rop_action"] = {"required": False, "text": "Дополнительный контроль не требуется."}
+
+        validate_lead_analysis(analysis)
+
+        analysis["manager_action_block"]["primary_text"] = {
+            "type": "messenger",
+            "subject": "",
+            "title": "Деловой и прямой",
+            "text": "Повторно уточните уже подтверждённый отказ.",
+        }
+        with self.assertRaisesRegex(AnalysisValidationError, "primary_text must be null"):
+            validate_lead_analysis(analysis)
+
+    def test_closed_lead_cannot_skip_closure_review(self) -> None:
+        analysis = lead_analysis()
+        analysis["closure_review"].update(
+            {
+                "applicable": True,
+                "crm_status_semantic_id": "F",
+                "verdict": "not_applicable",
+                "evidence": ["Лид находится в финальном статусе."],
+            }
+        )
+
+        with self.assertRaisesRegex(AnalysisValidationError, "must not be not_applicable"):
             validate_lead_analysis(analysis)
 
     def test_incomplete_bant_keeps_data_gap_and_one_question(self) -> None:

@@ -75,14 +75,96 @@ def resolve_transcript(value: str, lead_dir: Path) -> Path | None:
     return path
 
 
+def _load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _response_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    response = payload.get("response")
+    result = response.get("result") if isinstance(response, dict) else None
+    return result if isinstance(result, dict) else {}
+
+
+def load_lead_crm_state(lead_dir: Path) -> dict[str, Any]:
+    """Build deterministic current CRM state for the lead prompt."""
+    lead_id = lead_dir.name.removeprefix("lead_")
+    bundle = _load_json_object(lead_dir / "raw" / f"lead_{lead_id}_customer_history_bundle.json")
+    lead = _response_result(bundle.get("lead"))
+    if not lead:
+        context = _load_json_object(lead_dir / "raw" / f"lead_{lead_id}_context.json")
+        lead = _response_result(context.get("lead"))
+
+    status_id = str(lead.get("STATUS_ID") or "").strip()
+    semantic = str(lead.get("STATUS_SEMANTIC_ID") or "").strip().upper()
+    status_name = ""
+    pipeline_map = _load_json_object(PROJECT_ROOT / "crm_pipeline_map.json")
+    lead_pipeline = pipeline_map.get("lead_pipeline") if isinstance(pipeline_map.get("lead_pipeline"), dict) else {}
+    for stage in lead_pipeline.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        stage_id = str(stage.get("status_id") or stage.get("STATUS_ID") or stage.get("id") or "").strip()
+        if stage_id == status_id:
+            status_name = str(stage.get("name") or stage.get("NAME") or "").strip()
+            break
+
+    return {
+        "status_id": status_id or None,
+        "status_name": status_name or None,
+        "status_semantic_id": semantic or "unknown",
+        "is_closed_lost": semantic == "F",
+        "is_converted": status_id.upper() == "CONVERTED" or semantic == "S",
+        "status_name_available": bool(status_name),
+    }
+
+
+def validate_lead_analysis_for_crm_state(
+    analysis: dict[str, Any],
+    crm_state: dict[str, Any],
+) -> None:
+    """Validate the model contract and bind its CRM claims to deterministic input."""
+    validate_lead_analysis(analysis)
+    closure_review = analysis.get("closure_review")
+    if not isinstance(closure_review, dict):
+        raise AnalysisValidationError("closure_review must be an object")
+
+    expected = {
+        "crm_status_id": crm_state.get("status_id"),
+        "crm_status_name": crm_state.get("status_name"),
+        "crm_status_semantic_id": crm_state.get("status_semantic_id") or "unknown",
+        "applicable": bool(crm_state.get("is_closed_lost")),
+    }
+    mismatches = [
+        f"closure_review.{field} must match deterministic CRM state: expected {value!r}, got {closure_review.get(field)!r}"
+        for field, value in expected.items()
+        if closure_review.get(field) != value
+    ]
+    if mismatches:
+        raise AnalysisValidationError("Invalid lead CRM closure review: " + "; ".join(mismatches))
+
+
 def build_prompt(
     lead_id: str,
     history_text: str,
     transcript_text: str,
     context_diagnostics_text: str,
     okf_sections: list[tuple[Path, str]],
+    crm_state: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections)
+    crm_state_text = json.dumps(crm_state or {
+        "status_id": None,
+        "status_name": None,
+        "status_semantic_id": "unknown",
+        "is_closed_lost": False,
+        "is_converted": False,
+        "status_name_available": False,
+    }, ensure_ascii=False, indent=2)
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
 Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
@@ -117,6 +199,7 @@ def build_prompt(
 - Если в истории есть связанные сделки того же контакта, не считай отсутствие действия в текущей карточке лида отсутствием работы с клиентом.
 - Внутренний контекст и комментарии менеджеров можно использовать как evidence для контроля РОПа, но не считай их словами клиента.
 - Diagnostics используй только как сведения о полноте/ограничениях выгрузки, не как факты лида.
+- Блок ТЕКУЩЕЕ СОСТОЯНИЕ CRM сформирован детерминированно из карточки лида и справочника этапов. Используй `is_closed_lost` для определения уже закрытого лида, а `status_name` — только как заявленную CRM-причину закрытия.
 </grounding_rules>
 
 <length_limits>
@@ -144,9 +227,14 @@ def build_prompt(
 10. Рекомендация должна быть управленческой: что РОП поручает менеджеру и какой факт должен появиться в CRM.
 11. Если лид требует уточнения, используй прогрессивную квалификацию: один управляемый контакт должен сначала получить ближайший достижимый результат текущего этапа, а после ответа или в продолжении разговора — добрать остальные важные факты и зафиксировать их в CRM. Не требуй от клиента закрыть все пробелы квалификации в первом письменном сообщении и не превращай последовательность в несвязанные действия.
 12. rop_manager_message_block.manager_review_text — один короткий профессиональный комментарий РОПа менеджеру. Сначала покажи понимание текущей ситуации, затем отметь только подтверждённые сильные действия менеджера и объясни один рекомендуемый следующий шаг и его смысл. Если квалификация неполная, кратко раздели ближайший результат первого касания и факты, которые менеджер должен добрать после ответа или в разговоре, чтобы он видел весь маршрут работы. Не повторяй списки «Сильные стороны» и «Слабые стороны», не ставь психологические диагнозы и не включай сюда срок/CRM-критерии SMART-задачи или готовые тексты клиенту.
-13. rop_manager_message_block.message_to_manager — отдельная готовая SMART-задача менеджеру. В одной короткой формулировке должны быть конкретное действие, точный срок YYYY-MM-DD, полный список существенных недостающих квалификационных или технических фактов для этого этапа, ожидаемый факт в CRM и проверяемый результат. Не выдавай внутренний срок РОПа за обещание клиента.
-14. manager_action_block должен содержать ровно три готовых варианта первого обращения менеджера к клиенту: primary_text и два элемента backup_texts. Во всех трёх обязаны совпадать ближайшая цель касания, ключевые вопросы, факты и требуемый следующий шаг; меняется только тон подачи. Вариант 1 — деловой и прямой, вариант 2 — партнёрский и доброжелательный, вариант 3 — спокойный и консультативный. Оптимизируй каждый вариант как самостоятельное сообщение, которое можно отправить клиенту без редактирования; в разговоре оно служит вступлением, после которого менеджер продолжает квалификацию по manager_review_text и message_to_manager. Не превращай первое сообщение в анкету: выбери минимально достаточный запрос и один основной призыв к действию, который повышает вероятность ответа и продвигает текущий этап. При отложенном спросе или паузе сначала подтверди актуальность и согласуй месяц/дату следующего обсуждения; оставшиеся BANT- и технические вопросы перенеси на ответ клиента или разговор. Если клиент уже активно передаёт данные и следующий этап действительно заблокирован конкретным вводом, можно запросить этот ввод и срок его передачи. Не определяй DISC или иной психотип клиента, не дели варианты на письмо/мессенджер/звонок и не предлагай разные стратегии. Не включай в клиентские тексты инструкции менеджеру вроде «внеси в CRM».
+13. rop_manager_message_block.message_to_manager — отдельная готовая SMART-задача менеджеру. Когда `manager_task_required=true`, в одной короткой формулировке должны быть конкретное действие, точный срок YYYY-MM-DD, полный список существенных недостающих квалификационных или технических фактов для этого этапа, ожидаемый факт в CRM и проверяемый результат. Не выдавай внутренний срок РОПа за обещание клиента. Когда `manager_task_required=false`, прямо напиши, что дополнительная задача не требуется, и используй `deadline=null`.
+14. Когда `client_contact_required=true`, manager_action_block должен содержать ровно три готовых варианта первого обращения менеджера к клиенту: primary_text и два элемента backup_texts. Во всех трёх обязаны совпадать ближайшая цель касания, ключевые вопросы, факты и требуемый следующий шаг; меняется только тон подачи. Вариант 1 — деловой и прямой, вариант 2 — партнёрский и доброжелательный, вариант 3 — спокойный и консультативный. Оптимизируй каждый вариант как самостоятельное сообщение, которое можно отправить клиенту без редактирования; в разговоре оно служит вступлением, после которого менеджер продолжает квалификацию по manager_review_text и message_to_manager. Не превращай первое сообщение в анкету: выбери минимально достаточный запрос и один основной призыв к действию, который повышает вероятность ответа и продвигает текущий этап. При отложенном спросе или паузе сначала подтверди актуальность и согласуй месяц/дату следующего обсуждения; оставшиеся BANT- и технические вопросы перенеси на ответ клиента или разговор. Если клиент уже активно передаёт данные и следующий этап действительно заблокирован конкретным вводом, можно запросить этот ввод и срок его передачи. Не определяй DISC или иной психотип клиента, не дели варианты на письмо/мессенджер/звонок и не предлагай разные стратегии. Не включай в клиентские тексты инструкции менеджеру вроде «внеси в CRM».
 15. manager_action_block.manager_checklist — короткий список CRM-фактов после контакта; не дублируй в нём задачу или тексты клиенту.
+16. Если `is_closed_lost=true`, обязательно оцени корректность уже выполненного закрытия в closure_review. Не поручай менеджеру закрыть лид повторно.
+17. Для `confirmed_correct` нужны согласующиеся CRM-этап и evidence из истории/коммуникаций. В этом случае `client_contact_required=false`, `manager_task_required=false`, `deadline=null`, `primary_text=null`, `backup_texts=[]`, `manager_checklist=[]`, `rop_action.required=false`; прямо напиши, что дополнительная задача, контакт с клиентом и постановка на контроль не требуются.
+18. Для `disputed` укажи конкретное противоречие между CRM-причиной и evidence. Для `insufficient_evidence` не объявляй закрытие ошибочным: поручи один содержательный контакт и фиксацию результата. В обоих случаях контакт требуется и сохраняются ровно три варианта обращения.
+19. Если `is_closed_lost=false`, closure_review.verdict=`not_applicable`; текущая логика анализа, SMART-задачи и трёх клиентских вариантов не меняется.
+20. Подтверждённый стоп-фактор важнее отсутствующих BANT-фактов. Если клиент прямо отказался от решения без обязательной функции, не придумывай отдельную технологическую схему или готовность рассматривать альтернативу без evidence.
 
 <qualification_rules>
 Сначала заполни qualification_assessment: четыре независимых критерия BANT, техническую применимость, коммерческую проверку бюджета нового оборудования, категорию лида и маршрут. Только затем продублируй категорию в legacy-поле lead_state.qualification, выбери loss_diagnosis.final_verdict и рекомендацию.
@@ -248,13 +336,24 @@ def build_prompt(
     "meaningful_contact": true,
     "summary": "что уже произошло по коммуникациям"
   }},
+  "closure_review": {{
+    "applicable": false,
+    "crm_status_id": "код текущего этапа или null",
+    "crm_status_name": "название текущего этапа или null",
+    "crm_status_semantic_id": "F|S|P|unknown",
+    "verdict": "confirmed_correct|disputed|insufficient_evidence|not_applicable",
+    "reason": "почему закрытие подтверждено, спорно или не может быть проверено",
+    "client_contact_required": true,
+    "manager_task_required": true,
+    "evidence": ["факты CRM и коммуникаций, подтверждающие вывод"]
+  }},
   "rop_manager_message_block": {{
     "check_for_rop": "что конкретно РОПу проверить по лиду",
     "why_it_matters": "почему это влияет на потерю лида, скорость обработки или деньги",
     "manager_review_text": "краткий комментарий РОПа: понимание ситуации, подтверждённое хорошее действие и рекомендуемый следующий шаг",
     "message_to_manager": "короткая SMART-задача менеджеру: действие, точный срок, CRM-факт и проверяемый результат",
     "expected_crm_update": "какой факт должен появиться в CRM после действия менеджера",
-    "deadline": "YYYY-MM-DD",
+    "deadline": "YYYY-MM-DD или null, если закрытие подтверждено и задача не требуется",
     "success_condition": "как понять, что поручение выполнено",
     "evidence": [
       "1-7 самых важных фактов из истории, звонка, комментария, задачи, статуса, CRM или внутреннего чата"
@@ -324,6 +423,10 @@ def build_prompt(
 ## ИСТОРИЯ ЛИДА
 
 {history_text.strip()}
+
+## ТЕКУЩЕЕ СОСТОЯНИЕ CRM
+
+{crm_state_text}
 
 ## ТРАНСКРИБАЦИЯ / НОВОЕ СОБЫТИЕ
 
@@ -515,6 +618,7 @@ def render_report(
     risk = analysis.get("main_risk", {}) or {}
     loss = analysis.get("loss_diagnosis", {}) or {}
     manager_quality = analysis.get("manager_quality", {}) or {}
+    closure_review = analysis.get("closure_review", {}) or {}
     call_recommendation = analysis.get("call_attempt_recommendation", {}) or {}
     manager = analysis.get("manager_action_block", {}) or {}
     primary = manager.get("primary_text", {}) or {}
@@ -533,7 +637,27 @@ def render_report(
     ]
     client_options_md = "\n".join(
         f"{index}. {item}" for index, item in enumerate(client_message_options, 1) if item
-    ) or "не указано"
+    )
+    if closure_review.get("verdict") == "confirmed_correct" and not client_options_md:
+        client_material = "- Контакт с клиентом: не требуется — закрытие подтверждено фактами."
+    else:
+        client_material = f"- Три варианта обращения менеджера к клиенту:\n{client_options_md or 'не указано'}"
+
+    closure_section = ""
+    if closure_review:
+        closure_section = f"""
+
+## Проверка закрытия лида
+
+- Применима: {human_value(closure_review.get('applicable'))}
+- CRM-этап: {closure_review.get('crm_status_name') or closure_review.get('crm_status_id') or 'не указано'}
+- Вердикт: {closure_review.get('verdict', 'не указано')}
+- Причина: {closure_review.get('reason', 'не указано')}
+- Контакт с клиентом требуется: {human_value(closure_review.get('client_contact_required'))}
+- Задача менеджеру требуется: {human_value(closure_review.get('manager_task_required'))}
+- Основание:
+{bullet_list(closure_review.get('evidence'))}
+"""
 
     return f"""# Отчет РОПу по лиду {lead_id}
 
@@ -545,8 +669,7 @@ def render_report(
 - Проверить: {rop_manager.get('check_for_rop') or rop.get('text', 'не указано')}
 - Почему это важно: {rop_manager.get('why_it_matters', 'не указано')}
 - Комментарий РОПа менеджеру: {rop_manager.get('manager_review_text', 'не указано')}
-- Три варианта обращения менеджера к клиенту:
-{client_options_md}
+{client_material}
 - SMART-задача менеджеру: {rop_manager.get('message_to_manager', 'не указано')}
 - Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
 - Срок контроля: {human_value(rop_manager.get('deadline'))}
@@ -562,6 +685,7 @@ def render_report(
 - Квалификация: {lead_state.get('qualification', 'unknown')}
 - Почему: {lead_state.get('qualification_reason', 'не указано')}
 - Кратко: {lead_state.get('summary', 'не указано')}
+{closure_section}
 
 {qualification_assessment}
 
@@ -718,7 +842,15 @@ def main() -> None:
         okf_sections.append((path, read_text(path)))
 
     history_text = read_text(history_path)
-    prompt = build_prompt(args.lead_id, history_text, transcript_text, context_diagnostics_text, okf_sections)
+    crm_state = load_lead_crm_state(lead_dir)
+    prompt = build_prompt(
+        args.lead_id,
+        history_text,
+        transcript_text,
+        context_diagnostics_text,
+        okf_sections,
+        crm_state,
+    )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"lead_{args.lead_id}_request_prompt.txt"
     prompt_budget_path = analysis_dir / f"lead_{args.lead_id}_prompt_budget.json"
@@ -757,7 +889,7 @@ def main() -> None:
     try:
         analysis, metadata = call_validated_analysis_json(
             prompt,
-            validator=validate_lead_analysis,
+            validator=lambda value: validate_lead_analysis_for_crm_state(value, crm_state),
             normalizer=normalize_analysis_for_validation,
             validation_error_types=(AnalysisValidationError,),
             model=args.model,

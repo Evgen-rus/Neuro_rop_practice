@@ -57,6 +57,7 @@ LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "lead_id",
     "lead_state",
     "activity_summary",
+    "closure_review",
     "loss_diagnosis",
     "qualification_assessment",
 }
@@ -77,6 +78,7 @@ MAX_LIST_LIMITS = {
     "competitor_defense_checklist.defense_points": 5,
     "competitor_defense_checklist.questions_to_client": 5,
     "loss_diagnosis.evidence": 7,
+    "closure_review.evidence": 7,
     "qualification_assessment.bant.budget.evidence": 7,
     "qualification_assessment.bant.authority.evidence": 7,
     "qualification_assessment.bant.need.evidence": 7,
@@ -147,6 +149,19 @@ def normalize_analysis_for_validation(
         if isinstance(call_attempt, dict) and "cycle_status" not in call_attempt:
             call_attempt["cycle_status"] = "unknown"
             changes.append({"path": "call_attempt_recommendation.cycle_status", "action": "added_legacy_fallback"})
+        if "closure_review" not in analysis:
+            analysis["closure_review"] = {
+                "applicable": False,
+                "crm_status_id": None,
+                "crm_status_name": None,
+                "crm_status_semantic_id": "unknown",
+                "verdict": "not_applicable",
+                "reason": "В старом анализе нет структурированной проверки закрытия.",
+                "client_contact_required": True,
+                "manager_task_required": True,
+                "evidence": [],
+            }
+            changes.append({"path": "closure_review", "action": "added_legacy_fallback"})
         lead_state = analysis.get("lead_state")
         assessment = analysis.get("qualification_assessment")
         category = assessment.get("lead_category") if isinstance(assessment, dict) else None
@@ -474,7 +489,14 @@ def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None
 
     manager_action = _expect_dict(analysis.get("manager_action_block"), "manager_action_block", errors)
     if manager_action:
-        _expect_dict(manager_action.get("primary_text"), "manager_action_block.primary_text", errors)
+        closure_review = analysis.get("closure_review")
+        no_client_contact = (
+            isinstance(closure_review, dict)
+            and closure_review.get("verdict") == "confirmed_correct"
+            and closure_review.get("client_contact_required") is False
+        )
+        if not no_client_contact:
+            _expect_dict(manager_action.get("primary_text"), "manager_action_block.primary_text", errors)
         _expect_list(manager_action.get("backup_texts"), "manager_action_block.backup_texts", errors)
         _expect_list(manager_action.get("manager_checklist"), "manager_action_block.manager_checklist", errors)
         _validate_client_texts(manager_action, errors)
@@ -1412,6 +1434,86 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _require_fields(analysis, LEAD_REQUIRED_FIELDS, "", errors)
     _expect_dict(analysis.get("lead_state"), "lead_state", errors)
     _expect_dict(analysis.get("activity_summary"), "activity_summary", errors)
+    closure_review = _expect_dict(analysis.get("closure_review"), "closure_review", errors)
+    closure_verdict = None
+    no_manager_action = False
+    if closure_review:
+        _require_fields(
+            closure_review,
+            {
+                "applicable",
+                "crm_status_id",
+                "crm_status_name",
+                "crm_status_semantic_id",
+                "verdict",
+                "reason",
+                "client_contact_required",
+                "manager_task_required",
+                "evidence",
+            },
+            "closure_review",
+            errors,
+        )
+        _expect_bool(closure_review.get("applicable"), "closure_review.applicable", errors)
+        _expect_bool(
+            closure_review.get("client_contact_required"),
+            "closure_review.client_contact_required",
+            errors,
+        )
+        _expect_bool(
+            closure_review.get("manager_task_required"),
+            "closure_review.manager_task_required",
+            errors,
+        )
+        closure_verdict = closure_review.get("verdict")
+        _expect_enum(
+            closure_verdict,
+            "closure_review.verdict",
+            {"confirmed_correct", "disputed", "insufficient_evidence", "not_applicable"},
+            errors,
+        )
+        _expect_enum(
+            closure_review.get("crm_status_semantic_id"),
+            "closure_review.crm_status_semantic_id",
+            {"F", "S", "P", "unknown"},
+            errors,
+        )
+        _expect_non_empty_text_without_markers(
+            closure_review.get("reason"),
+            "closure_review.reason",
+            errors,
+        )
+        closure_evidence = _expect_max_list_length(
+            closure_review.get("evidence"),
+            "closure_review.evidence",
+            7,
+            errors,
+        )
+        is_closed_lost = closure_review.get("crm_status_semantic_id") == "F"
+        if is_closed_lost != bool(closure_review.get("applicable")):
+            errors.append("closure_review.applicable must match crm_status_semantic_id=F")
+        if is_closed_lost and closure_verdict == "not_applicable":
+            errors.append("closed-lost lead closure_review.verdict must not be not_applicable")
+        if not is_closed_lost and closure_verdict != "not_applicable":
+            errors.append("non-closed lead closure_review.verdict must be not_applicable")
+        if is_closed_lost and not closure_evidence:
+            errors.append("closed-lost closure_review.evidence must not be empty")
+        no_manager_action = closure_verdict == "confirmed_correct"
+        if no_manager_action:
+            if closure_review.get("client_contact_required") is not False:
+                errors.append("confirmed_correct closure must not require client contact")
+            if closure_review.get("manager_task_required") is not False:
+                errors.append("confirmed_correct closure must not require manager task")
+        elif closure_verdict in {"disputed", "insufficient_evidence"}:
+            if closure_review.get("client_contact_required") is not True:
+                errors.append(f"{closure_verdict} closure must require client contact")
+            if closure_review.get("manager_task_required") is not True:
+                errors.append(f"{closure_verdict} closure must require manager task")
+        elif closure_verdict == "not_applicable":
+            if closure_review.get("client_contact_required") is not True:
+                errors.append("non-closed lead must preserve client contact workflow")
+            if closure_review.get("manager_task_required") is not True:
+                errors.append("non-closed lead must preserve manager task workflow")
     call_attempt = _expect_dict(
         analysis.get("call_attempt_recommendation"), "call_attempt_recommendation", errors
     )
@@ -1489,7 +1591,10 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
         if isinstance(review_text, str) and len(review_text.strip()) > 500:
             errors.append("rop_manager_message_block.manager_review_text must be at most 500 characters")
         deadline = rop_manager.get("deadline")
-        if not isinstance(deadline, str) or not deadline.strip():
+        if no_manager_action:
+            if deadline is not None:
+                errors.append("confirmed_correct closure must use null rop_manager_message_block.deadline")
+        elif not isinstance(deadline, str) or not deadline.strip():
             errors.append("rop_manager_message_block.deadline must be a non-empty YYYY-MM-DD string for lead analysis")
         else:
             try:
@@ -1504,7 +1609,13 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
             "manager_action_block.backup_texts",
             errors,
         )
-        if len(backups) != 2:
+        if no_manager_action and primary is not None:
+            errors.append("confirmed_correct closure manager_action_block.primary_text must be null")
+        if no_manager_action and backups:
+            errors.append("confirmed_correct closure manager_action_block.backup_texts must be empty")
+        if no_manager_action and manager_action.get("manager_checklist") != []:
+            errors.append("confirmed_correct closure manager_action_block.manager_checklist must be empty")
+        if not no_manager_action and len(backups) != 2:
             errors.append("manager_action_block.backup_texts must contain exactly 2 items for lead analysis")
         option_values: list[tuple[str, Any]] = []
         client_options: list[dict[str, Any]] = []
@@ -1533,9 +1644,12 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
                 normalized_options.append(normalized)
                 if len(normalized) > 1200:
                     errors.append(f"{path} must be at most 1200 characters")
-        if len(option_values) != 3:
+        if not no_manager_action and len(option_values) != 3:
             errors.append("manager_action_block must contain exactly 3 client message texts for lead analysis")
         if len(set(normalized_options)) != len(normalized_options):
             errors.append("manager_action_block client message texts must be distinct")
+    rop_action = analysis.get("rop_action")
+    if no_manager_action and isinstance(rop_action, dict) and rop_action.get("required") is not False:
+        errors.append("confirmed_correct closure rop_action.required must be false")
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

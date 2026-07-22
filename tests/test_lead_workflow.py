@@ -147,6 +147,35 @@ class LeadWorkflowApiTests(unittest.TestCase):
             self.assertIn("«Клиентский вариант 1»", workflow["manager_full_review_text"])
             self.assertNotIn("final_decision", workflow)
 
+    def test_confirmed_correct_closure_builds_review_without_client_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="230059",
+                report_json={
+                    "lead_state": {"summary": "Закрытие подтверждено."},
+                    "closure_review": {
+                        "verdict": "confirmed_correct",
+                        "client_contact_required": False,
+                        "manager_task_required": False,
+                    },
+                    "rop_manager_message_block": {
+                        "manager_review_text": "Лид закрыт корректно; дополнительных действий не требуется.",
+                        "message_to_manager": "Дополнительная задача менеджеру не требуется.",
+                    },
+                    "manager_action_block": {"primary_text": None, "backup_texts": []},
+                },
+            )
+
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                workflow = api_app.lead_workflow("230059", report_id=report_id)
+
+            self.assertEqual(workflow["manager_message_options"], [])
+            self.assertNotIn("Вариант 1", workflow["manager_full_review_text"])
+            self.assertEqual(workflow["manager_task_text"], "Дополнительная задача менеджеру не требуется.")
+
     def test_legacy_report_preserves_manually_edited_client_texts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"
