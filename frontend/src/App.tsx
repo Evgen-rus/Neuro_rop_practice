@@ -2020,6 +2020,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const [notice, setNotice] = useState('')
   const [materialTab, setMaterialTab] = useState<LeadMaterialTab | null>(null)
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
+  const [showReviewEditor, setShowReviewEditor] = useState(false)
   const [showTaskEditor, setShowTaskEditor] = useState(false)
   const [qualificationIssues, setQualificationIssues] = useState<string[]>([])
   const [qualificationComment, setQualificationComment] = useState('')
@@ -2027,6 +2028,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   useEffect(() => {
     setWorkflow(reportDetail?.workflow || null)
     setMaterialTab(null)
+    setEditingMessageIndex(null)
+    setShowReviewEditor(false)
   }, [reportDetail?.id, reportDetail?.workflow])
 
   useEffect(() => {
@@ -2046,6 +2049,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   const leadState = asRecord(analysis?.lead_state)
   const rop = asRecord(analysis?.rop_manager_message_block)
+  const managerQuality = asRecord(analysis?.manager_quality)
   const assessment = asRecord(analysis?.qualification_assessment)
   const bant = asRecord(assessment.bant)
   const category = asRecord(assessment.lead_category)
@@ -2084,7 +2088,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     }
   }
 
-  function updateDraft(field: 'manager_task_text', value: string) {
+  function updateDraft(field: 'manager_review_text' | 'manager_task_text', value: string) {
     setWorkflow((current) => current ? { ...current, [field]: value } : current)
   }
 
@@ -2124,6 +2128,15 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     ? workflow.manager_message_options
     : asStringList(rop.manager_message_options)
   ).map(formatMoneyText)
+  const strengths = asStringList(managerQuality.what_done_well).map(formatMoneyText)
+  const weaknesses = asStringList(managerQuality.missed_points).map(formatMoneyText)
+  const managerReviewText = formatMoneyText(workflow.manager_review_text || asString(rop.manager_review_text))
+  const messageToneLabels = ['Деловой и прямой', 'Партнёрский и доброжелательный', 'Спокойный и консультативный']
+  const fullManagerReview = [
+    managerReviewText,
+    managerMessages.length ? 'Предлагаю три варианта, как можно обратиться к клиенту:' : '',
+    ...managerMessages.map((message, index) => `Вариант ${index + 1} — ${messageToneLabels[index] || 'готовый текст'}\n${message}`),
+  ].filter(Boolean).join('\n\n')
   const taskEnabled = workflow.review_completed
   const controlEnabled = workflow.task_completed
   const controlActive = Boolean(workflow.control_mode)
@@ -2232,16 +2245,27 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
 
           <article className={`workflow-step ${workflow.review_completed ? 'completed' : 'active'}`}>
-            <div className="workflow-step-label"><b>1</b><strong>Разбор для менеджера</strong><span>Три готовых варианта</span></div>
+            <div className="workflow-step-label"><b>1</b><strong>Разбор для менеджера</strong><span>Сильные и слабые стороны</span></div>
             <div className="workflow-step-body">
-              <div className="manager-message-grid">
-                {managerMessages.length ? managerMessages.map((message, index) => (
-                  <section className="review-card manager-review" key={`manager-option-${index}`}>
-                    <div className="manager-review-heading"><h4>Вариант {index + 1}</h4><div><button onClick={() => copyValue(message, `Вариант ${index + 1}`)}>Копировать</button><button onClick={() => setEditingMessageIndex(editingMessageIndex === index ? null : index)}>{editingMessageIndex === index ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
-                    <ExpandableText text={message} />
-                    {editingMessageIndex === index ? <textarea aria-label={`Вариант сообщения ${index + 1}`} value={workflow.manager_message_options?.[index] || message} onChange={(event) => updateManagerMessage(index, event.target.value)} onBlur={() => void persist({ manager_message_options: workflow.manager_message_options })} /> : null}
-                  </section>
-                )) : <section className="review-card manager-review"><p>Разбор пока не сформирован.</p></section>}
+              <div className="review-grid">
+                <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
+                <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
+                <section className="review-card manager-review">
+                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать всё</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать вступление'}</button></div></div>
+                  <ExpandableText text={managerReviewText || 'Разбор пока не сформирован.'} />
+                  {showReviewEditor ? <textarea aria-label="Вступление разбора для менеджера" value={workflow.manager_review_text || ''} onChange={(event) => updateDraft('manager_review_text', event.target.value)} onBlur={() => void persist({ manager_review_text: workflow.manager_review_text })} /> : null}
+                  {managerMessages.length ? <p className="manager-options-intro">Предлагаю три варианта, как можно обратиться к клиенту:</p> : null}
+                  <div className="manager-client-options">
+                    {managerMessages.map((message, index) => (
+                      <article className="manager-client-option" key={`manager-option-${index}`}>
+                        <div className="manager-client-option-heading"><strong>Вариант {index + 1}</strong><span>{messageToneLabels[index] || 'Готовый текст'}</span><div><button onClick={() => copyValue(message, `Вариант ${index + 1}`)}>Копировать</button><button onClick={() => setEditingMessageIndex(editingMessageIndex === index ? null : index)}>{editingMessageIndex === index ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
+                        <ExpandableText text={message} />
+                        {editingMessageIndex === index ? <textarea aria-label={`Вариант сообщения клиенту ${index + 1}`} value={workflow.manager_message_options?.[index] || message} onChange={(event) => updateManagerMessage(index, event.target.value)} onBlur={() => void persist({ manager_message_options: workflow.manager_message_options })} /> : null}
+                      </article>
+                    ))}
+                    {!managerMessages.length ? <p className="muted">Варианты сообщения клиенту пока не сформированы.</p> : null}
+                  </div>
+                </section>
               </div>
             </div>
             <div className="workflow-step-actions">

@@ -77,9 +77,13 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 report_json={
                     "lead_state": {"summary": "Нужна проверка"},
                     "rop_manager_message_block": {
-                        "manager_message_options": ["Вариант 1", "Вариант 2", "Вариант 3"],
+                        "manager_review_text": "Хорошо проведён первый контакт. Теперь важно согласовать следующий шаг.",
                         "message_to_manager": "До 2026-07-24 позвонить клиенту и зафиксировать результат в CRM.",
                         "deadline": "2026-07-24",
+                    },
+                    "manager_action_block": {
+                        "primary_text": {"text": "Клиентский вариант 1"},
+                        "backup_texts": [{"text": "Клиентский вариант 2"}, {"text": "Клиентский вариант 3"}],
                     },
                 },
             )
@@ -108,7 +112,7 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 self.assertEqual(review["state"], "active")
                 self.assertEqual(review["decision"], "Снят с контроля")
 
-    def test_legacy_report_gets_one_safe_manager_message_fallback(self) -> None:
+    def test_legacy_report_uses_client_texts_and_builds_review_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"
             report_id = save_ui_report(
@@ -117,9 +121,14 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 entity_id="88",
                 report_json={
                     "lead_state": {},
+                    "manager_quality": {"what_done_well": ["собраны исходные параметры"], "missed_points": []},
                     "rop_manager_message_block": {
                         "message_to_manager": "Позвонить клиенту.",
                         "why_it_matters": "Нужно подтвердить актуальность.",
+                    },
+                    "manager_action_block": {
+                        "primary_text": {"text": "Клиентский вариант 1"},
+                        "backup_texts": [{"text": "Клиентский вариант 2"}, {"text": "Клиентский вариант 3"}],
                     },
                 },
             )
@@ -127,9 +136,50 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 workflow = api_app.lead_workflow("88", report_id=report_id)
             self.assertEqual(
                 workflow["manager_message_options"],
-                ["Позвонить клиенту. Нужно подтвердить актуальность."],
+                ["Клиентский вариант 1", "Клиентский вариант 2", "Клиентский вариант 3"],
             )
+            self.assertIn("собраны исходные параметры", workflow["manager_review_text"])
             self.assertNotIn("final_decision", workflow)
+
+    def test_legacy_report_preserves_manually_edited_client_texts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="89",
+                report_json={
+                    "rop_manager_message_block": {
+                        "manager_message_options": ["Старый вариант 1", "Старый вариант 2", "Старый вариант 3"],
+                    },
+                    "manager_action_block": {
+                        "primary_text": {"text": "Клиентский вариант 1"},
+                        "backup_texts": [{"text": "Клиентский вариант 2"}, {"text": "Клиентский вариант 3"}],
+                    },
+                },
+            )
+            edited_options = ["Ручной вариант 1", "Ручной вариант 2", "Ручной вариант 3"]
+            upsert_lead_workflow_state(
+                db_path,
+                lead_id="89",
+                source_report_id=report_id,
+                manager_review_text="Ручной разбор",
+                manager_message_options=edited_options,
+                manager_task_text="Задача",
+                review_completed=False,
+                task_completed=False,
+                control_mode=None,
+                control_days=2,
+                control_date=None,
+                control_completed=False,
+                final_decision=None,
+            )
+
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                workflow = api_app.lead_workflow("89", report_id=report_id)
+
+            self.assertEqual(workflow["manager_review_text"], "Ручной разбор")
+            self.assertEqual(workflow["manager_message_options"], edited_options)
 
     def test_one_time_migration_reactivates_no_attention_and_keeps_audit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

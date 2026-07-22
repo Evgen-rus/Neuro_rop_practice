@@ -1480,24 +1480,14 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _validate_common_shapes(analysis, errors)
     rop_manager = analysis.get("rop_manager_message_block")
     if isinstance(rop_manager, dict):
-        options = _expect_list(
-            rop_manager.get("manager_message_options"),
-            "rop_manager_message_block.manager_message_options",
+        review_text = rop_manager.get("manager_review_text")
+        _expect_non_empty_text_without_markers(
+            review_text,
+            "rop_manager_message_block.manager_review_text",
             errors,
         )
-        if len(options) != 3:
-            errors.append("rop_manager_message_block.manager_message_options must contain exactly 3 items")
-        normalized_options: list[str] = []
-        for index, option in enumerate(options):
-            path = f"rop_manager_message_block.manager_message_options[{index}]"
-            _expect_non_empty_text_without_markers(option, path, errors)
-            if isinstance(option, str):
-                normalized = option.strip()
-                normalized_options.append(normalized)
-                if len(normalized) > 500:
-                    errors.append(f"{path} must be at most 500 characters")
-        if len(set(normalized_options)) != len(normalized_options):
-            errors.append("rop_manager_message_block.manager_message_options must be distinct")
+        if isinstance(review_text, str) and len(review_text.strip()) > 500:
+            errors.append("rop_manager_message_block.manager_review_text must be at most 500 characters")
         deadline = rop_manager.get("deadline")
         if not isinstance(deadline, str) or not deadline.strip():
             errors.append("rop_manager_message_block.deadline must be a non-empty YYYY-MM-DD string for lead analysis")
@@ -1506,5 +1496,46 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
                 date.fromisoformat(deadline.strip())
             except ValueError:
                 errors.append("rop_manager_message_block.deadline must use YYYY-MM-DD format for lead analysis")
+    manager_action = analysis.get("manager_action_block")
+    if isinstance(manager_action, dict):
+        primary = manager_action.get("primary_text")
+        backups = _expect_list(
+            manager_action.get("backup_texts"),
+            "manager_action_block.backup_texts",
+            errors,
+        )
+        if len(backups) != 2:
+            errors.append("manager_action_block.backup_texts must contain exactly 2 items for lead analysis")
+        option_values: list[tuple[str, Any]] = []
+        client_options: list[dict[str, Any]] = []
+        if isinstance(primary, dict):
+            client_options.append(primary)
+            option_values.append(("manager_action_block.primary_text.text", primary.get("text")))
+        for index, option in enumerate(backups):
+            if isinstance(option, dict):
+                client_options.append(option)
+                option_values.append((f"manager_action_block.backup_texts[{index}].text", option.get("text")))
+        expected_titles = [
+            "Деловой и прямой",
+            "Партнёрский и доброжелательный",
+            "Спокойный и консультативный",
+        ]
+        for index, (option, expected_title) in enumerate(zip(client_options, expected_titles)):
+            if str(option.get("title") or "").strip() != expected_title:
+                errors.append(
+                    f"manager_action_block client option {index + 1} must use title {expected_title!r}"
+                )
+        normalized_options: list[str] = []
+        for path, option in option_values:
+            _expect_non_empty_text_without_markers(option, path, errors)
+            if isinstance(option, str):
+                normalized = option.strip()
+                normalized_options.append(normalized)
+                if len(normalized) > 1200:
+                    errors.append(f"{path} must be at most 1200 characters")
+        if len(option_values) != 3:
+            errors.append("manager_action_block must contain exactly 3 client message texts for lead analysis")
+        if len(set(normalized_options)) != len(normalized_options):
+            errors.append("manager_action_block client message texts must be distinct")
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

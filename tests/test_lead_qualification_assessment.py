@@ -105,11 +105,7 @@ def lead_analysis() -> dict:
         "rop_manager_message_block": {
             "check_for_rop": "Проверить подготовку расчёта.",
             "why_it_matters": "Клиент готов перейти к КП.",
-            "manager_message_options": [
-                "Смотри, клиент готов перейти к расчёту. Подготовь его до срока и сразу согласуй дату ответа, чтобы следующий шаг не остался открытым.",
-                "Ты уже подтвердил интерес клиента. Теперь подготовь расчёт до срока и договорись о дате ответа — так мы сохраним темп работы.",
-                "Здесь важно не останавливаться на интересе клиента. Подготовь расчёт до срока, согласуй дату ответа и зафиксируй следующий шаг.",
-            ],
+            "manager_review_text": "Хорошо, что интерес клиента подтверждён. Теперь важно отправить расчёт и сразу согласовать дату ответа, чтобы следующий шаг не остался открытым.",
             "message_to_manager": "До 2026-07-15 подготовьте расчёт, согласуйте дату ответа клиента и внесите её в CRM; результат — расчёт отправлен и следующий шаг зафиксирован.",
             "expected_crm_update": "В CRM зафиксирован срок ответа по КП.",
             "deadline": "2026-07-15",
@@ -142,8 +138,11 @@ def lead_analysis() -> dict:
             "recommended_channel": "email",
             "channel_reason": "Нужно направить расчёт.",
             "goal": "Согласовать следующий шаг.",
-            "primary_text": {"type": "email", "subject": "Расчёт", "text": "Направляем расчёт."},
-            "backup_texts": [],
+            "primary_text": {"type": "email", "subject": "Расчёт", "title": "Деловой и прямой", "text": "Направляю расчёт. Подскажите, пожалуйста, когда сможете дать обратную связь и согласовать следующий шаг?"},
+            "backup_texts": [
+                {"type": "messenger", "title": "Партнёрский и доброжелательный", "text": "Подготовили для вас расчёт. Подскажите, когда будет удобно вернуться с обратной связью и вместе определить следующий шаг?"},
+                {"type": "messenger", "title": "Спокойный и консультативный", "text": "Расчёт готов. Предлагаю определить срок обратной связи, после которого зафиксируем дальнейший порядок работы."},
+            ],
             "manager_checklist": [],
         },
         "rop_action": {"required": True, "text": "Проверить срок ответа."},
@@ -209,7 +208,11 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("не предполагай бюджет", prompt)
         self.assertIn("«десятки тысяч»", prompt)
         self.assertIn("JSON boolean true", prompt)
-        self.assertIn("ровно три готовых коротких сообщения менеджеру", prompt)
+        self.assertIn("ровно три готовых варианта обращения менеджера к клиенту", prompt)
+        self.assertIn("деловой и прямой", prompt)
+        self.assertIn("партнёрский и доброжелательный", prompt)
+        self.assertIn("спокойный и консультативный", prompt)
+        self.assertIn("Не определяй DISC", prompt)
         self.assertIn("отдельная готовая SMART-задача", prompt)
 
     def test_confirmed_bant_compatible_solution_and_sufficient_budget_is_valid(self) -> None:
@@ -221,16 +224,31 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertEqual(analysis["lead_state"]["qualification"], "A")
         self.assertEqual(analysis["loss_diagnosis"]["final_verdict"], "ready_for_deal")
 
-    def test_lead_manager_message_options_require_three_distinct_short_messages(self) -> None:
+    def test_lead_requires_review_and_three_distinct_client_messages(self) -> None:
         analysis = lead_analysis()
-        analysis["rop_manager_message_block"]["manager_message_options"] = ["Одинаковый текст"] * 3
+        analysis["rop_manager_message_block"]["manager_review_text"] = ""
 
-        with self.assertRaisesRegex(AnalysisValidationError, "must be distinct"):
+        with self.assertRaisesRegex(AnalysisValidationError, "manager_review_text"):
             validate_lead_analysis(analysis)
 
         analysis = lead_analysis()
-        analysis["rop_manager_message_block"]["manager_message_options"] = ["Первый", "Второй"]
-        with self.assertRaisesRegex(AnalysisValidationError, "exactly 3 items"):
+        same_text = analysis["manager_action_block"]["primary_text"]["text"]
+        analysis["manager_action_block"]["backup_texts"] = [
+            {"type": "messenger", "title": "Вариант 2", "text": same_text},
+            {"type": "messenger", "title": "Вариант 3", "text": same_text},
+        ]
+
+        with self.assertRaisesRegex(AnalysisValidationError, "client message texts must be distinct"):
+            validate_lead_analysis(analysis)
+
+        analysis = lead_analysis()
+        analysis["manager_action_block"]["backup_texts"] = analysis["manager_action_block"]["backup_texts"][:1]
+        with self.assertRaisesRegex(AnalysisValidationError, "exactly 2 items"):
+            validate_lead_analysis(analysis)
+
+        analysis = lead_analysis()
+        analysis["manager_action_block"]["backup_texts"][0]["title"] = "Произвольный тон"
+        with self.assertRaisesRegex(AnalysisValidationError, "must use title"):
             validate_lead_analysis(analysis)
 
     def test_lead_smart_task_requires_deadline(self) -> None:

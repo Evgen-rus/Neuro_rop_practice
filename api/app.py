@@ -687,9 +687,12 @@ def _report_markdown_path(report: dict[str, Any]) -> Path:
     return workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
 
 
-def _workflow_default_texts(report: dict[str, Any]) -> tuple[list[str], str]:
+def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, list[str], str]:
     analysis = unwrap_analysis_payload(report.get("report_json") if isinstance(report.get("report_json"), dict) else {})
     rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
+    manager_action = analysis.get("manager_action_block") if isinstance(analysis.get("manager_action_block"), dict) else {}
+    manager_quality = analysis.get("manager_quality") if isinstance(analysis.get("manager_quality"), dict) else {}
+    lead_state = analysis.get("lead_state") if isinstance(analysis.get("lead_state"), dict) else {}
 
     def lines(value: Any) -> list[str]:
         if isinstance(value, list):
@@ -697,16 +700,31 @@ def _workflow_default_texts(report: dict[str, Any]) -> tuple[list[str], str]:
         text = str(value or "").strip()
         return [text] if text else []
 
-    message_options = lines(rop.get("manager_message_options"))
-    has_new_message_contract = bool(message_options)
+    review_text = str(rop.get("manager_review_text") or "").strip()
+    has_new_message_contract = bool(review_text)
+    if not review_text:
+        review_parts: list[str] = []
+        done_well = lines(manager_quality.get("what_done_well"))
+        if done_well:
+            review_parts.append("Хорошо, что " + "; ".join(item.rstrip(".") for item in done_well) + ".")
+        situation = str(lead_state.get("summary") or "").strip()
+        if situation:
+            review_parts.append(situation)
+        next_step = str(rop.get("check_for_rop") or rop.get("why_it_matters") or "").strip()
+        if next_step:
+            review_parts.append(next_step)
+        review_text = " ".join(review_parts)
+
+    primary = manager_action.get("primary_text") if isinstance(manager_action.get("primary_text"), dict) else {}
+    backups = manager_action.get("backup_texts") if isinstance(manager_action.get("backup_texts"), list) else []
+    message_options = lines(primary.get("text"))
+    message_options.extend(
+        str(item.get("text") or "").strip()
+        for item in backups
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    )
     if not message_options:
-        legacy_parts = [
-            str(rop.get("message_to_manager") or rop.get("check_for_rop") or "").strip(),
-            str(rop.get("why_it_matters") or "").strip(),
-        ]
-        legacy_text = " ".join(part for part in legacy_parts if part)
-        if legacy_text:
-            message_options = [legacy_text]
+        message_options = lines(rop.get("manager_message_options"))
 
     task_parts = lines(rop.get("message_to_manager"))
     expected = str(rop.get("expected_crm_update") or "").strip()
@@ -719,7 +737,7 @@ def _workflow_default_texts(report: dict[str, Any]) -> tuple[list[str], str]:
             task_parts.append(f"Срок: {deadline}")
         if success:
             task_parts.append(f"Результат: {success}")
-    return message_options[:3], "\n\n".join(task_parts)
+    return review_text, message_options[:3], "\n\n".join(task_parts)
 
 
 def _workflow_status(workflow: dict[str, Any]) -> str:
@@ -732,19 +750,34 @@ def _workflow_status(workflow: dict[str, Any]) -> str:
 
 def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -> dict[str, Any]:
     saved = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
+    default_review, default_options, default_task = _workflow_default_texts(report or {})
     if saved is not None:
         workflow = saved
-        if not workflow.get("manager_message_options") and report:
-            default_options, _ = _workflow_default_texts(report)
-            workflow["manager_message_options"] = default_options
+        analysis = unwrap_analysis_payload(report.get("report_json") if report and isinstance(report.get("report_json"), dict) else {})
+        rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
+        is_legacy_report = not str(rop.get("manager_review_text") or "").strip()
+        if is_legacy_report:
+            legacy_options = [
+                str(item).strip()
+                for item in rop.get("manager_message_options", [])
+                if str(item).strip()
+            ] if isinstance(rop.get("manager_message_options"), list) else []
+            if not workflow.get("manager_review_text"):
+                workflow["manager_review_text"] = default_review
+            if not workflow.get("manager_message_options") or workflow.get("manager_message_options") == legacy_options:
+                workflow["manager_message_options"] = default_options
+        else:
+            if not workflow.get("manager_review_text"):
+                workflow["manager_review_text"] = default_review
+            if not workflow.get("manager_message_options"):
+                workflow["manager_message_options"] = default_options
     else:
-        message_options, task_text = _workflow_default_texts(report or {})
         workflow = {
             "lead_id": str(lead_id),
             "source_report_id": report.get("id") if report else None,
-            "manager_review_text": None,
-            "manager_message_options": message_options,
-            "manager_task_text": task_text,
+            "manager_review_text": default_review,
+            "manager_message_options": default_options,
+            "manager_task_text": default_task,
             "review_completed": False,
             "task_completed": False,
             "control_mode": None,

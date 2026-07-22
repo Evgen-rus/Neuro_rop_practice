@@ -1992,8 +1992,7 @@ ul.facts.bad li:before {
 .workflow-step-actions label { font-size: 12.5px; }
 .workflow-step button.primary-dark { border-color: #22272d; background: #22272d; color: white; }
 .workflow-step button:disabled { cursor: not-allowed; opacity: .55; }
-.review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
-.manager-message-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
+.review-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.45fr); gap: 9px; }
 .review-card { min-width: 0; border: 1px solid #dce4ed; border-radius: 10px; padding: 10px; background: #f9fbfd; }
 .review-card h4 { margin: 0 0 7px; font-size: 13px; }
 .review-card ul { display: grid; gap: 5px; margin: 0; padding-left: 18px; }
@@ -2008,6 +2007,14 @@ ul.facts.bad li:before {
 .manager-review-heading button { padding: 4px 7px; font-size: 12px; }
 .review-card.manager-review p { margin: 0; white-space: pre-wrap; line-height: 1.4; }
 .review-card.manager-review textarea { min-height: 128px; margin-top: 9px; }
+.review-card.manager-review .manager-options-intro { margin-top: 14px; font-weight: 700; }
+.manager-client-options { display: grid; gap: 8px; margin-top: 9px; }
+.manager-client-option { min-width: 0; border: 1px solid #d6e3f5; border-radius: 9px; padding: 9px; background: #fff; }
+.manager-client-option-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; margin-bottom: 6px; }
+.manager-client-option-heading > span { color: var(--muted); font-size: 12px; }
+.manager-client-option-heading > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.manager-client-option-heading button { padding: 4px 7px; font-size: 12px; }
+.manager-client-option .expandable-copy p { font-size: 13px; }
 .expandable-copy { min-width: 0; }
 .expandable-text { display: -webkit-box; margin: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .expandable-text.expanded { display: block; overflow: visible; -webkit-line-clamp: unset; }
