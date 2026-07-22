@@ -181,6 +181,57 @@ class LeadWorkflowApiTests(unittest.TestCase):
             self.assertEqual(workflow["manager_review_text"], "Ручной разбор")
             self.assertEqual(workflow["manager_message_options"], edited_options)
 
+    def test_new_report_refreshes_workflow_texts_and_review_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            old_report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="90",
+                report_json={"lead_state": {}},
+            )
+            upsert_lead_workflow_state(
+                db_path,
+                lead_id="90",
+                source_report_id=old_report_id,
+                manager_review_text="Старый разбор",
+                manager_message_options=["Старый 1", "Старый 2", "Старый 3"],
+                manager_task_text="Старая задача",
+                review_completed=True,
+                task_completed=True,
+                control_mode="days",
+                control_days=2,
+                control_date=None,
+                control_completed=False,
+                final_decision=None,
+            )
+            new_report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="90",
+                report_json={
+                    "rop_manager_message_block": {
+                        "manager_review_text": "Новый разбор",
+                        "message_to_manager": "Новая задача",
+                    },
+                    "manager_action_block": {
+                        "primary_text": {"text": "Новый 1"},
+                        "backup_texts": [{"text": "Новый 2"}, {"text": "Новый 3"}],
+                    },
+                },
+            )
+
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                workflow = api_app.lead_workflow("90", report_id=new_report_id)
+
+            self.assertEqual(workflow["source_report_id"], new_report_id)
+            self.assertEqual(workflow["manager_review_text"], "Новый разбор")
+            self.assertEqual(workflow["manager_message_options"], ["Новый 1", "Новый 2", "Новый 3"])
+            self.assertEqual(workflow["manager_task_text"], "Новая задача")
+            self.assertFalse(workflow["review_completed"])
+            self.assertFalse(workflow["task_completed"])
+            self.assertEqual(workflow["control_mode"], "days")
+
     def test_one_time_migration_reactivates_no_attention_and_keeps_audit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"

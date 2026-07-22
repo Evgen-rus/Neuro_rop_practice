@@ -755,8 +755,17 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
         workflow = saved
         analysis = unwrap_analysis_payload(report.get("report_json") if report and isinstance(report.get("report_json"), dict) else {})
         rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
+        report_id = report.get("id") if report else None
+        report_changed = report_id is not None and workflow.get("source_report_id") != report_id
         is_legacy_report = not str(rop.get("manager_review_text") or "").strip()
-        if is_legacy_report:
+        if report_changed:
+            workflow["source_report_id"] = report_id
+            workflow["manager_review_text"] = default_review
+            workflow["manager_message_options"] = default_options
+            workflow["manager_task_text"] = default_task
+            workflow["review_completed"] = False
+            workflow["task_completed"] = False
+        elif is_legacy_report:
             legacy_options = [
                 str(item).strip()
                 for item in rop.get("manager_message_options", [])

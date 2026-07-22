@@ -208,12 +208,16 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("не предполагай бюджет", prompt)
         self.assertIn("«десятки тысяч»", prompt)
         self.assertIn("JSON boolean true", prompt)
-        self.assertIn("ровно три готовых варианта обращения менеджера к клиенту", prompt)
+        self.assertIn("ровно три готовых варианта первого обращения менеджера к клиенту", prompt)
         self.assertIn("деловой и прямой", prompt)
         self.assertIn("партнёрский и доброжелательный", prompt)
         self.assertIn("спокойный и консультативный", prompt)
         self.assertIn("Не определяй DISC", prompt)
         self.assertIn("отдельная готовая SMART-задача", prompt)
+        self.assertIn("используй прогрессивную квалификацию", prompt)
+        self.assertIn("Не превращай первое сообщение в анкету", prompt)
+        self.assertIn("При отложенном спросе или паузе сначала подтверди актуальность", prompt)
+        self.assertIn("полный список существенных недостающих квалификационных или технических фактов", prompt)
 
     def test_confirmed_bant_compatible_solution_and_sufficient_budget_is_valid(self) -> None:
         analysis = lead_analysis()
