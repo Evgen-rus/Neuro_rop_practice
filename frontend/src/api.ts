@@ -320,6 +320,7 @@ export type LeadWorkflowState = {
   lead_id: string
   source_report_id?: number | null
   manager_review_text?: string | null
+  manager_message_options?: string[]
   manager_task_text?: string | null
   review_completed: boolean
   task_completed: boolean
@@ -327,7 +328,6 @@ export type LeadWorkflowState = {
   control_days?: number | null
   control_date?: string | null
   control_completed: boolean
-  final_decision?: 'continue' | 'no_attention' | null
   status_label: string
   created_at?: string | null
   updated_at?: string | null
@@ -560,13 +560,6 @@ export function saveLeadWorkflow(leadId: string, payload: Partial<LeadWorkflowSt
   return api<LeadWorkflowState>(`/api/leads/${encodeURIComponent(leadId)}/workflow`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-  })
-}
-
-export function markLeadNoAttention(leadId: string, reportId: number) {
-  return api<{ workflow: LeadWorkflowState; candidate_review: Record<string, unknown> }>(`/api/leads/${encodeURIComponent(leadId)}/no-attention`, {
-    method: 'POST',
-    body: JSON.stringify({ report_id: reportId }),
   })
 }
 

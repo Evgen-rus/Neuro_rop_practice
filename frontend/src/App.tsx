@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './index.css'
 import {
@@ -33,7 +33,6 @@ import {
   fetchReport,
   fetchReportMarkdown,
   fetchReports,
-  markLeadNoAttention,
   previewAnalysisProfile,
   saveDecision,
   saveLeadWorkflow,
@@ -1976,6 +1975,33 @@ function ReportPanels(props: ReportPanelsProps) {
   )
 }
 
+function ExpandableText(props: { text: string; className?: string }) {
+  const { text, className = '' } = props
+  const elementRef = useRef<HTMLParagraphElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
+
+  useEffect(() => {
+    setExpanded(false)
+    const element = elementRef.current
+    if (!element) return
+    const checkOverflow = () => setCanExpand(element.scrollHeight > element.clientHeight + 1)
+    const frame = window.requestAnimationFrame(checkOverflow)
+    window.addEventListener('resize', checkOverflow)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', checkOverflow)
+    }
+  }, [text])
+
+  return (
+    <div className={`expandable-copy ${className}`.trim()}>
+      <p ref={elementRef} className={expanded ? 'expandable-text expanded' : 'expandable-text'}>{text}</p>
+      {canExpand || expanded ? <button type="button" className="expandable-toggle" onClick={(event) => { event.stopPropagation(); setExpanded((value) => !value) }}>{expanded ? 'Свернуть' : 'Показать полностью'}</button> : null}
+    </div>
+  )
+}
+
 type LeadMaterialTab = 'summary' | 'bant' | 'evidence' | 'audit' | 'history' | 'technical'
 
 function formatLeadDate(value: string | null | undefined, includeTime = true): string {
@@ -1993,7 +2019,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [materialTab, setMaterialTab] = useState<LeadMaterialTab | null>(null)
-  const [showReviewEditor, setShowReviewEditor] = useState(false)
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
+  const [showTaskEditor, setShowTaskEditor] = useState(false)
   const [qualificationIssues, setQualificationIssues] = useState<string[]>([])
   const [qualificationComment, setQualificationComment] = useState('')
 
@@ -2019,8 +2046,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   const leadState = asRecord(analysis?.lead_state)
   const rop = asRecord(analysis?.rop_manager_message_block)
-  const action = asRecord(analysis?.manager_action_block)
-  const managerQuality = asRecord(analysis?.manager_quality)
   const assessment = asRecord(analysis?.qualification_assessment)
   const bant = asRecord(assessment.bant)
   const category = asRecord(assessment.lead_category)
@@ -2040,8 +2065,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const categoryValue = asString(category.value) || asString(leadState.qualification) || 'Unknown'
   const interest = formatMoneyText(asString(leadState.need))
   const currentSituation = formatMoneyText(asString(leadState.summary)) || formatMoneyText(asString(rop.why_it_matters)) || meta?.attention_reason || 'Нет данных'
-  const strengths = asStringList(managerQuality.what_done_well).map(formatMoneyText)
-  const weaknesses = [...asStringList(managerQuality.missed_points), ...asStringList(managerQuality.critical_mistake)].map(formatMoneyText)
   const latestQualificationReview = props.qualificationReviews?.[0]
 
   async function persist(patch: Partial<LeadWorkflowState>) {
@@ -2061,33 +2084,22 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     }
   }
 
-  function updateDraft(field: 'manager_review_text' | 'manager_task_text', value: string) {
+  function updateDraft(field: 'manager_task_text', value: string) {
     setWorkflow((current) => current ? { ...current, [field]: value } : current)
+  }
+
+  function updateManagerMessage(index: number, value: string) {
+    setWorkflow((current) => {
+      if (!current) return current
+      const options = [...(current.manager_message_options || [])]
+      options[index] = value
+      return { ...current, manager_message_options: options }
+    })
   }
 
   function copyValue(value: string, label: string) {
     void navigator.clipboard?.writeText(value)
     setNotice(`${label} скопирован`)
-  }
-
-  function developmentStub() {
-    setNotice('Функция в разработке')
-  }
-
-  async function markNoAttention() {
-    if (!meta?.report_id || !workflow) return
-    if (!window.confirm('Убрать лид из основной очереди как не требующий внимания? Решение сохранится локально и лид вернётся при значимом изменении CRM.')) return
-    setSaving(true)
-    setNotice('')
-    try {
-      const result = await markLeadNoAttention(meta.entity_id, meta.report_id)
-      setWorkflow(result.workflow)
-      setNotice('Лид убран из основной очереди')
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Не удалось сохранить решение')
-    } finally {
-      setSaving(false)
-    }
   }
 
   function openMaterials(tab: LeadMaterialTab) {
@@ -2108,27 +2120,35 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
   const lastContact = reportMeta.last_contact
   const currentTask = reportMeta.current_task
-  const managerFocus = formatMoneyText(asString(rop.message_to_manager) || asString(rop.check_for_rop))
-  const defaultManagerReview = [
-    strengths.length ? `Сильные стороны:\n${strengths.map((item) => `• ${item}`).join('\n')}` : '',
-    weaknesses.length ? `Что нужно усилить:\n${weaknesses.map((item) => `• ${item}`).join('\n')}` : '',
-    managerFocus ? `Фокус следующего контакта:\n${managerFocus}` : '',
-  ].filter(Boolean).join('\n\n')
-  const isLegacyManagerReview = !workflow.manager_review_text || workflow.manager_review_text.startsWith('Что хорошо:')
-  const managerReviewText = isLegacyManagerReview ? defaultManagerReview : workflow.manager_review_text
+  const managerMessages = (workflow.manager_message_options?.length
+    ? workflow.manager_message_options
+    : asStringList(rop.manager_message_options)
+  ).map(formatMoneyText)
   const taskEnabled = workflow.review_completed
   const controlEnabled = workflow.task_completed
-  const finalEnabled = workflow.control_completed
-  const workflowDone = [workflow.review_completed, workflow.task_completed, workflow.control_completed, Boolean(workflow.final_decision)].filter(Boolean).length
+  const controlActive = Boolean(workflow.control_mode)
+  const workflowDone = [workflow.review_completed, workflow.task_completed, controlActive].filter(Boolean).length
+  const controlDeadline = workflow.control_mode === 'date'
+    ? workflow.control_date
+    : asString(rop.deadline) || null
   const evidence = [
     ...props.facts,
     ...asStringList(rop.evidence).map(formatMoneyText),
     ...bantItems.flatMap((item) => asStringList(item.value.evidence).map(formatMoneyText)),
   ].filter(Boolean)
 
-  function editManagerReview() {
-    if (isLegacyManagerReview) setWorkflow((current) => current ? { ...current, manager_review_text: defaultManagerReview } : current)
-    setShowReviewEditor(true)
+  async function toggleControl() {
+    if (!controlEnabled) return
+    if (controlActive) {
+      await persist({ control_mode: null, control_date: null, control_days: null, control_completed: false })
+      return
+    }
+    const deadline = asString(rop.deadline)
+    if (deadline) {
+      await persist({ control_mode: 'date', control_date: deadline, control_days: null, control_completed: false })
+      return
+    }
+    await persist({ control_mode: 'days', control_days: 2, control_date: null, control_completed: false })
   }
 
   return (
@@ -2152,7 +2172,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
-            <button className="no-attention" disabled={saving || workflow.status_label === 'Не требует внимания'} onClick={() => void markNoAttention()}>Не требует внимания</button>
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
             <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button>
@@ -2162,16 +2181,16 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
         <section className="lead-summary-strip" aria-label="Краткая сводка по лиду">
           <article className="lead-summary-card lead-summary-about">
             <h3>Что за лид</h3>
-            <p className="lead-summary-primary">{interest || 'Интерес не зафиксирован'}</p>
+            <ExpandableText className="lead-summary-primary" text={interest || 'Интерес не зафиксирован'} />
             <span>Клиент: {client}</span>
           </article>
           <article className="lead-summary-card lead-summary-situation">
             <h3>Текущая ситуация</h3>
-            <p className="lead-summary-primary">{currentSituation}</p>
+            <ExpandableText className="lead-summary-primary" text={currentSituation} />
             {currentTask ? (
               <details>
                 <summary><strong>{currentTask.completed ? 'Последняя задача' : 'Актуальная задача'}</strong><span>{formatLeadDate(currentTask.date)}{currentTask.subject ? ` · ${currentTask.subject}` : ''}</span></summary>
-                <p>{currentTask.text || 'Дополнительного текста нет.'}</p>
+                <ExpandableText text={currentTask.text || 'Дополнительного текста нет.'} />
               </details>
             ) : <span className="muted">Актуальная задача в CRM не найдена</span>}
           </article>
@@ -2179,7 +2198,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             {lastContact ? (
               <details>
                 <summary><strong>Последний контакт</strong><span>{lastContact.type || 'контакт'} · {formatLeadDate(lastContact.date)}{lastContact.subject ? ` · ${lastContact.subject}` : ''}</span></summary>
-                <p>{lastContact.text || 'Дополнительного текста нет.'}</p>
+                <ExpandableText text={lastContact.text || 'Дополнительного текста нет.'} />
               </details>
             ) : <div><strong>Последний контакт</strong><span className="muted">Нет данных</span></div>}
           </article>
@@ -2195,11 +2214,11 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               const status = asString(item.value.status, 'unknown')
               const summary = formatMoneyText(asString(item.value.summary) || asString(item.value.explanation))
               return (
-                <button className={`compact-bant-card status-${status}`} key={item.key} onClick={() => openMaterials('bant')}>
+                <div className={`compact-bant-card status-${status}`} key={item.key} role="button" tabIndex={0} onClick={() => openMaterials('bant')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') openMaterials('bant') }}>
                   <strong>{item.letter} · {item.label}</strong>
                   <span>{assessmentLabel(status, BANT_STATUS_RU)}</span>
-                  {summary ? <small>{summary}</small> : null}
-                </button>
+                  {summary ? <ExpandableText text={summary} /> : null}
+                </div>
               )
             })}
             <div className="compact-bant-total"><strong>Итого · {bantPercent}%</strong><span>{confirmedBant} из 4 подтверждены</span></div>
@@ -2208,17 +2227,21 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
         <section className="workflow-steps">
           <div className="workflow-section-title">
-            <div><h3>Работа РОПа по лиду</h3><p>Разобрать → поручить → проверить → принять решение</p></div>
-            <span>{workflowDone} из 4 выполнено</span>
+            <div><h3>Работа РОПа по лиду</h3><p>Разобрать → поручить → поставить на контроль</p></div>
+            <span>{workflowDone} из 3 выполнено</span>
           </div>
 
           <article className={`workflow-step ${workflow.review_completed ? 'completed' : 'active'}`}>
-            <div className="workflow-step-label"><b>1</b><strong>Разбор с менеджером</strong><span>Сильные и слабые стороны</span></div>
+            <div className="workflow-step-label"><b>1</b><strong>Разбор для менеджера</strong><span>Три готовых варианта</span></div>
             <div className="workflow-step-body">
-              <div className="review-grid">
-                <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
-                <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
-                <section className="review-card manager-review"><div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(managerReviewText || '', 'Разбор')}>Копировать</button><button onClick={() => showReviewEditor ? setShowReviewEditor(false) : editManagerReview()}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button></div></div><p>{managerReviewText || 'Разбор пока не сформирован.'}</p>{showReviewEditor ? <textarea aria-label="Готовый разбор для менеджера" value={workflow.manager_review_text || ''} onChange={(event) => updateDraft('manager_review_text', event.target.value)} onBlur={() => void persist({ manager_review_text: workflow.manager_review_text })} /> : null}</section>
+              <div className="manager-message-grid">
+                {managerMessages.length ? managerMessages.map((message, index) => (
+                  <section className="review-card manager-review" key={`manager-option-${index}`}>
+                    <div className="manager-review-heading"><h4>Вариант {index + 1}</h4><div><button onClick={() => copyValue(message, `Вариант ${index + 1}`)}>Копировать</button><button onClick={() => setEditingMessageIndex(editingMessageIndex === index ? null : index)}>{editingMessageIndex === index ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
+                    <ExpandableText text={message} />
+                    {editingMessageIndex === index ? <textarea aria-label={`Вариант сообщения ${index + 1}`} value={workflow.manager_message_options?.[index] || message} onChange={(event) => updateManagerMessage(index, event.target.value)} onBlur={() => void persist({ manager_message_options: workflow.manager_message_options })} /> : null}
+                  </section>
+                )) : <section className="review-card manager-review"><p>Разбор пока не сформирован.</p></section>}
               </div>
             </div>
             <div className="workflow-step-actions">
@@ -2231,46 +2254,23 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             <div className="workflow-step-body">
               <p><strong>Цель:</strong> дать менеджеру конкретное поручение для закрытия недостающих фактов.</p>
               <label>Что нужно сделать</label>
-              <textarea disabled={!taskEnabled} value={workflow.manager_task_text || ''} onChange={(event) => updateDraft('manager_task_text', event.target.value)} onBlur={() => void persist({ manager_task_text: workflow.manager_task_text })} />
+              <ExpandableText text={workflow.manager_task_text || 'Задача пока не сформирована.'} />
+              {showTaskEditor ? <textarea disabled={!taskEnabled} value={workflow.manager_task_text || ''} onChange={(event) => updateDraft('manager_task_text', event.target.value)} onBlur={() => void persist({ manager_task_text: workflow.manager_task_text })} /> : null}
             </div>
             <div className="workflow-step-actions">
               <button disabled={!taskEnabled} onClick={() => copyValue(workflow.manager_task_text || '', 'Задача')}>Копировать задачу</button>
-              <button disabled={!taskEnabled} className="primary-dark" onClick={developmentStub}>Поставить задачу</button>
+              <button disabled={!taskEnabled} onClick={() => setShowTaskEditor((value) => !value)}>{showTaskEditor ? 'Скрыть редактор' : 'Редактировать'}</button>
               <label><input type="checkbox" checked={workflow.task_completed} disabled={!taskEnabled || saving} onChange={(event) => void persist({ task_completed: event.target.checked })} /> Выполнено вручную</label>
             </div>
           </article>
 
-          <article className={`workflow-step ${workflow.control_completed ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>3</b><strong>Контроль и проверка</strong><span>Проверяем результат</span></div>
+          <article className={`workflow-step ${controlActive ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
+            <div className="workflow-step-label"><b>3</b><strong>Контроль и проверка</strong><span>{controlActive ? 'Карточка на контроле' : 'Поставить карточку на контроль'}</span></div>
             <div className="workflow-step-body">
-              <p><strong>Цель:</strong> проверить выполнение поручения и наличие результата контакта.</p>
-              <div className="control-checklist">
-                {asStringList(action.manager_checklist).length ? asStringList(action.manager_checklist).map((item) => <span key={item}>• {formatMoneyText(item)}</span>) : <span>{formatMoneyText(asString(rop.check_for_rop)) || 'Проверить результат в CRM.'}</span>}
-              </div>
-              <div className="control-fields">
-                <label>Режим<select disabled={!controlEnabled} value={workflow.control_mode || 'days'} onChange={(event) => setWorkflow({ ...workflow, control_mode: event.target.value as LeadWorkflowState['control_mode'] })}><option value="days">Через N дней</option><option value="date">Точная дата</option><option value="daily">Ежедневно / VIP</option></select></label>
-                {workflow.control_mode !== 'date' && workflow.control_mode !== 'daily' ? <label>Дней<input disabled={!controlEnabled} type="number" min="1" max="365" value={workflow.control_days || 2} onChange={(event) => setWorkflow({ ...workflow, control_days: Number(event.target.value) })} /></label> : null}
-                {workflow.control_mode === 'date' ? <label>Дата<input disabled={!controlEnabled} type="date" value={workflow.control_date || ''} onChange={(event) => setWorkflow({ ...workflow, control_date: event.target.value })} /></label> : null}
-                <button disabled={!controlEnabled || saving} onClick={() => void persist({ control_mode: workflow.control_mode || 'days', control_days: workflow.control_days || 2, control_date: workflow.control_date })}>Поставить контроль</button>
-              </div>
+              <p>{controlActive ? `Контроль назначен${controlDeadline ? ` на ${formatLeadDate(controlDeadline, false)}` : ''}.` : `Карточка вернётся в активную очередь по сроку задачи${controlDeadline ? ` — ${formatLeadDate(controlDeadline, false)}` : ''}.`}</p>
             </div>
             <div className="workflow-step-actions">
-              <button disabled={!controlEnabled} onClick={() => openMaterials('evidence')}>Основание проверки</button>
-              <label><input type="checkbox" checked={workflow.control_completed} disabled={!controlEnabled || !workflow.control_mode || saving} onChange={(event) => void persist({ control_completed: event.target.checked })} /> Проверено</label>
-            </div>
-          </article>
-
-          <article className={`workflow-step ${workflow.final_decision ? 'completed' : finalEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>4</b><strong>Финальный статус</strong><span>Решение по лиду</span></div>
-            <div className="workflow-step-body">
-              <p><strong>Цель:</strong> принять решение после проверки результата.</p>
-              <p>Продолжать работу — если лид актуален и есть следующий шаг.</p>
-              <p>Не требует внимания — если лид неактуален или не соответствует критериям.</p>
-            </div>
-            <div className="workflow-step-actions">
-              <button disabled={!finalEnabled || saving} className={workflow.final_decision === 'continue' ? 'primary-dark' : ''} onClick={() => void persist({ final_decision: 'continue' })}>Продолжать работу</button>
-              <button disabled={!finalEnabled || saving} onClick={() => void persist({ final_decision: 'no_attention' })}>Не требует внимания</button>
-              {!finalEnabled ? <span className="muted">Доступно после проверки</span> : null}
+              <button disabled={!controlEnabled || saving} className="primary-dark" onClick={() => void toggleControl()}>{controlActive ? 'Снять с контроля' : 'Поставить на контроль'}</button>
             </div>
           </article>
         </section>

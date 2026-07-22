@@ -105,7 +105,12 @@ def lead_analysis() -> dict:
         "rop_manager_message_block": {
             "check_for_rop": "Проверить подготовку расчёта.",
             "why_it_matters": "Клиент готов перейти к КП.",
-            "message_to_manager": "Подготовьте расчёт и зафиксируйте срок ответа клиента.",
+            "manager_message_options": [
+                "Смотри, клиент готов перейти к расчёту. Подготовь его до срока и сразу согласуй дату ответа, чтобы следующий шаг не остался открытым.",
+                "Ты уже подтвердил интерес клиента. Теперь подготовь расчёт до срока и договорись о дате ответа — так мы сохраним темп работы.",
+                "Здесь важно не останавливаться на интересе клиента. Подготовь расчёт до срока, согласуй дату ответа и зафиксируй следующий шаг.",
+            ],
+            "message_to_manager": "До 2026-07-15 подготовьте расчёт, согласуйте дату ответа клиента и внесите её в CRM; результат — расчёт отправлен и следующий шаг зафиксирован.",
             "expected_crm_update": "В CRM зафиксирован срок ответа по КП.",
             "deadline": "2026-07-15",
             "success_condition": "КП и дата ответа внесены в CRM.",
@@ -204,6 +209,8 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("не предполагай бюджет", prompt)
         self.assertIn("«десятки тысяч»", prompt)
         self.assertIn("JSON boolean true", prompt)
+        self.assertIn("ровно три готовых коротких сообщения менеджеру", prompt)
+        self.assertIn("отдельная готовая SMART-задача", prompt)
 
     def test_confirmed_bant_compatible_solution_and_sufficient_budget_is_valid(self) -> None:
         analysis = lead_analysis()
@@ -213,6 +220,30 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
 
         self.assertEqual(analysis["lead_state"]["qualification"], "A")
         self.assertEqual(analysis["loss_diagnosis"]["final_verdict"], "ready_for_deal")
+
+    def test_lead_manager_message_options_require_three_distinct_short_messages(self) -> None:
+        analysis = lead_analysis()
+        analysis["rop_manager_message_block"]["manager_message_options"] = ["Одинаковый текст"] * 3
+
+        with self.assertRaisesRegex(AnalysisValidationError, "must be distinct"):
+            validate_lead_analysis(analysis)
+
+        analysis = lead_analysis()
+        analysis["rop_manager_message_block"]["manager_message_options"] = ["Первый", "Второй"]
+        with self.assertRaisesRegex(AnalysisValidationError, "exactly 3 items"):
+            validate_lead_analysis(analysis)
+
+    def test_lead_smart_task_requires_deadline(self) -> None:
+        analysis = lead_analysis()
+        analysis["rop_manager_message_block"]["deadline"] = None
+
+        with self.assertRaisesRegex(AnalysisValidationError, "deadline must be"):
+            validate_lead_analysis(analysis)
+
+        analysis = lead_analysis()
+        analysis["rop_manager_message_block"]["deadline"] = "завтра"
+        with self.assertRaisesRegex(AnalysisValidationError, "YYYY-MM-DD format"):
+            validate_lead_analysis(analysis)
 
     def test_incomplete_bant_keeps_data_gap_and_one_question(self) -> None:
         analysis = lead_analysis()

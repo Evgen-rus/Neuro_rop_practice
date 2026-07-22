@@ -118,6 +118,7 @@ class DecisionRequest(BaseModel):
 class LeadWorkflowRequest(BaseModel):
     source_report_id: int | None = None
     manager_review_text: str | None = Field(default=None, max_length=12000)
+    manager_message_options: list[str] | None = Field(default=None, min_length=1, max_length=3)
     manager_task_text: str | None = Field(default=None, max_length=12000)
     review_completed: bool | None = None
     task_completed: bool | None = None
@@ -125,11 +126,6 @@ class LeadWorkflowRequest(BaseModel):
     control_days: int | None = Field(default=None, ge=1, le=365)
     control_date: str | None = Field(default=None, max_length=40)
     control_completed: bool | None = None
-    final_decision: Literal["continue", "no_attention"] | None = None
-
-
-class LeadNoAttentionRequest(BaseModel):
-    report_id: int = Field(gt=0)
 
 
 class OutcomeRequest(BaseModel):
@@ -691,11 +687,9 @@ def _report_markdown_path(report: dict[str, Any]) -> Path:
     return workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_rop_report.md"
 
 
-def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, str]:
+def _workflow_default_texts(report: dict[str, Any]) -> tuple[list[str], str]:
     analysis = unwrap_analysis_payload(report.get("report_json") if isinstance(report.get("report_json"), dict) else {})
-    manager_quality = analysis.get("manager_quality") if isinstance(analysis.get("manager_quality"), dict) else {}
     rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
-    action = analysis.get("manager_action_block") if isinstance(analysis.get("manager_action_block"), dict) else {}
 
     def lines(value: Any) -> list[str]:
         if isinstance(value, list):
@@ -703,49 +697,36 @@ def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, str]:
         text = str(value or "").strip()
         return [text] if text else []
 
-    review_parts: list[str] = []
-    good = lines(manager_quality.get("what_done_well"))
-    missed = lines(manager_quality.get("missed_points"))
-    critical = lines(manager_quality.get("critical_mistake"))
-    if good:
-        review_parts.append("Сильные стороны:\n" + "\n".join(f"• {item}" for item in good))
-    if missed or critical:
-        review_parts.append("Что нужно усилить:\n" + "\n".join(f"• {item}" for item in [*missed, *critical]))
-    manager_focus = str(rop.get("message_to_manager") or rop.get("check_for_rop") or "").strip()
-    if manager_focus:
-        review_parts.append(f"Фокус следующего контакта:\n{manager_focus}")
-    if not review_parts:
-        fallback = str(rop.get("why_it_matters") or rop.get("check_for_rop") or "").strip()
-        if fallback:
-            review_parts.append(fallback)
+    message_options = lines(rop.get("manager_message_options"))
+    has_new_message_contract = bool(message_options)
+    if not message_options:
+        legacy_parts = [
+            str(rop.get("message_to_manager") or rop.get("check_for_rop") or "").strip(),
+            str(rop.get("why_it_matters") or "").strip(),
+        ]
+        legacy_text = " ".join(part for part in legacy_parts if part)
+        if legacy_text:
+            message_options = [legacy_text]
 
     task_parts = lines(rop.get("message_to_manager"))
-    checklist = lines(action.get("manager_checklist"))
     expected = str(rop.get("expected_crm_update") or "").strip()
     deadline = str(rop.get("deadline") or "").strip()
     success = str(rop.get("success_condition") or "").strip()
-    if checklist:
-        task_parts.append("Что сделать:\n" + "\n".join(f"{index}. {item}" for index, item in enumerate(checklist, 1)))
-    if expected:
-        task_parts.append(f"Зафиксировать в CRM: {expected}")
-    if deadline:
-        task_parts.append(f"Срок: {deadline}")
-    if success:
-        task_parts.append(f"Результат: {success}")
-    return "\n\n".join(review_parts), "\n\n".join(task_parts)
+    if not has_new_message_contract:
+        if expected:
+            task_parts.append(f"Зафиксировать в CRM: {expected}")
+        if deadline:
+            task_parts.append(f"Срок: {deadline}")
+        if success:
+            task_parts.append(f"Результат: {success}")
+    return message_options[:3], "\n\n".join(task_parts)
 
 
-def _workflow_status(workflow: dict[str, Any], candidate_review: dict[str, Any] | None) -> str:
-    if workflow.get("final_decision") == "no_attention":
-        return "Не требует внимания"
-    if workflow.get("final_decision") == "continue":
-        return "Продолжать работу"
-    if workflow.get("control_mode") and not workflow.get("control_completed"):
+def _workflow_status(workflow: dict[str, Any]) -> str:
+    if workflow.get("control_mode"):
         return "На контроле"
     if workflow.get("review_completed") or workflow.get("task_completed") or workflow.get("control_completed"):
         return "В работе"
-    if candidate_review and candidate_review.get("state") == "reviewed":
-        return "Не требует внимания"
     return "Готов к разбору"
 
 
@@ -753,12 +734,16 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
     saved = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
     if saved is not None:
         workflow = saved
+        if not workflow.get("manager_message_options") and report:
+            default_options, _ = _workflow_default_texts(report)
+            workflow["manager_message_options"] = default_options
     else:
-        review_text, task_text = _workflow_default_texts(report or {})
+        message_options, task_text = _workflow_default_texts(report or {})
         workflow = {
             "lead_id": str(lead_id),
             "source_report_id": report.get("id") if report else None,
-            "manager_review_text": review_text,
+            "manager_review_text": None,
+            "manager_message_options": message_options,
             "manager_task_text": task_text,
             "review_completed": False,
             "task_completed": False,
@@ -766,14 +751,11 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
             "control_days": 2,
             "control_date": None,
             "control_completed": False,
-            "final_decision": None,
             "created_at": None,
             "updated_at": None,
         }
-    candidate_review = get_candidate_review_states(
-        DEFAULT_DB_PATH, entity_type="lead", entity_ids=[str(lead_id)]
-    ).get(str(lead_id))
-    return {**workflow, "status_label": _workflow_status(workflow, candidate_review)}
+    workflow.pop("final_decision", None)
+    return {**workflow, "status_label": _workflow_status(workflow)}
 
 
 @app.get("/api/leads/{lead_id}/workflow")
@@ -804,14 +786,12 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
         raise HTTPException(status_code=422, detail="control_days is required for days mode")
     if control_mode == "date" and not merged.get("control_date"):
         raise HTTPException(status_code=422, detail="control_date is required for date mode")
-    if merged.get("final_decision") and not merged.get("control_completed"):
-        raise HTTPException(status_code=422, detail="Complete control before final decision")
-
     saved = upsert_lead_workflow_state(
         DEFAULT_DB_PATH,
         lead_id=lead_id,
         source_report_id=merged["source_report_id"],
         manager_review_text=merged.get("manager_review_text"),
+        manager_message_options=merged.get("manager_message_options"),
         manager_task_text=merged.get("manager_task_text"),
         review_completed=bool(merged.get("review_completed")),
         task_completed=bool(merged.get("task_completed")),
@@ -819,19 +799,14 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
         control_days=merged.get("control_days"),
         control_date=merged.get("control_date"),
         control_completed=bool(merged.get("control_completed")),
-        final_decision=merged.get("final_decision"),
+        final_decision=None,
     )
 
-    previous_final = (existing or {}).get("final_decision")
     previous_control = (existing or {}).get("control_mode")
     next_control_date: str | None = None
     state = "active"
     decision: str | None = None
-    if saved.get("final_decision") == "no_attention":
-        state, decision = "reviewed", "Не требует внимания"
-    elif saved.get("final_decision") == "continue":
-        state, decision = "active", "Продолжать работу"
-    elif saved.get("control_mode"):
+    if saved.get("control_mode"):
         state, decision = "snoozed", "Назначен контроль"
         if saved.get("control_mode") == "days":
             next_control_date = (datetime.now().date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
@@ -839,6 +814,8 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
             next_control_date = (datetime.now().date() + timedelta(days=1)).isoformat()
         else:
             next_control_date = str(saved.get("control_date") or "") or None
+    else:
+        decision = "Снят с контроля" if previous_control else None
     upsert_candidate_review_state(
         DEFAULT_DB_PATH,
         entity_type="lead",
@@ -849,47 +826,15 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
         next_control_date=next_control_date,
         **_candidate_review_values(report),
     )
-    if decision and (saved.get("final_decision") != previous_final or saved.get("control_mode") != previous_control):
+    if decision and saved.get("control_mode") != previous_control:
         save_rop_decision(
             DEFAULT_DB_PATH,
             report_id=int(report["id"]),
             decision=decision,
             next_control_date=next_control_date,
         )
-    return {**saved, "status_label": _workflow_status(saved, {"state": state})}
-
-
-@app.post("/api/leads/{lead_id}/no-attention")
-def mark_lead_no_attention(lead_id: str, body: LeadNoAttentionRequest) -> dict[str, Any]:
-    lead_id = str(lead_id)
-    report = get_ui_report(DEFAULT_DB_PATH, body.report_id)
-    if not report or str(report.get("entity_type")) != "lead" or str(report.get("entity_id")) != lead_id:
-        raise HTTPException(status_code=400, detail="A lead report is required for this decision")
-
-    existing = get_candidate_review_states(
-        DEFAULT_DB_PATH, entity_type="lead", entity_ids=[lead_id]
-    ).get(lead_id)
-    review = upsert_candidate_review_state(
-        DEFAULT_DB_PATH,
-        entity_type="lead",
-        entity_id=lead_id,
-        state="reviewed",
-        report_id=body.report_id,
-        decision="Не требует внимания",
-        next_control_date=None,
-        **_candidate_review_values(report),
-    )
-    if not existing or existing.get("state") != "reviewed" or existing.get("decision") != "Не требует внимания":
-        save_rop_decision(
-            DEFAULT_DB_PATH,
-            report_id=body.report_id,
-            decision="Не требует внимания",
-            next_control_date=None,
-        )
-    return {
-        "workflow": _lead_workflow_payload(lead_id, report),
-        "candidate_review": review,
-    }
+    saved.pop("final_decision", None)
+    return {**saved, "status_label": _workflow_status(saved)}
 
 
 @app.get("/api/reports")

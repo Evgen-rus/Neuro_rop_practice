@@ -4,6 +4,7 @@ Lightweight validation for model-generated ROP analysis JSON.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 
@@ -1477,5 +1478,33 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     _validate_qualification_assessment(analysis, errors, lead_contract=True)
     _validate_lead_qualification_consistency(analysis, errors)
     _validate_common_shapes(analysis, errors)
+    rop_manager = analysis.get("rop_manager_message_block")
+    if isinstance(rop_manager, dict):
+        options = _expect_list(
+            rop_manager.get("manager_message_options"),
+            "rop_manager_message_block.manager_message_options",
+            errors,
+        )
+        if len(options) != 3:
+            errors.append("rop_manager_message_block.manager_message_options must contain exactly 3 items")
+        normalized_options: list[str] = []
+        for index, option in enumerate(options):
+            path = f"rop_manager_message_block.manager_message_options[{index}]"
+            _expect_non_empty_text_without_markers(option, path, errors)
+            if isinstance(option, str):
+                normalized = option.strip()
+                normalized_options.append(normalized)
+                if len(normalized) > 500:
+                    errors.append(f"{path} must be at most 500 characters")
+        if len(set(normalized_options)) != len(normalized_options):
+            errors.append("rop_manager_message_block.manager_message_options must be distinct")
+        deadline = rop_manager.get("deadline")
+        if not isinstance(deadline, str) or not deadline.strip():
+            errors.append("rop_manager_message_block.deadline must be a non-empty YYYY-MM-DD string for lead analysis")
+        else:
+            try:
+                date.fromisoformat(deadline.strip())
+            except ValueError:
+                errors.append("rop_manager_message_block.deadline must use YYYY-MM-DD format for lead analysis")
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

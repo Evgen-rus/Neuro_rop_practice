@@ -9,10 +9,15 @@ from unittest.mock import patch
 import api.app as api_app
 import api.jobs as jobs
 from storage.rop_db import (
+    connect,
     get_candidate_review_states,
     get_lead_workflow_state,
     get_ui_report,
+    init_db,
+    list_rop_decisions,
+    save_rop_decision,
     save_ui_report,
+    upsert_candidate_review_state,
     upsert_lead_workflow_state,
 )
 
@@ -26,6 +31,7 @@ class LeadWorkflowStorageTests(unittest.TestCase):
                 lead_id="101",
                 source_report_id=None,
                 manager_review_text="Разбор",
+                manager_message_options=["Вариант 1", "Вариант 2", "Вариант 3"],
                 manager_task_text="Задача",
                 review_completed=True,
                 task_completed=False,
@@ -38,6 +44,7 @@ class LeadWorkflowStorageTests(unittest.TestCase):
             self.assertEqual(first["lead_id"], "101")
             self.assertTrue(first["review_completed"])
             self.assertEqual(first["control_days"], 3)
+            self.assertEqual(first["manager_message_options"], ["Вариант 1", "Вариант 2", "Вариант 3"])
             self.assertIsNone(get_lead_workflow_state(db_path, "202"))
 
     def test_report_snapshots_are_optional_and_decoded(self) -> None:
@@ -60,7 +67,7 @@ class LeadWorkflowStorageTests(unittest.TestCase):
 
 
 class LeadWorkflowApiTests(unittest.TestCase):
-    def test_control_and_final_decision_sync_candidate_lifecycle(self) -> None:
+    def test_control_toggle_syncs_candidate_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"
             report_id = save_ui_report(
@@ -69,7 +76,11 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 entity_id="77",
                 report_json={
                     "lead_state": {"summary": "Нужна проверка"},
-                    "rop_manager_message_block": {"message_to_manager": "Позвонить клиенту"},
+                    "rop_manager_message_block": {
+                        "manager_message_options": ["Вариант 1", "Вариант 2", "Вариант 3"],
+                        "message_to_manager": "До 2026-07-24 позвонить клиенту и зафиксировать результат в CRM.",
+                        "deadline": "2026-07-24",
+                    },
                 },
             )
             with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
@@ -79,34 +90,89 @@ class LeadWorkflowApiTests(unittest.TestCase):
                         source_report_id=report_id,
                         review_completed=True,
                         task_completed=True,
-                        control_mode="days",
-                        control_days=2,
+                        control_mode="date",
+                        control_date="2026-07-24",
                     ),
                 )
                 self.assertEqual(control["status_label"], "На контроле")
                 review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
                 self.assertEqual(review["state"], "snoozed")
+                self.assertEqual(review["next_control_date"], "2026-07-24")
 
-                final = api_app.save_lead_workflow(
+                active = api_app.save_lead_workflow(
                     "77",
-                    api_app.LeadWorkflowRequest(control_completed=True, final_decision="no_attention"),
+                    api_app.LeadWorkflowRequest(control_mode=None, control_date=None, control_days=None),
                 )
-                self.assertEqual(final["status_label"], "Не требует внимания")
+                self.assertEqual(active["status_label"], "В работе")
                 review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
-                self.assertEqual(review["state"], "reviewed")
+                self.assertEqual(review["state"], "active")
+                self.assertEqual(review["decision"], "Снят с контроля")
 
-    def test_fast_no_attention_marks_only_this_lead_as_reviewed(self) -> None:
+    def test_legacy_report_gets_one_safe_manager_message_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"
-            report_id = save_ui_report(db_path, entity_type="lead", entity_id="88", report_json={"lead_state": {}})
+            report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="88",
+                report_json={
+                    "lead_state": {},
+                    "rop_manager_message_block": {
+                        "message_to_manager": "Позвонить клиенту.",
+                        "why_it_matters": "Нужно подтвердить актуальность.",
+                    },
+                },
+            )
             with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
-                result = api_app.mark_lead_no_attention(
-                    "88", api_app.LeadNoAttentionRequest(report_id=report_id)
+                workflow = api_app.lead_workflow("88", report_id=report_id)
+            self.assertEqual(
+                workflow["manager_message_options"],
+                ["Позвонить клиенту. Нужно подтвердить актуальность."],
+            )
+            self.assertNotIn("final_decision", workflow)
+
+    def test_one_time_migration_reactivates_no_attention_and_keeps_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(db_path, entity_type="lead", entity_id="99", report_json={"lead_state": {}})
+            upsert_lead_workflow_state(
+                db_path,
+                lead_id="99",
+                source_report_id=report_id,
+                manager_review_text="Старый разбор",
+                manager_message_options=None,
+                manager_task_text="Старая задача",
+                review_completed=True,
+                task_completed=True,
+                control_mode=None,
+                control_days=None,
+                control_date=None,
+                control_completed=True,
+                final_decision="no_attention",
+            )
+            upsert_candidate_review_state(
+                db_path,
+                entity_type="lead",
+                entity_id="99",
+                state="reviewed",
+                report_id=report_id,
+                decision="Не требует внимания",
+            )
+            save_rop_decision(db_path, report_id=report_id, decision="Не требует внимания")
+            with connect(db_path) as conn:
+                conn.execute(
+                    "DELETE FROM local_migrations WHERE migration_id = ?",
+                    ("2026-07-22-reactivate-lead-no-attention",),
                 )
-            self.assertEqual(result["workflow"]["status_label"], "Не требует внимания")
-            review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["88"])["88"]
-            self.assertEqual(review["state"], "reviewed")
-            self.assertEqual(review["decision"], "Не требует внимания")
+
+            init_db(db_path)
+
+            workflow = get_lead_workflow_state(db_path, "99")
+            review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["99"])["99"]
+            self.assertIsNone(workflow["final_decision"])
+            self.assertEqual(review["state"], "active")
+            self.assertIsNone(review["next_control_date"])
+            self.assertEqual(list_rop_decisions(db_path, report_id)[0]["decision"], "Не требует внимания")
 
 
 class LeadReportSnapshotTests(unittest.TestCase):

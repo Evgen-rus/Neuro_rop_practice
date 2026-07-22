@@ -122,6 +122,7 @@ def build_prompt(
 <length_limits>
 - summary/reason/description: максимум 2-3 коротких предложения.
 - Списки what_done_well, missed_points, next_call_plan, manager_checklist: максимум 5 пунктов.
+- Каждый вариант manager_message_options: максимум 500 символов и 3-5 коротких предложений.
 - Любой массив evidence: максимум 7 пунктов. Если фактов больше 7, выбери самые важные и объединяй близкие факты в один пункт.
 - При выборе evidence приоритет такой: клиентские факты и транскрипт, затем CRM-статус/задачи/комментарии, затем внутренний чат как источник управленческого контекста.
 - Готовый email или messenger text: максимум 1200 символов.
@@ -141,9 +142,10 @@ def build_prompt(
 9. Квалификацию A/B/C/D/E давай только по фактам BANT, сроку, ЛПР, производству и техническим данным. Если данных мало, ставь unknown и фиксируй data_gap в loss_diagnosis.
 10. Рекомендация должна быть управленческой: что РОП поручает менеджеру и какой факт должен появиться в CRM.
 11. Если лид требует уточнения, поручай менеджеру один контакт с клиентом: получить недостающие факты и сразу зафиксировать результат в CRM. Не превращай это в два независимых действия.
-12. rop_manager_message_block.message_to_manager — готовое поручение менеджеру. В нём должны быть срок, конкретные вопросы клиенту и результат, который нужно внести в CRM.
-13. manager_action_block.primary_text — готовый текст именно для клиента, без инструкций менеджеру вроде "внеси в CRM". Для лида он должен уточнять потребность, параметры задачи, бюджетный ориентир, срок, ЛПР и следующий шаг только в той части, которая ещё не известна.
-14. manager_action_block.manager_checklist — короткий список CRM-фактов после контакта; не дублируй в нём задачу или текст клиенту.
+12. rop_manager_message_block.manager_message_options — ровно три готовых коротких сообщения менеджеру от опытного РОПа. Во всех трёх должна быть одна и та же рекомендация и факты, но разная подача: прямой управленческий, поддерживающий и наставнический тон. Каждое сообщение должно коротко объяснить, что сделать и почему это важно. Отмечай уже сделанное хорошо только при наличии фактического основания. Не добавляй разделы, заголовки, списки «Сильные стороны», «Слабые стороны» или «Что усилить» и не ставь психологические диагнозы менеджеру или клиенту.
+13. rop_manager_message_block.message_to_manager — отдельная готовая SMART-задача менеджеру, а не повтор сообщения из manager_message_options. В одной короткой формулировке должны быть конкретное действие, точный срок YYYY-MM-DD, ожидаемый факт в CRM и проверяемый результат.
+14. manager_action_block.primary_text — готовый текст именно для клиента, без инструкций менеджеру вроде "внеси в CRM". Для лида он должен уточнять потребность, параметры задачи, бюджетный ориентир, срок, ЛПР и следующий шаг только в той части, которая ещё не известна.
+15. manager_action_block.manager_checklist — короткий список CRM-фактов после контакта; не дублируй в нём задачу или текст клиенту.
 
 <qualification_rules>
 Сначала заполни qualification_assessment: четыре независимых критерия BANT, техническую применимость, коммерческую проверку бюджета нового оборудования, категорию лида и маршрут. Только затем продублируй категорию в legacy-поле lead_state.qualification, выбери loss_diagnosis.final_verdict и рекомендацию.
@@ -248,9 +250,14 @@ def build_prompt(
   "rop_manager_message_block": {{
     "check_for_rop": "что конкретно РОПу проверить по лиду",
     "why_it_matters": "почему это влияет на потерю лида, скорость обработки или деньги",
-    "message_to_manager": "готовый текст поручения, который РОП может отправить менеджеру",
+    "manager_message_options": [
+      "короткое сообщение менеджеру в прямом управленческом тоне",
+      "короткое сообщение менеджеру в поддерживающем тоне",
+      "короткое сообщение менеджеру в наставническом тоне"
+    ],
+    "message_to_manager": "короткая SMART-задача менеджеру: действие, точный срок, CRM-факт и проверяемый результат",
     "expected_crm_update": "какой факт должен появиться в CRM после действия менеджера",
-    "deadline": "YYYY-MM-DD или null",
+    "deadline": "YYYY-MM-DD",
     "success_condition": "как понять, что поручение выполнено",
     "evidence": [
       "1-7 самых важных фактов из истории, звонка, комментария, задачи, статуса, CRM или внутреннего чата"
@@ -522,6 +529,14 @@ def render_report(
     limitations = render_context_limitations_section(context_diagnostics)
     limitations_section = f"\n\n{limitations}\n" if limitations else ""
     qualification_assessment = render_qualification_assessment_section(analysis)
+    manager_message_options = [
+        str(item).strip()
+        for item in rop_manager.get("manager_message_options", [])
+        if str(item).strip()
+    ]
+    manager_options_md = "\n".join(
+        f"{index}. {item}" for index, item in enumerate(manager_message_options, 1)
+    ) or str(rop_manager.get("message_to_manager") or "не указано")
 
     return f"""# Отчет РОПу по лиду {lead_id}
 
@@ -532,7 +547,9 @@ def render_report(
 
 - Проверить: {rop_manager.get('check_for_rop') or rop.get('text', 'не указано')}
 - Почему это важно: {rop_manager.get('why_it_matters', 'не указано')}
-- Сообщение менеджеру: {rop_manager.get('message_to_manager', 'не указано')}
+- Варианты сообщения менеджеру:
+{manager_options_md}
+- SMART-задача менеджеру: {rop_manager.get('message_to_manager', 'не указано')}
 - Ожидаемый факт в CRM: {rop_manager.get('expected_crm_update', 'не указано')}
 - Срок контроля: {human_value(rop_manager.get('deadline'))}
 - Критерий выполнения: {rop_manager.get('success_condition', 'не указано')}
