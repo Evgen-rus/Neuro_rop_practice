@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from bitrix.customer_history import build_normalized_communications
 from openai_api.bitrix_links import bitrix_entity_url
 from progress_events import PROGRESS_PREFIX, progress_key
 from setup import BASE_DIR, MSK_TZ
@@ -228,6 +229,141 @@ def _short_text(value: Any, limit: int = 600) -> str | None:
     return text[:limit] or None
 
 
+_NO_CONTACT_TRANSCRIPT_MARKERS = (
+    "абонент недоступен",
+    "временно недоступен",
+    "не может ответить",
+    "оставьте сообщение",
+    "после звукового сигнала",
+    "голосовая почта",
+    "автоответчик",
+)
+
+
+def _call_transcript(lead_id: str, call_id: str) -> str | None:
+    if not call_id:
+        return None
+    transcript_dir = workspace_dir("lead", lead_id) / "transcripts"
+    candidates = sorted(transcript_dir.glob(f"call_{call_id}_*_transcript.json"))
+    candidates.extend(sorted(transcript_dir.glob(f"call_{call_id}_*_transcript.txt")))
+    for path in candidates:
+        try:
+            if path.suffix.lower() == ".json":
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                text = payload.get("text") if isinstance(payload, dict) else None
+            else:
+                text = path.read_text(encoding="utf-8")
+        except (OSError, json.JSONDecodeError):
+            continue
+        normalized = str(text or "").strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _transcript_confirms_contact(text: str | None, duration_seconds: float | None) -> bool:
+    if not text or (duration_seconds is not None and duration_seconds < 20):
+        return False
+    normalized = " ".join(text.lower().split())
+    if len(normalized) < 80:
+        return False
+    if any(marker in normalized for marker in _NO_CONTACT_TRANSCRIPT_MARKERS):
+        return False
+    return True
+
+
+def _communication_snapshot(event: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not event:
+        return None
+    channel = str(event.get("channel") or "unknown")
+    channel_label = {
+        "call": "Звонок",
+        "email": "Письмо",
+        "whatsapp": "WhatsApp",
+        "max": "Max",
+        "telegram": "Telegram",
+        "message": "Сообщение",
+        "internal_comment": "Комментарий CRM",
+        "internal_chat": "Внутренний чат",
+        "unknown": "Коммуникация",
+    }.get(channel, channel)
+    direction_label = {
+        "incoming": "входящий",
+        "outgoing": "исходящий",
+        "internal": "внутренний",
+        "unknown": "направление не определено",
+    }.get(str(event.get("direction") or "unknown"), "направление не определено")
+    contact_label = {
+        "attempt": "Попытка связи",
+        "confirmed_contact": "Подтверждённый контакт",
+        "internal_information": "Внутренняя информация",
+        "unknown": "Результат не определён",
+    }.get(str(event.get("contact_class") or "unknown"), "Результат не определён")
+    duration = event.get("duration_seconds")
+    return {
+        "event_id": _short_text(event.get("event_id"), 160),
+        "type": channel_label,
+        "channel": channel,
+        "direction": str(event.get("direction") or "unknown"),
+        "direction_label": direction_label,
+        "date": _short_text(event.get("occurred_at"), 80),
+        "subject": _short_text(event.get("subject"), 240),
+        "text": _short_text(event.get("content"), 4000),
+        "participant_name": _short_text(event.get("participant_name"), 240),
+        "source_label": _short_text(event.get("source_label"), 240),
+        "contact_class": str(event.get("contact_class") or "unknown"),
+        "contact_label": contact_label,
+        "classification_reason": _short_text(event.get("classification_reason"), 500),
+        "duration_seconds": round(float(duration), 1) if isinstance(duration, (int, float)) else None,
+        "has_transcript": bool(event.get("has_transcript")),
+        "transcript_text": _short_text(event.get("transcript_text"), 12000),
+    }
+
+
+def build_lead_communication_summary(lead_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+    events = bundle.get("normalized_communications")
+    if not isinstance(events, list):
+        events = build_normalized_communications(bundle)
+    normalized_events = [dict(item) for item in events if isinstance(item, dict)]
+    for event in normalized_events:
+        if event.get("channel") != "call":
+            continue
+        transcript = _call_transcript(lead_id, str(event.get("call_id") or ""))
+        event["transcript_text"] = transcript
+        event["has_transcript"] = bool(transcript)
+        duration = event.get("duration_seconds")
+        duration_value = float(duration) if isinstance(duration, (int, float)) else None
+        if _transcript_confirms_contact(transcript, duration_value):
+            event["contact_class"] = "confirmed_contact"
+            event["evidence_level"] = "direct"
+            event["classification_reason"] = "Есть содержательная расшифровка разговора с клиентом."
+        elif duration_value is not None and duration_value < 20:
+            event["contact_class"] = "attempt"
+            event["classification_reason"] = "Звонок короче 20 секунд: подтверждённый разговор не установлен."
+        elif transcript:
+            event["contact_class"] = "attempt"
+            event["classification_reason"] = "Расшифровка не подтверждает содержательный разговор с клиентом."
+        else:
+            event["contact_class"] = "attempt"
+            event["classification_reason"] = "Нет доступной расшифровки, поэтому результат звонка не подтверждён."
+
+    def event_time(item: dict[str, Any]) -> str:
+        return str(item.get("occurred_at") or "")
+
+    attempts = [
+        item for item in normalized_events
+        if item.get("contact_class") in {"attempt", "confirmed_contact"}
+        and item.get("direction") in {"outgoing", "unknown"}
+    ]
+    confirmed = [item for item in normalized_events if item.get("contact_class") == "confirmed_contact"]
+    internal = [item for item in normalized_events if item.get("contact_class") == "internal_information"]
+    return {
+        "last_attempt": _communication_snapshot(max(attempts, key=event_time, default=None)),
+        "last_confirmed_contact": _communication_snapshot(max(confirmed, key=event_time, default=None)),
+        "last_internal_information": _communication_snapshot(max(internal, key=event_time, default=None)),
+    }
+
+
 def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
     bundle_path = workspace_dir("lead", lead_id) / "raw" / f"lead_{lead_id}_customer_history_bundle.json"
     bundle = _load_json_object(bundle_path)
@@ -249,6 +385,7 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
         return str(item.get("when") or raw.get("DEADLINE") or raw.get("START_TIME") or raw.get("LAST_UPDATED") or "")
 
     last_contact = max(touchpoints, key=activity_time, default=None)
+    communication_summary = build_lead_communication_summary(lead_id, bundle) if bundle else {}
     open_tasks = [item for item in tasks if not bool(item.get("completed"))]
     current_task = max(open_tasks or tasks, key=activity_time, default=None)
 
@@ -281,6 +418,9 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
         "stage_id": status_id or None,
         "stage_name": _lead_stage_name(status_id) or status_id or None,
         "last_contact": activity_snapshot(last_contact),
+        "last_attempt": communication_summary.get("last_attempt"),
+        "last_confirmed_contact": communication_summary.get("last_confirmed_contact"),
+        "last_internal_information": communication_summary.get("last_internal_information"),
         "current_task": activity_snapshot(current_task),
         "snapshot_generated_at": _short_text(bundle.get("generated_at"), 80),
     }

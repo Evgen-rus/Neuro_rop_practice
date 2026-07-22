@@ -292,11 +292,23 @@ export type UiReportDetail = UiReportListItem & {
 }
 
 export type LeadReportActivity = {
+  event_id?: string | null
   type?: string | null
+  channel?: string | null
+  direction?: string | null
+  direction_label?: string | null
   date?: string | null
   subject?: string | null
   text?: string | null
   completed?: boolean
+  participant_name?: string | null
+  source_label?: string | null
+  contact_class?: string | null
+  contact_label?: string | null
+  classification_reason?: string | null
+  duration_seconds?: number | null
+  has_transcript?: boolean
+  transcript_text?: string | null
 }
 
 export type ModelContextSnapshot = {
@@ -312,6 +324,9 @@ export type LeadReportMeta = {
   stage_id?: string | null
   stage_name?: string | null
   last_contact?: LeadReportActivity | null
+  last_attempt?: LeadReportActivity | null
+  last_confirmed_contact?: LeadReportActivity | null
+  last_internal_information?: LeadReportActivity | null
   current_task?: LeadReportActivity | null
   snapshot_generated_at?: string | null
 }

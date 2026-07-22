@@ -8,6 +8,7 @@ timeline comments. It does not write anything to Bitrix.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 from datetime import datetime, timedelta
@@ -24,6 +25,12 @@ DEAL_OWNER_TYPE_ID = 2
 CONTACT_OWNER_TYPE_ID = 3
 
 DEFAULT_HISTORY_DAYS = 365
+
+WAZZUP_CHANNEL_MARKERS = {
+    "whatsapp": ("/whatsapp.", "whatsapp"),
+    "max": ("/max.", " max"),
+    "telegram": ("/telegram.", "telegram"),
+}
 
 
 def get_result(call_result: dict[str, Any] | None) -> Any:
@@ -70,6 +77,222 @@ def clean_text(value: Any, limit: int | None = None) -> str:
     if limit and len(text) > limit:
         return text[: limit - 3].rstrip() + "..."
     return text
+
+
+def _normalized_person_name(value: Any) -> str:
+    return " ".join(re.findall(r"[a-zа-яё0-9]+", str(value or "").lower()))
+
+
+def _bundle_client_names(bundle: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+
+    def add_item(item: dict[str, Any]) -> None:
+        variants = [
+            " ".join(str(item.get(key) or "").strip() for key in ("NAME", "SECOND_NAME", "LAST_NAME")).strip(),
+            " ".join(str(item.get(key) or "").strip() for key in ("NAME", "LAST_NAME")).strip(),
+        ]
+        for variant in variants:
+            normalized = _normalized_person_name(variant)
+            if normalized:
+                names.add(normalized)
+
+    add_item(result_item(bundle.get("lead")))
+    for contact_container in (bundle.get("contacts") or {}).values():
+        add_item(result_item(contact_container if isinstance(contact_container, dict) else None))
+    return names
+
+
+def _call_duration_seconds(raw: dict[str, Any]) -> float | None:
+    started = parse_bitrix_datetime(raw.get("START_TIME") or raw.get("CREATED"))
+    ended = parse_bitrix_datetime(raw.get("END_TIME"))
+    if started is None or ended is None:
+        return None
+    return round(max(0.0, (ended - started).total_seconds()), 1)
+
+
+def _communication_channel_from_comment(text: str) -> str | None:
+    lowered = text.lower()
+    for channel, markers in WAZZUP_CHANNEL_MARKERS.items():
+        if any(marker in lowered for marker in markers):
+            return channel
+    return None
+
+
+def _parse_mirrored_message(text: str) -> tuple[str | None, str]:
+    cleaned = re.sub(r"\[img\].*?\[/img\]", "", text, flags=re.I | re.S).strip()
+    first_line, _, remainder = cleaned.partition("\n")
+    if ":" not in first_line:
+        return None, cleaned
+    speaker, first_content = first_line.split(":", 1)
+    content = "\n".join(part for part in (first_content.strip(), remainder.strip()) if part).strip()
+    return speaker.strip() or None, content
+
+
+def _communication_event_id(prefix: str, occurred_at: Any, identity: str) -> str:
+    digest = hashlib.sha1(f"{occurred_at}|{identity}".encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
+
+
+def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return an additive, source-aware communication ledger for leads and deals."""
+    client_names = _bundle_client_names(bundle)
+    events: list[dict[str, Any]] = []
+
+    for item in bundle.get("client_touchpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        event_type = str(item.get("event_type") or "unknown").lower()
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        raw_direction = str(item.get("direction") or raw.get("DIRECTION") or "")
+        direction = "incoming" if raw_direction == "1" else "outgoing" if raw_direction == "2" else "unknown"
+        channel = event_type if event_type in {"call", "email", "message"} else "unknown"
+        content = clean_text(item.get("text") or raw.get("DESCRIPTION"), 1200)
+        source_id = str(item.get("id") or raw.get("ID") or "")
+        contact_class = "attempt"
+        evidence_level = "unknown" if channel == "call" else "direct"
+        participant_role = "client" if direction == "incoming" else "employee" if direction == "outgoing" else "unknown"
+        if channel in {"email", "message"} and direction == "incoming" and content:
+            contact_class = "confirmed_contact"
+        event_id = f"crm_activity:{source_id}" if source_id else _communication_event_id(
+            "crm_activity",
+            item.get("when"),
+            f"{channel}|{direction}|{item.get('subject')}|{content}",
+        )
+        events.append(
+            {
+                "event_id": event_id,
+                "source_ids": [source_id] if source_id else [],
+                "occurred_at": item.get("when"),
+                "entity_type": item.get("entity_type"),
+                "entity_id": item.get("entity_id"),
+                "entity_key": item.get("entity_key"),
+                "channel": channel,
+                "direction": direction,
+                "participant_role": participant_role,
+                "participant_name": None,
+                "source_type": "crm_activity",
+                "source_label": "Активность Bitrix",
+                "subject": clean_text(item.get("subject"), 300),
+                "content": content,
+                "preview": clean_text(content, 360),
+                "call_id": source_id if channel == "call" else None,
+                "duration_seconds": _call_duration_seconds(raw) if channel == "call" else None,
+                "has_recording": bool(raw.get("FILES")) if channel == "call" else False,
+                "has_transcript": False,
+                "evidence_level": evidence_level,
+                "contact_class": contact_class,
+                "classification_reason": (
+                    "Звонок зафиксирован в CRM; результат разговора требует записи или транскрипта."
+                    if channel == "call"
+                    else "Входящий текст клиента зафиксирован в CRM."
+                    if contact_class == "confirmed_contact"
+                    else "Исходящая коммуникация зафиксирована как попытка связи."
+                ),
+            }
+        )
+
+    for item in bundle.get("internal_context") or []:
+        if not isinstance(item, dict):
+            continue
+        text = clean_text(item.get("text"), 1200)
+        category = str(item.get("category") or "")
+        source_id = str(item.get("id") or "")
+        channel = _communication_channel_from_comment(text)
+        if channel:
+            speaker, content = _parse_mirrored_message(text)
+            normalized_speaker = _normalized_person_name(speaker)
+            is_client = bool(normalized_speaker and normalized_speaker in client_names)
+            direction = "incoming" if is_client else "unknown"
+            participant_role = "client" if is_client else "unknown"
+            contact_class = "confirmed_contact" if is_client and content else "attempt" if speaker and content else "unknown"
+            evidence_level = "direct" if content else "unknown"
+            source_label = f"CRM/{'WhatsApp' if channel == 'whatsapp' else 'Max' if channel == 'max' else 'Telegram'}"
+            identity = f"{channel}|{direction}|{speaker}|{content}"
+            event_id = _communication_event_id("crm_mirror", item.get("when"), identity)
+            events.append(
+                {
+                    "event_id": event_id,
+                    "source_ids": [source_id] if source_id else [],
+                    "occurred_at": item.get("when"),
+                    "entity_type": item.get("entity_type"),
+                    "entity_id": item.get("entity_id"),
+                    "entity_key": item.get("entity_key"),
+                    "channel": channel,
+                    "direction": direction,
+                    "participant_role": participant_role,
+                    "participant_name": speaker,
+                    "source_type": "crm_timeline_comment",
+                    "source_label": source_label,
+                    "subject": "",
+                    "content": content,
+                    "preview": clean_text(content, 360),
+                    "call_id": None,
+                    "duration_seconds": None,
+                    "has_recording": False,
+                    "has_transcript": False,
+                    "evidence_level": evidence_level,
+                    "contact_class": contact_class,
+                    "classification_reason": (
+                        "Автор сообщения совпадает с контактом клиента."
+                        if is_client
+                        else "Автор не совпадает с известным контактом клиента; сообщение учтено как попытка, но направление не подтверждено."
+                        if speaker
+                        else "Автор зеркального сообщения не определён."
+                    ),
+                }
+            )
+            continue
+
+        source_type = "internal_im_chat" if category == "internal_im_chat" else "crm_timeline_comment"
+        event_id = f"{source_type}:{source_id}" if source_id else _communication_event_id(
+            source_type,
+            item.get("when"),
+            text,
+        )
+        events.append(
+            {
+                "event_id": event_id,
+                "source_ids": [source_id] if source_id else [],
+                "occurred_at": item.get("when"),
+                "entity_type": item.get("entity_type"),
+                "entity_id": item.get("entity_id"),
+                "entity_key": item.get("entity_key"),
+                "channel": "internal_chat" if source_type == "internal_im_chat" else "internal_comment",
+                "direction": "internal",
+                "participant_role": "employee",
+                "participant_name": item.get("author"),
+                "source_type": source_type,
+                "source_label": "Внутренний чат" if source_type == "internal_im_chat" else "Комментарий CRM",
+                "subject": clean_text(item.get("subject"), 300),
+                "content": text,
+                "preview": clean_text(text, 360),
+                "call_id": None,
+                "duration_seconds": None,
+                "has_recording": False,
+                "has_transcript": False,
+                "evidence_level": "reported",
+                "contact_class": "internal_information",
+                "classification_reason": "Внутренняя запись сотрудника не считается словами клиента.",
+            }
+        )
+
+    deduplicated: dict[str, dict[str, Any]] = {}
+    for event in events:
+        event_id = str(event.get("event_id") or "")
+        existing = deduplicated.get(event_id)
+        if existing is None:
+            deduplicated[event_id] = event
+            continue
+        existing["source_ids"] = sorted(
+            {str(value) for value in [*(existing.get("source_ids") or []), *(event.get("source_ids") or [])] if value}
+        )
+        if not existing.get("entity_key") and event.get("entity_key"):
+            existing["entity_key"] = event.get("entity_key")
+
+    return sorted(
+        deduplicated.values(),
+        key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")),
+    )
 
 
 def parse_bitrix_datetime(value: Any) -> datetime | None:
@@ -1106,6 +1329,7 @@ def build_customer_history_bundle(
 
     bundle["internal_im_chats_by_entity"] = internal_chats_by_entity
     append_internal_chat_events(bundle, internal_chat_rows)
+    bundle["normalized_communications"] = build_normalized_communications(bundle)
     bundle["diagnostics"]["internal_im_chat"] = {
         "enabled": bool(include_internal_context),
         "entities_checked": sorted(internal_chats_by_entity.keys()),

@@ -314,6 +314,68 @@ class LeadWorkflowApiTests(unittest.TestCase):
 
 
 class LeadReportSnapshotTests(unittest.TestCase):
+    def test_communication_summary_separates_attempt_contact_and_internal_note(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lead_root = root / "reports" / "rop_assistant" / "leads" / "lead_5"
+            transcript_dir = lead_root / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "call_10_client_transcript.json").write_text(
+                json.dumps(
+                    {
+                        "text": (
+                            "Менеджер: Добрый день, уточню параметры проекта. "
+                            "Клиент: Да, проект актуален, предложение получили. "
+                            "Давайте вернёмся к согласованию бюджета на следующей неделе."
+                        )
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            bundle = {
+                "normalized_communications": [
+                    {
+                        "event_id": "crm_activity:10",
+                        "occurred_at": "2026-07-18T10:00:00+03:00",
+                        "channel": "call",
+                        "direction": "outgoing",
+                        "source_label": "Активность Bitrix",
+                        "call_id": "10",
+                        "duration_seconds": 95.0,
+                        "contact_class": "attempt",
+                    },
+                    {
+                        "event_id": "crm_activity:11",
+                        "occurred_at": "2026-07-19T10:00:00+03:00",
+                        "channel": "call",
+                        "direction": "outgoing",
+                        "source_label": "Активность Bitrix",
+                        "call_id": "11",
+                        "duration_seconds": 0.0,
+                        "contact_class": "attempt",
+                    },
+                    {
+                        "event_id": "crm_timeline_comment:12",
+                        "occurred_at": "2026-07-20T10:00:00+03:00",
+                        "channel": "internal_comment",
+                        "direction": "internal",
+                        "source_label": "Комментарий CRM",
+                        "content": "Менеджер сообщил, что КП отправлено.",
+                        "contact_class": "internal_information",
+                    },
+                ]
+            }
+            with patch.object(jobs, "PROJECT_ROOT", root):
+                summary = jobs.build_lead_communication_summary("5", bundle)
+
+            self.assertEqual(summary["last_attempt"]["event_id"], "crm_activity:11")
+            self.assertEqual(summary["last_attempt"]["contact_class"], "attempt")
+            self.assertIn("короче 20 секунд", summary["last_attempt"]["classification_reason"])
+            self.assertEqual(summary["last_confirmed_contact"]["event_id"], "crm_activity:10")
+            self.assertTrue(summary["last_confirmed_contact"]["has_transcript"])
+            self.assertEqual(summary["last_internal_information"]["event_id"], "crm_timeline_comment:12")
+
     def test_metadata_uses_local_bundle_and_russian_stage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

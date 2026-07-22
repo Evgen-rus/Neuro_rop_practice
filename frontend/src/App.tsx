@@ -19,6 +19,7 @@ import {
   type UiReportDetail,
   type UiReportListItem,
   type LeadWorkflowState,
+  type LeadReportActivity,
   createAnalysisProfile,
   createDailySummary,
   deleteAnalysisProfile,
@@ -2013,6 +2014,36 @@ function formatLeadDate(value: string | null | undefined, includeTime = true): s
     : { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
+function CommunicationSummaryItem(props: { title: string; item?: LeadReportActivity | null; emptyText: string }) {
+  const { title, item, emptyText } = props
+  if (!item) {
+    return <div className="communication-summary-empty"><strong>{title}</strong><span>{emptyText}</span></div>
+  }
+  const duration = typeof item.duration_seconds === 'number' ? ` · ${Math.round(item.duration_seconds)} сек.` : ''
+  const meta = [item.type, item.direction_label, formatLeadDate(item.date)].filter(Boolean).join(' · ')
+  return (
+    <details className="communication-summary-item">
+      <summary>
+        <strong>{title}</strong>
+        <span>{meta}{duration}</span>
+      </summary>
+      <div className="communication-summary-body">
+        {item.contact_label ? <b>{item.contact_label}</b> : null}
+        {item.subject ? <span>{item.subject}</span> : null}
+        {item.text ? <ExpandableText text={item.text} /> : <span className="muted">Текст события в CRM отсутствует</span>}
+        {item.transcript_text ? (
+          <details className="communication-transcript">
+            <summary><strong>Расшифровка звонка</strong></summary>
+            <ExpandableText text={item.transcript_text} />
+          </details>
+        ) : null}
+        {item.classification_reason ? <small>{item.classification_reason}</small> : null}
+        {item.source_label ? <small>Источник: {item.source_label}</small> : null}
+      </div>
+    </details>
+  )
+}
+
 function ManagerReviewDocument({ text }: { text: string }) {
   return (
     <div className="manager-review-document">
@@ -2129,7 +2160,10 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     )
   }
 
-  const lastContact = reportMeta.last_contact
+  const lastAttempt = reportMeta.last_attempt
+  const lastConfirmedContact = reportMeta.last_confirmed_contact
+  const lastInternalInformation = reportMeta.last_internal_information
+  const legacyLastContact = reportMeta.last_contact
   const currentTask = reportMeta.current_task
   const managerMessages = (workflow.manager_message_options?.length
     ? workflow.manager_message_options
@@ -2226,12 +2260,21 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             ) : <span className="muted">Актуальная задача в CRM не найдена</span>}
           </article>
           <article className="lead-summary-card lead-summary-contact">
-            {lastContact ? (
+            <h3>Коммуникации</h3>
+            {lastAttempt || lastConfirmedContact || lastInternalInformation ? (
+              <div className="communication-summary-list">
+                <CommunicationSummaryItem title="Последняя попытка связи" item={lastAttempt} emptyText="Исходящая попытка связи не определена" />
+                {lastConfirmedContact?.event_id && lastConfirmedContact.event_id === lastAttempt?.event_id ? null : (
+                  <CommunicationSummaryItem title="Последний подтверждённый контакт" item={lastConfirmedContact} emptyText="Подтверждённый контакт не определён" />
+                )}
+                <CommunicationSummaryItem title="Последняя внутренняя информация" item={lastInternalInformation} emptyText="Внутренних записей не найдено" />
+              </div>
+            ) : legacyLastContact ? (
               <details>
-                <summary><strong>Последний контакт</strong><span>{lastContact.type || 'контакт'} · {formatLeadDate(lastContact.date)}{lastContact.subject ? ` · ${lastContact.subject}` : ''}</span></summary>
-                <ExpandableText text={lastContact.text || 'Дополнительного текста нет.'} />
+                <summary><strong>Последнее событие CRM</strong><span>{legacyLastContact.type || 'событие'} · {formatLeadDate(legacyLastContact.date)}</span></summary>
+                {legacyLastContact.text ? <ExpandableText text={legacyLastContact.text} /> : <span className="muted">Текст события в CRM отсутствует</span>}
               </details>
-            ) : <div><strong>Последний контакт</strong><span className="muted">Нет данных</span></div>}
+            ) : <div><strong>Коммуникации</strong><span className="muted">Данные не найдены</span></div>}
           </article>
         </section>
 

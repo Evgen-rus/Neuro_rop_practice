@@ -88,7 +88,7 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 - ТЗ UI (продуктовый ориентир, не source-of-truth кода): `tz_front.md`
 - Краткая Markdown-выгрузка свежих лидов: `export_recent_leads_summary.py`
 - Bitrix REST client: `bitrix/client.py`
-- Полная история клиента / fallback-связки: `bitrix/customer_history.py`
+- Полная история клиента, fallback-связки и общий нормализатор коммуникаций lead/deal: `bitrix/customer_history.py`
 - Внутренние Bitrix IM-чаты CRM-сущностей: `bitrix/internal_im_chat.py`
 - Диагностика полноты контекста и ручные действия: `bitrix/context_diagnostics.py`
 - Markdown полной истории клиента: `bitrix/customer_history_report.py`
@@ -211,12 +211,13 @@ lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate le
 74. События прогресса передаются строками с маркером `@@ROP_PROGRESS@@` и ASCII-safe JSON. `api/jobs.py` отделяет их от пользовательского лога и сохраняет текущий этап по каждой сущности.
 75. Статус, прогресс, `job_id`, `report_id`, ошибка и фактическая стоимость каждой карточки сводки сохраняются в SQLite. После перезапуска API осиротевший активный item переводится в явную ошибку, а уже готовые результаты остаются доступны.
 76. Имена и настройки analysis profiles сохраняются в UTF-8; слой хранения исправляет известный UTF-8/CP1251 mojibake при чтении и записи, не меняя корректный текст.
+77. `normalized_communications` — additive-представление коммуникаций внутри `customer_history_bundle`: исходные `client_touchpoints`, `internal_context`, `tasks_and_control`, `system_events` и `unified_timeline` сохраняются без изменения. Звонок становится подтверждённым контактом только при содержательной локальной расшифровке; `COMPLETED=Y` этого не доказывает. Зеркальные сообщения Wazzup/WhatsApp/Max считаются входящими только при надёжном совпадении автора с контактом клиента, а внутренние комментарии и IM-чаты всегда остаются внутренней информацией. Первый нормализованный UI-блок включён только для лидов; общий builder уже пригоден для будущего deal UI без изменения deal prompt или deal JSON-контракта.
 
 ## 4) Key Domain Objects
 
 - `Lead` — лид Bitrix24, локально представлен raw JSON, markdown history, workspace и analysis.
 - `Deal` — сделка Bitrix24, локально представлена raw JSON, markdown history, audio manifest, workspace и analysis.
-- `Customer history bundle` — единый raw JSON `*_customer_history_bundle.json` вокруг root lead/deal: root entity, период, контакты, связанные сделки, дубль-лиды, активности по сущностям, timeline comments, internal IM chats, tasks, unified timeline и diagnostics.
+- `Customer history bundle` — единый raw JSON `*_customer_history_bundle.json` вокруг root lead/deal: root entity, период, контакты, связанные сделки, дубль-лиды, активности по сущностям, timeline comments, internal IM chats, tasks, исходный unified timeline, additive `normalized_communications` и diagnostics.
 - `Related deal` — сделка, найденная через `CONTACT_ID`/`crm.deal.contact.items.get` и `crm.deal.list` по контакту или напрямую через `LEAD_ID`; попадает в общий контекст даже из другой воронки.
 - `Related lead` — подтвержденный дубль-лид, найденный fallback-поиском по телефону/email, когда у root lead нет `CONTACT_ID`.
 - `Converted lead handoff` — правило верхнего CLI: если лид сконвертирован и сделка найдена, дальнейшая транскрибация/анализ идут по сделке, а не по лиду.

@@ -927,8 +927,12 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     payload = _enrich_report_row(report)
-    if str(report.get("entity_type") or "") == "lead" and not payload.get("report_meta"):
-        payload["report_meta"] = build_lead_report_meta(str(report.get("entity_id") or ""))
+    if str(report.get("entity_type") or "") == "lead":
+        current_meta = build_lead_report_meta(str(report.get("entity_id") or "")) or {}
+        saved_meta = payload.get("report_meta") if isinstance(payload.get("report_meta"), dict) else {}
+        payload["report_meta"] = {**current_meta, **saved_meta}
+        for key in ("last_attempt", "last_confirmed_contact", "last_internal_information"):
+            payload["report_meta"][key] = current_meta.get(key)
     payload["decisions"] = list_rop_decisions(DEFAULT_DB_PATH, report_id)
     payload["qualification_reviews"] = list_qualification_reviews(DEFAULT_DB_PATH, report_id)
     payload["outcomes"] = list_outcomes(DEFAULT_DB_PATH, report_id)
