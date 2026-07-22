@@ -189,6 +189,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 source_report_id INTEGER,
                 manager_review_text TEXT,
                 manager_message_options_json TEXT,
+                manager_full_review_text TEXT,
                 manager_task_text TEXT,
                 review_completed INTEGER NOT NULL DEFAULT 0,
                 task_completed INTEGER NOT NULL DEFAULT 0,
@@ -336,6 +337,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "daily_summary_items", "error", "TEXT")
         _ensure_column(conn, "daily_summary_items", "updated_at", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_message_options_json", "TEXT")
+        _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
 
         migration_id = "2026-07-22-reactivate-lead-no-attention"
         migration_applied = conn.execute(
@@ -1045,6 +1047,7 @@ def upsert_lead_workflow_state(
     control_date: str | None,
     control_completed: bool,
     final_decision: str | None,
+    manager_full_review_text: str | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
     now = utcish_now()
@@ -1052,15 +1055,16 @@ def upsert_lead_workflow_state(
         conn.execute(
             """
             INSERT INTO lead_workflow_state (
-                lead_id, source_report_id, manager_review_text, manager_message_options_json, manager_task_text,
+                lead_id, source_report_id, manager_review_text, manager_message_options_json, manager_full_review_text, manager_task_text,
                 review_completed, task_completed, control_mode, control_days,
                 control_date, control_completed, final_decision, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(lead_id) DO UPDATE SET
                 source_report_id = excluded.source_report_id,
                 manager_review_text = excluded.manager_review_text,
                 manager_message_options_json = excluded.manager_message_options_json,
+                manager_full_review_text = excluded.manager_full_review_text,
                 manager_task_text = excluded.manager_task_text,
                 review_completed = excluded.review_completed,
                 task_completed = excluded.task_completed,
@@ -1073,7 +1077,7 @@ def upsert_lead_workflow_state(
             """,
             (
                 str(lead_id), source_report_id, manager_review_text,
-                dumps_json(manager_message_options or []), manager_task_text,
+                dumps_json(manager_message_options or []), manager_full_review_text, manager_task_text,
                 int(review_completed), int(task_completed), control_mode, control_days,
                 control_date, int(control_completed), final_decision, now, now,
             ),

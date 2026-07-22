@@ -32,6 +32,7 @@ class LeadWorkflowStorageTests(unittest.TestCase):
                 source_report_id=None,
                 manager_review_text="Разбор",
                 manager_message_options=["Вариант 1", "Вариант 2", "Вариант 3"],
+                manager_full_review_text="Разбор целиком",
                 manager_task_text="Задача",
                 review_completed=True,
                 task_completed=False,
@@ -45,6 +46,7 @@ class LeadWorkflowStorageTests(unittest.TestCase):
             self.assertTrue(first["review_completed"])
             self.assertEqual(first["control_days"], 3)
             self.assertEqual(first["manager_message_options"], ["Вариант 1", "Вариант 2", "Вариант 3"])
+            self.assertEqual(first["manager_full_review_text"], "Разбор целиком")
             self.assertIsNone(get_lead_workflow_state(db_path, "202"))
 
     def test_report_snapshots_are_optional_and_decoded(self) -> None:
@@ -92,6 +94,7 @@ class LeadWorkflowApiTests(unittest.TestCase):
                     "77",
                     api_app.LeadWorkflowRequest(
                         source_report_id=report_id,
+                        manager_full_review_text="Ручная редакция всего разбора",
                         review_completed=True,
                         task_completed=True,
                         control_mode="date",
@@ -99,6 +102,7 @@ class LeadWorkflowApiTests(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(control["status_label"], "На контроле")
+                self.assertEqual(control["manager_full_review_text"], "Ручная редакция всего разбора")
                 review = get_candidate_review_states(db_path, entity_type="lead", entity_ids=["77"])["77"]
                 self.assertEqual(review["state"], "snoozed")
                 self.assertEqual(review["next_control_date"], "2026-07-24")
@@ -139,6 +143,8 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 ["Клиентский вариант 1", "Клиентский вариант 2", "Клиентский вариант 3"],
             )
             self.assertIn("собраны исходные параметры", workflow["manager_review_text"])
+            self.assertIn("Вариант 1 — Деловой и прямой", workflow["manager_full_review_text"])
+            self.assertIn("«Клиентский вариант 1»", workflow["manager_full_review_text"])
             self.assertNotIn("final_decision", workflow)
 
     def test_legacy_report_preserves_manually_edited_client_texts(self) -> None:
@@ -227,6 +233,8 @@ class LeadWorkflowApiTests(unittest.TestCase):
             self.assertEqual(workflow["source_report_id"], new_report_id)
             self.assertEqual(workflow["manager_review_text"], "Новый разбор")
             self.assertEqual(workflow["manager_message_options"], ["Новый 1", "Новый 2", "Новый 3"])
+            self.assertIn("Вариант 3 — Спокойный и консультативный", workflow["manager_full_review_text"])
+            self.assertIn("«Новый 3»", workflow["manager_full_review_text"])
             self.assertEqual(workflow["manager_task_text"], "Новая задача")
             self.assertFalse(workflow["review_completed"])
             self.assertFalse(workflow["task_completed"])

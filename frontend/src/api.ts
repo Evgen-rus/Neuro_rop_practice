@@ -321,6 +321,7 @@ export type LeadWorkflowState = {
   source_report_id?: number | null
   manager_review_text?: string | null
   manager_message_options?: string[]
+  manager_full_review_text?: string | null
   manager_task_text?: string | null
   review_completed: boolean
   task_completed: boolean

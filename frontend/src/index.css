@@ -2005,16 +2005,13 @@ ul.facts.bad li:before {
 .manager-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .manager-review-heading > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .manager-review-heading button { padding: 4px 7px; font-size: 12px; }
-.review-card.manager-review p { margin: 0; white-space: pre-wrap; line-height: 1.4; }
-.review-card.manager-review textarea { min-height: 128px; margin-top: 9px; }
-.review-card.manager-review .manager-options-intro { margin-top: 14px; font-weight: 700; }
-.manager-client-options { display: grid; gap: 8px; margin-top: 9px; }
-.manager-client-option { min-width: 0; border: 1px solid #d6e3f5; border-radius: 9px; padding: 9px; background: #fff; }
-.manager-client-option-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; margin-bottom: 6px; }
-.manager-client-option-heading > span { color: var(--muted); font-size: 12px; }
-.manager-client-option-heading > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-.manager-client-option-heading button { padding: 4px 7px; font-size: 12px; }
-.manager-client-option .expandable-copy p { font-size: 13px; }
+.review-card.manager-review textarea { min-height: 520px; margin-top: 9px; line-height: 1.5; }
+.manager-review-document { margin-top: 4px; color: #243345; }
+.manager-review-document p { margin: 0 0 12px; white-space: pre-wrap; line-height: 1.5; }
+.manager-review-document h5 { margin: 16px 0 7px; color: #1e3f68; font-size: 13px; }
+.manager-review-document blockquote { margin: 0; border-left: 3px solid #8fb5e5; border-radius: 0 7px 7px 0; padding: 9px 11px; background: #fff; color: #26384d; }
+.manager-review-document blockquote p { margin: 0; }
+.manager-review-document hr { margin: 16px 0; border: 0; border-top: 1px solid #cdd9e8; }
 .expandable-copy { min-width: 0; }
 .expandable-text { display: -webkit-box; margin: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .expandable-text.expanded { display: block; overflow: visible; -webkit-line-clamp: unset; }

@@ -2013,13 +2013,29 @@ function formatLeadDate(value: string | null | undefined, includeTime = true): s
     : { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
+function ManagerReviewDocument({ text }: { text: string }) {
+  return (
+    <div className="manager-review-document">
+      {text.split(/\n\s*\n/).map((block, index) => {
+        const value = block.trim()
+        if (!value) return null
+        if (/^[─—_-]{4,}$/.test(value)) return <hr key={`review-divider-${index}`} />
+        if (/^Вариант\s+\d+/i.test(value)) return <h5 key={`review-heading-${index}`}>{value}</h5>
+        if (value.startsWith('«') && value.endsWith('»')) {
+          return <blockquote key={`review-quote-${index}`}><p>{value}</p></blockquote>
+        }
+        return <p key={`review-text-${index}`}>{value}</p>
+      })}
+    </div>
+  )
+}
+
 function LeadWorkflowPanels(props: ReportPanelsProps) {
   const { meta, analysis, reportDetail, onCloseLeadWorkspace } = props
   const [workflow, setWorkflow] = useState<LeadWorkflowState | null>(reportDetail?.workflow || null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [materialTab, setMaterialTab] = useState<LeadMaterialTab | null>(null)
-  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null)
   const [showReviewEditor, setShowReviewEditor] = useState(false)
   const [showTaskEditor, setShowTaskEditor] = useState(false)
   const [qualificationIssues, setQualificationIssues] = useState<string[]>([])
@@ -2028,7 +2044,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   useEffect(() => {
     setWorkflow(reportDetail?.workflow || null)
     setMaterialTab(null)
-    setEditingMessageIndex(null)
     setShowReviewEditor(false)
   }, [reportDetail?.id, reportDetail?.workflow])
 
@@ -2088,17 +2103,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     }
   }
 
-  function updateDraft(field: 'manager_review_text' | 'manager_task_text', value: string) {
+  function updateDraft(field: 'manager_review_text' | 'manager_full_review_text' | 'manager_task_text', value: string) {
     setWorkflow((current) => current ? { ...current, [field]: value } : current)
-  }
-
-  function updateManagerMessage(index: number, value: string) {
-    setWorkflow((current) => {
-      if (!current) return current
-      const options = [...(current.manager_message_options || [])]
-      options[index] = value
-      return { ...current, manager_message_options: options }
-    })
   }
 
   function copyValue(value: string, label: string) {
@@ -2132,11 +2138,16 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const weaknesses = asStringList(managerQuality.missed_points).map(formatMoneyText)
   const managerReviewText = formatMoneyText(workflow.manager_review_text || asString(rop.manager_review_text))
   const messageToneLabels = ['Деловой и прямой', 'Партнёрский и доброжелательный', 'Спокойный и консультативный']
-  const fullManagerReview = [
+  const generatedFullManagerReview = [
     managerReviewText,
     managerMessages.length ? 'Предлагаю три варианта, как можно обратиться к клиенту:' : '',
-    ...managerMessages.map((message, index) => `Вариант ${index + 1} — ${messageToneLabels[index] || 'готовый текст'}\n${message}`),
+    ...managerMessages.flatMap((message, index) => [
+      index ? '────────────────────' : '',
+      `Вариант ${index + 1} — ${messageToneLabels[index] || 'готовый текст'}`,
+      `«${message}»`,
+    ]),
   ].filter(Boolean).join('\n\n')
+  const fullManagerReview = formatMoneyText(workflow.manager_full_review_text || generatedFullManagerReview)
   const taskEnabled = workflow.review_completed
   const controlEnabled = workflow.task_completed
   const controlActive = Boolean(workflow.control_mode)
@@ -2251,20 +2262,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
                 <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card manager-review">
-                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать всё</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать вступление'}</button></div></div>
-                  <ExpandableText text={managerReviewText || 'Разбор пока не сформирован.'} />
-                  {showReviewEditor ? <textarea aria-label="Вступление разбора для менеджера" value={workflow.manager_review_text || ''} onChange={(event) => updateDraft('manager_review_text', event.target.value)} onBlur={() => void persist({ manager_review_text: workflow.manager_review_text })} /> : null}
-                  {managerMessages.length ? <p className="manager-options-intro">Предлагаю три варианта, как можно обратиться к клиенту:</p> : null}
-                  <div className="manager-client-options">
-                    {managerMessages.map((message, index) => (
-                      <article className="manager-client-option" key={`manager-option-${index}`}>
-                        <div className="manager-client-option-heading"><strong>Вариант {index + 1}</strong><span>{messageToneLabels[index] || 'Готовый текст'}</span><div><button onClick={() => copyValue(message, `Вариант ${index + 1}`)}>Копировать</button><button onClick={() => setEditingMessageIndex(editingMessageIndex === index ? null : index)}>{editingMessageIndex === index ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
-                        <ExpandableText text={message} />
-                        {editingMessageIndex === index ? <textarea aria-label={`Вариант сообщения клиенту ${index + 1}`} value={workflow.manager_message_options?.[index] || message} onChange={(event) => updateManagerMessage(index, event.target.value)} onBlur={() => void persist({ manager_message_options: workflow.manager_message_options })} /> : null}
-                      </article>
-                    ))}
-                    {!managerMessages.length ? <p className="muted">Варианты сообщения клиенту пока не сформированы.</p> : null}
-                  </div>
+                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
+                  {showReviewEditor ? <textarea aria-label="Готовый разбор для менеджера" value={workflow.manager_full_review_text || generatedFullManagerReview} onChange={(event) => updateDraft('manager_full_review_text', event.target.value)} onBlur={() => void persist({ manager_full_review_text: workflow.manager_full_review_text })} /> : <ManagerReviewDocument text={fullManagerReview || 'Разбор пока не сформирован.'} />}
                 </section>
               </div>
             </div>

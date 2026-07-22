@@ -119,6 +119,7 @@ class LeadWorkflowRequest(BaseModel):
     source_report_id: int | None = None
     manager_review_text: str | None = Field(default=None, max_length=12000)
     manager_message_options: list[str] | None = Field(default=None, min_length=1, max_length=3)
+    manager_full_review_text: str | None = Field(default=None, max_length=20000)
     manager_task_text: str | None = Field(default=None, max_length=12000)
     review_completed: bool | None = None
     task_completed: bool | None = None
@@ -740,6 +741,23 @@ def _workflow_default_texts(report: dict[str, Any]) -> tuple[str, list[str], str
     return review_text, message_options[:3], "\n\n".join(task_parts)
 
 
+def _compose_manager_full_review(review_text: str, message_options: list[str]) -> str:
+    tone_labels = [
+        "Деловой и прямой",
+        "Партнёрский и доброжелательный",
+        "Спокойный и консультативный",
+    ]
+    parts = [str(review_text or "").strip()]
+    if message_options:
+        parts.append("Предлагаю три варианта, как можно обратиться к клиенту:")
+    for index, message in enumerate(message_options):
+        if index:
+            parts.append("────────────────────")
+        title = tone_labels[index] if index < len(tone_labels) else "Готовый текст"
+        parts.extend([f"Вариант {index + 1} — {title}", f"«{str(message).strip()}»"])
+    return "\n\n".join(part for part in parts if part)
+
+
 def _workflow_status(workflow: dict[str, Any]) -> str:
     if workflow.get("control_mode"):
         return "На контроле"
@@ -751,6 +769,7 @@ def _workflow_status(workflow: dict[str, Any]) -> str:
 def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -> dict[str, Any]:
     saved = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
     default_review, default_options, default_task = _workflow_default_texts(report or {})
+    default_full_review = _compose_manager_full_review(default_review, default_options)
     if saved is not None:
         workflow = saved
         analysis = unwrap_analysis_payload(report.get("report_json") if report and isinstance(report.get("report_json"), dict) else {})
@@ -762,6 +781,7 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
             workflow["source_report_id"] = report_id
             workflow["manager_review_text"] = default_review
             workflow["manager_message_options"] = default_options
+            workflow["manager_full_review_text"] = default_full_review
             workflow["manager_task_text"] = default_task
             workflow["review_completed"] = False
             workflow["task_completed"] = False
@@ -780,12 +800,18 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
                 workflow["manager_review_text"] = default_review
             if not workflow.get("manager_message_options"):
                 workflow["manager_message_options"] = default_options
+        if not workflow.get("manager_full_review_text"):
+            workflow["manager_full_review_text"] = _compose_manager_full_review(
+                str(workflow.get("manager_review_text") or ""),
+                list(workflow.get("manager_message_options") or []),
+            )
     else:
         workflow = {
             "lead_id": str(lead_id),
             "source_report_id": report.get("id") if report else None,
             "manager_review_text": default_review,
             "manager_message_options": default_options,
+            "manager_full_review_text": default_full_review,
             "manager_task_text": default_task,
             "review_completed": False,
             "task_completed": False,
@@ -834,6 +860,7 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
         source_report_id=merged["source_report_id"],
         manager_review_text=merged.get("manager_review_text"),
         manager_message_options=merged.get("manager_message_options"),
+        manager_full_review_text=merged.get("manager_full_review_text"),
         manager_task_text=merged.get("manager_task_text"),
         review_completed=bool(merged.get("review_completed")),
         task_completed=bool(merged.get("task_completed")),
