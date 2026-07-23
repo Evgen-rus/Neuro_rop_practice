@@ -2305,20 +2305,17 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             <span>{workflowDone} из {workflowTotal} выполнено</span>
           </div>
 
-          <article className={`workflow-step ${workflow.review_completed ? 'completed' : 'active'}`}>
+          <article className={`workflow-step review-step ${workflow.review_completed ? 'completed' : 'active'}`}>
             <div className="workflow-step-label"><b>1</b><strong>Разбор для менеджера</strong><span>Сильные и слабые стороны</span></div>
             <div className="workflow-step-body">
               <div className="review-grid">
                 <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card manager-review">
-                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button></div></div>
+                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button><label className="review-completed-toggle"><input type="checkbox" checked={workflow.review_completed} disabled={saving} onChange={(event) => void persist({ review_completed: event.target.checked })} /> Выполнено</label></div></div>
                   {showReviewEditor ? <textarea aria-label="Готовый разбор для менеджера" value={workflow.manager_full_review_text || generatedFullManagerReview} onChange={(event) => updateDraft('manager_full_review_text', event.target.value)} onBlur={() => void persist({ manager_full_review_text: workflow.manager_full_review_text })} /> : <ManagerReviewDocument text={fullManagerReview || 'Разбор пока не сформирован.'} />}
                 </section>
               </div>
-            </div>
-            <div className="workflow-step-actions">
-              <label><input type="checkbox" checked={workflow.review_completed} disabled={saving} onChange={(event) => void persist({ review_completed: event.target.checked })} /> Выполнено</label>
             </div>
           </article>
 
