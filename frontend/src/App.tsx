@@ -500,67 +500,42 @@ function ReviewPage({ shareToken }: { shareToken: string }) {
   if (!report) {
     return <main className="review-page"><section className="shared-review-card"><p>Загружаем карточку…</p></section></main>
   }
-  return <ReviewCard report={report} />
+  return <SharedReportCard report={report} />
 }
 
-function ReviewCard({ report }: { report: UiReportDetail }) {
+function SharedReportCard({ report }: { report: UiReportDetail }) {
   const analysis = unwrapAnalysis(report.report_json)
-  const isLead = report.entity_type === 'lead'
-  const state = asRecord(isLead ? analysis?.lead_state : analysis?.deal_state)
-  const assessment = asRecord(analysis?.qualification_assessment)
-  const bant = asRecord(assessment.bant)
-  const rop = asRecord(analysis?.rop_manager_message_block)
-  const managerReview = isLead
-    ? report.workflow?.manager_full_review_text || report.workflow?.manager_review_text || asString(rop.manager_review_text)
-    : asString(rop.manager_review_text)
-  const managerTask = isLead
-    ? report.workflow?.manager_task_text || asString(rop.message_to_manager)
-    : asString(rop.message_to_manager)
-  const situation = formatMoneyText(
-    asString(state.summary) || asString(state.current_situation) || report.attention_reason || 'Ситуация не сформирована.',
-  )
-  const client = asString(state.client_name) || asString(state.contact_name) || asString(report.report_meta?.client_name)
-  const stage = asString(state.status) || asString(state.stage) || asString(report.report_meta?.stage_name)
-  const bantItems = [
-    ['budget', 'Бюджет'],
-    ['authority', 'ЛПР'],
-    ['need', 'Потребность'],
-    ['timeframe', 'Срок'],
-  ] as const
-
   return (
-    <main className="review-page">
-      <article className="shared-review-card">
-        <header className="shared-review-header">
-          <span className="shared-review-kicker">Тестовая карточка · только для просмотра</span>
-          <h1>{isLead ? 'Лид' : 'Сделка'} #{report.entity_id}</h1>
-          <p>{client ? `Клиент: ${client}` : 'Клиент не указан'}{stage ? ` · Этап: ${stage}` : ''}</p>
-        </header>
-
-        <section className="shared-review-section">
-          <h2>Текущая ситуация</h2>
-          <p>{situation}</p>
-          {report.recommended_action ? <><h3>Рекомендуемое действие</h3><p>{formatMoneyText(report.recommended_action)}</p></> : null}
-        </section>
-
-        {Object.keys(bant).length ? (
-          <section className="shared-review-section">
-            <h2>BANT</h2>
-            <div className="shared-review-bant-grid">
-              {bantItems.map(([key, label]) => {
-                const item = asRecord(bant[key])
-                return <div key={key}><strong>{label}</strong><span>{assessmentLabel(asString(item.status, 'unknown'), BANT_STATUS_RU)}</span><small>{formatMoneyText(asString(item.summary) || asString(item.explanation) || 'Нет данных')}</small></div>
-              })}
-            </div>
-          </section>
-        ) : null}
-
-        {managerReview ? <section className="shared-review-section"><h2>Разбор для менеджера</h2><ManagerReviewDocument text={formatMoneyText(managerReview)} /></section> : null}
-        {managerTask ? <section className="shared-review-section"><h2>Следующее действие</h2><p>{formatMoneyText(managerTask)}</p></section> : null}
-        {report.bitrix_url ? <p className="shared-review-bitrix"><a href={report.bitrix_url} target="_blank" rel="noreferrer">Открыть карточку в Bitrix</a></p> : null}
-        <footer className="shared-review-footer">Комментарий и хотелки по этой карточке оставьте в соответствующей строке Google-таблицы.</footer>
-      </article>
-    </main>
+    <ReportPanels
+      readOnly
+      meta={{
+        entity_type: report.entity_type,
+        entity_id: report.entity_id,
+        report_id: report.id,
+        risk_level: report.risk_level,
+        attention_reason: report.attention_reason,
+        recommended_action: report.recommended_action,
+        bitrix_url: report.bitrix_url || null,
+        candidate_review: null,
+      }}
+      reportDetail={report}
+      leadWorkspaceOpen
+      onCloseLeadWorkspace={() => undefined}
+      analysis={analysis}
+      facts={analysis ? evidenceList(analysis) : []}
+      unknowns={analysis ? unknownsList(analysis) : []}
+      closureReasons={analysis ? closureReasonsList(analysis) : []}
+      internalChecks={analysis ? internalChecksList(analysis) : []}
+      recommendations={analysis ? ropRecommendations(analysis) : []}
+      managerBrief={getManagerBrief(analysis)}
+      showMarkdown={Boolean(report.report_markdown)}
+      markdown={report.report_markdown || null}
+      onCopy={() => undefined}
+      onToggleMarkdown={() => undefined}
+      onDecision={() => undefined}
+      onOutcome={() => undefined}
+      onQualificationReview={() => undefined}
+    />
   )
 }
 
@@ -2039,6 +2014,7 @@ function MainApp() {
 }
 
 type ReportPanelsProps = {
+  readOnly?: boolean
   meta: {
     entity_type: string
     entity_id: string
@@ -2083,7 +2059,7 @@ function ReportPanels(props: ReportPanelsProps) {
     if (!props.leadWorkspaceOpen) return null
     return createPortal(
       <div className="lead-workspace-backdrop" onMouseDown={(event) => {
-        if (event.target === event.currentTarget) props.onCloseLeadWorkspace()
+        if (!props.readOnly && event.target === event.currentTarget) props.onCloseLeadWorkspace()
       }}>
         <section className="lead-workspace-window" role="dialog" aria-modal="true" aria-label={`Карточка лида ${props.meta.entity_id}`}>
           <LeadWorkflowPanels {...props} />
@@ -2092,6 +2068,7 @@ function ReportPanels(props: ReportPanelsProps) {
       document.body,
     )
   }
+  if (props.readOnly) return <FullAnalysisPanels {...props} />
   return (
     <>
       <section className="section analysis-tabs">
@@ -2203,6 +2180,7 @@ function ManagerReviewDocument({ text }: { text: string }) {
 
 function LeadWorkflowPanels(props: ReportPanelsProps) {
   const { meta, analysis, reportDetail, onCloseLeadWorkspace } = props
+  const readOnly = Boolean(props.readOnly)
   const [workflow, setWorkflow] = useState<LeadWorkflowState | null>(reportDetail?.workflow || null)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
@@ -2386,7 +2364,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
-            <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button>
+            {!readOnly ? <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button> : null}
           </div>
         </header>
 
@@ -2459,7 +2437,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
                 <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card weak"><h4>Слабые стороны</h4><ul>{weaknesses.map((item) => <li key={item}>{item}</li>)}{!weaknesses.length ? <li>Зоны усиления в анализе не выделены.</li> : null}</ul></section>
                 <section className="review-card manager-review">
-                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4><div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button><label className="review-completed-toggle"><input type="checkbox" checked={workflow.review_completed} disabled={saving} onChange={(event) => void persist({ review_completed: event.target.checked })} /> Выполнено</label></div></div>
+                  <div className="manager-review-heading"><h4>Готовый разбор для менеджера</h4>{!readOnly ? <div><button onClick={() => copyValue(fullManagerReview, 'Разбор')}>Копировать</button><button onClick={() => setShowReviewEditor((value) => !value)}>{showReviewEditor ? 'Скрыть редактор' : 'Редактировать'}</button><label className="review-completed-toggle"><input type="checkbox" checked={workflow.review_completed} disabled={saving} onChange={(event) => void persist({ review_completed: event.target.checked })} /> Выполнено</label></div> : null}</div>
                   {showReviewEditor ? <textarea aria-label="Готовый разбор для менеджера" value={workflow.manager_full_review_text || generatedFullManagerReview} onChange={(event) => updateDraft('manager_full_review_text', event.target.value)} onBlur={() => void persist({ manager_full_review_text: workflow.manager_full_review_text })} /> : <ManagerReviewDocument text={fullManagerReview || 'Разбор пока не сформирован.'} />}
                 </section>
               </div>
@@ -2475,9 +2453,9 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
                 <><p><strong>Цель:</strong> {missingCrmReturn ? 'зафиксировать управляемый возврат без повторного контакта с клиентом.' : 'дать менеджеру конкретное поручение для закрытия недостающих фактов.'}</p><label>Что нужно сделать</label><ExpandableText text={workflow.manager_task_text || 'Задача пока не сформирована.'} />{showTaskEditor ? <textarea disabled={!taskEnabled} value={workflow.manager_task_text || ''} onChange={(event) => updateDraft('manager_task_text', event.target.value)} onBlur={() => void persist({ manager_task_text: workflow.manager_task_text })} /> : null}</>
               )}
             </div>
-            <div className="workflow-step-actions">
+            {!readOnly ? <div className="workflow-step-actions">
               {!closureNeedsNoWorkflow ? <><button disabled={!taskEnabled} onClick={() => copyValue(workflow.manager_task_text || '', 'Задача')}>Копировать задачу</button><button disabled={!taskEnabled} onClick={() => setShowTaskEditor((value) => !value)}>{showTaskEditor ? 'Скрыть редактор' : 'Редактировать'}</button><label><input type="checkbox" checked={workflow.task_completed} disabled={!taskEnabled || saving} onChange={(event) => void persist({ task_completed: event.target.checked })} /> Выполнено вручную</label></> : null}
-            </div>
+            </div> : null}
           </article>
 
           <article className={`workflow-step ${closureNeedsNoWorkflow || controlActive ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
@@ -2485,9 +2463,9 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             <div className="workflow-step-body">
               <p>{closureNeedsNoWorkflow ? 'Причина закрытия подтверждена историей CRM; возвращать карточку на контроль не нужно.' : controlActive ? `Контроль назначен${controlDeadline ? ` на ${formatLeadDate(controlDeadline, false)}` : ''}.` : missingCrmReturn ? `Проверь появление CRM-задачи возврата${controlDeadline ? ` до ${formatLeadDate(controlDeadline, false)}` : ''}.` : `Карточка вернётся в активную очередь по сроку задачи${controlDeadline ? ` — ${formatLeadDate(controlDeadline, false)}` : ''}.`}</p>
             </div>
-            <div className="workflow-step-actions">
+            {!readOnly ? <div className="workflow-step-actions">
               {!closureNeedsNoWorkflow ? <button disabled={!controlEnabled || saving} className="primary-dark" onClick={() => void toggleControl()}>{controlActive ? 'Снять с контроля' : 'Поставить на контроль'}</button> : null}
-            </div>
+            </div> : null}
           </article>
         </section>
         {notice ? <div className="workflow-notice" role="status">{notice}</div> : null}
@@ -2501,11 +2479,13 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {([
                 ['summary', 'Краткий вывод'], ['bant', 'Полный BANT'], ['evidence', 'Доказательства'],
                 ['audit', 'Аудитный отчёт'], ['history', 'История'], ['technical', 'Техническая информация'],
-              ] as Array<[LeadMaterialTab, string]>).map(([key, label]) => <button className={materialTab === key ? 'active' : ''} onClick={() => openMaterials(key)} key={key}>{label}</button>)}
+              ] as Array<[LeadMaterialTab, string]>).filter(([key]) => !readOnly || (key !== 'history' && key !== 'technical')).map(([key, label]) => <button className={materialTab === key ? 'active' : ''} onClick={() => openMaterials(key)} key={key}>{label}</button>)}
             </nav>
-            <div className="analysis-drawer-content">
+            <div className="analysis-drawer-content" onChange={(event) => {
+              if (event.target instanceof HTMLTextAreaElement) setQualificationComment(event.target.value)
+            }}>
               {materialTab === 'summary' ? <div className="material-summary"><h3>Краткий вывод</h3><p><strong>Вывод:</strong> {formatMoneyText(asString(leadState.summary)) || meta.attention_reason || 'Нет данных'}</p><p><strong>Поручение:</strong> {formatMoneyText(asString(rop.message_to_manager)) || workflow.manager_task_text || 'Нет данных'}</p><p><strong>Критерий проверки:</strong> {formatMoneyText(asString(rop.success_condition)) || 'Нет данных'}</p></div> : null}
-              {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article><div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div></div> : null}
+              {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article>{!readOnly ? <div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div> : null}</div> : null}
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
               {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(props.markdown)}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
               {materialTab === 'history' ? <div><h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{asString(item.created_at)} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
@@ -2524,7 +2504,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const [correctedStatuses, setCorrectedStatuses] = useState<Record<string, string>>({})
   const [correctedCategory, setCorrectedCategory] = useState('')
   const [qualificationComment, setQualificationComment] = useState('')
-  const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief } = props
+  const { meta, analysis, facts, unknowns, closureReasons, internalChecks, recommendations, managerBrief, readOnly } = props
   const isLead = meta?.entity_type === 'lead'
   const dealState = asRecord(analysis?.deal_state)
   const leadState = asRecord(analysis?.lead_state)
@@ -2675,7 +2655,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
           ) : null}
         </div>
 
-        {!isLead ? ropControlBlock : null}
+        {!isLead && !readOnly ? ropControlBlock : null}
 
         {isLead && hasQualificationAssessment ? (
           <section className="lead-qualification" aria-label="BANT и категория лида">
@@ -2764,7 +2744,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
               </div>
             ) : null}
 
-            {meta?.report_id ? (
+            {meta?.report_id && !readOnly ? (
               <div className="qualification-review-card">
                 <div>
                   <div className="label">Проверка РОПом</div>
@@ -2834,7 +2814,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
             ) : null}
           </section>
         ) : null}
-        {isLead ? ropControlBlock : null}
+        {isLead && !readOnly ? ropControlBlock : null}
         {!isLead && hasQualificationAssessment ? (
           <section className="qualification-summary" aria-label="Квалификация и применимость">
             <div className="qualification-summary-head">
@@ -2906,9 +2886,9 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
             <h2>Задача менеджеру</h2>
             <p>То, что РОП может отправить без аналитики и лишнего контекста.</p>
           </div>
-          <button className="btn" onClick={props.onCopy} disabled={!hasAnalysis}>
+          {!readOnly ? <button className="btn" onClick={props.onCopy} disabled={!hasAnalysis}>
             Скопировать
-          </button>
+          </button> : null}
         </div>
         {hasAnalysis ? (
           <div className="task">
@@ -2938,7 +2918,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
         )}
       </section>
 
-      {meta?.report_id ? (
+      {meta?.report_id && !readOnly ? (
         <section className="section">
           <h2>Решение РОПа</h2>
           {meta.candidate_review && asString(meta.candidate_review.state) !== 'active' ? (
@@ -3016,7 +2996,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
         </ul>
       </section>
 
-      {meta?.report_id ? (
+      {meta?.report_id && !readOnly ? (
         <section className="section">
           <h2>Исход после рекомендации</h2>
           <div className="actions">
@@ -3034,14 +3014,14 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
         </section>
       ) : null}
 
-      <section className="section">
+      {!readOnly ? <section className="section">
         <h2>Полный markdown-отчёт</h2>
         <p>Большой аудитный текст. Открывается только по запросу.</p>
         <button className="btn secondary" onClick={props.onToggleMarkdown} disabled={!meta?.report_id}>
           {props.showMarkdown ? 'Скрыть полный отчёт' : 'Показать полный отчёт'}
         </button>
         {props.showMarkdown && props.markdown && <div className="markdown">{formatMoneyText(props.markdown)}</div>}
-      </section>
+      </section> : null}
     </>
   )
 }

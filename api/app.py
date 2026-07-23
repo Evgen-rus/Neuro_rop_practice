@@ -946,6 +946,9 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     ).get(str(report.get("entity_id") or ""))
     if str(report.get("entity_type") or "") == "lead":
         payload["workflow"] = _lead_workflow_payload(str(report.get("entity_id") or ""), report)
+    markdown_path = _report_markdown_path(report)
+    payload["markdown_available"] = markdown_path.exists()
+    payload["report_markdown"] = markdown_path.read_text(encoding="utf-8") if markdown_path.exists() else None
     related_reports = list_entity_ui_reports(
         DEFAULT_DB_PATH,
         entity_type=str(report.get("entity_type") or ""),
