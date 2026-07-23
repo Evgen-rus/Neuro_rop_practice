@@ -949,9 +949,11 @@ function MainApp() {
     setTab('history')
   }
 
-  async function copyReviewLink() {
-    if (!selectedReport?.share_token) return
-    await navigator.clipboard?.writeText(`${window.location.origin}/review/${selectedReport.share_token}`)
+  async function copyReviewLink(reportId?: number | null) {
+    let report = selectedReport?.id === reportId ? selectedReport : null
+    if (!report && reportId) report = await fetchReport(reportId, false)
+    if (!report?.share_token) return
+    await navigator.clipboard?.writeText(`${window.location.origin}/review/${report.share_token}`)
     toast('Тестовая ссылка скопирована', setToastMessage)
   }
 
@@ -1724,6 +1726,7 @@ function MainApp() {
                 void navigator.clipboard?.writeText(copyText)
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
+              onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -1919,6 +1922,7 @@ function MainApp() {
                 void navigator.clipboard?.writeText(copyText)
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
+              onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -1996,6 +2000,7 @@ function MainApp() {
                 void navigator.clipboard?.writeText(copyText)
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
+              onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -2038,6 +2043,7 @@ type ReportPanelsProps = {
   showMarkdown: boolean
   markdown: string | null
   onCopy: () => void
+  onCopyReviewLink?: () => void
   onToggleMarkdown: () => void
   onDecision: (value: string) => void
   onOutcome: (value: string) => void
@@ -2362,6 +2368,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
+            {!readOnly && props.onCopyReviewLink ? <button onClick={props.onCopyReviewLink}>Скопировать тестовую ссылку</button> : null}
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
             {!readOnly ? <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button> : null}
