@@ -12,6 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 from tkinter import Tk, filedialog
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
