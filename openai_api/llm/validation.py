@@ -1429,6 +1429,23 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
         raise AnalysisValidationError("Invalid deal analysis: " + "; ".join(errors))
 
 
+def _requires_missing_crm_return_task(analysis: dict[str, Any]) -> bool:
+    assessment = analysis.get("qualification_assessment")
+    if not isinstance(assessment, dict):
+        return False
+    category = assessment.get("lead_category")
+    route = assessment.get("lead_route")
+    return (
+        isinstance(category, dict)
+        and category.get("value") == "C"
+        and isinstance(route, dict)
+        and route.get("controlled_return_required") is True
+        and route.get("controlled_return_status") == "missing_in_crm"
+        and isinstance(route.get("recommended_return_date"), str)
+        and bool(route.get("recommended_return_date").strip())
+    )
+
+
 def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     errors: list[str] = []
     _require_fields(analysis, LEAD_REQUIRED_FIELDS, "", errors)
@@ -1437,6 +1454,8 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     closure_review = _expect_dict(analysis.get("closure_review"), "closure_review", errors)
     closure_verdict = None
     no_manager_action = False
+    no_client_contact = False
+    missing_crm_return_task = _requires_missing_crm_return_task(analysis)
     if closure_review:
         _require_fields(
             closure_review,
@@ -1498,12 +1517,13 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
             errors.append("non-closed lead closure_review.verdict must be not_applicable")
         if is_closed_lost and not closure_evidence:
             errors.append("closed-lost closure_review.evidence must not be empty")
-        no_manager_action = closure_verdict == "confirmed_correct"
-        if no_manager_action:
+        no_client_contact = closure_verdict == "confirmed_correct"
+        no_manager_action = no_client_contact and not missing_crm_return_task
+        if no_client_contact:
             if closure_review.get("client_contact_required") is not False:
                 errors.append("confirmed_correct closure must not require client contact")
             if closure_review.get("manager_task_required") is not False:
-                errors.append("confirmed_correct closure must not require manager task")
+                errors.append("confirmed_correct closure must not require a closure-review manager task")
         elif closure_verdict in {"disputed", "insufficient_evidence"}:
             if closure_review.get("client_contact_required") is not True:
                 errors.append(f"{closure_verdict} closure must require client contact")
@@ -1609,13 +1629,13 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
             "manager_action_block.backup_texts",
             errors,
         )
-        if no_manager_action and primary is not None:
+        if no_client_contact and primary is not None:
             errors.append("confirmed_correct closure manager_action_block.primary_text must be null")
-        if no_manager_action and backups:
+        if no_client_contact and backups:
             errors.append("confirmed_correct closure manager_action_block.backup_texts must be empty")
-        if no_manager_action and manager_action.get("manager_checklist") != []:
+        if no_client_contact and manager_action.get("manager_checklist") != []:
             errors.append("confirmed_correct closure manager_action_block.manager_checklist must be empty")
-        if not no_manager_action and len(backups) != 2:
+        if not no_client_contact and len(backups) != 2:
             errors.append("manager_action_block.backup_texts must contain exactly 2 items for lead analysis")
         option_values: list[tuple[str, Any]] = []
         client_options: list[dict[str, Any]] = []
@@ -1644,12 +1664,14 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
                 normalized_options.append(normalized)
                 if len(normalized) > 1200:
                     errors.append(f"{path} must be at most 1200 characters")
-        if not no_manager_action and len(option_values) != 3:
+        if not no_client_contact and len(option_values) != 3:
             errors.append("manager_action_block must contain exactly 3 client message texts for lead analysis")
         if len(set(normalized_options)) != len(normalized_options):
             errors.append("manager_action_block client message texts must be distinct")
     rop_action = analysis.get("rop_action")
     if no_manager_action and isinstance(rop_action, dict) and rop_action.get("required") is not False:
         errors.append("confirmed_correct closure rop_action.required must be false")
+    if missing_crm_return_task and isinstance(rop_action, dict) and rop_action.get("required") is not True:
+        errors.append("missing CRM return task must require rop_action")
     if errors:
         raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))

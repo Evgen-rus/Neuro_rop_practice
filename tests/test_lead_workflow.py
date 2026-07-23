@@ -176,6 +176,44 @@ class LeadWorkflowApiTests(unittest.TestCase):
             self.assertNotIn("Вариант 1", workflow["manager_full_review_text"])
             self.assertEqual(workflow["manager_task_text"], "Дополнительная задача менеджеру не требуется.")
 
+    def test_confirmed_correct_missing_crm_return_keeps_task_and_hides_client_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(
+                db_path,
+                entity_type="lead",
+                entity_id="230411",
+                report_json={
+                    "lead_state": {"summary": "Проект отложен."},
+                    "closure_review": {
+                        "verdict": "confirmed_correct",
+                        "client_contact_required": False,
+                        "manager_task_required": False,
+                    },
+                    "qualification_assessment": {
+                        "lead_category": {"value": "C"},
+                        "lead_route": {
+                            "controlled_return_required": True,
+                            "controlled_return_status": "missing_in_crm",
+                            "recommended_return_date": "2027-01-21",
+                        },
+                    },
+                    "rop_manager_message_block": {
+                        "manager_review_text": "Клиенту сейчас писать не нужно; оформи возврат в CRM.",
+                        "message_to_manager": "До 2026-07-24 создай в CRM задачу возврата на 2027-01-21.",
+                        "deadline": "2026-07-24",
+                    },
+                    "manager_action_block": {"primary_text": None, "backup_texts": []},
+                },
+            )
+
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                workflow = api_app.lead_workflow("230411", report_id=report_id)
+
+            self.assertEqual(workflow["manager_message_options"], [])
+            self.assertIn("создай в CRM задачу возврата", workflow["manager_task_text"])
+            self.assertFalse(workflow["task_completed"])
+
     def test_legacy_report_preserves_manually_edited_client_texts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"

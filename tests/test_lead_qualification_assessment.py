@@ -410,6 +410,66 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         with self.assertRaisesRegex(AnalysisValidationError, "primary_text must be null"):
             validate_lead_analysis(analysis)
 
+    def test_confirmed_correct_category_c_missing_return_requires_crm_task_without_client_contact(self) -> None:
+        analysis = lead_analysis()
+        assessment = analysis["qualification_assessment"]
+        assessment["bant"]["timeframe"]["purchase_window"] = "months_3_to_12"
+        assessment["lead_category"].update(
+            {
+                "value": "C",
+                "reason": "Подтверждённый проект отложен на несколько месяцев.",
+                "next_step": "Создать в CRM датированную задачу возврата.",
+            }
+        )
+        assessment["lead_route"].update(
+            {
+                "current_route": "deferred_demand",
+                "recommended_route": "deferred_demand",
+                "status": "violation",
+                "reason": "Отложенный спрос подтверждён, но в CRM нет задачи возврата.",
+                "controlled_return_required": True,
+                "controlled_return_status": "missing_in_crm",
+                "controlled_return_date": None,
+                "recommended_return_date": "2027-01-21",
+                "evidence": ["В CRM нет датированной задачи возврата."],
+            }
+        )
+        analysis["lead_state"].update({"qualification": "C", "qualification_reason": "Подтверждённый отложенный спрос."})
+        analysis["closure_review"] = {
+            "applicable": True,
+            "crm_status_id": "UC_LONG_TERM",
+            "crm_status_name": "Срок покупки более 6 месяцев",
+            "crm_status_semantic_id": "F",
+            "verdict": "confirmed_correct",
+            "reason": "Закрытие соответствует подтверждённому отложенному сроку.",
+            "client_contact_required": False,
+            "manager_task_required": False,
+            "evidence": ["Клиент подтвердил отложенный запуск проекта."],
+        }
+        analysis["loss_diagnosis"].update({"route_quality": "violation", "final_verdict": "needs_nurture"})
+        analysis["rop_manager_message_block"].update(
+            {
+                "check_for_rop": "Проверить, что в CRM появилась задача возврата.",
+                "why_it_matters": "Без задачи подтверждённый отложенный спрос потеряется в закрытом статусе.",
+                "manager_review_text": "Клиент вернётся к проекту позже, поэтому сейчас ему писать не нужно. Оформи датированный возврат в CRM.",
+                "message_to_manager": "До 2026-07-24 создай в CRM задачу возврата на 2027-01-21; результат — открытая задача с этой датой.",
+                "expected_crm_update": "Открытая CRM-задача возврата на 2027-01-21.",
+                "deadline": "2026-07-24",
+                "success_condition": "В CRM есть открытая задача возврата на 2027-01-21.",
+                "evidence": ["В CRM нет датированной задачи возврата."],
+            }
+        )
+        analysis["manager_action_block"].update(
+            {"goal": "Контакт с клиентом сейчас не требуется.", "primary_text": None, "backup_texts": [], "manager_checklist": []}
+        )
+        analysis["rop_action"] = {"required": True, "text": "Проконтролировать создание CRM-задачи возврата."}
+
+        validate_lead_analysis(analysis)
+
+        analysis["rop_action"] = {"required": False, "text": "Контроль не требуется."}
+        with self.assertRaisesRegex(AnalysisValidationError, "missing CRM return task must require rop_action"):
+            validate_lead_analysis(analysis)
+
     def test_closed_lead_cannot_skip_closure_review(self) -> None:
         analysis = lead_analysis()
         analysis["closure_review"].update(
