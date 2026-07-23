@@ -452,7 +452,7 @@ class LeadReportSnapshotTests(unittest.TestCase):
             )
             bundle = {
                 "generated_at": "2026-07-20T10:00:00+07:00",
-                "lead": {"response": {"result": {"ID": "5", "TITLE": "Лид 5", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "9"}}},
+                "lead": {"response": {"result": {"ID": "5", "TITLE": "Лид 5", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "9", "DATE_CREATE": "2026-07-13T10:30:00+03:00", "DATE_MODIFY": "2026-07-20T11:45:00+03:00"}}},
                 "client_touchpoints": [{"event_type": "call", "when": "2026-07-19", "subject": "Звонок", "text": "Обсудили задачу"}],
                 "tasks_and_control": [{"event_type": "task", "when": "2026-07-21", "subject": "Перезвонить", "completed": False}],
             }
@@ -462,6 +462,8 @@ class LeadReportSnapshotTests(unittest.TestCase):
             with patch.object(jobs, "PROJECT_ROOT", root):
                 metadata = jobs.build_lead_report_meta("5")
             self.assertEqual(metadata["stage_name"], "Новый")
+            self.assertEqual(metadata["lead_created_at"], "2026-07-13T10:30:00+03:00")
+            self.assertEqual(metadata["lead_modified_at"], "2026-07-20T11:45:00+03:00")
             self.assertEqual(metadata["last_contact"]["type"], "Звонок")
             self.assertEqual(metadata["current_task"]["subject"], "Перезвонить")
 

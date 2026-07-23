@@ -414,6 +414,40 @@ ${brief.clientText}
 ${brief.crm}`
 }
 
+function tableCell(value: string | null | undefined): string {
+  return String(value || '').replace(/[\t\r\n]+/g, ' ').trim()
+}
+
+function tableDate(value: string | null | undefined): string {
+  const matched = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/)
+  if (!matched) return tableCell(value)
+  const [, year, month, day, hours, minutes] = matched
+  return hours && minutes ? `${day}.${month}.${year} ${hours}:${minutes}` : `${day}.${month}.${year}`
+}
+
+function sheetsText(value: string): string {
+  return value.replace(/"/g, '""')
+}
+
+function buildLeadTableRow(report: UiReportDetail): string | null {
+  if (report.entity_type !== 'lead' || !report.share_token) return null
+  const meta = report.report_meta || {}
+  const title = tableCell(meta.lead_title || meta.client_name || `Лид #${report.entity_id}`)
+  const reviewLink = `=HYPERLINK($K$1&"/review/${report.share_token}";"Открыть отчёт")`
+  const bitrixLink = report.bitrix_url
+    ? `=HYPERLINK("${sheetsText(report.bitrix_url)}";"Открыть в Б24")`
+    : ''
+  return [
+    title,
+    reviewLink,
+    bitrixLink,
+    '',
+    tableDate(meta.lead_created_at),
+    tableDate(meta.lead_modified_at),
+    tableDate(report.created_at),
+  ].join('\t')
+}
+
 function evidenceList(analysis: Record<string, unknown> | null | undefined): string[] {
   const rop = asRecord(analysis?.rop_manager_message_block)
   const money = asRecord(analysis?.money_path_diagnosis)
@@ -955,6 +989,18 @@ function MainApp() {
     if (!report?.share_token) return
     await navigator.clipboard?.writeText(`${window.location.origin}/review/${report.share_token}`)
     toast('Тестовая ссылка скопирована', setToastMessage)
+  }
+
+  async function copyLeadTableRow(reportId?: number | null) {
+    let report = selectedReport?.id === reportId ? selectedReport : null
+    if (!report && reportId) report = await fetchReport(reportId, false)
+    const row = report ? buildLeadTableRow(report) : null
+    if (!row) {
+      toast('Строка для таблицы доступна только для сохранённого анализа лида', setToastMessage)
+      return
+    }
+    await navigator.clipboard?.writeText(row)
+    toast('Строка скопирована: вставьте её в колонку B пустой строки таблицы', setToastMessage)
   }
 
   async function openCandidateReport(candidate: Candidate) {
@@ -1727,6 +1773,7 @@ function MainApp() {
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
               onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
+              onCopyLeadTableRow={() => void copyLeadTableRow(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -1923,6 +1970,7 @@ function MainApp() {
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
               onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
+              onCopyLeadTableRow={() => void copyLeadTableRow(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -2001,6 +2049,7 @@ function MainApp() {
                 toast('Задача менеджеру скопирована', setToastMessage)
               }}
               onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
+              onCopyLeadTableRow={() => void copyLeadTableRow(activeMeta?.report_id)}
               onToggleMarkdown={() => void toggleMarkdown()}
               onDecision={(value) => void onDecision(value)}
               onOutcome={(value) => void onOutcome(value)}
@@ -2044,6 +2093,7 @@ type ReportPanelsProps = {
   markdown: string | null
   onCopy: () => void
   onCopyReviewLink?: () => void
+  onCopyLeadTableRow?: () => void
   onToggleMarkdown: () => void
   onDecision: (value: string) => void
   onOutcome: (value: string) => void
@@ -2369,6 +2419,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           <div className="lead-header-actions">
             {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
             {!readOnly && props.onCopyReviewLink ? <button onClick={props.onCopyReviewLink}>Скопировать тестовую ссылку</button> : null}
+            {!readOnly && props.onCopyLeadTableRow ? <button onClick={props.onCopyLeadTableRow}>Скопировать строку для таблицы</button> : null}
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
             {!readOnly ? <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button> : null}

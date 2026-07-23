@@ -414,6 +414,8 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
     return {
         "client_name": _short_text(client_name or lead.get("TITLE"), 240),
         "lead_title": _short_text(lead.get("TITLE"), 240),
+        "lead_created_at": _short_text(lead.get("DATE_CREATE"), 80),
+        "lead_modified_at": _short_text(lead.get("DATE_MODIFY"), 80),
         "manager_id": _short_text(lead.get("ASSIGNED_BY_ID"), 80),
         "stage_id": status_id or None,
         "stage_name": _lead_stage_name(status_id) or status_id or None,
