@@ -9,6 +9,7 @@ the change-detection layer needs.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -130,7 +131,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 report_meta_json TEXT,
                 technical_log_json TEXT,
                 model_context_json TEXT,
-                job_id TEXT
+                job_id TEXT,
+                share_token TEXT UNIQUE
             );
 
             CREATE TABLE IF NOT EXISTS rop_decisions (
@@ -329,6 +331,11 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
         _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
         _ensure_column(conn, "ui_reports", "model_context_json", "TEXT")
+        _ensure_column(conn, "ui_reports", "share_token", "TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_ui_reports_share_token "
+            "ON ui_reports(share_token) WHERE share_token IS NOT NULL"
+        )
         _ensure_column(conn, "daily_summary_runs", "completed_at", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "actual_cost_json", "TEXT")
         _ensure_column(conn, "daily_summary_items", "job_id", "TEXT")
@@ -619,6 +626,7 @@ def save_ui_report(
     job_id: str | None = None,
 ) -> int:
     init_db(db_path)
+    share_token = secrets.token_urlsafe(24)
     with connect(db_path) as conn:
         cursor = conn.execute(
             """
@@ -635,9 +643,10 @@ def save_ui_report(
                 report_meta_json,
                 technical_log_json,
                 model_context_json,
-                job_id
+                job_id,
+                share_token
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -653,6 +662,7 @@ def save_ui_report(
                 dumps_json(technical_log) if technical_log is not None else None,
                 dumps_json(model_context) if model_context is not None else None,
                 job_id,
+                share_token,
             ),
         )
         return int(cursor.lastrowid)
@@ -697,6 +707,42 @@ def get_latest_ui_report(
             (str(entity_type), str(entity_id)),
         ).fetchone()
     return _row_to_ui_report(row)
+
+
+def get_ui_report_by_share_token(db_path: str | Path, share_token: str) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM ui_reports WHERE share_token = ?",
+            (share_token,),
+        ).fetchone()
+    return _row_to_ui_report(row)
+
+
+def get_or_create_ui_report_share_token(db_path: str | Path, report_id: int) -> str | None:
+    """Return a stable opaque review token, including for reports saved before this feature."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT share_token FROM ui_reports WHERE id = ?", (int(report_id),)).fetchone()
+        if row is None:
+            return None
+        if row["share_token"]:
+            return str(row["share_token"])
+        for _ in range(3):
+            token = secrets.token_urlsafe(24)
+            try:
+                cursor = conn.execute(
+                    "UPDATE ui_reports SET share_token = ? WHERE id = ? AND share_token IS NULL",
+                    (token, int(report_id)),
+                )
+            except sqlite3.IntegrityError:
+                continue
+            if cursor.rowcount:
+                return token
+            existing = conn.execute("SELECT share_token FROM ui_reports WHERE id = ?", (int(report_id),)).fetchone()
+            if existing and existing["share_token"]:
+                return str(existing["share_token"])
+    raise RuntimeError("Не удалось создать токен просмотра отчёта")
 
 
 def list_entity_ui_reports(

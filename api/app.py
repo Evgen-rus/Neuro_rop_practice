@@ -54,7 +54,9 @@ from storage.rop_db import (
     get_candidate_review_states,
     get_lead_workflow_state,
     get_compact_shadow_run,
+    get_or_create_ui_report_share_token,
     get_ui_report,
+    get_ui_report_by_share_token,
     init_db,
     list_analysis_profiles,
     list_daily_summary_runs,
@@ -926,6 +928,7 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
     report = get_ui_report(DEFAULT_DB_PATH, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+    report["share_token"] = get_or_create_ui_report_share_token(DEFAULT_DB_PATH, report_id)
     payload = _enrich_report_row(report)
     if str(report.get("entity_type") or "") == "lead":
         current_meta = build_lead_report_meta(str(report.get("entity_id") or "")) or {}
@@ -966,6 +969,36 @@ def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, A
             payload["report_markdown"] = md_path.read_text(encoding="utf-8")
         else:
             payload["report_markdown"] = None
+    return payload
+
+
+@app.get("/api/review/{share_token}")
+def review_report(share_token: str) -> dict[str, Any]:
+    """Return one saved report for the lightweight read-only review page."""
+    if len(share_token) > 128:
+        raise HTTPException(status_code=404, detail="Review report not found")
+    report = get_ui_report_by_share_token(DEFAULT_DB_PATH, share_token)
+    if not report:
+        raise HTTPException(status_code=404, detail="Review report not found")
+    payload = _enrich_report_row(report)
+    if str(report.get("entity_type") or "") == "lead":
+        current_meta = build_lead_report_meta(str(report.get("entity_id") or "")) or {}
+        saved_meta = payload.get("report_meta") if isinstance(payload.get("report_meta"), dict) else {}
+        payload["report_meta"] = {**current_meta, **saved_meta}
+        for key in ("last_attempt", "last_confirmed_contact", "last_internal_information"):
+            payload["report_meta"][key] = current_meta.get(key)
+        payload["workflow"] = _lead_workflow_payload(str(report.get("entity_id") or ""), report)
+    # Review links intentionally expose the selected card only: no history, decisions,
+    # technical log, model context, or filesystem paths belong to this response.
+    for key in (
+        "analysis_path",
+        "report_path",
+        "technical_log",
+        "model_context",
+        "job_id",
+        "share_token",
+    ):
+        payload.pop(key, None)
     return payload
 
 

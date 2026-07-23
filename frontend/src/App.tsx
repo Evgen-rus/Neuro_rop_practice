@@ -32,6 +32,7 @@ import {
   fetchJob,
   fetchPipelines,
   fetchReport,
+  fetchReviewReport,
   fetchReportMarkdown,
   fetchReports,
   previewAnalysisProfile,
@@ -459,7 +460,111 @@ function ropRecommendations(analysis: Record<string, unknown> | null | undefined
   return items.slice(0, 6).map(formatMoneyText)
 }
 
+function reviewTokenFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/review\/([^/]+)\/?$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function historyDateLabel(value: string): string {
+  const parsed = new Date(`${value}T12:00:00`)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(parsed)
+}
+
 export default function App() {
+  const shareToken = reviewTokenFromPath()
+  return shareToken ? <ReviewPage shareToken={shareToken} /> : <MainApp />
+}
+
+function ReviewPage({ shareToken }: { shareToken: string }) {
+  const [report, setReport] = useState<UiReportDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchReviewReport(shareToken)
+      .then((value) => {
+        if (!cancelled) setReport(value)
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [shareToken])
+
+  if (error) {
+    return <main className="review-page"><section className="shared-review-card"><h1>Карточка недоступна</h1><p>{error}</p></section></main>
+  }
+  if (!report) {
+    return <main className="review-page"><section className="shared-review-card"><p>Загружаем карточку…</p></section></main>
+  }
+  return <ReviewCard report={report} />
+}
+
+function ReviewCard({ report }: { report: UiReportDetail }) {
+  const analysis = unwrapAnalysis(report.report_json)
+  const isLead = report.entity_type === 'lead'
+  const state = asRecord(isLead ? analysis?.lead_state : analysis?.deal_state)
+  const assessment = asRecord(analysis?.qualification_assessment)
+  const bant = asRecord(assessment.bant)
+  const rop = asRecord(analysis?.rop_manager_message_block)
+  const managerReview = isLead
+    ? report.workflow?.manager_full_review_text || report.workflow?.manager_review_text || asString(rop.manager_review_text)
+    : asString(rop.manager_review_text)
+  const managerTask = isLead
+    ? report.workflow?.manager_task_text || asString(rop.message_to_manager)
+    : asString(rop.message_to_manager)
+  const situation = formatMoneyText(
+    asString(state.summary) || asString(state.current_situation) || report.attention_reason || 'Ситуация не сформирована.',
+  )
+  const client = asString(state.client_name) || asString(state.contact_name) || asString(report.report_meta?.client_name)
+  const stage = asString(state.status) || asString(state.stage) || asString(report.report_meta?.stage_name)
+  const bantItems = [
+    ['budget', 'Бюджет'],
+    ['authority', 'ЛПР'],
+    ['need', 'Потребность'],
+    ['timeframe', 'Срок'],
+  ] as const
+
+  return (
+    <main className="review-page">
+      <article className="shared-review-card">
+        <header className="shared-review-header">
+          <span className="shared-review-kicker">Тестовая карточка · только для просмотра</span>
+          <h1>{isLead ? 'Лид' : 'Сделка'} #{report.entity_id}</h1>
+          <p>{client ? `Клиент: ${client}` : 'Клиент не указан'}{stage ? ` · Этап: ${stage}` : ''}</p>
+        </header>
+
+        <section className="shared-review-section">
+          <h2>Текущая ситуация</h2>
+          <p>{situation}</p>
+          {report.recommended_action ? <><h3>Рекомендуемое действие</h3><p>{formatMoneyText(report.recommended_action)}</p></> : null}
+        </section>
+
+        {Object.keys(bant).length ? (
+          <section className="shared-review-section">
+            <h2>BANT</h2>
+            <div className="shared-review-bant-grid">
+              {bantItems.map(([key, label]) => {
+                const item = asRecord(bant[key])
+                return <div key={key}><strong>{label}</strong><span>{assessmentLabel(asString(item.status, 'unknown'), BANT_STATUS_RU)}</span><small>{formatMoneyText(asString(item.summary) || asString(item.explanation) || 'Нет данных')}</small></div>
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {managerReview ? <section className="shared-review-section"><h2>Разбор для менеджера</h2><ManagerReviewDocument text={formatMoneyText(managerReview)} /></section> : null}
+        {managerTask ? <section className="shared-review-section"><h2>Следующее действие</h2><p>{formatMoneyText(managerTask)}</p></section> : null}
+        {report.bitrix_url ? <p className="shared-review-bitrix"><a href={report.bitrix_url} target="_blank" rel="noreferrer">Открыть карточку в Bitrix</a></p> : null}
+        <footer className="shared-review-footer">Комментарий и хотелки по этой карточке оставьте в соответствующей строке Google-таблицы.</footer>
+      </article>
+    </main>
+  )
+}
+
+function MainApp() {
   const [tab, setTab] = useState<Tab>('summary')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
@@ -631,6 +736,17 @@ export default function App() {
     }
     return null
   }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex, pendingAnalyzeMeta])
+
+  const historyGroups = useMemo(() => {
+    const groups = new Map<string, UiReportListItem[]>()
+    history.forEach((item) => {
+      const key = item.created_at ? item.created_at.slice(0, 10) : 'Без даты'
+      const items = groups.get(key) || []
+      items.push(item)
+      groups.set(key, items)
+    })
+    return [...groups.entries()].map(([date, items]) => ({ date, items }))
+  }, [history])
 
   function applyFilterState(filter: CandidateFilter) {
     setEntityFilter(filter.entity_type === 'deal' ? 'deal' : 'lead')
@@ -856,6 +972,12 @@ export default function App() {
     setSelectedReport(detail)
     setLeadWorkspaceOpen(detail.entity_type === 'lead')
     setTab('history')
+  }
+
+  async function copyReviewLink() {
+    if (!selectedReport?.share_token) return
+    await navigator.clipboard?.writeText(`${window.location.origin}/review/${selectedReport.share_token}`)
+    toast('Тестовая ссылка скопирована', setToastMessage)
   }
 
   async function openCandidateReport(candidate: Candidate) {
@@ -1833,36 +1955,54 @@ export default function App() {
       )}
 
       {tab === 'history' && (
-        <div className="grid">
-          <aside className="panel">
-            <h3>История отчётов</h3>
-            <p>Сохранённые анализы и решения РОПа.</p>
+        <div className="history-page">
+          <section className="history-toolbar panel">
+            <div>
+              <h2>История отчётов</h2>
+              <p>Сохранённые анализы сгруппированы по дате создания.</p>
+            </div>
             <button className="btn secondary" onClick={() => void loadHistory(true)}>
               Обновить
             </button>
-            {historyError && (
-              <div className="alert error" style={{ marginTop: 12 }}>
-                <strong>Ошибка:</strong> {historyError}
-              </div>
-            )}
-            <div style={{ marginTop: 12 }}>
-              {history.map((item) => (
-                <button
-                  key={item.id}
-                  className={`deal ${selectedReport?.id === item.id ? 'active' : ''}`}
-                  onClick={() => void openHistoryReport(item.id)}
-                >
-                  <strong>
-                    #{item.id} · {item.entity_type} {item.entity_id}
-                  </strong>
-                  <small>{reportPreview(item)}</small>
-                  {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis category={item.lead_category} /> : null}
-                </button>
-              ))}
-              {!history.length && !historyError && <p className="muted">Пока нет сохранённых отчётов.</p>}
+            {selectedReport?.share_token ? (
+              <button className="btn ghost" onClick={() => void copyReviewLink()}>
+                Скопировать тестовую ссылку
+              </button>
+            ) : null}
+          </section>
+          {historyError && (
+            <div className="alert error">
+              <strong>Ошибка:</strong> {historyError}
             </div>
-          </aside>
-          <main>
+          )}
+          <section className="history-groups">
+            {historyGroups.map((group) => (
+              <section className="history-date-group" key={group.date}>
+                <header>
+                  <h3>{group.date === 'Без даты' ? group.date : historyDateLabel(group.date)}</h3>
+                  <span>{group.items.length} шт.</span>
+                </header>
+                <div className="history-card-grid">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      className={`history-report-card ${selectedReport?.id === item.id ? 'active' : ''}`}
+                      onClick={() => void openHistoryReport(item.id)}
+                    >
+                      <div className="history-report-card-top">
+                        <span>{item.entity_type === 'lead' ? 'Лид' : 'Сделка'} #{item.entity_id}</span>
+                        {item.risk_level ? <span className={`risk-dot risk-${item.risk_level}`} aria-label={riskLabelRu(item.risk_level)} /> : null}
+                      </div>
+                      <strong>{reportPreview(item)}</strong>
+                      {item.entity_type === 'lead' ? <LeadQualificationStrip summary={item.lead_qualification} hasAnalysis category={item.lead_category} /> : null}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {!history.length && !historyError && <p className="muted">Пока нет сохранённых отчётов.</p>}
+          </section>
+          <main className="history-detail">
             <ReportPanels
               meta={activeMeta}
               reportDetail={selectedReport?.id === activeMeta?.report_id ? selectedReport : null}

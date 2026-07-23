@@ -273,6 +273,7 @@ export type UiReportListItem = {
   report_path?: string | null
   job_id?: string | null
   bitrix_url?: string | null
+  share_token?: string | null
 }
 
 export type UiReportDetail = UiReportListItem & {
@@ -556,6 +557,10 @@ export function fetchReports(limit = 50) {
 export function fetchReport(reportId: number, includeMarkdown = false) {
   const q = includeMarkdown ? '?include_markdown=true' : ''
   return api<UiReportDetail>(`/api/reports/${reportId}${q}`)
+}
+
+export function fetchReviewReport(shareToken: string) {
+  return api<UiReportDetail>(`/api/review/${encodeURIComponent(shareToken)}`)
 }
 
 export function fetchReportMarkdown(reportId: number) {

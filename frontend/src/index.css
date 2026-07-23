@@ -41,6 +41,238 @@ textarea {
   min-height: 100vh;
 }
 
+.review-page {
+  width: min(920px, 94vw);
+  margin: 0 auto;
+  padding: 40px 0 64px;
+}
+
+.shared-review-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.shared-review-header {
+  padding: 30px;
+  color: white;
+  background: linear-gradient(135deg, var(--dark), #1d4f89);
+}
+
+.shared-review-header h1 {
+  margin: 6px 0 4px;
+  font-size: clamp(26px, 5vw, 36px);
+}
+
+.shared-review-header p {
+  margin: 0;
+  color: #dcecff;
+}
+
+.shared-review-kicker {
+  color: #b9dcff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.shared-review-section {
+  padding: 24px 30px;
+  border-bottom: 1px solid var(--line);
+}
+
+.shared-review-section h2,
+.shared-review-section h3 {
+  margin: 0 0 10px;
+}
+
+.shared-review-section h3 {
+  margin-top: 20px;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.shared-review-section p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.shared-review-bant-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.shared-review-bant-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.shared-review-bant-grid span {
+  color: var(--blue2);
+  font-weight: 750;
+}
+
+.shared-review-bant-grid small {
+  color: var(--muted);
+}
+
+.shared-review-bitrix {
+  padding: 20px 30px 0;
+  margin: 0;
+}
+
+.shared-review-footer {
+  padding: 22px 30px;
+  color: var(--muted);
+  background: #f8fafc;
+  font-size: 14px;
+}
+
+@media (max-width: 600px) {
+  .review-page {
+    width: min(100%, 94vw);
+    padding-top: 20px;
+  }
+
+  .shared-review-header,
+  .shared-review-section {
+    padding: 22px;
+  }
+
+  .shared-review-bant-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.history-page {
+  display: grid;
+  gap: 18px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px;
+}
+
+.history-toolbar > div {
+  margin-right: auto;
+}
+
+.history-toolbar h2,
+.history-toolbar p {
+  margin: 0;
+}
+
+.history-toolbar p {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.history-groups {
+  display: grid;
+  gap: 24px;
+}
+
+.history-date-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.history-date-group h3,
+.history-date-group p {
+  margin: 0;
+}
+
+.history-date-group > header span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(245px, 1fr));
+  gap: 12px;
+}
+
+.history-report-card {
+  display: grid;
+  min-height: 132px;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 35, 65, 0.035);
+}
+
+.history-report-card:hover,
+.history-report-card.active {
+  border-color: var(--blue);
+  box-shadow: 0 8px 20px rgba(23, 113, 241, 0.13);
+}
+
+.history-report-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.history-report-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.risk-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.risk-dot.risk-high { background: var(--red); }
+.risk-dot.risk-medium_high { background: #ea8b1a; }
+.risk-dot.risk-medium { background: var(--yellow); }
+.risk-dot.risk-low { background: var(--green); }
+
+.history-detail {
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .history-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .history-toolbar > div {
+    width: 100%;
+  }
+
+  .history-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .wrap {
   width: min(1220px, 94vw);
   margin: auto;

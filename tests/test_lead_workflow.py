@@ -69,6 +69,33 @@ class LeadWorkflowStorageTests(unittest.TestCase):
 
 
 class LeadWorkflowApiTests(unittest.TestCase):
+    def test_review_link_returns_only_the_selected_saved_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.db"
+            report_id = save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="501",
+                report_json={
+                    "deal_state": {"summary": "Нужно подтвердить срок закупки."},
+                    "rop_manager_message_block": {"message_to_manager": "Уточнить срок у клиента."},
+                },
+                technical_log={"internal": "not for review"},
+                model_context={"history_text": "not for review"},
+            )
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+                full = api_app.report_detail(report_id)
+                share_token = full["share_token"]
+                review = api_app.review_report(share_token)
+
+            self.assertEqual(review["id"], report_id)
+            self.assertEqual(review["entity_type"], "deal")
+            self.assertEqual(review["entity_id"], "501")
+            self.assertEqual(review["report_json"]["deal_state"]["summary"], "Нужно подтвердить срок закупки.")
+            self.assertNotIn("technical_log", review)
+            self.assertNotIn("model_context", review)
+            self.assertNotIn("share_token", review)
+
     def test_control_toggle_syncs_candidate_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.db"
