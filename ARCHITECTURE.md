@@ -1,588 +1,128 @@
-# ARCHITECTURE
+# Архитектура Neuro ROP Assistant
 
-Короткий контекст проекта для старта нового чата с ИИ.
-Цель: быстро дать модели рабочую карту проекта без перегруза деталями.
+## Назначение и статус
 
-## How AI Should Use This File
+Локальный ROP Assistant помогает руководителю продаж разбирать лиды и сделки Bitrix24: собирает доступный CRM-контекст, при необходимости локально транскрибирует записи, строит валидированный LLM-анализ и показывает его в локальном UI. Это MVP без авторизации и многопользовательского режима; FastAPI и UI предназначены для `localhost`.
 
-- Используй этот файл как карту проекта перед изменениями кода: сначала сверяй контуры, source-of-truth файлы и critical invariants.
-- Если документ конфликтует с кодом, доверяй коду и явно отмечай расхождение в ответе пользователю.
-- Не превращай этот файл в runbook, changelog или подробную спецификацию. Подробные команды держать в `Docs/*_runbook.md`, практические результаты — в отдельных notes. Краткий запуск UI/API — в корневом `README.md`.
-- Обновляй `ARCHITECTURE.md` только когда пользователь прямо просит обновить архитектуру или явно просит зафиксировать новое архитектурное состояние. Не обновляй его автоматически после каждой правки кода.
-- При обновлении сохраняй средний размер и убирай явное дублирование: здесь должны быть стабильные правила, карта потоков и ссылки на подробные документы.
+Документ — рабочая карта для агента, а не runbook и не API-справочник. Перед изменением прочитай разделы **Source of Truth**, **Critical Invariants** и соответствующую строку в **Where to change code**. Если документ расходится с кодом или конфигурацией, верен код; исправь карту только при изменении архитектурного факта.
 
-Last updated: 2026-07-23
-
-## 1) System At A Glance
-
-`Neuro_rop_practice` — локальный Python MVP ИИ-помощника РОПа для анализа лидов, сделок, звонков и истории коммуникаций из Bitrix24.
-
-- Интерфейсы: CLI (`run_rop_assistant.py`) и локальный UI (`frontend/` React/Vite) через FastAPI-адаптер (`api/`).
-- CRM-интеграция: Bitrix24 REST webhook, только read-only операции.
-- LLM-интеграция: OpenAI Responses API для JSON-анализа.
-- Транскрибация: OpenAI audio transcription, локальная подготовка аудио через `ffmpeg`/`ffprobe`.
-- База правил клиента: обработанные Markdown-файлы в `knowledge/clients/praktikm/`.
-- Поддерживаемые контуры: `deals` и `leads`.
-- Текущий продуктовый статус: локальный MVP с CLI + UI/API-адаптером, SQLite для change detection, feedback РОПа и ручных compact shadow runs; без Telegram-отправки и без записи в Bitrix.
-
-Главная логика:
-
-```text
-Bitrix24 -> raw JSON -> customer_path.md -> workspace -> transcript -> LLM JSON -> ROP markdown report
-```
-
-Верхний CLI-путь:
-
-```text
-run_rop_assistant.py -> lead/deal pipeline -> context diagnostics -> missing audio/transcript actions -> transcribe -> change-aware LLM analysis
-```
-
-Локальный UI-путь:
-
-```text
-React UI -> FastAPI api/ -> candidates scoring | analyze job -> run_rop_assistant.py / analysis JSON -> UI report + SQLite feedback
-```
-
-Ручная ежедневная сводка использует отдельный pre-LLM этап отбора:
-
-```text
-именованный analysis profile -> Moscow workday/custom period -> Bitrix lead/deal preview без LLM
--> lead-to-deal journey deduplication -> signals + lifecycle + workset/capacity
--> immutable daily summary snapshot -> жёсткий платный gate
--> fresh/date_modified_only: последний сохранённый UI report без pipeline/LLM
--> missing/changed/failed в пределах лимита: analyze jobs -> structured progress -> SQLite status/cost -> результат в той же карточке
-```
-
-Отдельный ручной compact-контур не участвует в штатном pipeline:
-
-```text
-сохранённый полный analysis JSON -> recorded input files -> attention_delta shadow -> evidence coverage -> SQLite run/feedback -> UI review
-```
-
-Он не перечитывает CRM, не запускает legacy pipeline и не заменяет полный analysis JSON или ROP markdown report.
-
-Расширенный контур истории клиента:
-
-```text
-lead/deal -> contact -> related contact deals + deals by LEAD_ID -> duplicate leads by phone/email -> activities/timeline/internal IM -> unified customer_history_bundle -> customer_path.md / LLM context
-```
-
-Продуктовый сценарий отчёта: `система -> РОП -> менеджер`. Отчёт читает только РОП; менеджер получает от РОПа отдельное поручение или сообщение, а не доступ к отчёту.
-
-### Контур тестирования заказчиком (лиды)
-
-Это отдельный MVP-контур для проверки полезности карточки заказчиком, а не доступ к основному приложению РОПа:
-
-```text
-РОП выбирает сохранённый отчёт по лиду -> ссылка с токеном -> заказчик открывает ту же полную карточку только для просмотра -> внешняя таблица обратной связи -> доработка карточки и сценария РОПа
-```
-
-По ссылке доступен только один сохранённый отчёт: без истории, технических материалов, действий РОПа и перехода в основной UI. Контур пока относится только к лидам; сделки — последующее расширение. Обратная связь фиксируется во внешней таблице и не записывается в Bitrix.
-
-## 2) Source Of Truth
-
-Если есть конфликт между документами и кодом, доверять коду.
-
-- Общая настройка путей, времени и логирования: `setup.py`
-- Краткий запуск CLI/UI/API: `README.md`
-- Runtime env для OpenAI: `openai_api/config.py`
-- Публичные ссылки на карточки Bitrix: `openai_api/bitrix_links.py`
-- Расчёт стоимости OpenAI: `openai_api/pricing.py`
-- Верхний CLI ROP assistant: `run_rop_assistant.py`
-- FastAPI entrypoint: `api/app.py`
-- Analyze jobs / CLI adapter: `api/jobs.py`
-- Compact shadow job и evidence lookup: `api/compact_shadow.py`
-- Candidates scoring, profile preview, lead-to-deal journey и лимиты workset (без LLM): `api/candidates.py`
-- React UI: `frontend/src/App.tsx`, API-клиент `frontend/src/api.ts`
-- Визуальный референс демо: `praktikm_rop_assistant_demo.html`
-- ТЗ UI (продуктовый ориентир, не source-of-truth кода): `tz_front.md`
-- Краткая Markdown-выгрузка свежих лидов: `export_recent_leads_summary.py`
-- Bitrix REST client: `bitrix/client.py`
-- Полная история клиента, fallback-связки и общий нормализатор коммуникаций lead/deal: `bitrix/customer_history.py`
-- Внутренние Bitrix IM-чаты CRM-сущностей: `bitrix/internal_im_chat.py`
-- Диагностика полноты контекста и ручные действия: `bitrix/context_diagnostics.py`
-- Markdown полной истории клиента: `bitrix/customer_history_report.py`
-- Структура рабочих папок лидов/сделок: `bitrix/workspace.py`
-- Deal pipeline: `bitrix/deals/run_deals_customer_path_pipeline.py`
-- Deal raw fetch: `bitrix/deals/1_fetch_deals_context.py`
-- Deal markdown history: `bitrix/deals/2_build_deals_customer_path_report.py`
-- Deal workspace prepare: `bitrix/deals/3_prepare_deals_workspace.py`
-- Deal compact LLM context: `bitrix/deals/4_build_deals_llm_context.py`
-- Deal missing-only audio downloader: `bitrix/deals/download_deals_call_audio.py`
-- Lead pipeline: `bitrix/leads/run_leads_customer_path_pipeline.py`
-- Lead raw fetch: `bitrix/leads/1_fetch_leads_context.py`
-- Lead markdown history: `bitrix/leads/2_build_leads_customer_path_report.py`
-- Lead workspace prepare: `bitrix/leads/3_prepare_leads_workspace.py`
-- Lead missing-only audio downloader: `bitrix/leads/download_leads_call_audio.py`
-- Транскрибация аудио CLI: `openai_api/audio/local_file_transcribe.py`
-- Общая логика транскрибации: `openai_api/audio/transcribe_core.py`
-- Short-call / недозвон filter: `openai_api/audio/short_call.py`
-- Deal LLM-анализ, BANT/техническая/коммерческая квалификация и полный Markdown-отчёт: `openai_api/llm/analyze_deal.py`
-- Lead LLM-анализ, детальный BANT, `lead_category`, `lead_route`, детерминированный CRM-контекст текущего статуса, аудит корректности закрытия и полный Markdown-отчёт: `openai_api/llm/analyze_lead.py`
-- OpenAI JSON client и единичный corrective retry после невалидного JSON/бизнес-ответа: `openai_api/llm/llm_client.py`
-- Общий bounded transport retry для временных ошибок Bitrix/OpenAI/скачивания аудио: `reliability/retry.py`
-- Машиночитаемые события прогресса CLI/jobs: `progress_events.py`
-- Валидация LLM JSON перед отчётом, включая `qualification_assessment` полного lead- и deal-анализа: `openai_api/llm/validation.py`
-- Контракт, prompt и детерминированная материализация compact attention delta: `openai_api/llm/attention_delta.py`
-- Compact OKF packs: `openai_api/llm/attention_delta_knowledge.py`, `knowledge/clients/praktikm/attention_delta_*.md`
-- Ограничивающая диагностика полноты compact-контекста: `openai_api/llm/context_completeness.py`
-- Проверка evidence compact-ответа относительно переданного контекста: `openai_api/llm/evidence_coverage.py`
-- Детерминированные playbooks compact-анализа: `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`
-- SQLite-хранилище change detection, UI feedback, analysis profiles, lifecycle кандидатов, immutable snapshots, статусов/прогресса карточек и фактической стоимости ежедневных сводок: `storage/rop_db.py`
-- Deal change detection snapshot/diff: `openai_api/change_detection/snapshot.py`
-- Deal/lead decision engine и mini recommendation: `openai_api/change_detection/decision_engine.py`
-- Deal CRM stage policy / closed-lost classification: `openai_api/change_detection/stage_policy.py`
-- Deal orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_deal_if_changed.py`
-- Lead orchestration CLI с пропуском лишнего LLM: `openai_api/llm/analyze_lead_if_changed.py`
-- Локальный benchmark/shadow runner: `benchmarks/run_attention_delta_shadow.py`
-- Сравнение и replay локальных shadow-результатов: `benchmarks/compare_attention_delta.py`, `benchmarks/replay_attention_delta_postprocessing.py`
-- Правила локальных benchmark-артефактов: `benchmarks/README.md`
-- Инструкция ручного запуска change detection: `Docs/change_detection_runbook.md`
-- Инструкция запуска полной истории клиента: `Docs/customer_history_runbook.md`
-- Практические заметки по проверке customer history: `Docs/customer_history_experiment.md`
-- Обработанная OKF-база ПрактикМ: `knowledge/clients/praktikm/index.md`
-- Ручная проверка проекта: `Docs/ручная проверка проекта.md`
-
-## 3) Critical Invariants
-
-1. Bitrix-скрипты и API-адаптер должны оставаться read-only к CRM: только `get/list/fields`-подобные методы и запись локальных файлов/SQLite.
-2. `.env` не коммитить и не переносить секреты в код. В репозитории допустим только шаблон `.env.example`.
-3. `reports/` содержит персональные и коммерческие данные: raw JSON, аудио, транскрипты, отчёты. Считать эту папку чувствительной.
-4. `knowledge/clients/praktikm/` — обработанная база правил, а не факты конкретной сделки или лида.
-5. LLM не должен выдумывать факты: промпты обязаны отделять историю CRM/транскрипт от OKF-правил.
-6. Анализ должен возвращать валидный JSON. Markdown-отчёт строится только после успешного JSON-разбора.
-7. Для моделей с длинными ответами важен `ANALYSIS_MAX_OUTPUT_TOKENS`: если лимит мал, JSON может оборваться и упасть на `json.loads`.
-8. Готовые тексты клиенту не должны содержать плейсхолдеры вроде `ДОБАВИТЬ`, `уточнить`, `{данные}`.
-9. Недозвон, автоответчик и служебное сообщение нельзя считать содержательным контактом.
-10. Если содержательного контакта нет, анализ должен применять правила дозвона из `call_attempt_rules.md`.
-11. После отправки КП анализ должен требовать критерии выбора, срок решения, ЛПР и следующий шаг к договору, счету, предоплате или согласованию комплектации.
-12. Workspace-структура должна быть одинаковой по смыслу для `lead_*` и `deal_*`: `history/`, `raw/`, `audio/`, `transcripts/`, `analysis/`, `index.json`.
-13. `latest` transcript выбирается по времени изменения файла. Если в папке несколько транскриптов, это может повлиять на анализ.
-14. `ffmpeg` и `ffprobe` — внешние зависимости, они не ставятся через `requirements.txt`.
-15. SQLite — локальное MVP-хранилище: change detection (`entity_state`, `analysis_runs`, …), UI feedback и снимок фактического контекста отчёта (`ui_reports` с `model_context_json`, `rop_decisions`, `outcomes`), review state (`candidate_review_state`), legacy-фильтр (`ui_candidate_filters`), именованные профили (`analysis_profiles`), lifecycle journey (`candidate_cases`) и snapshots ручных сводок (`daily_summary_runs`, `daily_summary_items`). В `model_context_json` попадают только фактические history/transcript inputs одного завершённого анализа; prompt, OKF-правила и raw model output туда не попадают. Полноценной портфельной `deal_memory` / `lead_memory` из спеки пока нет.
-16. Финальный ROP markdown report нельзя сохранять, если LLM JSON не прошёл `openai_api/llm/validation.py`.
-17. Deal change detection должен считать fingerprint только по normalized snapshot, а не по Markdown и не по полному raw JSON.
-18. `DATE_MODIFY` хранится в snapshot metadata, но не является самостоятельной причиной запускать LLM.
-19. Прямой запуск `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокирован, чтобы не тратить LLM в обход change detection.
-20. Lead change detection использует `STATUS_ID` вместо `STAGE_ID`; задачи и смена ответственного считаются soft diff, новый звонок/email/message/comment/status/transcript — hard diff.
-21. Полный `customer_path.md` остается аудитным/UI-артефактом. Для deal LLM prompt используется `history/deal_<id>_llm_context.md`, если он существует; иначе fallback на полный `customer_path.md`.
-22. Закрытый провальный CRM-статус сделки определяется кодом до LLM через `stage_policy.py`, а не угадывается моделью по тексту истории.
-23. Если сделка закрыта как проваленная, deal-анализ обязан вернуть `closed_deal_review`. Если для решения не хватает фактов, поручение менеджеру должно предусматривать один содержательный контакт с клиентом и фиксацию результата в CRM, без обещания вернуть сделку в работу.
-24. Главный action-блок нового анализа — `rop_manager_message_block`: что РОПу проверить, почему это важно, какой факт должен появиться в CRM, срок контроля, критерий выполнения и evidence. В lead-контракте `manager_review_text` содержит один короткий комментарий РОПа менеджеру: понимание ситуации, только подтверждённые сильные действия и один рекомендуемый следующий шаг с объяснением его смысла. `message_to_manager` остаётся отдельной SMART-задачей с точной датой; deal-контракт сохраняет одно готовое поручение в `message_to_manager`.
-25. Lead-анализ получает детерминированный блок текущего CRM-состояния: `STATUS_SEMANTIC_ID=F` означает уже закрытый провальный лид, а `STATUS_ID` и русское название этапа описывают заявленную причину закрытия. `closure_review` независимо возвращает `confirmed_correct`, `disputed`, `insufficient_evidence` или `not_applicable`; модель не определяет факт закрытия по названию этапа. Для лида, где нужен контакт, `manager_action_block` содержит ровно три готовых первых обращения: `primary_text` и два элемента `backup_texts`. Их ближайшая цель, факты, ключевые вопросы и следующий шаг совпадают; различается только тон: деловой и прямой, партнёрский и доброжелательный, спокойный и консультативный. При доказанном `confirmed_correct` контакт и задача менеджеру не требуются, `primary_text=null`, `backup_texts=[]`, срок контроля отсутствует; UI не предлагает фиктивную задачу или постановку на контроль. Для спорного закрытия или недостатка evidence сохраняются один управляемый контакт, SMART-задача и три варианта текста. Открытые лиды сохраняют прогрессивную квалификацию: первое сообщение содержит минимально достаточный запрос и один CTA, остальные BANT- и технические вопросы остаются в комментарии РОПа, задаче и CRM-чеклисте. DISC не определяется, варианты не разделяются по каналам. В deal-контракте блок сохраняет прежнюю семантику.
-26. Markdown-отчёт по сделке и лиду должен начинаться с раздела `## Что сделать РОПу сейчас`; текст клиенту выводится ниже как готовый материал менеджеру для одного контакта.
-27. Deal-анализ обязан возвращать `money_path_diagnosis`: где застрял путь к деньгам, почему деньги под риском, у кого следующий шаг, какой факт нужен для движения и evidence.
-28. Lead-анализ обязан возвращать `loss_diagnosis`: качество лида, качество обработки, сигнал источника, качество дозвона, качество следующего шага, корректность маршрута, финальный вердикт и evidence. Полный lead- и deal-анализ обязан возвращать `qualification_assessment` с независимыми BANT, технической и коммерческой оценками. Только lead-контракт дополнительно содержит `lead_category` и `lead_route`; deal-оценка не получает A–E и не заменяет `deal_mode`, `payment_blocker` или `closed_deal_review`.
-29. Нельзя уверенно писать `bad_lead`, если не было нормального дозвона, альтернативного канала или конкретного следующего шага; в таком случае использовать `bad_processing`, `data_gap` или другой более точный verdict. Неполные BANT или технические данные не являются техническим либо бюджетным отказом. Категория D требует подтверждённого `technical_mismatch`, явно названного бюджета нового оборудования ниже 1 000 000 ₽ либо срока свыше 12 месяцев. Категория E требует спама, неверного контакта либо полного завершения существующего цикла дозвона; незавершённый цикл остаётся `unknown`. Категория лида и CRM-маршрут независимы: `ordinary_deal` допустим только при четырёх подтверждённых критериях BANT, `op2` — ровно при одном неподтверждённом/неизвестном критерии без отрицательного. Категория C сохраняется и при отсутствии CRM-дела или задачи возврата: такой случай получает нарушение маршрута, существующая CRM-дата остаётся пустой, а предложенная дата хранится отдельно как рекомендация и не выдаётся за CRM-факт. После конвертации категории A–E не пересчитываются и не отображаются в deal-карточке.
-30. Полная история клиента строится read-only: `customer_history_bundle` может читать root lead/deal, контакты, связанные сделки контакта, duplicate leads по телефону/email, активности, timeline comments и внутренние Bitrix IM-чаты CRM-сущностей, но не пишет в Bitrix.
-31. `CONTACT_ID` — базовая связка клиента. Если `CONTACT_ID` отсутствует, fallback по телефону/email должен подтверждать совпадение через `crm.contact.get` или `crm.lead.get`; неподтвержденные кандидаты остаются только в diagnostics.
-32. Если fallback нашел несколько подтвержденных контактов, автосклейка не применяется: такие совпадения считаются ambiguous и требуют ручной проверки.
-33. Если fallback нашел дубль-лид по телефону/email, его история включается в `related_leads`, но контакт не считается найденным, пока нет подтвержденного contact link.
-34. Внутренний контекст (`timeline comments`, заметки, служебные комментарии, внутренние Bitrix IM-чаты) должен храниться отдельно от клиентских касаний и не должен трактоваться как слова клиента.
-35. Внутренние Bitrix IM-чаты включаются только вместе с internal context, попадают в `internal_context`/`unified_timeline`, а вложения отображаются только строкой `Файл: name.ext` без ссылок и скачивания.
-36. Открытые линии не являются обязательным источником для ПрактикМ; события openline/chat не должны ломать выгрузку и могут быть проигнорированы с diagnostics.
-37. `customer_history_bundle` сохраняет diagnostics: missing contact, fallback candidates/matches, unavailable sources, access denied и предупреждения. Эти diagnostics нужны для ручной проверки прав и связок.
-38. Для root lead и duplicate leads связанные сделки нужно искать не только через контакт, но и read-only фильтром `crm.deal.list` по `LEAD_ID`.
-39. Если lead имеет `STATUS_ID=CONVERTED` или успешную семантику, а связанная сделка найдена, основной ROP-анализ должен выполняться по сделке; lead-анализ для этого лида пропускается.
-40. Если converted lead не имеет найденной связанной сделки, diagnostics должен явно писать ручное действие: открыть лид в Bitrix, найти сделку и проверить REST-доступ/связку по `LEAD_ID`.
-41. Если у converted lead найдено несколько сделок, автоматический верхний CLI выбирает самую свежую, но история должна оставаться хронологически понятной через customer history и source lead context.
-42. Анализ разрешен при неполном контексте, но diagnostics/LLM prompt/ROP report должны явно указывать ограничения и не делать выводы о содержании отсутствующих звонков.
-43. Автоскачивание аудио должно быть missing-only по умолчанию: уже успешно скачанные и существующие локально записи не перекачиваются без явного `--redownload`.
-44. Существенный ценовой разрыв не является автоматическим доказательством ошибочного закрытия или окончательной неквалификации. Deal-анализ должен сначала проверить сопоставимость КП: состав решения, обязательные/опциональные узлы, этапность, сервис, запуск, гарантию и то, что именно клиент сравнивает.
-45. Модель видит полный доступный контекст, но перед `validate_deal_analysis` / `validate_lead_analysis` ответ нормализуется до лимитов JSON-контракта; такие изменения фиксируются в `model_metadata.normalization_changes`.
-46. FastAPI не должен ломать CLI: analyze job вызывает существующий `run_rop_assistant.py` / те же модули, а не дублирует pipeline.
-47. UI читает текущий `*_analysis.json` как есть; отдельный UI-only JSON-контракт поверх LLM пока не вводим. Для converted lead результат job обязан возвращать связанную сделку, если её полный анализ создан штатным handoff, а не пустой lead-результат.
-48. `reports/` не раздаётся frontend'у целиком: UI получает analysis/report только через API; полный markdown — по запросу, не на первом экране.
-49. Первый экран UI показывает кандидатов на внимание (Bitrix-фильтр + scoring без LLM), а не технический pipeline.
-50. Основной candidates preview ручной сводки — дешёвый pre-LLM слой на базе выбранного `analysis_profile`: период `today|previous_workday|today_and_previous_workday|custom` считается по `Europe/Moscow`; default — `today_and_previous_workday`. Для понедельника рабочая пара — пятница и понедельник без субботы/воскресенья, а в выходной рабочий combined-период сводится к пятнице. `custom` принимает включительные даты конкретного preview/запуска, не сохраняет сами даты в профиле и преобразуется в полуоткрытое окно `[from, to)`. Legacy `yesterday|today_and_yesterday` при чтении профиля нормализуются в рабочие аналоги. Preview читает Bitrix и SQLite, но не вызывает OpenAI. Legacy `/api/candidates` и `ui_candidate_filters` сохраняются для совместимости ручного экрана.
-51. Звонки короче 20 секунд считаются `short_no_answer` (недозвон/автоответчик): duration через `ffprobe` пишется в audio manifest, такие файлы по умолчанию не транскрибируются.
-52. Локальный UI на первом этапе без авторизации, только localhost.
-53. Решения РОПа и outcomes сохраняются локально в SQLite (`rop_decisions`, `outcomes`) и не пишутся в Bitrix.
-54. Ручной запуск принимает числовые ID или канонические ссылки Bitrix вида `/crm/deal/details/<id>/` и `/crm/lead/details/<id>/`. Ссылка определяет тип сущности; за один запуск нельзя смешивать ссылки на лиды и сделки.
-55. Денежные суммы в UI показываются в читаемом формате: `10 000 000 ₽`, а не как техническое значение Bitrix с дробной частью и `RUB`.
-56. Решение РОПа «Закрытие обосновано» исключает только конкретную сущность из основной очереди кандидатов, а не целую воронку или этап. В lead-workflow отдельный терминальный вердикт «Не требует внимания» удалён: карточка остаётся активной либо переводится в локальное состояние `snoozed` кнопкой «Поставить на контроль».
-57. Снятие lead-карточки с контроля немедленно возвращает её в активную очередь; `snoozed`-сущность возвращается автоматически при наступлении даты контроля. Для остальных проверенных сущностей сохраняется возврат при изменении стадии, воронки или суммы. Одно изменение `DATE_MODIFY` не является причиной автоповтора: оно отмечается только в аудите как обновление CRM после решения РОПа.
-58. В deal prompt сравнение технических показателей требует нормализации единиц. Например, `150 банок/мин` и `9 000 банок/час` должны рассматриваться как совпадение при одинаковом типе продукта; если единица не указана, модель обязана запросить уточнение, а не объявлять несоответствие.
-59. `attention_delta` — изолированный shadow-контур. Он не может перезаписывать legacy `*_analysis.json`, prompt, ROP markdown report, change-detection state или UI report; полный анализ остаётся baseline и fallback.
-60. Compact run разрешён только после preflight по входным путям, записанным в завершённом полном `*_analysis.json`. Он не должен неявно запускать Bitrix-fetch, legacy pipeline или повторный полный анализ.
-61. Перед сохранением успешного compact-результата обязательны: structured-output contract, entity-specific deterministic playbook/materialization и `validate_evidence_context_coverage`. При непокрытом evidence или ошибке класс fallback — `full_fallback_recommended`; автоматически повторять платный вызов нельзя.
-62. Compact diagnostics ограничивают использование evidence, но не являются фактами о клиенте: отсутствие источника нельзя интерпретировать как отсутствие события или намерения клиента.
-63. Compact knowledge packs выбираются только по типу сущности (`core + lead` или `core + deal`) и должны оставаться воспроизводимыми. Полная OKF-база legacy-анализа не подменяется этими пакетами.
-64. Профиль анализа именованный и версионируемый; UI сохраняет последний выбранный профиль. Изменение профиля после preview инвалидирует создание сводки по старой версии.
-65. Lead scope ограничен календарным периодом создания, исключает live-resolved источники DMP/DMP1 и настроенные негативные категории. Входящие звонки остаются частью activity context и сигнала методики дозвона.
-66. Deal scope настраивается воронками и этапами профиля и может включать старые активные сделки независимо от даты создания. Источник DMP/DMP1 не исключает уже созданную сделку.
-67. Лид и созданная из него сделка образуют один `journey_key`; в основной карточке предпочтительна сделка, а исходный lead сохраняется как origin. Сделка вне выбранного deal scope не подменяет карточку и показывается только как handoff warning.
-68. Preview показывает весь найденный список, но `workset_selected` выделяет ограниченный набор по priority, lifecycle и слотам `new/backlog`. Остальные карточки остаются видимыми и могут быть добавлены вручную.
-69. `daily_summary_runs` и `daily_summary_items` хранят immutable snapshot профиля и кандидатов на момент создания. Повторное чтение Bitrix не должно незаметно менять уже созданную сводку.
-70. Полный LLM-анализ запускается только после явного подтверждения платных карточек и в пределах `paid_per_run`/`paid_per_day`. Штатный запуск сводки передаёт `force_llm=false`; свежий analysis переиспользуется, а changed/missing/failed требуют доступной платной ёмкости.
-71. Transport retry применяется только к временным сетевым/серверным ошибкам и ограничен тремя попытками с `Retry-After` либо exponential backoff. Встроенный retry OpenAI-клиента отключён, чтобы попытки не перемножались скрыто.
-72. Невалидный JSON или ответ, не прошедший бизнес-валидацию, получает не более одного corrective LLM-повтора. Usage и стоимость суммируются по обеим попыткам; отчёт не сохраняется до валидного результата.
-73. Платный gate ежедневной сводки проверяется до pipeline: только `missing`, `changed` и `failed` из подтверждённого набора могут запустить анализ. `fresh` и `date_modified_only` переиспользуют последний сохранённый UI report и не должны расходовать LLM.
-74. События прогресса передаются строками с маркером `@@ROP_PROGRESS@@` и ASCII-safe JSON. `api/jobs.py` отделяет их от пользовательского лога и сохраняет текущий этап по каждой сущности.
-75. Статус, прогресс, `job_id`, `report_id`, ошибка и фактическая стоимость каждой карточки сводки сохраняются в SQLite. После перезапуска API осиротевший активный item переводится в явную ошибку, а уже готовые результаты остаются доступны.
-76. Имена и настройки analysis profiles сохраняются в UTF-8; слой хранения исправляет известный UTF-8/CP1251 mojibake при чтении и записи, не меняя корректный текст.
-77. `normalized_communications` — additive-представление коммуникаций внутри `customer_history_bundle`: исходные `client_touchpoints`, `internal_context`, `tasks_and_control`, `system_events` и `unified_timeline` сохраняются без изменения. Звонок становится подтверждённым контактом только при содержательной локальной расшифровке; `COMPLETED=Y` этого не доказывает. Зеркальные сообщения Wazzup/WhatsApp/Max считаются входящими только при надёжном совпадении автора с контактом клиента, а внутренние комментарии и IM-чаты всегда остаются внутренней информацией. Первый нормализованный UI-блок включён только для лидов; общий builder уже пригоден для будущего deal UI без изменения deal prompt или deal JSON-контракта.
-
-### Исключение: корректное закрытие с неоформленным CRM-возвратом
-
-Корректность закрытия и наличие управляемого возврата в CRM — независимые выводы. Для лида с `closure_review.verdict=confirmed_correct`, категорией `C`, `controlled_return_status=missing_in_crm` и заполненной `recommended_return_date` закрытие остаётся подтверждённо корректным: клиенту повторно не пишут, `closure_review.manager_task_required=false`, а `manager_action_block.primary_text=null`, `backup_texts=[]` и `manager_checklist=[]`.
-
-Одновременно это нарушение CRM-маршрута, а не отсутствие действия: `rop_manager_message_block` обязан содержать отдельную SMART-задачу менеджеру создать CRM-задачу возврата на `recommended_return_date`, внутренний срок контроля, ожидаемый CRM-факт и критерий выполнения; `rop_action.required=true`. В lead-карточке рядом с «Закрытие проверено» показывается отдельный статус о необходимости оформить возврат в CRM, а шаги «Оформить возврат в CRM» и «Проверить создание CRM-задачи» остаются активными. Локальный контроль проверяет создание задачи в ближайший внутренний срок, а не заменяет дату будущего CRM-возврата.
-
-## 4) Key Domain Objects
-
-- `Lead` — лид Bitrix24, локально представлен raw JSON, markdown history, workspace и analysis.
-- `Deal` — сделка Bitrix24, локально представлена raw JSON, markdown history, audio manifest, workspace и analysis.
-- `Customer history bundle` — единый raw JSON `*_customer_history_bundle.json` вокруг root lead/deal: root entity, период, контакты, связанные сделки, дубль-лиды, активности по сущностям, timeline comments, internal IM chats, tasks, исходный unified timeline, additive `normalized_communications` и diagnostics.
-- `Related deal` — сделка, найденная через `CONTACT_ID`/`crm.deal.contact.items.get` и `crm.deal.list` по контакту или напрямую через `LEAD_ID`; попадает в общий контекст даже из другой воронки.
-- `Related lead` — подтвержденный дубль-лид, найденный fallback-поиском по телефону/email, когда у root lead нет `CONTACT_ID`.
-- `Converted lead handoff` — правило верхнего CLI: если лид сконвертирован и сделка найдена, дальнейшая транскрибация/анализ идут по сделке, а не по лиду.
-- `Fallback candidate` — телефон/email/company из root lead/deal, сохраненный в diagnostics для ручной проверки; автоматически применяется только после подтверждения.
-- `Fallback match` — подтвержденная fallback-связка с contact или duplicate lead через read-only Bitrix методы.
-- `Activity` — CRM-активность: звонок, письмо, сообщение, задача или другое событие.
-- `Timeline comment` — комментарий/событие таймлайна Bitrix.
-- `Client touchpoint` — клиентское касание в customer history: звонок, письмо, сообщение, без смешивания с внутренними комментариями.
-- `Internal context` — внутренние комментарии/заметки/таймлайн, используемые как контекст работы менеджера, но не как факт клиентского общения.
-- `Internal IM chat` — привязанный к CRM lead/deal Bitrix IM-чат команды, читается read-only через `im.*`, хранится как `internal_context`, не как клиентское касание.
-- `Tasks and control` — задачи и контрольные активности из CRM activities.
-- `System event` — состояние/изменение сущности, например текущий статус связанной сделки или дубль-лида.
-- `Transcript` — результат транскрибации звонка, обычно хранится в `transcripts/` в `.md`, `.txt`, `.json`.
-- `Short no-answer call` — локальный звонок с `duration_seconds < 20`; в manifest помечается как `short_no_answer` / `skip_transcribe`.
-- `Knowledge file` — обработанное правило ПрактикМ из `knowledge/clients/praktikm/`.
-- `Analysis JSON` — структурированный ответ модели в `analysis/*_analysis.json`.
-- `ROP manager message block` — главный action-блок `rop_manager_message_block`: ожидаемый CRM-факт, срок, критерий выполнения и evidence; для lead дополнительно один готовый комментарий РОПа в `manager_review_text` и отдельная SMART-задача в `message_to_manager`, для deal — одно поручение в `message_to_manager`. Три готовых обращения к клиенту для lead находятся в `manager_action_block`.
-- `CRM stage policy` — детерминированный контекст стадии сделки: открыта/закрыта, причина закрытия, тип провала, основание для режима `closed_deal_review`.
-- `Deal management blocks` — управленческие поля deal-анализа: `rop_manager_message_block`, `money_path_diagnosis`, `deal_mode`, `closed_deal_review`, `resource_control`, `payment_blocker`, `objection_handling`, `shaker_question`, `competitor_defense_checklist`, `priority_recommendation`.
-- `Price comparability check` — блок deal-анализа `price_comparability_check`: проверка, сравниваются ли одинаковые КП/комплектации при существенном ценовом разрыве.
-- `Lead qualification assessment` — блок `qualification_assessment` с четырьмя детальными BANT-критериями, отдельными `solution_fit` и `commercial_fit`, а для лидов также с `lead_category` и `lead_route`; `lead_state.qualification` остаётся legacy-дублем категории.
-- `Lead loss diagnosis` — блок `loss_diagnosis`, который отделяет качество лида от качества обработки, оценивает дозвон/следующий шаг/маршрут и фиксирует итоговый verdict.
-- `Manager action block` — блок `manager_action_block`: для lead `primary_text` и два `backup_texts` содержат три готовых первых обращения к клиенту с одинаковой ближайшей целью и разным фиксированным тоном; полная квалификация продолжается после ответа по маршруту из комментария РОПа и SMART-задачи. Для deal сохраняется совместимая схема с основным текстом клиенту. `manager_checklist` содержит CRM-факты, которые менеджер фиксирует после контакта.
-- `ROP report` — человекочитаемый Markdown-отчёт в `analysis/*_rop_report.md`.
-- `Workspace index` — `index.json`, фиксирует тип сущности, ID и локальные папки.
-- `Candidate` — pre-LLM карточка внимания из `api/candidates.py`: entity, journey/origin, статус/стадия, priority, reason codes, analysis freshness, lifecycle, Bitrix URL и признак попадания в workset.
-- `Candidate journey` — единый путь клиента с устойчивым `journey_key`; после конвертации одна карточка связывает origin lead с текущей deal и не допускает двойного анализа одного пути.
-- `Analysis profile` — именованная версионируемая конфигурация в `analysis_profiles`: московский preset периода, lead/deal scope, сигналы, review view, workset/paid limits и параметры анализа. Последний выбранный ID хранится в `ui_preferences`; конкретные даты произвольного диапазона принадлежат preview/run и не сохраняются как постоянные даты профиля.
-- `Workset` — ограниченный выделенный набор кандидатов внутри полного preview; overflow остаётся видимым и доступным для ручного выбора.
-- `Daily summary snapshot` — неизменяемая запись `daily_summary_runs` + `daily_summary_items` с версией/снимком профиля, периодом, scope, кандидатами, выбранными journey и зарезервированной платной ёмкостью.
-- `Candidate case` — локальный lifecycle journey в `candidate_cases`: `new`, `backlog` или `reactivation`, определяемый по first seen и signal hash.
-- `Candidate filter` — legacy-сохранённый фильтр ручного экрана в `ui_candidate_filters`: тип lead/deal, окна дат, multi-select воронок/этапов, priority, limit.
-- `Candidate review state` — текущее локальное состояние конкретного lead/deal после решения РОПа: `reviewed`, `snoozed` или `active`, снимок стадии/суммы и дата следующего контроля. Не является записью в Bitrix и не переносит правило на похожие сущности.
-- `Manual input` — значение ручного запуска: один или несколько числовых ID либо канонических ссылок Bitrix. UI извлекает ID из ссылки и подставляет тип `lead` или `deal`.
-- `Analyze job` — фоновая задача UI/API (`api/jobs.py`): опции как в CLI, live stages, results, `report_ids`.
-- `UI report` — запись в `ui_reports`: ссылка на analysis/report paths + snapshot `report_json` для истории UI.
-- `ROP decision` — локальное решение РОПа по отчёту (`rop_decisions`), без записи в Bitrix.
-- `Outcome` — локальный исход после рекомендации (`outcomes`), включая отрицательные исходы.
-- `Attention delta` — компактный структурированный shadow-вывод для одного существующего full analysis: необходимость внимания, причина, ROP action с typed evidence IDs, memory patch и entity-specific review. Не является штатным ROP report.
-- `Compact shadow run` — сохранённый в `compact_shadow_runs` результат ручного compact-вызова: snapshot hash входного контекста, статус, модель, usage/cost, evidence coverage и fallback class.
-- `Compact shadow feedback` — один локальный отзыв РОПа на compact run в `compact_shadow_feedback`: исход, причина, комментарий, исходный и финальный playbook. Не обучает модель и не изменяет CRM.
-- `Evidence coverage` — детерминированная проверка, что typed evidence IDs compact-ответа присутствуют в переданных history/transcript/stage-policy данных.
-
-## 5) Runtime Flows
-
-Этот раздел держит только карту основных потоков. Подробные команды и проверки: `Docs/customer_history_runbook.md`, `Docs/change_detection_runbook.md`, краткий UI/API запуск — `README.md`.
-
-### A) ROP Assistant Orchestrator
-
-Основной удобный CLI для ручного MVP-запуска:
-
-```powershell
-.\venv\Scripts\python.exe .\run_rop_assistant.py --entity lead --ids 228773 --history-days 60 --yes
-.\venv\Scripts\python.exe .\run_rop_assistant.py --entity deal --ids 18507 --history-days 60 --yes
-```
-
-Для `--entity lead` верхний CLI сначала собирает lead workspace. Если лид сконвертирован и связанная сделка найдена, он печатает handoff `lead -> deal`, пропускает lead-анализ и запускает deal pipeline/транскрибацию/анализ по выбранной сделке. Если сделка не найдена, это должно быть отражено в diagnostics/manual actions.
-
-### B) Lead Intake Overview
-
-Быстрый read-only обзор лидов за период используется для поиска проблемных источников/этапов перед точечным ROP-анализом:
-
-```powershell
-.\venv\Scripts\python.exe .\export_recent_leads_summary.py --days 30
-```
-
-Выход по умолчанию: `leads_last_30_days_summary.md`. Это обзорный Markdown для triage, не замена `customer_history_bundle` и не вход LLM-анализа.
-
-### C) Build Customer History
-
-Основной read-only путь подготовки контекста:
-
-```text
-Bitrix24 -> raw context/customer_history_bundle -> customer_path.md -> workspace -> LLM context
-```
-
-Главные команды:
-
-```powershell
-.\venv\Scripts\python.exe .\bitrix\deals\run_deals_customer_path_pipeline.py --deal-ids 18507 --history-days 365 --include-related-contact-deals --include-internal-context
-.\venv\Scripts\python.exe .\bitrix\leads\run_leads_customer_path_pipeline.py --lead-ids 227661 --history-days 365 --include-related-contact-deals --include-internal-context
-```
-
-Без `--include-related-contact-deals` pipeline сохраняет старый режим одиночной карточки. С флагом строится `*_customer_history_bundle.json`, где есть root entity, contact resolution, related deals, deals by `LEAD_ID`, related duplicate leads, activities by entity, unified timeline и diagnostics. При `--include-internal-context` дополнительно проверяются timeline comments и привязанные внутренние Bitrix IM-чаты.
-
-Ключевые файлы в workspace:
-
-- `history/*_customer_path.md` — аудитный человекочитаемый контекст;
-- `raw/*_context.json` — старый raw context root-сущности;
-- `raw/*_customer_history_bundle.json` — полный raw context клиента;
-- `history/deal_<id>_llm_context.md` — compact context для deal LLM, если построен.
-
-### D) Audio And Transcripts
-
-Автоскачивание аудио встроено в lead/deal pipelines и отдельно доступно через missing-only downloader-скрипты. По умолчанию они не перекачивают уже успешно скачанные локальные файлы; для принудительной перекачки используется `--redownload`.
-
-После успешного download/manifest duration измеряется через `ffprobe` (`openai_api/audio/short_call.py`). Звонки `< 20 сек` помечаются как `short_no_answer` и пропускаются оркестратором транскрибации в `run_rop_assistant.py`.
-
-```powershell
-.\venv\Scripts\python.exe .\bitrix\deals\download_deals_call_audio.py --deal-ids 18507
-.\venv\Scripts\python.exe .\bitrix\leads\download_leads_call_audio.py --lead-ids 227661
-```
-
-Ручная транскрибация локального аудио сохраняет transcript bundle в workspace `transcripts/`.
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\audio\local_file_transcribe.py --deal-id 18507 --audio "C:\path\call.mp3" --activity-id 123
-```
-
-Для лида используется тот же CLI с `--lead-id`. Внешние зависимости: `ffmpeg` и `ffprobe`.
-
-### E) LLM Analysis
-
-Штатно запускать через change detection, чтобы не тратить LLM без смысловых изменений:
-
-```powershell
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_deal_if_changed.py --deal-id 18507
-.\venv\Scripts\python.exe .\openai_api\llm\analyze_lead_if_changed.py --lead-id 227661 --transcript none
-```
-
-Прямые `analyze_deal.py` / `analyze_lead.py` без `--allow-direct-llm` заблокированы, но `--dry-run` можно использовать для проверки prompt без вызова OpenAI.
-
-Основные LLM входы:
-
-- deal: `history/deal_<id>_llm_context.md`, fallback на `history/deal_<id>_customer_path.md`, transcript, OKF, CRM stage policy;
-- lead: `history/lead_<id>_customer_path.md`, optional transcript, OKF;
-- если full customer history включен, prompt должен учитывать связанные сделки/дубль-лиды и не трактовать тишину в root-карточке как отсутствие работы.
-- для converted lead штатный путь анализа — deal prompt/report, потому что управленческий разбор должен видеть движение после конвертации.
-
-Основные LLM выходы:
-
-- `analysis/*_request_prompt.txt`;
-- `analysis/*_analysis.json`;
-- `analysis/*_rop_report.md`;
-- `analysis/*_raw_model_output.txt`.
-
-Перед сохранением итогового отчёта JSON проходит нормализацию и валидацию: длинные списки, для которых контракт задаёт максимум, ужимаются до лимита, а факт изменения пишется в `model_metadata.normalization_changes`. Сырой ответ модели всё равно сохраняется в `analysis/*_raw_model_output.txt`.
-
-Полный lead-контракт квалификации:
-
-1. `qualification_assessment.bant` содержит четыре независимых критерия `budget`, `authority`, `need`, `timeframe`. Каждый критерий возвращает заметное название, статус, краткий вывод, evidence, недостающие факты и один вопрос/действие. Lead-статусы: `confirmed|not_confirmed|negative|unknown`; отсутствие информации не является `negative`.
-2. `timeframe.purchase_window` нормализует горизонт в `up_to_60_days|days_61_to_89|months_3_to_12|over_12_months|unknown`. Ровно три месяца относится к `months_3_to_12`. Внутри `timeframe` отдельно фиксируются `decision_timing` — когда клиент принимает решение — и `need_or_launch_timing` — когда требуется оборудование или запуск; для каждого срока хранится собственный статус подтверждения. Следующее действие планируется по сроку решения, а не автоматически по сроку потребности. Эти два срока разделены и в lead-, и в deal-контракте.
-3. `solution_fit` и `commercial_fit` не входят в BANT: нехватка технических данных означает `needs_technical_data`, а бюджетный стоп-фактор допустим только для явно названного бюджета нового оборудования ниже 1 000 000 ₽.
-4. `lead_category.value` содержит `A|B|C|D|E|unknown`, объяснение, BANT/технические/бюджетные факторы, недостающие сведения и следующий шаг. `lead_state.qualification` остаётся обязательным legacy-дублем того же значения.
-5. `lead_route` отдельно фиксирует текущий и рекомендуемый маршрут, статус `allowed|violation|needs_clarification|unknown`, evidence и контролируемый возврат. `ordinary_deal` разрешён только при полном BANT; `op2` — ровно при одном `not_confirmed|unknown` без `negative`. Для C `controlled_return_status=confirmed_in_crm` требует существующую CRM-дату и evidence. Если действия в CRM нет, категория остаётся C, `controlled_return_status=missing_in_crm`, `controlled_return_date=null`, маршрут становится `violation`, а `recommended_return_date` содержит только предлагаемую дату будущего действия.
-6. `loss_diagnosis` независимо оценивает качество лида, обработки, дозвона, следующего шага и маршрута. При состоявшемся контакте `call_attempt_quality=not_applicable` является валидным состоянием; это не пропуск проверки.
-7. Для нового LLM-ответа расширенный lead-контракт обязателен. `allow_legacy_qualification_assessment` применяется только при чтении старых сохранённых результатов и материализует безопасный `unknown` fallback; новый анализ не может использовать этот обход.
-
-Deal-контракт сохраняет общий `qualification_assessment.bant|solution_fit|commercial_fit`, но не содержит и не вычисляет `lead_category` или `lead_route`; управленческими сущностями сделки остаются `deal_mode`, `priority_recommendation`, `payment_blocker`, `closed_deal_review` и другие deal-блоки.
-
-### F) Local UI And API Adapter
-
-Локальный экран РОПа поверх текущего backend/CLI:
-
-```powershell
-.\venv\Scripts\python.exe -m uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
-cd frontend
-npm run dev
-```
-
-UI: `http://127.0.0.1:5173` (Vite proxy `/api` → API).
-
-Основные API:
-
-- `GET /api/health`
-- `GET /api/pipelines` — справочник воронок/этапов из `crm_pipeline_map.json`
-- `GET|PUT /api/candidate-filters` — сохранённый фильтр кандидатов в SQLite, включая режим очереди `active|reviewed|all`
-- `GET|POST /api/candidates` / `candidates/search` — Bitrix list + scoring без LLM; без выбранных этапов (и воронок для сделок) возвращает `ready=false`; применяет локальный `candidate_review_state`
-- `GET|POST|PUT|DELETE /api/analysis-profiles` — именованные версионируемые настройки периода, lead/deal scope, сигналов и лимитов; последний выбранный профиль хранится в SQLite
-- `POST /api/analysis-profiles/{id}/preview` — read-only Bitrix/SQLite preview без LLM: принимает выбранный preset периода и, для `custom`, включительные `date_from`/`date_to`; возвращает фактические московские границы, journeys, сигналы, lifecycle, workset и предварительную стоимость
-- `POST /api/daily-summaries`, `GET /api/daily-summaries[/{id}]` — immutable snapshot выбранного preview, история сводок и сохранённые per-item status/progress/result/cost
-- `POST /api/daily-summaries/{id}/start` — жёсткий платный gate: переиспользование сохранённых fresh/date_modified_only reports и запуск lead/deal jobs только для подтверждённых missing/changed/failed в пределах дневного/разового лимита
-- `POST /api/analyze` — фоновый job с опциями как в CLI; `force_llm=true` требует `confirm_paid=true`; auto = сначала lead, потом deal
-- `GET /api/jobs/{job_id}` — live stages/progress
-- `GET /api/reports`, `GET /api/reports/{id}` — история UI-отчётов; список остаётся лёгким, а detail возвращает `model_context` с фактической CRM-историей и выбранным транскриптом, без prompt/OKF-правил
-- `GET /api/reports/{id}/markdown` — полный markdown по запросу
-- `GET /api/review/{share_token}` — сохранённый lead-отчёт для тестового просмотра заказчиком; только read-only данные выбранной карточки
-- `POST /api/reports/{id}/rop-decision`, `POST /api/reports/{id}/outcome`
-- `GET|PUT /api/leads/{lead_id}/workflow` — локальный lead-workflow: единый редактируемый документ разбора РОПа с тремя обращениями к клиенту, отдельная SMART-задача, ручные отметки первых двух шагов и постановка/снятие контроля через `candidate_review_state`; исходные части разбора сохраняются для совместимости, но UI редактирует и копирует цельное поле `manager_full_review_text`; без записи в Bitrix и без финального статуса лида
-
-UI экраны: ручная ежедневная сводка с профилями и preview, legacy-кандидаты, ручной запуск, прогресс, отчёт из текущего analysis JSON, история, решение/исход РОПа. В сводке карточки визуально разделяются на `Новые случаи` и `Накопившиеся и вернувшиеся в контроль`; обе группы остаются видимыми и в пустом состоянии. Lead-карточка открывается поверх экрана: в её закреплённой шапке доступны стадия CRM и действия с материалами. Под шапкой идут три кратких блока `Что за лид`, `Текущая ситуация` и `Последний контакт`; длинные тексты, включая BANT-выводы и action-тексты, раскрываются через `Показать полностью` / `Свернуть`. Затем идут BANT-микродашборд из четырёх самостоятельных критериев, отдельные `Категория лида` и маршрут, после них — трёхшаговый workflow `разобрать → поручить → поставить на контроль`. Первый шаг сохраняет отдельные карточки сильных и слабых сторон, а справа показывает одну рамку `Готовый разбор для менеджера`: комментарий РОПа и три обращения к клиенту идут единым форматированным документом с заголовками, кавычками и разделителями. Весь документ редактируется одним полем и копируется одной кнопкой; вложенных карточек и отдельных действий у вариантов нет. Второй шаг содержит отдельную редактируемую SMART-задачу для ручного создания; третий — одну stateful-кнопку `Поставить на контроль` / `Снять с контроля`, использующую срок задачи. Финального статуса и lead-only действия `Не требует внимания` нет. Для старых отчётов комментарий РОПа безопасно собирается из подтверждённых данных анализа, а три обращения берутся из прежнего `manager_action_block`; повторный LLM-анализ не требуется. При открытии нового отчёта того же лида тексты workflow обновляются из нового analysis JSON, первые два шага возвращаются в состояние проверки, а действующий контроль сохраняется. В материалах доступна техническая вкладка с сохранёнными фактическими history/transcript inputs анализа и очищенным техническим snapshot; старые отчёты об отсутствии этого снимка сообщают явно. Причины внимания, качество обработки и остальные рекомендации идут ниже. Для C отдельно показываются статус возврата, существующая CRM-дата и рекомендуемая дата. В deal-карточке lead-интерфейс не создаётся, а `Контроль РОПа` выводится первым. Этот блок показывает проверку, основание, поручение менеджеру, ожидаемый CRM-факт, срок и критерий выполнения. `api/jobs.py` и `api/app.py` передают полный analysis JSON без параллельной схемы, а в summary дополнительно публикуют категорию и маршрут лида, оба срока timeframe и статус контролируемого возврата; frontend старого отчёта использует fallback на `lead_state.qualification` и безопасно скрывает отсутствующие новые блоки. Preview показывает весь список, точные счётчики и ограниченный workset; пользователь может очистить выбор или выбрать карточки до доступного лимита. После старта каждая карточка в том же окне показывает текущий этап, результат либо ошибку без перехода на другой экран; активный этап и общий статус запуска имеют spinner, общий блок показывает `готово N из M`, а финал меняется на явное успешное или ошибочное состояние. Fresh/date_modified_only карточки сразу получают последний сохранённый отчёт. Очередь кандидатов имеет режимы `На проверку`, `Проверенные РОПом` и `Все`; решение `Закрытие обосновано` скрывает сущность до значимого изменения, а lead-контроль использует `snoozed` и дату возврата. Ручной запуск принимает ID и ссылки Bitrix; для распознанной ссылки тип сущности выбирается автоматически.
-
-Для lead-карточки действует исключение управляемого отложенного спроса: при `confirmed_correct` + категория `C` + `missing_in_crm` первый шаг не содержит клиентских обращений, но второй и третий шаги активны для ручного создания CRM-задачи возврата и контроля её появления. Обычный `confirmed_correct` без этого нарушения по-прежнему завершает workflow после проверки закрытия.
-
-### G) Candidates Scoring
-
-Основной pre-LLM слой ручной сводки (`api/candidates.py`):
-
-```text
-analysis_profile + Moscow period -> live CRM source/status resolution + crm_pipeline_map stages
--> fresh leads + configured deal portfolio + activities
--> lead-to-deal journey deduplication
--> deterministic signals + analysis freshness + lifecycle
--> priority ordering -> highlighted workset + visible overflow + paid capacity preview
-```
-
-Default profile использует период `today_and_previous_workday` по Москве. В понедельник он выбирает пятницу и понедельник, со вторника по пятницу — предыдущий и текущий день, в субботу/воскресенье — пятницу; weekend-строки внутри широкого CRM-окна дополнительно отфильтровываются. Профиль исключает DMP/DMP1 только для лидов, сохраняет входящие звонки, выбирает настроенные deal pipelines/stages и выделяет workset до 15 карточек. Сигналы включают просроченную задачу, сомнительное закрытие, негативный свежий лид, отсутствие датированного следующего шага, post-proposal/payment control и мягкий `call_method_gap`. Это triage до LLM, не замена analysis JSON. Legacy saved-filter scorer остаётся отдельным совместимым маршрутом.
-
-### H) Compact Attention-Delta Shadow
-
-Это отдельная ручная проверка компактного JSON-контракта, а не второй штатный pipeline. Benchmark runner и UI получают входы только из `input_files`, записанных полным анализом; до платного запроса выполняется локальный preflight. Для benchmark API-вызов требует `--allow-api`, а legacy paid-run — отдельное явное подтверждение.
-
-```text
-full analysis envelope
--> load recorded history/transcript/diagnostics/stage policy
--> compact prompt (static core + entity pack)
--> Structured Outputs
--> deterministic playbook normalization/materialization
--> contract + evidence coverage
--> compact_safe | full_fallback_recommended
-```
-
-В UI доступны read-only review, запуск одного compact job для сущности, polling статуса, раскрытие исходного evidence и один feedback на run. Run хранится в SQLite, привязан к hash фактически поданных inputs; `is_current=false` означает, что исходный контекст с тех пор изменился. Compact job не делает Bitrix-вызовов, но может вызвать OpenAI после успешного preflight. Ошибка или coverage failure сохраняются, автоматически не перезапускаются и не меняют legacy report.
-
-## 6) Where To Change Code By Task Type
-
-- Новый Bitrix-метод или изменение REST-обработки: `bitrix/client.py` и конкретный `1_fetch_*_context.py`.
-- Изменение верхнего CLI, выбора lead/deal, handoff converted lead в сделку, включения transcribe/analyze, skip short calls: `run_rop_assistant.py`.
-- Изменение обзорной выгрузки свежих лидов по этапам/датам/источникам: `export_recent_leads_summary.py`.
-- Изменение полной истории клиента, fallback по телефону/email, duplicate leads, поиск сделок по `LEAD_ID`, diagnostics или разделения событий: `bitrix/customer_history.py`.
-- Изменение поиска/чтения внутренних Bitrix IM-чатов и преобразования сообщений в `internal_context`: `bitrix/internal_im_chat.py`.
-- Изменение диагностики полноты контекста, `manual_actions.md`, ссылок Bitrix для ручного добора звонков/сделок: `bitrix/context_diagnostics.py`.
-- Изменение Markdown полной истории клиента: `bitrix/customer_history_report.py`.
-- Изменение CLI полного customer history: `bitrix/deals/run_deals_customer_path_pipeline.py`, `bitrix/leads/run_leads_customer_path_pipeline.py`, `1_fetch_*_context.py`.
-- Изменение состава raw bundle по сделкам: `bitrix/deals/1_fetch_deals_context.py`.
-- Изменение состава raw bundle по лидам: `bitrix/leads/1_fetch_leads_context.py`.
-- Изменение Markdown-истории сделки: `bitrix/deals/2_build_deals_customer_path_report.py`.
-- Изменение Markdown-истории лида: `bitrix/leads/2_build_leads_customer_path_report.py`.
-- Изменение compact LLM context сделки, включая чтение `customer_history_bundle`: `bitrix/deals/4_build_deals_llm_context.py`.
-- Изменение скачивания аудио Bitrix, manifest/missing-only и duration enrichment: `bitrix/deals/download_deals_call_audio.py`, `bitrix/leads/download_leads_call_audio.py`, `openai_api/audio/short_call.py`.
-- Изменение папок, имён файлов и workspace: `bitrix/workspace.py` плюс `3_prepare_*_workspace.py`.
-- Изменение транскрибации, chunking, `ffmpeg`: `openai_api/audio/transcribe_core.py`.
-- Изменение CLI выбора аудио и сохранения transcript bundle: `openai_api/audio/local_file_transcribe.py`.
-- Изменение модели/лимитов/стоимости анализа: `.env`, `.env.example`, `openai_api/config.py`.
-- Изменение Responses API reasoning/structured output или поддержки модели: `openai_api/llm/llm_client.py`, `openai_api/pricing.py`, `openai_api/config.py`.
-- Изменение публичных ссылок на лиды/сделки Bitrix: `BITRIX_PORTAL_URL` и `openai_api/bitrix_links.py`.
-- Изменение тарифов моделей и формулы стоимости: `openai_api/pricing.py`.
-- Изменение вызова OpenAI Responses API и JSON-парсинга: `openai_api/llm/llm_client.py`.
-- Изменение проверки обязательных полей, запрещённых плейсхолдеров и нормализации LLM JSON перед валидацией: `openai_api/llm/validation.py`.
-- Изменение структуры deal-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_deal.py`.
-- Изменение классификации закрытых/провальных стадий сделки: `openai_api/change_detection/stage_policy.py`.
-- Изменение структуры lead-анализа, правил промпта или Markdown-отчёта: `openai_api/llm/analyze_lead.py`.
-- Изменение mini recommendation, повторного использования последнего поручения РОПа менеджеру или сохранённого клиентского текста: `openai_api/change_detection/decision_engine.py`.
-- Изменение приоритетного набора OKF-файлов: `knowledge_files()` в `openai_api/llm/analyze_deal.py`.
-- Изменение правил клиента ПрактикМ: файлы в `knowledge/clients/praktikm/`.
-- Изменение FastAPI routes / CORS / report endpoints: `api/app.py`.
-- Изменение analyze job, auto lead→deal resolve, progress stages: `api/jobs.py`.
-- Изменение candidates scoring / фильтров / приоритетов и применения review state: `api/candidates.py`.
-- Изменение analysis profiles, Moscow period, lead/deal scope, journey deduplication, сигналов, lifecycle, workset или cost preview: `api/candidates.py`, `storage/rop_db.py`, `api/app.py`.
-- Изменение immutable daily summary snapshot, платных лимитов или запуска сводки: `storage/rop_db.py`, `api/app.py`, `api/jobs.py`.
-- Изменение состояния «проверено РОПом», lead-кнопки постановки/снятия контроля, отложенного контроля или возврата в очередь: `storage/rop_db.py` (`candidate_review_state`, `lead_workflow_state`) и `api/app.py`.
-- Изменение UI экранов, copy-блока менеджеру, истории, решений РОПа и режима очереди: `frontend/src/App.tsx`, `frontend/src/api.ts`, стили `frontend/src/index.css`.
-- Изменение распознавания ID и ссылок Bitrix в ручном запуске: `parseManualInput()` в `frontend/src/App.tsx`.
-- Изменение UI feedback, сохранённого фактического LLM-контекста или saved candidate filter tables: `storage/rop_db.py` (`ui_reports.model_context_json`, `rop_decisions`, `outcomes`, `ui_candidate_filters`) и сериализация completed analysis в `api/jobs.py`.
-- Изменение compact JSON-контракта, prompt или детерминированных playbooks: `openai_api/llm/attention_delta.py`, `openai_api/llm/deal_attention_playbooks.py`, `openai_api/llm/lead_attention_playbooks.py`, `openai_api/llm/lead_playbook_resolver.py`.
-- Изменение compact knowledge packs или их воспроизводимого выбора: `knowledge/clients/praktikm/attention_delta_*.md`, `openai_api/llm/attention_delta_knowledge.py`.
-- Изменение диагностики/валидации compact evidence: `openai_api/llm/context_completeness.py`, `openai_api/llm/evidence_coverage.py`.
-- Изменение benchmark/shadow preflight, telemetry или ручного сравнения: `benchmarks/run_attention_delta_shadow.py`, `benchmarks/compare_attention_delta.py`, `benchmarks/replay_attention_delta_postprocessing.py`.
-- Изменение API/UI compact review или фонового compact job: `api/compact_shadow.py`, `api/app.py`, `frontend/src/App.tsx`, `frontend/src/api.ts`.
-- Изменение хранения compact run/feedback: `storage/rop_db.py` (`compact_shadow_runs`, `compact_shadow_feedback`).
-- Обновление краткого запуска: `README.md`.
-- Обновление ручной инструкции проверки: `Docs/ручная проверка проекта.md`.
-- Обновление инструкции по полной истории клиента: `Docs/customer_history_runbook.md`.
-
-## 7) Env Groups (Quick)
-
-Bitrix:
-
-- `BITRIX_WEBHOOK_URL`
-- `BITRIX_PORTAL_URL`
-
-OpenAI:
-
-- `OPENAI_API_KEY`
-- `TRANSCRIPTION_MODEL`
-- `ANALYSIS_MODEL`
-- `ANALYSIS_REASONING_EFFORT`
-- `ANALYSIS_MAX_OUTPUT_TOKENS`
-- `ATTENTION_DELTA_MAX_OUTPUT_TOKENS`
-- `USD_RUB_RATE`
-
-ROP assistant state:
-
-- `ROP_DB_PATH`
-
-Логирование payload preview:
-
-- `OPENAI_LOG_PREVIEW_LINES`
-- `OPENAI_LOG_PREVIEW_CHARS`
-
-Важно:
-
-- для настроенной модели и длинных отчётов может понадобиться увеличить `ANALYSIS_MAX_OUTPUT_TOKENS`;
-- fallback legacy-модели задаёт `openai_api/config.py` (сейчас `gpt-5.4-mini`), но реальная модель определяется `ANALYSIS_MODEL` из `.env`; в `pricing.py` также описаны тарифы `gpt-5.6-terra` и `gpt-5.6-luna`;
-- `ATTENTION_DELTA_MAX_OUTPUT_TOKENS` относится только к compact shadow и включает reasoning + видимый JSON; не использовать его как лимит legacy report;
-- цены моделей зашиты в `openai_api/pricing.py`, а курс рубля берётся из `USD_RUB_RATE`;
-- UI/API используют тот же `.env` и существующий `venv`.
-
-## 8) Encoding / Text Policy
-
-- Текстовые файлы проекта ожидаются в `UTF-8`.
-- Кириллица используется намеренно: документы, отчёты, промпты, OKF-база, логи и сообщения.
-- Не заменять русский текст транслитом или Unicode escape без крайней необходимости.
-- Если терминал показывает битую кириллицу, не копировать её обратно в исходники без проверки файла.
-- Markdown-отчёты и JSON сохранять с `ensure_ascii=False`, чтобы русский текст оставался читаемым.
-- Исключение для межпроцессных progress-событий: JSON после `@@ROP_PROGRESS@@` намеренно ASCII-safe, а после разбора снова является обычным Unicode-текстом.
-- Analysis profiles проходят мягкое исправление известного UTF-8/CP1251 mojibake на границе SQLite; корректная кириллица не перекодируется повторно.
-
-## 9) Known Pitfalls
-
-1. Перед анализом всегда готовить workspace через lead/deal pipeline; `analyze_*` ожидает файлы в `reports/rop_assistant/...`.
-2. `reports/` содержит чувствительные рабочие артефакты, а не исходный код; UI не должен монтировать всю папку статикой.
-3. `latest` transcript выбирается по mtime; если звонков несколько, передавать конкретный `--transcript` или использовать `--transcript all`.
-4. Deal и lead похожи по pipeline, но имеют разные JSON contracts, prompts и renderer requirements.
-5. OKF-файлы — правила оценки, а не evidence фактов сделки/лида.
-6. `customer_history_bundle.related_leads` без контакта означает найденную продолженную историю по телефону/email, но не найденный контакт.
-7. `fallback_match_used=false` при `fallback_related_leads_used=true` — нормальная ситуация: дубль-лид найден, contact link отсутствует.
-8. `crm.timeline.comment.list` по contact может вернуть `Access denied`, даже если timeline по сделкам доступен; это права webhook/user, не ошибка renderer.
-9. `crm_pipeline_map.json` — локальная выгрузка CRM-карты; продуктовую классификацию закрытых стадий менять в `stage_policy.py`. UI-фильтр кандидатов и имена стадий читаются из `deal_pipelines` / `lead_pipeline` этой карты (реальные Bitrix STATUS_ID / STAGE_ID), а не из семантики `stage_policy`.
-10. Если JSON модели обрезан, первым делом проверять `ANALYSIS_MAX_OUTPUT_TOKENS`; JSON mode не заменяет бизнес-валидацию.
-11. Если модель вернула больше evidence/list items, чем разрешает контракт, это не должно валить pipeline: sanitizer ужимает списки перед валидацией, но prompt всё равно должен явно задавать лимиты.
-12. `ffmpeg`/`ffprobe` должны быть в `PATH`; без `ffprobe` short-call filter не сможет надёжно измерить duration.
-13. У converted lead без `CONTACT_ID` сделка может быть найдена только через `LEAD_ID`; не считать отсутствие contact link доказательством отсутствия сделки.
-14. По сделке, созданной из лида, звонки могут физически лежать в source lead; deal context/diagnostics должны сохранять source entity и Bitrix-ссылку на исходную активность.
-15. Profile preview может давать много high-карточек при широком deal scope: это triage, его нужно калибровать по живым примерам, а не принимать за LLM-вердикт. Ограничение workset выделяет приоритет, но не скрывает overflow.
-16. Analyze job из UI может быть долгим: это полный CLI-пайплайн со скачиванием и возможной транскрибацией аудио. Ручной запуск отслеживается через `/api/jobs/{id}`, а ежедневная сводка — через `/api/daily-summaries/{id}` с per-item прогрессом прямо в карточках. Spinner является только визуальным признаком живого polling-процесса; фактический прогресс задают сохранённые статусы карточек и счётчик `готово N из M`, а не оценочный процент времени.
-17. Ссылка в ручном запуске должна содержать путь `/crm/lead/details/<id>/` или `/crm/deal/details/<id>/`; смешанные ссылки на лиды и сделки UI отклоняет до старта job.
-18. `candidate_review_state` применяется только к конкретной сущности. Нельзя скрывать всех кандидатов этапа после одного подтверждённого закрытия; перенос решения на похожие сущности требует отдельного накопленного feedback-паттерна.
-19. Текущий candidates scorer видит изменение стадии/воронки/суммы напрямую. Новый звонок, письмо, комментарий или внутренний чат после решения РОПа требуют semantic diff полного контекста; пока они не должны автоматически возвращать сущность только по `DATE_MODIFY`.
-20. Compact review не является доказательством готовности заменить legacy analysis: он доступен лишь при сохранённых full-analysis inputs, а `full_fallback_recommended`, error или устаревший snapshot требуют вернуться к полному контуру.
-21. Запуск compact run из UI платный и ручной; API preflight не гарантирует достаточность фактов, а только проверяет наличие зафиксированных входов. Не добавлять автоматические retry или batch-вызовы без отдельного продуктового решения.
-22. `benchmarks/local/` и `benchmarks/results/` намеренно игнорируются Git. В них допустимы только локальные чувствительные артефакты; в tracked manifest нельзя добавлять реальные CRM-выгрузки, транскрипты, телефоны, имена или отчёты.
-23. Не связывать категорию с количеством подтверждённых критериев или процентом BANT. Категория определяется совместно BANT, горизонтом, технической применимостью и доказанным бюджетным/контактным основанием.
-24. `not_confirmed`, `negative` и `unknown` имеют разные значения: неподтверждённость и нехватка данных не доказывают отказ. Для E по недозвону нужен `call_attempt_recommendation.cycle_status=completed`; обычный или незавершённый цикл остаётся `unknown`.
-25. Реальные `analysis/*.json`, Markdown, raw model output, аудио и транскрипты остаются в игнорируемом `reports/`; успешный локальный прогон не должен добавлять эти артефакты в Git.
-26. Transport retry не исправляет постоянные `4xx`, ошибки контракта и бизнес-валидации. Для последней предусмотрен отдельный единственный corrective LLM-повтор; бесконечно перезапускать платную карточку автоматически нельзя.
-27. API хранит фоновые subprocess jobs в памяти. После перезапуска они не возобновляются автоматически: SQLite-reconciliation помечает осиротевшие карточки ошибкой, после чего повторный запуск требует явного действия пользователя.
-28. Строки progress transport должны оставаться ASCII-safe: это защищает долгий Windows subprocess от падения на несовпадении кодировок консоли и не разрешает сохранять остальной русский текст в escape-виде.
-
-## 10) Current Gaps
-
-- Нет Telegram Bot API и автоматической отправки отчётов/поручений менеджеру.
-- Нет auth/multi-user кабинета: UI локальный, только localhost.
-- Daily candidate engine учитывает задачи, следующий шаг и детерминированные сигналы, но счета/оплаты пока не загружаются как отдельный надёжный CRM-источник; payment-сигнал зависит от доступных полей/активностей.
-- SQLite-контур включает profiles, candidate lifecycle, daily summary snapshots, per-item progress/final status/actual cost и feedback, но нет аналитики качества рекомендаций, полноценного semantic diff всех CRM-активностей и портфельной `deal_memory` / `lead_memory`.
-- Compact attention-delta работает только как isolated shadow/review: он не включён в штатный CLI/change-detection flow и не может заменить legacy report без отдельной валидации и продуктового решения.
-- Нет автоматического отбора безопасных compact cases, batch-режима и автоматического принятия compact-результата; coverage failure ведёт только к `full_fallback_recommended`.
-- Нет Pydantic-схем и нормального тестового набора для raw parsing, markdown rendering и report rendering.
-- Автоматическое скачивание аудио и contact timeline зависят от прав Bitrix webhook/user; часть сценариев остается ручной.
-- Комментарии к задачам не выгружаются отдельным API-методом.
-- Company fallback пока только diagnostic candidate, без автосклейки.
-- Wazzup-переписка не выгружается через текущий Bitrix REST-контур; отдельная интеграция потребует Wazzup API и связку по телефону клиента.
+## Source of Truth
+
+| Область | Источник истины |
+| --- | --- |
+| Границы проекта и локальные пути | `setup.py`, `.env.example`, `.gitignore` |
+| HTTP-входы и сборка ответов | `api/app.py` |
+| Фоновые задания и запуск CLI | `api/jobs.py`; для compact — `api/compact_shadow.py` |
+| Кандидаты, профили и daily summary | `api/candidates.py`, `storage/rop_db.py` |
+| Локальное состояние SQLite | `storage/rop_db.py` |
+| Bitrix REST и customer history | `bitrix/client.py`, `bitrix/customer_history.py` |
+| Подготовка lead/deal workspaces | `bitrix/leads/*`, `bitrix/deals/*`, `bitrix/workspace.py`, `bitrix/context_diagnostics.py` |
+| Транскрибация | `openai_api/audio/*` |
+| Полный LLM-анализ и его рендеринг | `openai_api/llm/analyze_lead.py`, `openai_api/llm/analyze_deal.py` |
+| LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py` |
+| Change detection | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py` |
+| Семантика стадий | `openai_api/change_detection/stage_policy.py` |
+| Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
+| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/api.ts` |
+| Compact attention-delta shadow | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py`, `benchmarks/*` |
+
+`README.md` описывает только быстрый запуск. Операционные детали принадлежат runbook-файлам и не должны дублироваться здесь.
+
+## Critical Invariants
+
+- Код и конфигурация важнее документации. Не придумывай отсутствующие интеграции, таблицы, гарантии или тесты.
+- Bitrix-контур только читает CRM. `BitrixReadOnlyClient` допускает HTTP POST как транспорт REST-вызова, но не должен получать CRM write-методы.
+- `.env`, webhook, API-ключи, персональные CRM-данные, аудио, транскрипты и содержимое `reports/` — чувствительные локальные данные. Их нельзя печатать, коммитить или публиковать.
+- Все сохраняемые тексты — UTF-8; JSON с кириллицей сохраняется с `ensure_ascii=False`. ASCII-safe допустим только для строки transport-progress до её разбора.
+- Lead и deal — разные контракты: у них отдельные context builders, prompts, validators и renderers. Общая механика не разрешает смешивать поля или переиспользовать renderer одного контура в другом.
+- Lead с подтверждённой конверсией переводится в deal-flow. Отсутствующий `CONTACT_ID` не доказывает отсутствие связанной сделки.
+- CRM-запись о звонке, `COMPLETED=Y` или внутренний комментарий сами по себе не доказывают содержательный контакт с клиентом. Для лида это требует подходящего transcript/contact evidence; попытки, подтверждённый контакт и внутреннюю информацию хранить раздельно.
+- Полный Markdown-отчёт создаётся только после успешной бизнес-валидации JSON. OKF/knowledge задают правила оценки, но не являются фактами конкретной сущности.
+- Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
+- У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
+- Compact attention-delta — изолированный shadow/review. Ошибка, устаревший snapshot или неуспешное evidence coverage означают `full_fallback_recommended`, а не замену legacy report.
+
+## Основные контуры
+
+### 1. UI, API и CLI
+
+`frontend/src/App.tsx` — локальный интерфейс; `frontend/src/api.ts` — его HTTP-контракт. `api/app.py` валидирует запросы, читает/сохраняет локальное состояние и делегирует доменную работу специализированным модулям.
+
+`api/jobs.py` не дублирует Bitrix, transcription или LLM-логику: он запускает `run_rop_assistant.py`, читает его progress events и материализует готовые результаты в `ui_reports`. Состояние активных jobs находится в памяти процесса. SQLite хранит снимки и результаты daily-summary, но перезапуск API не возобновляет subprocess автоматически.
+
+`run_rop_assistant.py` — общий интерактивный/CLI orchestration layer. Он вызывает lead/deal preparation pipeline, затем при выбранных опциях транскрибацию пропущенных аудио и change-aware анализ. UI использует тот же путь через API jobs, а не отдельную бизнес-реализацию.
+
+### 2. Получение CRM-контекста
+
+`bitrix/client.py` централизует REST-вызовы, пагинацию и transient retry. `bitrix/customer_history.py` строит customer-history bundle для корневой сущности и связанных CRM-сущностей, включая нормализованные коммуникации и отдельно внутренний контекст.
+
+Lead и deal preparation scripts получают raw context, подготавливают workspace, диагностику полноты и LLM context. `bitrix/workspace.py` задаёт layout workspace. Локальные выгрузки, manifest, аудио и diagnostics остаются под `reports/`.
+
+### 3. Аудио и полный анализ
+
+`openai_api/audio/*` работает с уже найденными локальными файлами; короткие звонки/недозвоны исключаются до транскрибации, когда это можно установить. Transcript context включается в соответствующий lead/deal workspace.
+
+`analyze_lead.py` и `analyze_deal.py` формируют разные prompts, вызывают общий Responses API wrapper, нормализуют и валидируют JSON, затем записывают JSON, raw output и Markdown в workspace. `llm_client.py` считает usage; `pricing.py` формирует локальную оценку стоимости. Вызовы OpenAI и транскрибация требуют ключа и могут создавать стоимость.
+
+### 4. Change detection
+
+`snapshot.py` извлекает стабильный, компактный снимок CRM-фактов; длинные тексты в нём хэшируются. `decision_engine.py` выбирает первый полный анализ, полный анализ при значимом изменении, локальную mini-рекомендацию при детерминированном риске без изменения или пропуск без изменений. Не подменяй эту логику одной лишь `DATE_MODIFY` и не обходи её прямым LLM-вызовом.
+
+`stage_policy.py` определяет семантику стадий для решения. `crm_pipeline_map.json` — только локальная карта реальных Bitrix IDs и имён для UI/фильтров; изменения в ней не меняют бизнес-семантику closed stages.
+
+### 5. SQLite, кандидаты и daily summary
+
+`storage/rop_db.py` — единственный слой доступа к SQLite `reports/rop_assistant/rop_assistant.sqlite`. Он хранит change state, запуски и отчёты, решения и workflow лида, настройки/профили UI, candidate lifecycle, daily-summary и compact shadow runs/feedback. Миграции выполняются idempotently в `init_db()`; не добавляй обращения к таблицам мимо этого модуля.
+
+`api/candidates.py` читает Bitrix и локальное состояние, ранжирует кандидатов и строит preview профиля без LLM. `daily_summary_runs` сохраняет snapshot профиля и scope; оплачиваемая обработка начинается только после явного подтверждения пользователя. Journey/candidate lifecycle учитывает переход лида в сделку, но решение по одной сущности не должно скрывать остальные кандидаты воронки.
+
+### 6. Compact attention-delta
+
+Compact run доступен только для уже сохранённых full-analysis inputs. Он строит отдельный строгий schema/prompt, валидирует evidence IDs против ровно тех источников, что были в prompt, и сохраняет результат отдельно от legacy analysis. Запуск — явный и платный; автоматических batch/retry нет. `benchmarks/` служит для isolated replay/сравнения, а не для production-пайплайна; локальные cases и results игнорируются Git.
+
+## Границы lead и deal
+
+| Вопрос | Lead | Deal |
+| --- | --- | --- |
+| Workspace и pipeline | `bitrix/leads/*` | `bitrix/deals/*` |
+| Полный анализ | `analyze_lead.py` + lead validator | `analyze_deal.py` + deal validator |
+| Специальное состояние UI | `lead_workflow_state`, qualification и manager review | общие reports/decisions/outcomes и deal-specific analysis |
+| Смена сущности | конвертированный лид передаётся сделке | может включать source lead context |
+| Компактный сценарий | lead playbooks и contact-aware rules | deal playbooks и deal review rules |
+
+Не переносить lead workflow, BANT-контракт, manager/client текст или lead playbook в deal-контур без отдельного решения. Аналогично не переносить deal qualification/closed-deal правила в lead.
+
+## Where to change code
+
+| Задача | Первое место для проверки | Затронуть также, если меняется контракт |
+| --- | --- | --- |
+| Bitrix REST, pagination, retry | `bitrix/client.py` | callers и tests внешнего API |
+| Customer history, связанная сущность, контакт/внутренний контекст | `bitrix/customer_history.py` | конкретный lead/deal builder, diagnostics и UI metadata |
+| Workspace, raw context или audio manifest | соответствующий `bitrix/leads/*` или `bitrix/deals/*`, `bitrix/workspace.py` | `run_rop_assistant.py` только при изменении orchestration |
+| Транскрибация и short-call policy | `openai_api/audio/*` | diagnostics и tests транскриптов |
+| Prompt, JSON contract, validation или renderer | нужный `analyze_lead.py` либо `analyze_deal.py`, `validation.py` | второй контур проверить на несовместимость, но не менять автоматически |
+| Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py` | progress events и tests retry/validation |
+| Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
+| Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
+| Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx` |
+| Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
+| Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
+| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |
+
+## Интеграционные границы и данные
+
+- Bitrix webhook и `OPENAI_API_KEY` читаются из окружения. Не выводи их значение и не помещай в тестовые фикстуры.
+- `reports/` содержит локальные CRM exports, аудио, transcripts, analysis, Markdown и SQLite; это runtime data, не исходный код.
+- `crm_pipeline_map.json` также является локальной CRM-выгрузкой и не должен пополняться персональными данными вручную.
+- `knowledge/clients/*` может участвовать в prompt; knowledge определяет правила, а источники CRM/transcript — факты.
+- Для аудио нужны `ffmpeg`/`ffprobe` в `PATH`; их отсутствие — ограничение среды, а не повод угадать длительность звонка.
+
+## Known gaps and pitfalls
+
+- API CORS настроен для localhost; authentication и multi-user tenancy нет.
+- Неполные или недоступные Bitrix источники фиксируются в diagnostics. `Access denied` на конкретном REST-методе обычно отражает права webhook/user, а не renderer failure.
+- `latest` transcript выбирается по времени файла. При нескольких записях предпочитай явно заданный режим/список transcript, если задача требует определённого звонка.
+- `not_confirmed`, `unknown` и `negative` — разные состояния. Не превращай недостаток evidence в отказ клиента.
+- Прогресс job — наблюдение за subprocess, а не оценка процента времени. После рестарта API незавершённые daily items требуют явного повторного запуска.
+- Compact evidence coverage и fallback не являются доказательством готовности заменить legacy flow. Такое решение требует отдельной валидации и продуктового решения.
+- В проекте нет отдельной Pydantic-схемы для полного model output: его контракты реализованы в Python validation. Не объявляй строгую API-схему существующей, пока она не добавлена в код.
