@@ -30,6 +30,7 @@ from storage.rop_db import (
     default_analysis_profile,
     get_candidate_review_states,
     get_entity_state,
+    get_latest_ui_report,
     reconcile_candidate_cases,
 )
 
@@ -1058,6 +1059,8 @@ def candidate_freshness(
         return "missing"
     if str(state.get("last_analysis_status") or "").lower() in {"error", "failed"}:
         return "failed"
+    if not get_latest_ui_report(db_path, entity_type=entity_type, entity_id=entity_id):
+        return "missing"
     previous = state.get("snapshot") if isinstance(state.get("snapshot"), dict) else {}
     previous_entity = previous.get(entity_type) if isinstance(previous.get(entity_type), dict) else {}
     pairs = (

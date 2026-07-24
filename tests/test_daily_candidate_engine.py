@@ -18,8 +18,7 @@ from api.candidates import (
     profile_candidates_preview,
     profile_period_bounds,
 )
-from storage.rop_db import default_analysis_profile
-from storage.rop_db import upsert_entity_state
+from storage.rop_db import default_analysis_profile, save_ui_report, upsert_entity_state
 
 
 MSK = ZoneInfo("Europe/Moscow")
@@ -231,6 +230,8 @@ class DailyCandidateEngineTests(unittest.TestCase):
             )
             entity = {"ID": "8", "STAGE_ID": "C15:NEW", "CATEGORY_ID": "15", "OPPORTUNITY": "100", "DATE_MODIFY": "2026-07-16T10:00:00+03:00"}
             activities = [{"ID": "1", "COMPLETED": "N", "DEADLINE": "2026-07-20"}]
+            self.assertEqual(candidate_freshness("deal", entity, activities=activities, db_path=db), "missing")
+            save_ui_report(db, entity_type="deal", entity_id="8", report_json={"deal_state": {}})
             self.assertEqual(candidate_freshness("deal", entity, activities=activities, db_path=db), "date_modified_only")
             changed = [{"ID": "2", "COMPLETED": "N", "DEADLINE": "2026-07-21"}]
             self.assertEqual(candidate_freshness("deal", entity, activities=changed, db_path=db), "changed")
