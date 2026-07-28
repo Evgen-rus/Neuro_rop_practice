@@ -326,6 +326,142 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(compact_run_id) REFERENCES compact_shadow_runs(id)
             );
+
+            CREATE TABLE IF NOT EXISTS deal_control_scope (
+                scope_key TEXT NOT NULL PRIMARY KEY,
+                initial_deal_ids_json TEXT NOT NULL,
+                manager_ids_json TEXT NOT NULL,
+                pipeline_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_control_deals (
+                deal_id TEXT NOT NULL PRIMARY KEY,
+                source TEXT NOT NULL,
+                title TEXT,
+                manager_id TEXT,
+                manager_name TEXT,
+                stage_id TEXT,
+                stage_name TEXT,
+                pipeline_id TEXT,
+                amount TEXT,
+                currency_id TEXT,
+                created_at_crm TEXT,
+                modified_at_crm TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                probability INTEGER,
+                expected_payment_period TEXT,
+                next_control_at TEXT,
+                last_crm_sync_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_control_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                task_text TEXT NOT NULL,
+                touch_type TEXT,
+                expected_result TEXT,
+                due_at TEXT NOT NULL,
+                local_status TEXT NOT NULL DEFAULT 'active',
+                crm_execution_status TEXT NOT NULL DEFAULT 'not_reflected',
+                crm_match_activity_id TEXT,
+                crm_match_confidence TEXT,
+                crm_match_candidate_completed INTEGER,
+                crm_match_confirmed INTEGER NOT NULL DEFAULT 0,
+                business_result_status TEXT NOT NULL DEFAULT 'no_result',
+                business_result_note TEXT,
+                result_activity_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_control_tasks_deal_due
+                ON deal_control_tasks(deal_id, due_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_reschedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                previous_due_at TEXT NOT NULL,
+                next_due_at TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_crm_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                activity_id TEXT,
+                fact_kind TEXT NOT NULL,
+                summary TEXT,
+                occurred_at TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_crm_facts_unique
+                ON deal_control_task_crm_facts(task_id, activity_id, fact_kind);
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_guidance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                task_revision INTEGER NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                guidance_json TEXT NOT NULL,
+                model_meta_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_guidance_version
+                ON deal_control_task_guidance(task_id, task_revision, source_report_id);
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_baselines (
+                task_id INTEGER NOT NULL PRIMARY KEY,
+                deal_snapshot_json TEXT NOT NULL,
+                source_report_id INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                contact_status TEXT NOT NULL,
+                result_status TEXT NOT NULL,
+                result_note TEXT,
+                next_step_text TEXT,
+                next_step_at TEXT,
+                evidence_kind TEXT,
+                evidence_id TEXT,
+                source_role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_control_task_outcomes_task
+                ON deal_control_task_outcomes(task_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS deal_control_task_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_key TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(task_id) REFERENCES deal_control_tasks(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_events_key
+                ON deal_control_task_events(task_id, event_key)
+                WHERE event_key IS NOT NULL;
             """
         )
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
@@ -345,6 +481,16 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "daily_summary_items", "updated_at", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_message_options_json", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
+        _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
+        _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "deal_control_task_crm_facts", "contact_class", "TEXT NOT NULL DEFAULT 'unknown'")
+        _ensure_column(conn, "deal_control_task_crm_facts", "review_status", "TEXT NOT NULL DEFAULT 'candidate'")
+        _ensure_column(conn, "deal_control_task_crm_facts", "fact_key", "TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_crm_facts_key "
+            "ON deal_control_task_crm_facts(task_id, fact_key) WHERE fact_key IS NOT NULL"
+        )
 
         migration_id = "2026-07-22-reactivate-lead-no-attention"
         migration_applied = conn.execute(
@@ -2089,3 +2235,801 @@ def daily_paid_capacity_used(db_path: str | Path, *, day_prefix: str) -> int:
             (str(day_prefix),),
         ).fetchone()
     return int(row[0] or 0)
+
+
+# Deal control is separate from the lead workflow: it tracks local ROP tasks and
+# only observes the corresponding read-only CRM facts.
+DEAL_CONTROL_SCOPE_KEY = "active"
+
+
+def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["is_active"] = bool(value.get("is_active"))
+    return value
+
+
+def get_deal_control_scope(db_path: str | Path) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM deal_control_scope WHERE scope_key = ?", (DEAL_CONTROL_SCOPE_KEY,)).fetchone()
+    if row is None:
+        return {"initial_deal_ids": [], "manager_ids": [], "pipeline_id": "15", "configured": False}
+    value = dict(row)
+    return {
+        "initial_deal_ids": loads_json(value.get("initial_deal_ids_json"), []),
+        "manager_ids": loads_json(value.get("manager_ids_json"), []),
+        "pipeline_id": str(value.get("pipeline_id") or "15"),
+        "updated_at": value.get("updated_at"),
+        "configured": True,
+    }
+
+
+def save_deal_control_scope(
+    db_path: str | Path,
+    *,
+    initial_deal_ids: list[str],
+    manager_ids: list[str],
+    pipeline_id: str,
+) -> dict[str, Any]:
+    init_db(db_path)
+    deals = list(dict.fromkeys(str(value).strip() for value in initial_deal_ids if str(value).strip()))
+    managers = list(dict.fromkeys(str(value).strip() for value in manager_ids if str(value).strip()))
+    if not deals and not managers:
+        raise ValueError("Нужен хотя бы один ID сделки или ответственного")
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO deal_control_scope (scope_key, initial_deal_ids_json, manager_ids_json, pipeline_id, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(scope_key) DO UPDATE SET
+                initial_deal_ids_json = excluded.initial_deal_ids_json,
+                manager_ids_json = excluded.manager_ids_json,
+                pipeline_id = excluded.pipeline_id,
+                updated_at = excluded.updated_at
+            """,
+            (DEAL_CONTROL_SCOPE_KEY, dumps_json(deals), dumps_json(managers), str(pipeline_id).strip() or "15", utcish_now()),
+        )
+    return get_deal_control_scope(db_path)
+
+
+def upsert_deal_control_deal(db_path: str | Path, *, deal_id: str, source: str, title: str | None,
+                             manager_id: str | None, manager_name: str | None, stage_id: str | None,
+                             stage_name: str | None, pipeline_id: str | None, amount: str | None,
+                             currency_id: str | None, created_at_crm: str | None, modified_at_crm: str | None,
+                             is_active: bool) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO deal_control_deals (
+                deal_id, source, title, manager_id, manager_name, stage_id, stage_name, pipeline_id,
+                amount, currency_id, created_at_crm, modified_at_crm, is_active, last_crm_sync_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id) DO UPDATE SET
+                source = excluded.source, title = excluded.title, manager_id = excluded.manager_id,
+                manager_name = excluded.manager_name, stage_id = excluded.stage_id, stage_name = excluded.stage_name,
+                pipeline_id = excluded.pipeline_id, amount = excluded.amount, currency_id = excluded.currency_id,
+                created_at_crm = excluded.created_at_crm, modified_at_crm = excluded.modified_at_crm,
+                is_active = excluded.is_active, last_crm_sync_at = excluded.last_crm_sync_at, updated_at = excluded.updated_at
+            """,
+            (str(deal_id), source, title, manager_id, manager_name, stage_id, stage_name, pipeline_id, amount,
+             currency_id, created_at_crm, modified_at_crm, int(is_active), now, now, now),
+        )
+        row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+    result = _row_to_deal_control_deal(row)
+    assert result is not None
+    return result
+
+
+def update_deal_control_fields(db_path: str | Path, *, deal_id: str, probability: int | None,
+                               expected_payment_period: str | None, next_control_at: str | None) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        conn.execute(
+            "UPDATE deal_control_deals SET probability = ?, expected_payment_period = ?, next_control_at = ?, updated_at = ? WHERE deal_id = ?",
+            (probability, expected_payment_period, next_control_at, utcish_now(), str(deal_id)),
+        )
+        row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+    result = _row_to_deal_control_deal(row)
+    assert result is not None
+    return result
+
+
+def list_deal_control_deals(db_path: str | Path, *, active_only: bool = True) -> list[dict[str, Any]]:
+    init_db(db_path)
+    query = "SELECT * FROM deal_control_deals" + (" WHERE is_active = 1" if active_only else "")
+    query += " ORDER BY COALESCE(next_control_at, '9999-12-31') ASC, modified_at_crm DESC, deal_id DESC"
+    with connect(db_path) as conn:
+        rows = conn.execute(query).fetchall()
+    return [_row_to_deal_control_deal(row) for row in rows if row is not None]
+
+
+def set_deal_control_deal_active(db_path: str | Path, *, deal_id: str, is_active: bool) -> None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE deal_control_deals SET is_active = ?, updated_at = ? WHERE deal_id = ?",
+            (int(is_active), utcish_now(), str(deal_id)),
+        )
+
+
+def create_deal_control_task(db_path: str | Path, *, deal_id: str, task_text: str, touch_type: str | None,
+                             expected_result: str | None, due_at: str) -> dict[str, Any]:
+    init_db(db_path)
+    if not task_text.strip() or not due_at.strip():
+        raise ValueError("Укажите текст поручения и срок")
+    now = utcish_now()
+    with connect(db_path) as conn:
+        deal = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        cursor = conn.execute(
+            "INSERT INTO deal_control_tasks (deal_id, task_text, touch_type, expected_result, due_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(deal_id), task_text.strip(), touch_type, expected_result, due_at, now, now),
+        )
+        task_id = int(cursor.lastrowid)
+        report = conn.execute(
+            """
+            SELECT id FROM ui_reports
+            WHERE entity_type = 'deal' AND entity_id = ? AND report_json IS NOT NULL
+            ORDER BY id DESC LIMIT 1
+            """,
+            (str(deal_id),),
+        ).fetchone()
+        baseline = {
+            key: deal[key]
+            for key in (
+                "deal_id", "stage_id", "stage_name", "amount", "currency_id",
+                "manager_id", "modified_at_crm", "last_crm_sync_at",
+            )
+        }
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_baselines (task_id, deal_snapshot_json, source_report_id, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (task_id, dumps_json(baseline), int(report["id"]) if report is not None else None, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, event_key, payload_json, created_at)
+            VALUES (?, 'task_created', 'task_created', ?, ?)
+            """,
+            (task_id, dumps_json({"due_at": due_at, "expected_result": expected_result}), now),
+        )
+        row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+    result = dict(row) if row is not None else None
+    assert result is not None
+    return result
+
+
+def record_deal_control_task_event(
+    db_path: str | Path,
+    *,
+    task_id: int,
+    event_type: str,
+    event_key: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone() is None:
+            raise ValueError("Поручение не найдено")
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, event_key, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(task_id, event_key) WHERE event_key IS NOT NULL DO UPDATE SET
+                event_type = excluded.event_type,
+                payload_json = excluded.payload_json
+            """,
+            (int(task_id), event_type, event_key, dumps_json(payload) if payload is not None else None, utcish_now()),
+        )
+
+
+def save_deal_control_task_outcome(
+    db_path: str | Path,
+    *,
+    task_id: int,
+    contact_status: str,
+    result_status: str,
+    result_note: str | None,
+    next_step_text: str | None,
+    next_step_at: str | None,
+    evidence_kind: str | None,
+    evidence_id: str | None,
+    source_role: str,
+) -> dict[str, Any]:
+    allowed_contacts = {"not_attempted", "attempt_no_contact", "confirmed_contact", "unknown"}
+    allowed_results = {"pending", "achieved", "partial", "postponed", "refused", "not_applicable", "needs_rop_review"}
+    if contact_status not in allowed_contacts:
+        raise ValueError("Неизвестный статус контакта")
+    if result_status not in allowed_results:
+        raise ValueError("Неизвестный результат задачи")
+    if source_role not in {"manager", "rop"}:
+        raise ValueError("Неизвестный источник результата")
+    note = str(result_note or "").strip() or None
+    next_text = str(next_step_text or "").strip() or None
+    next_at = str(next_step_at or "").strip() or None
+    if result_status in {"achieved", "partial", "postponed"} and (not next_text or not next_at):
+        raise ValueError("Для этого результата укажите следующий шаг и его срок")
+    if result_status in {"refused", "not_applicable"} and not note:
+        raise ValueError("Укажите причину отказа или потери актуальности")
+    now = utcish_now()
+    with connect(db_path) as conn:
+        task = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        if task is None:
+            raise ValueError("Поручение не найдено")
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_control_task_outcomes (
+                task_id, contact_status, result_status, result_note, next_step_text, next_step_at,
+                evidence_kind, evidence_id, source_role, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(task_id), contact_status, result_status, note, next_text, next_at,
+                evidence_kind, evidence_id, source_role, now,
+            ),
+        )
+        legacy_status = {
+            "pending": "no_result",
+            "achieved": "next_step" if next_text else "client_fact",
+            "partial": "next_step" if next_text else "client_fact",
+            "postponed": "next_step",
+            "refused": "client_fact",
+            "not_applicable": "client_fact",
+            "needs_rop_review": "needs_rop_review",
+        }[result_status]
+        local_status = "active" if result_status in {"pending", "needs_rop_review"} else "completed"
+        conn.execute(
+            """
+            UPDATE deal_control_tasks
+            SET local_status = ?, business_result_status = ?, business_result_note = ?,
+                completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                local_status, legacy_status, note,
+                now if local_status == "completed" else task["completed_at"], now, int(task_id),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, payload_json, created_at)
+            VALUES (?, 'outcome_recorded', ?, ?)
+            """,
+            (
+                int(task_id),
+                dumps_json({
+                    "outcome_id": int(cursor.lastrowid),
+                    "contact_status": contact_status,
+                    "result_status": result_status,
+                    "has_next_step": bool(next_text and next_at),
+                    "source_role": source_role,
+                }),
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM deal_control_task_outcomes WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    result = dict(row) if row is not None else None
+    assert result is not None
+    return result
+
+
+def review_deal_control_task_crm_fact(
+    db_path: str | Path,
+    *,
+    task_id: int,
+    fact_id: int,
+    review_status: str,
+    contact_class: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    if review_status not in {"confirmed", "rejected"}:
+        raise ValueError("Неизвестный статус проверки CRM-факта")
+    allowed_classes = {"attempt", "confirmed_contact", "internal_information", "unknown", "deal_progress"}
+    if contact_class is not None and contact_class not in allowed_classes:
+        raise ValueError("Неизвестный класс CRM-факта")
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM deal_control_task_crm_facts WHERE id = ? AND task_id = ?",
+            (int(fact_id), int(task_id)),
+        ).fetchone()
+        if row is None:
+            raise ValueError("CRM-факт не найден")
+        next_class = contact_class if contact_class is not None else row["contact_class"]
+        conn.execute(
+            """
+            UPDATE deal_control_task_crm_facts
+            SET review_status = ?, contact_class = ?
+            WHERE id = ? AND task_id = ?
+            """,
+            (review_status, next_class, int(fact_id), int(task_id)),
+        )
+        saved = conn.execute(
+            "SELECT * FROM deal_control_task_crm_facts WHERE id = ?",
+            (int(fact_id),),
+        ).fetchone()
+    result = dict(saved) if saved is not None else None
+    assert result is not None
+    result["payload"] = loads_json(result.pop("payload_json"), None)
+    return result
+
+
+def update_deal_control_task(db_path: str | Path, *, task_id: int, task_text: str | None = None,
+                             touch_type: str | None = None, expected_result: str | None = None,
+                             due_at: str | None = None, local_status: str | None = None,
+                             business_result_status: str | None = None, business_result_note: str | None = None) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        current = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+        if current is None:
+            raise ValueError("Поручение не найдено")
+        values = dict(current)
+        next_due = due_at if due_at is not None else values["due_at"]
+        next_status = local_status if local_status is not None else values["local_status"]
+        next_task_text = task_text.strip() if task_text is not None else values["task_text"]
+        next_touch_type = touch_type if touch_type is not None else values["touch_type"]
+        next_expected_result = expected_result if expected_result is not None else values["expected_result"]
+        guidance_changed = any(
+            (
+                next_task_text != values["task_text"],
+                next_touch_type != values["touch_type"],
+                next_expected_result != values["expected_result"],
+                next_due != values["due_at"],
+            )
+        )
+        next_guidance_revision = int(values.get("guidance_revision") or 1) + int(guidance_changed)
+        conn.execute(
+            """
+            UPDATE deal_control_tasks SET task_text = ?, touch_type = ?, expected_result = ?, due_at = ?, local_status = ?,
+                business_result_status = ?, business_result_note = ?, completed_at = ?, guidance_revision = ?,
+                updated_at = ? WHERE id = ?
+            """,
+            (next_task_text, next_touch_type, next_expected_result, next_due, next_status,
+             business_result_status if business_result_status is not None else values["business_result_status"],
+             business_result_note if business_result_note is not None else values["business_result_note"],
+             utcish_now() if next_status in {"cancelled", "completed"} else values.get("completed_at"),
+             next_guidance_revision, utcish_now(), task_id),
+        )
+        if due_at is not None and due_at != values["due_at"]:
+            conn.execute(
+                "INSERT INTO deal_control_task_reschedules (task_id, previous_due_at, next_due_at, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                (task_id, values["due_at"], due_at, "Перенесено РОПом", utcish_now()),
+            )
+        row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+    result = dict(row) if row is not None else None
+    assert result is not None
+    return result
+
+
+def save_deal_control_task_crm_sync(db_path: str | Path, *, task_id: int, crm_execution_status: str,
+                                    crm_match_activity_id: str | None, crm_match_confidence: str | None,
+                                    crm_match_candidate_completed: bool | None = None,
+                                    result_activity_id: str | None = None, fact_kind: str | None = None,
+                                    fact_summary: str | None = None, fact_occurred_at: str | None = None,
+                                    fact_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        current = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+        if current is None:
+            raise ValueError("Поручение не найдено")
+        current_values = dict(current)
+        confirmed = bool(current_values.get("crm_match_confirmed"))
+        same_match = str(current_values.get("crm_match_activity_id") or "") == str(crm_match_activity_id or "")
+        if confirmed and same_match and crm_execution_status == "match_review":
+            crm_execution_status = "crm_closed" if crm_match_candidate_completed else "crm_open"
+        elif not same_match:
+            confirmed = False
+        conn.execute(
+            """
+            UPDATE deal_control_tasks
+            SET crm_execution_status = ?, crm_match_activity_id = ?, crm_match_confidence = ?,
+                crm_match_candidate_completed = ?, crm_match_confirmed = ?, result_activity_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (crm_execution_status, crm_match_activity_id, crm_match_confidence,
+             None if crm_match_candidate_completed is None else int(crm_match_candidate_completed), int(confirmed),
+             result_activity_id, utcish_now(), task_id),
+        )
+        if fact_kind:
+            conn.execute(
+                """
+                INSERT INTO deal_control_task_crm_facts (task_id, activity_id, fact_kind, summary, occurred_at, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(task_id, activity_id, fact_kind) DO UPDATE SET
+                    summary = excluded.summary, occurred_at = excluded.occurred_at, payload_json = excluded.payload_json, created_at = excluded.created_at
+                """,
+                (task_id, result_activity_id, fact_kind, fact_summary, fact_occurred_at,
+                 dumps_json(fact_payload) if fact_payload is not None else None, utcish_now()),
+            )
+        row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+    result = dict(row) if row is not None else None
+    assert result is not None
+    return result
+
+
+def save_deal_control_task_crm_fact(
+    db_path: str | Path,
+    *,
+    task_id: int,
+    fact_key: str,
+    activity_id: str | None,
+    fact_kind: str,
+    summary: str | None,
+    occurred_at: str | None,
+    contact_class: str = "unknown",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    allowed_classes = {"attempt", "confirmed_contact", "internal_information", "unknown", "deal_progress"}
+    if contact_class not in allowed_classes:
+        raise ValueError("Неизвестный класс CRM-факта")
+    now = utcish_now()
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone() is None:
+            raise ValueError("Поручение не найдено")
+        existing = conn.execute(
+            """
+            SELECT id FROM deal_control_task_crm_facts
+            WHERE task_id = ? AND activity_id IS ? AND fact_kind = ?
+            """,
+            (int(task_id), activity_id, fact_kind),
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                """
+                UPDATE deal_control_task_crm_facts
+                SET summary = ?, occurred_at = ?, payload_json = ?, contact_class = ?, fact_key = COALESCE(fact_key, ?)
+                WHERE id = ?
+                """,
+                (
+                    summary, occurred_at, dumps_json(payload) if payload is not None else None,
+                    contact_class, fact_key, int(existing["id"]),
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO deal_control_task_crm_facts (
+                    task_id, activity_id, fact_kind, summary, occurred_at, payload_json, created_at,
+                    contact_class, review_status, fact_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'candidate', ?)
+                ON CONFLICT(task_id, fact_key) WHERE fact_key IS NOT NULL DO UPDATE SET
+                    activity_id = excluded.activity_id,
+                    fact_kind = excluded.fact_kind,
+                    summary = excluded.summary,
+                    occurred_at = excluded.occurred_at,
+                    payload_json = excluded.payload_json,
+                    contact_class = excluded.contact_class
+                """,
+                (
+                    int(task_id), activity_id, fact_kind, summary, occurred_at,
+                    dumps_json(payload) if payload is not None else None, now, contact_class, fact_key,
+                ),
+            )
+        row = conn.execute(
+            "SELECT * FROM deal_control_task_crm_facts WHERE task_id = ? AND fact_key = ?",
+            (int(task_id), fact_key),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, event_key, payload_json, created_at)
+            VALUES (?, 'crm_fact_detected', ?, ?, ?)
+            ON CONFLICT(task_id, event_key) WHERE event_key IS NOT NULL DO NOTHING
+            """,
+            (int(task_id), f"crm_fact:{fact_key}", dumps_json({"fact_kind": fact_kind}), now),
+        )
+    result = dict(row) if row is not None else None
+    assert result is not None
+    result["payload"] = loads_json(result.pop("payload_json"), None)
+    return result
+
+
+def confirm_deal_control_task_crm_match(db_path: str | Path, *, task_id: int) -> dict[str, Any]:
+    """Confirm a medium-confidence activity match without claiming a client result."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        current = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+        if current is None:
+            raise ValueError("Поручение не найдено")
+        values = dict(current)
+        if str(values.get("crm_execution_status") or "") != "match_review":
+            raise ValueError("Подтверждение доступно только для совпадения, требующего проверки РОПа")
+        execution_status = "crm_closed" if bool(values.get("crm_match_candidate_completed")) else "crm_open"
+        conn.execute(
+            "UPDATE deal_control_tasks SET crm_execution_status = ?, crm_match_confirmed = 1, updated_at = ? WHERE id = ?",
+            (execution_status, utcish_now(), task_id),
+        )
+        row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
+    result = dict(row) if row is not None else None
+    assert result is not None
+    return result
+
+
+def list_deal_control_tasks(db_path: str | Path, *, deal_ids: list[str] | None = None,
+                            active_only: bool = False) -> list[dict[str, Any]]:
+    init_db(db_path)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if deal_ids:
+        values = [str(value) for value in deal_ids if str(value)]
+        if values:
+            clauses.append(f"deal_id IN ({','.join('?' for _ in values)})")
+            params.extend(values)
+    if active_only:
+        clauses.append("local_status = 'active'")
+    query = "SELECT * FROM deal_control_tasks" + (" WHERE " + " AND ".join(clauses) if clauses else "")
+    query += " ORDER BY due_at ASC, id ASC"
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+        tasks = [dict(row) for row in rows]
+        for task in tasks:
+            baseline = conn.execute(
+                "SELECT * FROM deal_control_task_baselines WHERE task_id = ?",
+                (int(task["id"]),),
+            ).fetchone()
+            latest_outcome = conn.execute(
+                "SELECT * FROM deal_control_task_outcomes WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (int(task["id"]),),
+            ).fetchone()
+            fact_rows = conn.execute(
+                "SELECT * FROM deal_control_task_crm_facts WHERE task_id = ? ORDER BY id DESC LIMIT 5",
+                (int(task["id"]),),
+            ).fetchall()
+            task["baseline"] = dict(baseline) if baseline is not None else None
+            if task["baseline"] is not None:
+                task["baseline"]["deal_snapshot"] = loads_json(task["baseline"].pop("deal_snapshot_json"), {})
+            task["latest_outcome"] = dict(latest_outcome) if latest_outcome is not None else None
+            task["crm_facts"] = [dict(item) for item in fact_rows]
+            for fact in task["crm_facts"]:
+                fact["payload"] = loads_json(fact.pop("payload_json"), None)
+            task["guidance"] = _latest_deal_control_task_guidance(
+                conn,
+                task_id=int(task["id"]),
+                deal_id=str(task["deal_id"]),
+                task_revision=int(task.get("guidance_revision") or 1),
+            )
+    return tasks
+
+
+def get_deal_control_task(db_path: str | Path, *, task_id: int) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        if row is None:
+            return None
+        task = dict(row)
+        baseline = conn.execute(
+            "SELECT * FROM deal_control_task_baselines WHERE task_id = ?",
+            (int(task["id"]),),
+        ).fetchone()
+        latest_outcome = conn.execute(
+            "SELECT * FROM deal_control_task_outcomes WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (int(task["id"]),),
+        ).fetchone()
+        fact_rows = conn.execute(
+            "SELECT * FROM deal_control_task_crm_facts WHERE task_id = ? ORDER BY id DESC LIMIT 5",
+            (int(task["id"]),),
+        ).fetchall()
+        task["baseline"] = dict(baseline) if baseline is not None else None
+        if task["baseline"] is not None:
+            task["baseline"]["deal_snapshot"] = loads_json(task["baseline"].pop("deal_snapshot_json"), {})
+        task["latest_outcome"] = dict(latest_outcome) if latest_outcome is not None else None
+        task["crm_facts"] = [dict(item) for item in fact_rows]
+        for fact in task["crm_facts"]:
+            fact["payload"] = loads_json(fact.pop("payload_json"), None)
+        task["guidance"] = _latest_deal_control_task_guidance(
+            conn,
+            task_id=int(task["id"]),
+            deal_id=str(task["deal_id"]),
+            task_revision=int(task.get("guidance_revision") or 1),
+        )
+    return task
+
+
+def _latest_deal_control_task_guidance(
+    conn: sqlite3.Connection,
+    *,
+    task_id: int,
+    deal_id: str,
+    task_revision: int,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT * FROM deal_control_task_guidance
+        WHERE task_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(task_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    latest_report = conn.execute(
+        """
+        SELECT id FROM ui_reports
+        WHERE entity_type = 'deal' AND entity_id = ? AND report_json IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (str(deal_id),),
+    ).fetchone()
+    value = dict(row)
+    value["content"] = loads_json(value.pop("guidance_json", None), {})
+    value["model_meta"] = loads_json(value.pop("model_meta_json", None), {})
+    value["is_stale"] = (
+        int(value.get("task_revision") or 0) != int(task_revision)
+        or latest_report is None
+        or int(value.get("source_report_id") or 0) != int(latest_report["id"])
+    )
+    return value
+
+
+def save_deal_control_task_guidance(
+    db_path: str | Path,
+    *,
+    task_id: int,
+    task_revision: int,
+    source_report_id: int,
+    guidance: dict[str, Any],
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        task = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        if task is None:
+            raise ValueError("Поручение не найдено")
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_guidance (
+                task_id, task_revision, source_report_id, guidance_json, model_meta_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id, task_revision, source_report_id) DO UPDATE SET
+                guidance_json = excluded.guidance_json,
+                model_meta_json = excluded.model_meta_json,
+                created_at = excluded.created_at
+            """,
+            (
+                int(task_id),
+                int(task_revision),
+                int(source_report_id),
+                dumps_json(guidance),
+                dumps_json(model_meta) if model_meta is not None else None,
+                now,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM deal_control_task_guidance
+            WHERE task_id = ? AND task_revision = ? AND source_report_id = ?
+            """,
+            (int(task_id), int(task_revision), int(source_report_id)),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, event_key, payload_json, created_at)
+            VALUES (?, 'guidance_ready', ?, ?, ?)
+            ON CONFLICT(task_id, event_key) WHERE event_key IS NOT NULL DO UPDATE SET
+                payload_json = excluded.payload_json
+            """,
+            (
+                int(task_id),
+                f"guidance:{int(task_revision)}:{int(source_report_id)}",
+                dumps_json({"task_revision": int(task_revision), "source_report_id": int(source_report_id)}),
+                now,
+            ),
+        )
+        result = dict(row) if row is not None else None
+    assert result is not None
+    result["content"] = loads_json(result.pop("guidance_json", None), {})
+    result["model_meta"] = loads_json(result.pop("model_meta_json", None), {})
+    result["is_stale"] = int(task["guidance_revision"] or 1) != int(task_revision)
+    return result
+
+
+def list_deal_control_task_history(db_path: str | Path, *, task_id: int) -> dict[str, list[dict[str, Any]]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        reschedules = [dict(row) for row in conn.execute("SELECT * FROM deal_control_task_reschedules WHERE task_id = ? ORDER BY id DESC", (task_id,)).fetchall()]
+        facts = [dict(row) for row in conn.execute("SELECT * FROM deal_control_task_crm_facts WHERE task_id = ? ORDER BY id DESC", (task_id,)).fetchall()]
+        outcomes = [dict(row) for row in conn.execute("SELECT * FROM deal_control_task_outcomes WHERE task_id = ? ORDER BY id DESC", (task_id,)).fetchall()]
+        events = [dict(row) for row in conn.execute("SELECT * FROM deal_control_task_events WHERE task_id = ? ORDER BY id DESC", (task_id,)).fetchall()]
+    for fact in facts:
+        fact["payload"] = loads_json(fact.pop("payload_json"), None)
+    for event in events:
+        event["payload"] = loads_json(event.pop("payload_json"), None)
+    return {"reschedules": reschedules, "crm_facts": facts, "outcomes": outcomes, "events": events}
+
+
+def get_deal_control_metrics(db_path: str | Path, *, manager_id: str | None = None) -> dict[str, Any]:
+    init_db(db_path)
+    params: list[Any] = []
+    manager_clause = ""
+    if manager_id:
+        manager_clause = "WHERE d.manager_id = ?"
+        params.append(str(manager_id))
+    with connect(db_path) as conn:
+        task_rows = conn.execute(
+            f"""
+            SELECT t.*, d.manager_id,
+                   EXISTS(
+                       SELECT 1 FROM deal_control_task_guidance g
+                       WHERE g.task_id = t.id
+                         AND g.task_revision = t.guidance_revision
+                         AND (
+                             NOT EXISTS(SELECT 1 FROM deal_control_task_outcomes ox WHERE ox.task_id = t.id)
+                             OR g.created_at <= (
+                                 SELECT ox.created_at FROM deal_control_task_outcomes ox
+                                 WHERE ox.task_id = t.id ORDER BY ox.id DESC LIMIT 1
+                             )
+                         )
+                   ) AS has_guidance
+            FROM deal_control_tasks t
+            JOIN deal_control_deals d ON d.deal_id = t.deal_id
+            {manager_clause}
+            ORDER BY t.id
+            """,
+            params,
+        ).fetchall()
+        tasks: list[dict[str, Any]] = []
+        for row in task_rows:
+            task = dict(row)
+            outcome = conn.execute(
+                "SELECT * FROM deal_control_task_outcomes WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (int(task["id"]),),
+            ).fetchone()
+            task["outcome"] = dict(outcome) if outcome is not None else None
+            task["stage_progressed"] = bool(conn.execute(
+                """
+                SELECT 1 FROM deal_control_task_crm_facts
+                WHERE task_id = ? AND fact_kind IN ('stage_changed', 'deal_won')
+                LIMIT 1
+                """,
+                (int(task["id"]),),
+            ).fetchone())
+            task["deal_won"] = bool(conn.execute(
+                "SELECT 1 FROM deal_control_task_crm_facts WHERE task_id = ? AND fact_kind = 'deal_won' LIMIT 1",
+                (int(task["id"]),),
+            ).fetchone())
+            tasks.append(task)
+
+    def aggregate(rows: list[dict[str, Any]]) -> dict[str, int]:
+        outcomes = [row.get("outcome") for row in rows]
+        return {
+            "tasks": len(rows),
+            "actions_completed": sum(str(row.get("local_status") or "") == "completed" for row in rows),
+            "confirmed_contacts": sum(
+                bool(outcome) and outcome.get("contact_status") == "confirmed_contact"
+                for outcome in outcomes
+            ),
+            "target_results": sum(
+                bool(outcome) and outcome.get("result_status") == "achieved"
+                for outcome in outcomes
+            ),
+            "next_steps": sum(
+                bool(outcome) and bool(outcome.get("next_step_text")) and bool(outcome.get("next_step_at"))
+                for outcome in outcomes
+            ),
+            "stage_progressed": sum(bool(row.get("stage_progressed")) for row in rows),
+            "deals_won": sum(bool(row.get("deal_won")) for row in rows),
+        }
+
+    with_guidance = [task for task in tasks if bool(task.get("has_guidance"))]
+    without_guidance = [task for task in tasks if not bool(task.get("has_guidance"))]
+    return {
+        "overall": aggregate(tasks),
+        "with_guidance": aggregate(with_guidance),
+        "without_guidance": aggregate(without_guidance),
+        "note": "Сравнение показывает связь с подготовленной AI-подсказкой, но не доказывает причинность.",
+    }

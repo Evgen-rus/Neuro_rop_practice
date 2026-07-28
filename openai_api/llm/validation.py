@@ -37,6 +37,7 @@ COMMON_REQUIRED_FIELDS = {
 DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_id",
     "deal_state",
+    "deal_control_brief",
     "deal_mode",
     "closed_deal_review",
     "new_event",
@@ -1119,6 +1120,20 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
 
 
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
+    control_brief = _expect_dict(analysis.get("deal_control_brief"), "deal_control_brief", errors)
+    if control_brief:
+        for field in (
+            "current_situation",
+            "rop_focus",
+            "what_to_check_now",
+            "manager_coaching",
+            "contact_goal",
+            "call_script",
+        ):
+            _expect_non_empty_string(control_brief.get(field), f"deal_control_brief.{field}", errors)
+        for field in ("strengths", "weaknesses", "known_facts", "missing_facts", "contact_questions"):
+            _validate_short_text_list(control_brief.get(field), f"deal_control_brief.{field}", 5, errors)
+
     deal_mode = _expect_dict(analysis.get("deal_mode"), "deal_mode", errors)
     if deal_mode:
         _expect_enum(

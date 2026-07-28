@@ -389,6 +389,168 @@ export type CompactJob = {
   error?: string | null
 }
 
+export type DealControlTask = {
+  id: number
+  deal_id: string
+  task_text: string
+  touch_type?: string | null
+  expected_result?: string | null
+  due_at: string
+  local_status: 'active' | 'completed' | 'cancelled'
+  crm_execution_status: 'not_reflected' | 'crm_open' | 'crm_closed' | 'match_review'
+  crm_match_activity_id?: string | null
+  crm_match_confidence?: string | null
+  crm_match_candidate_completed?: number | null
+  crm_match_confirmed?: number
+  business_result_status: 'no_result' | 'client_fact' | 'next_step' | 'needs_rop_review'
+  business_result_note?: string | null
+  view_status?: string
+  time_bucket?: 'overdue' | 'today' | 'tomorrow' | 'future' | 'completed_today' | 'completed' | 'cancelled'
+  guidance_revision?: number
+  guidance?: DealTaskGuidance | null
+  baseline?: {
+    task_id: number
+    source_report_id?: number | null
+    created_at: string
+    deal_snapshot: Record<string, unknown>
+  } | null
+  latest_outcome?: DealControlTaskOutcome | null
+  crm_facts?: DealControlCrmFact[]
+}
+
+export type DealControlTaskOutcome = {
+  id: number
+  task_id: number
+  contact_status: 'not_attempted' | 'attempt_no_contact' | 'confirmed_contact' | 'unknown'
+  result_status: 'pending' | 'achieved' | 'partial' | 'postponed' | 'refused' | 'not_applicable' | 'needs_rop_review'
+  result_note?: string | null
+  next_step_text?: string | null
+  next_step_at?: string | null
+  evidence_kind?: 'crm_activity' | 'transcript' | 'manager_confirmation' | 'rop_confirmation' | null
+  evidence_id?: string | null
+  source_role: 'manager' | 'rop'
+  created_at: string
+}
+
+export type DealControlCrmFact = {
+  id: number
+  task_id: number
+  activity_id?: string | null
+  fact_kind: string
+  summary?: string | null
+  occurred_at?: string | null
+  contact_class: 'attempt' | 'confirmed_contact' | 'internal_information' | 'unknown' | 'deal_progress'
+  review_status: 'candidate' | 'confirmed' | 'rejected'
+  fact_key?: string | null
+}
+
+export type DealControlMetricValues = {
+  tasks: number
+  actions_completed: number
+  confirmed_contacts: number
+  target_results: number
+  next_steps: number
+  stage_progressed: number
+  deals_won: number
+}
+
+export type DealControlMetrics = {
+  overall: DealControlMetricValues
+  with_guidance: DealControlMetricValues
+  without_guidance: DealControlMetricValues
+  note: string
+}
+
+export type DealTaskGuidanceContent = {
+  task_focus: string
+  expected_outcome: string
+  known_facts: string[]
+  missing_facts: string[]
+  contact_goal: string
+  contact_questions: string[]
+  ready_text: string
+  crm_checklist: string[]
+}
+
+export type DealTaskGuidance = {
+  id: number
+  task_id: number
+  task_revision: number
+  source_report_id: number
+  content: DealTaskGuidanceContent
+  created_at: string
+  is_stale: boolean
+}
+
+export type DealTaskGuidanceJob = {
+  job_id: string
+  task_id: number
+  deal_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
+  detail: string
+  percent: number
+  guidance_id?: number | null
+  error?: string | null
+}
+
+export type DealControlDeal = {
+  deal_id: string
+  source: 'initial' | 'pipeline'
+  title?: string | null
+  manager_id?: string | null
+  manager_name?: string | null
+  stage_id?: string | null
+  stage_name?: string | null
+  pipeline_id?: string | null
+  amount?: string | null
+  currency_id?: string | null
+  created_at_crm?: string | null
+  modified_at_crm?: string | null
+  probability?: number | null
+  expected_payment_period?: string | null
+  next_control_at?: string | null
+  tasks: DealControlTask[]
+  current_task?: DealControlTask | null
+  coaching: {
+    report_id?: number | null
+    current_situation?: string
+    strengths: string[]
+    weaknesses: string[]
+    rop_focus?: string
+    what_to_check_now?: string
+    manager_coaching?: string
+    known: string[]
+    unknowns: string[]
+    contact_goal?: string
+    questions: string[]
+    script?: string
+    script_channel?: string
+    rop_task_hint?: string
+    expected_crm_update?: string
+  }
+}
+
+export type DealControlDashboard = {
+  scope: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string; configured: boolean; updated_at?: string }
+  generated_at: string
+  sync_message?: string | null
+  sync_errors: string[]
+  summary: {
+    active_deals: number
+    portfolio_amount: number
+    tasks_total: number
+    tasks_today: number
+    tasks_tomorrow: number
+    tasks_future: number
+    tasks_overdue: number
+    tasks_completed_today: number
+    average_probability?: number | null
+  }
+  outcome_metrics: DealControlMetrics
+  deals: DealControlDeal[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: {
@@ -461,6 +623,99 @@ export function previewAnalysisProfile(
     method: 'POST',
     body: JSON.stringify(period),
   })
+}
+
+export function fetchDealControl() {
+  return api<DealControlDashboard>('/api/deal-control')
+}
+
+export function syncDealControl() {
+  return api<DealControlDashboard>('/api/deal-control/sync', { method: 'POST' })
+}
+
+export function saveDealControlScope(body: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string }) {
+  return api<{ ok: boolean; scope: DealControlDashboard['scope'] }>('/api/deal-control/scope', {
+    method: 'PUT', body: JSON.stringify(body),
+  })
+}
+
+export function updateDealControlDeal(dealId: string, body: {
+  probability: number | null
+  expected_payment_period: string | null
+  next_control_at: string | null
+}) {
+  return api<DealControlDeal>(`/api/deal-control/deals/${encodeURIComponent(dealId)}`, {
+    method: 'PUT', body: JSON.stringify(body),
+  })
+}
+
+export function createDealControlTask(dealId: string, body: {
+  task_text: string
+  touch_type?: string | null
+  expected_result?: string | null
+  due_at: string
+}) {
+  return api<DealControlTask>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/tasks`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+export function updateDealControlTask(taskId: number, body: Partial<Pick<DealControlTask,
+  'task_text' | 'touch_type' | 'expected_result' | 'due_at' | 'local_status' | 'business_result_status' | 'business_result_note'
+>>) {
+  return api<DealControlTask>(`/api/deal-control/tasks/${taskId}`, {
+    method: 'PUT', body: JSON.stringify(body),
+  })
+}
+
+export function confirmDealControlTaskCrmMatch(taskId: number) {
+  return api<DealControlTask>(`/api/deal-control/tasks/${taskId}/confirm-crm-match`, { method: 'POST' })
+}
+
+export function saveDealControlTaskOutcome(taskId: number, body: {
+  contact_status: DealControlTaskOutcome['contact_status']
+  result_status: DealControlTaskOutcome['result_status']
+  result_note?: string | null
+  next_step_text?: string | null
+  next_step_at?: string | null
+  evidence_kind?: DealControlTaskOutcome['evidence_kind']
+  evidence_id?: string | null
+  source_role: DealControlTaskOutcome['source_role']
+}) {
+  return api<DealControlTaskOutcome>(`/api/deal-control/tasks/${taskId}/outcomes`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+export function reviewDealControlCrmFact(taskId: number, factId: number, body: {
+  review_status: 'confirmed' | 'rejected'
+  contact_class?: DealControlCrmFact['contact_class'] | null
+}) {
+  return api<DealControlCrmFact>(`/api/deal-control/tasks/${taskId}/crm-facts/${factId}/review`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+export function recordDealControlTaskEvent(
+  taskId: number,
+  eventType: 'guidance_opened' | 'guidance_copied',
+  eventKey?: string | null,
+) {
+  return api<{ ok: boolean }>(`/api/deal-control/tasks/${taskId}/events`, {
+    method: 'POST',
+    body: JSON.stringify({ event_type: eventType, event_key: eventKey || null }),
+  })
+}
+
+export function startDealTaskGuidance(taskId: number) {
+  return api<DealTaskGuidanceJob>(`/api/deal-control/tasks/${taskId}/guidance`, {
+    method: 'POST',
+    body: JSON.stringify({ confirm_paid: true }),
+  })
+}
+
+export function fetchDealTaskGuidanceJob(jobId: string) {
+  return api<DealTaskGuidanceJob>(`/api/deal-control/guidance-jobs/${encodeURIComponent(jobId)}`)
 }
 
 export function createDailySummary(

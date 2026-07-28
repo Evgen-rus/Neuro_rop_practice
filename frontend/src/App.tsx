@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './index.css'
+import { DealControl } from './DealControl'
 import {
   asRecord,
   asString,
@@ -50,7 +51,7 @@ import {
   type CompactReview,
 } from './api'
 
-type Tab = 'summary' | 'dashboard' | 'manual' | 'history'
+type Tab = 'summary' | 'dashboard' | 'manual' | 'history' | 'deals'
 
 type ManualEntityType = 'lead' | 'deal' | 'auto'
 type CandidateReviewView = 'active' | 'reviewed' | 'all'
@@ -1238,6 +1239,10 @@ function MainApp() {
       ? ['Выберите кандидата и запустите анализ', selectedCandidate.attention_reason]
       : []
 
+  if (tab === 'deals') {
+    return <DealControl onExit={() => setTab('summary')} />
+  }
+
   return (
     <div className="wrap">
       <div className="top">
@@ -1251,6 +1256,9 @@ function MainApp() {
           </button>
           <button className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>
             Кандидаты
+          </button>
+          <button onClick={() => setTab('deals')}>
+            Контроль сделок
           </button>
           <button className={tab === 'manual' ? 'active' : ''} onClick={() => setTab('manual')}>
             Ручной запуск

@@ -354,11 +354,12 @@ def call_structured_output_json(
     model: str = ANALYSIS_MODEL,
     max_output_tokens: int = ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     retry_callback: RetryCallback | None = None,
+    log_title: str = "structured output prompt",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call Responses structured outputs without changing the legacy JSON client."""
     log_model_text_payload(
         logger,
-        title="attention delta shadow prompt",
+        title=log_title,
         model=model,
         text=prompt,
         metadata={

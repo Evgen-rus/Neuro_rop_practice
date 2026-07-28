@@ -36,6 +36,16 @@ from api.jobs import (
     workspace_dir,
 )
 from api.compact_shadow import get_compact_job, get_evidence, review_payload, start_compact_job
+from api.deal_control import add_task as add_deal_control_task
+from api.deal_control import build_deal_control_dashboard, edit_task as edit_deal_control_task
+from api.deal_control import confirm_task_crm_match as confirm_deal_control_task_crm_match
+from api.deal_control import deal_control_metrics
+from api.deal_control import record_task_outcome as record_deal_control_task_outcome
+from api.deal_control import record_task_event as record_deal_control_task_event
+from api.deal_control import refresh_deal_control, save_deal_fields, save_scope as save_deal_control_scope
+from api.deal_control import review_task_crm_fact as review_deal_control_task_crm_fact
+from api.deal_control import task_history as deal_control_task_history
+from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR
 from storage.rop_db import (
@@ -153,6 +163,60 @@ class QualificationReviewRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=800)
 
 
+class DealControlScopeRequest(BaseModel):
+    initial_deal_ids: list[str] = Field(default_factory=list, max_length=200)
+    manager_ids: list[str] = Field(default_factory=list, max_length=30)
+    pipeline_id: str = Field(default="15", min_length=1, max_length=40)
+
+
+class DealControlFieldsRequest(BaseModel):
+    probability: int | None = Field(default=None, ge=0, le=100)
+    expected_payment_period: str | None = Field(default=None, max_length=60)
+    next_control_at: str | None = Field(default=None, max_length=40)
+
+
+class DealControlTaskRequest(BaseModel):
+    task_text: str = Field(min_length=1, max_length=12000)
+    touch_type: str | None = Field(default=None, max_length=80)
+    expected_result: str | None = Field(default=None, max_length=4000)
+    due_at: str = Field(min_length=1, max_length=40)
+
+
+class DealControlTaskUpdateRequest(BaseModel):
+    task_text: str | None = Field(default=None, min_length=1, max_length=12000)
+    touch_type: str | None = Field(default=None, max_length=80)
+    expected_result: str | None = Field(default=None, max_length=4000)
+    due_at: str | None = Field(default=None, max_length=40)
+    local_status: Literal["active", "completed", "cancelled"] | None = None
+    business_result_status: Literal["no_result", "client_fact", "next_step", "needs_rop_review"] | None = None
+    business_result_note: str | None = Field(default=None, max_length=4000)
+
+
+class DealTaskGuidanceRequest(BaseModel):
+    confirm_paid: bool = False
+
+
+class DealControlTaskOutcomeRequest(BaseModel):
+    contact_status: Literal["not_attempted", "attempt_no_contact", "confirmed_contact", "unknown"]
+    result_status: Literal["pending", "achieved", "partial", "postponed", "refused", "not_applicable", "needs_rop_review"]
+    result_note: str | None = Field(default=None, max_length=4000)
+    next_step_text: str | None = Field(default=None, max_length=4000)
+    next_step_at: str | None = Field(default=None, max_length=40)
+    evidence_kind: Literal["crm_activity", "transcript", "manager_confirmation", "rop_confirmation"] | None = None
+    evidence_id: str | None = Field(default=None, max_length=120)
+    source_role: Literal["manager", "rop"]
+
+
+class DealControlCrmFactReviewRequest(BaseModel):
+    review_status: Literal["confirmed", "rejected"]
+    contact_class: Literal["attempt", "confirmed_contact", "internal_information", "unknown", "deal_progress"] | None = None
+
+
+class DealControlTaskEventRequest(BaseModel):
+    event_type: Literal["guidance_opened", "guidance_copied"]
+    event_key: str | None = Field(default=None, max_length=160)
+
+
 class CandidatesSearchRequest(BaseModel):
     entity_type: Literal["lead", "deal"] = "lead"
     created_days: int = Field(default=DEFAULT_DAYS, ge=0)
@@ -210,6 +274,157 @@ def health() -> dict[str, Any]:
         "service": "rop-assistant-api",
         "db_path": str(DEFAULT_DB_PATH),
     }
+
+
+@app.get("/api/deal-control")
+def deal_control_dashboard() -> dict[str, Any]:
+    return build_deal_control_dashboard(db_path=DEFAULT_DB_PATH)
+
+
+@app.put("/api/deal-control/scope")
+def deal_control_scope_put(body: DealControlScopeRequest) -> dict[str, Any]:
+    try:
+        scope = save_deal_control_scope(
+            db_path=DEFAULT_DB_PATH,
+            initial_deal_ids=body.initial_deal_ids,
+            manager_ids=body.manager_ids,
+            pipeline_id=body.pipeline_id,
+        )
+        return {"ok": True, "scope": scope}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/sync")
+def deal_control_sync() -> dict[str, Any]:
+    try:
+        return refresh_deal_control(db_path=DEFAULT_DB_PATH)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001 - surface a read-only CRM problem in the local UI
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.put("/api/deal-control/deals/{deal_id}")
+def deal_control_deal_update(deal_id: str, body: DealControlFieldsRequest) -> dict[str, Any]:
+    try:
+        return save_deal_fields(
+            db_path=DEFAULT_DB_PATH, deal_id=deal_id, probability=body.probability,
+            expected_payment_period=body.expected_payment_period, next_control_at=body.next_control_at,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/tasks")
+def deal_control_task_create(deal_id: str, body: DealControlTaskRequest) -> dict[str, Any]:
+    try:
+        return add_deal_control_task(
+            db_path=DEFAULT_DB_PATH, deal_id=deal_id, task_text=body.task_text,
+            touch_type=body.touch_type, expected_result=body.expected_result, due_at=body.due_at,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/deal-control/tasks/{task_id}")
+def deal_control_task_update(task_id: int, body: DealControlTaskUpdateRequest) -> dict[str, Any]:
+    try:
+        return edit_deal_control_task(
+            db_path=DEFAULT_DB_PATH, task_id=task_id, task_text=body.task_text, touch_type=body.touch_type,
+            expected_result=body.expected_result, due_at=body.due_at, local_status=body.local_status,
+            business_result_status=body.business_result_status, business_result_note=body.business_result_note,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/tasks/{task_id}/confirm-crm-match")
+def deal_control_task_confirm_crm_match(task_id: int) -> dict[str, Any]:
+    try:
+        return confirm_deal_control_task_crm_match(db_path=DEFAULT_DB_PATH, task_id=task_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/tasks/{task_id}/history")
+def deal_control_task_history_get(task_id: int) -> dict[str, Any]:
+    return deal_control_task_history(db_path=DEFAULT_DB_PATH, task_id=task_id)
+
+
+@app.post("/api/deal-control/tasks/{task_id}/outcomes")
+def deal_control_task_outcome_create(task_id: int, body: DealControlTaskOutcomeRequest) -> dict[str, Any]:
+    try:
+        return record_deal_control_task_outcome(
+            db_path=DEFAULT_DB_PATH,
+            task_id=task_id,
+            contact_status=body.contact_status,
+            result_status=body.result_status,
+            result_note=body.result_note,
+            next_step_text=body.next_step_text,
+            next_step_at=body.next_step_at,
+            evidence_kind=body.evidence_kind,
+            evidence_id=body.evidence_id,
+            source_role=body.source_role,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/tasks/{task_id}/crm-facts/{fact_id}/review")
+def deal_control_task_crm_fact_review(
+    task_id: int,
+    fact_id: int,
+    body: DealControlCrmFactReviewRequest,
+) -> dict[str, Any]:
+    try:
+        return review_deal_control_task_crm_fact(
+            db_path=DEFAULT_DB_PATH,
+            task_id=task_id,
+            fact_id=fact_id,
+            review_status=body.review_status,
+            contact_class=body.contact_class,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/metrics")
+def deal_control_metrics_get(manager_id: str | None = None) -> dict[str, Any]:
+    return deal_control_metrics(db_path=DEFAULT_DB_PATH, manager_id=manager_id)
+
+
+@app.post("/api/deal-control/tasks/{task_id}/events")
+def deal_control_task_event_create(task_id: int, body: DealControlTaskEventRequest) -> dict[str, bool]:
+    try:
+        return record_deal_control_task_event(
+            db_path=DEFAULT_DB_PATH,
+            task_id=task_id,
+            event_type=body.event_type,
+            event_key=body.event_key,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/tasks/{task_id}/guidance")
+def deal_control_task_guidance_start(task_id: int, body: DealTaskGuidanceRequest) -> dict[str, Any]:
+    try:
+        return start_task_guidance_job(
+            db_path=DEFAULT_DB_PATH,
+            task_id=task_id,
+            confirm_paid=body.confirm_paid,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/guidance-jobs/{job_id}")
+def deal_control_task_guidance_job_get(job_id: str) -> dict[str, Any]:
+    job = get_task_guidance_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание подготовки менеджера не найдено")
+    return job
 
 
 @app.get("/api/pipelines")

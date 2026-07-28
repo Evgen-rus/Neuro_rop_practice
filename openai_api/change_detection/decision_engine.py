@@ -25,11 +25,6 @@ FULL_LLM_ANALYSIS = "FULL_LLM_ANALYSIS"
 ERROR = "ERROR"
 
 HARD_CHANGE_TYPES = {
-    "stage_changed",
-    "new_call",
-    "new_email",
-    "new_message",
-    "new_comment",
     "commercial_refs_changed",
     "transcript_changed",
 }
@@ -303,6 +298,50 @@ def soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
     return triggers
 
 
+def _is_inbound_customer_direction(value: Any) -> bool:
+    """Bitrix directions differ by provider; accept only explicit incoming values."""
+    return str(value or "").strip().lower() in {"1", "in", "incoming", "входящий"}
+
+
+def _significant_amount_change(diff: dict[str, Any]) -> bool:
+    details = (diff.get("details") or {}).get("amount_changed") or {}
+    try:
+        before = float(str(details.get("before") or "0").replace(",", "."))
+        after = float(str(details.get("after") or "0").replace(",", "."))
+    except (TypeError, ValueError):
+        return False
+    if before == after:
+        return False
+    if before == 0 or after == 0:
+        return True
+    return abs(after - before) / abs(before) >= 0.10
+
+
+def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
+    """Return only evidence-backed changes that justify a new paid deal analysis.
+
+    A stage move, internal comment, task creation or task completion is still
+    visible to ROP as a mini recommendation, but it is not proof of a client
+    conversation. Calls need a new transcript; messages and emails need an
+    explicit incoming direction.
+    """
+    changes = set(diff.get("changes") or [])
+    hard = sorted(changes & HARD_CHANGE_TYPES)
+    activities_by_id = {str(item.get("id") or ""): item for item in current_snapshot.get("activities", []) or []}
+    new_ids = (diff.get("details") or {}).get("new_activity_ids") or []
+    if any(
+        str(activities_by_id.get(str(activity_id), {}).get("kind") or "") in {"email", "message"}
+        and _is_inbound_customer_direction(activities_by_id.get(str(activity_id), {}).get("direction"))
+        for activity_id in new_ids
+    ):
+        hard.append("new_inbound_customer_message")
+    if "closed_flag_changed" in changes and str((current_snapshot.get("deal") or {}).get("closed") or "").upper() == "Y":
+        hard.append("deal_closed")
+    if "amount_changed" in changes and _significant_amount_change(diff):
+        hard.append("significant_amount_changed")
+    return sorted(set(hard))
+
+
 def lead_soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
     triggers = soft_diff_triggers(diff)
     changes = set(diff.get("changes") or [])
@@ -331,7 +370,7 @@ def decide_deal_processing(
     previous_fingerprint = previous_state.get("current_fingerprint")
     changed = previous_fingerprint != fingerprint
     semantic_changes = set(diff.get("changes") or [])
-    hard_changes = sorted(semantic_changes & HARD_CHANGE_TYPES)
+    hard_changes = deal_full_analysis_changes(diff, current_snapshot)
     if changed and hard_changes:
         return ProcessingDecision(
             status=FULL_LLM_ANALYSIS,
