@@ -584,6 +584,32 @@ def refresh_diagnostics(entity_type: str, ids: list[str]) -> None:
     run_command(command, "Обновление диагностики после транскрибации")
 
 
+def refresh_workspace_after_transcription(entity_type: str, ids: list[str]) -> None:
+    entity_plural = "deals" if entity_type == "deal" else "leads"
+    id_arg = "--deal-ids" if entity_type == "deal" else "--lead-ids"
+    prepare_command = [
+        python_executable(),
+        str(PROJECT_ROOT / "bitrix" / entity_plural / f"3_prepare_{entity_plural}_workspace.py"),
+        id_arg,
+        *ids,
+        "--workspace-root",
+        str(workspace_root(entity_type)),
+    ]
+    run_command(prepare_command, "Обновление рабочего манифеста после транскрибации")
+    refresh_diagnostics(entity_type, ids)
+
+    if entity_type == "deal":
+        context_command = [
+            python_executable(),
+            str(PROJECT_ROOT / "bitrix" / "deals" / "4_build_deals_llm_context.py"),
+            "--workspace-root",
+            str(workspace_root(entity_type)),
+            "--deal-ids",
+            *ids,
+        ]
+        run_command(context_command, "Обновление контекста сделки после транскрибации")
+
+
 def transcribe_missing_audio(options: WorkflowOptions) -> None:
     any_transcribed = False
     for entity_id in options.entity_ids:
@@ -623,7 +649,7 @@ def transcribe_missing_audio(options: WorkflowOptions) -> None:
             total=len(gaps),
         )
     if any_transcribed:
-        refresh_diagnostics(options.entity_type, options.entity_ids)
+        refresh_workspace_after_transcription(options.entity_type, options.entity_ids)
 
 
 def analyze_command(options: WorkflowOptions, entity_id: str) -> list[str]:

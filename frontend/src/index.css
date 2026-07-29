@@ -405,7 +405,7 @@ textarea {
 
 .dc-outcome-metrics > div {
   display: grid;
-  grid-template-columns: repeat(6, minmax(95px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
   gap: 8px;
 }
 
@@ -467,6 +467,8 @@ textarea {
 .dc-filters select,
 .dc-filters input,
 .dc-modal input,
+.dc-modal select,
+.dc-modal textarea,
 .dc-manual-fields input,
 .dc-manual-fields select,
 .dc-result-field select,
@@ -481,6 +483,14 @@ textarea {
   border-radius: 9px;
   color: var(--dc-text);
   background: #fff;
+}
+
+.dc-modal input:focus,
+.dc-modal select:focus,
+.dc-modal textarea:focus {
+  outline: none;
+  border-color: #80adf8;
+  box-shadow: 0 0 0 3px rgba(23, 104, 242, .1);
 }
 
 .dc-filters select {
@@ -1833,6 +1843,12 @@ textarea {
   width: 100%;
 }
 
+.dc-modal textarea {
+  min-height: 72px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
 .dc-outcome-modal {
   display: grid;
   width: min(560px, 94vw);
@@ -1847,6 +1863,11 @@ textarea {
 .dc-outcome-modal > small {
   color: var(--dc-muted);
   font-size: 9px;
+}
+
+.dc-outcome-modal > small.dc-form-error {
+  color: #b82f2f;
+  font-weight: 700;
 }
 
 .dc-modal > div {

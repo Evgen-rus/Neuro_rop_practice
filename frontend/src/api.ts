@@ -458,6 +458,7 @@ export type DealControlMetrics = {
   overall: DealControlMetricValues
   with_guidance: DealControlMetricValues
   without_guidance: DealControlMetricValues
+  cancelled_tasks: number
   note: string
 }
 
@@ -662,10 +663,15 @@ export function createDealControlTask(dealId: string, body: {
 
 export function updateDealControlTask(taskId: number, body: Partial<Pick<DealControlTask,
   'task_text' | 'touch_type' | 'expected_result' | 'due_at' | 'local_status' | 'business_result_status' | 'business_result_note'
->>) {
+>> & { reschedule_reason?: string | null; source_role?: 'manager' | 'rop' | null }) {
   return api<DealControlTask>(`/api/deal-control/tasks/${taskId}`, {
     method: 'PUT', body: JSON.stringify(body),
   })
+}
+
+export function fetchDealControlMetrics(managerId?: string) {
+  const query = managerId ? `?manager_id=${encodeURIComponent(managerId)}` : ''
+  return api<DealControlMetrics>(`/api/deal-control/metrics${query}`)
 }
 
 export function confirmDealControlTaskCrmMatch(taskId: number) {

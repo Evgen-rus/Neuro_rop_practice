@@ -24,7 +24,7 @@
 | Контроль сделки, исходы задач и AI-подсказка менеджеру | `api/deal_control.py`, `api/deal_task_guidance.py`, `openai_api/llm/deal_task_guidance.py`, `storage/rop_db.py` |
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
 | Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
-| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/api.ts` |
+| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` |
 | Compact attention-delta shadow | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py`, `benchmarks/*` |
 
 `README.md` описывает только быстрый запуск. Операционные детали принадлежат runbook-файлам и не должны дублироваться здесь.
@@ -39,6 +39,7 @@
 - Lead с подтверждённой конверсией переводится в deal-flow. Отсутствующий `CONTACT_ID` не доказывает отсутствие связанной сделки.
 - CRM-запись о звонке, `COMPLETED=Y` или внутренний комментарий сами по себе не доказывают содержательный контакт с клиентом. Для лида это требует подходящего transcript/contact evidence; попытки, подтверждённый контакт и внутреннюю информацию хранить раздельно.
 - В deal-control исполнение поручения, подтверждённый контакт, целевой результат и движение сделки — отдельные состояния. Найденная или закрытая CRM-активность подтверждает не больше исполнения/попытки, пока клиентский результат не зафиксирован отдельно.
+- Исход deal-control должен содержать достаточно данных для своего состояния: попытка без ответа и незавершённый результат требуют следующего шага со сроком, подтверждённый контакт — описания ответа, отказ — причины. Перенос срока РОПом требует причины; роль автора сохраняется в истории. Отменённые задачи учитываются отдельно и не входят в знаменатель метрик исходов или сравнение AI/no-AI.
 - Полный Markdown-отчёт создаётся только после успешной бизнес-валидации JSON. OKF/knowledge задают правила оценки, но не являются фактами конкретной сущности.
 - Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
 - У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
@@ -49,7 +50,7 @@
 
 ### 1. UI, API и CLI
 
-`frontend/src/App.tsx` — локальный интерфейс; `frontend/src/api.ts` — его HTTP-контракт. `api/app.py` валидирует запросы, читает/сохраняет локальное состояние и делегирует доменную работу специализированным модулям.
+`frontend/src/App.tsx` — корневой локальный интерфейс; `frontend/src/DealControl.tsx` — три связанных представления контроля сделок (дашборд, экран РОПа и задачи менеджера); `frontend/src/api.ts` — их HTTP-контракт. Представления используют один набор deal-control данных и локальных исходов, а не отдельные хранилища. `api/app.py` валидирует запросы, читает/сохраняет локальное состояние и делегирует доменную работу специализированным модулям.
 
 `api/jobs.py` не дублирует Bitrix, transcription или LLM-логику: он запускает `run_rop_assistant.py`, читает его progress events и материализует готовые результаты в `ui_reports`. Состояние активных jobs находится в памяти процесса. SQLite хранит снимки и результаты daily-summary, но перезапуск API не возобновляет subprocess автоматически.
 
@@ -65,6 +66,8 @@ Lead и deal preparation scripts получают raw context, подготав�
 
 `openai_api/audio/*` работает с уже найденными локальными файлами; короткие звонки/недозвоны исключаются до транскрибации, когда это можно установить. Transcript context включается в соответствующий lead/deal workspace.
 
+После успешной транскрибации `run_rop_assistant.py` повторно подготавливает workspace, чтобы скопировать актуальный audio manifest, затем обновляет diagnostics; для сделки также пересобирается компактный LLM context. Анализ не должен продолжаться по устаревшей workspace-копии manifest или контекста.
+
 `analyze_lead.py` и `analyze_deal.py` формируют разные prompts, вызывают общий Responses API wrapper, нормализуют и валидируют JSON, затем записывают JSON, raw output и Markdown в workspace. `llm_client.py` считает usage; `pricing.py` формирует локальную оценку стоимости. Вызовы OpenAI и транскрибация требуют ключа и могут создавать стоимость.
 
 ### 4. Change detection
@@ -75,7 +78,7 @@ Lead и deal preparation scripts получают raw context, подготав�
 
 ### 5. SQLite, кандидаты и daily summary
 
-`storage/rop_db.py` — единственный слой доступа к SQLite `reports/rop_assistant/rop_assistant.sqlite`. Он хранит change state, запуски и отчёты, решения и workflow лида, настройки/профили UI, candidate lifecycle, daily-summary, deal-control baselines/outcomes/events и compact shadow runs/feedback. Миграции выполняются idempotently в `init_db()`; не добавляй обращения к таблицам мимо этого модуля.
+`storage/rop_db.py` — единственный слой доступа к SQLite `reports/rop_assistant/rop_assistant.sqlite`. Он хранит change state, запуски и отчёты, решения и workflow лида, настройки/профили UI, candidate lifecycle, daily-summary, deal-control baselines/outcomes/reschedules/events и compact shadow runs/feedback. Исходы и переносы deal-control сохраняют роль автора; отменённые задачи выводятся отдельной метрикой. Миграции выполняются idempotently в `init_db()`; не добавляй обращения к таблицам мимо этого модуля.
 
 `api/candidates.py` читает Bitrix и локальное состояние, ранжирует кандидатов и строит preview профиля без LLM. `daily_summary_runs` сохраняет snapshot профиля и scope; оплачиваемая обработка начинается только после явного подтверждения пользователя. Journey/candidate lifecycle учитывает переход лида в сделку, но решение по одной сущности не должно скрывать остальные кандидаты воронки.
 
@@ -107,11 +110,11 @@ Compact run доступен только для уже сохранённых f
 | Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py` | progress events и tests retry/validation |
 | Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
-| Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx` |
+| Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
 | Задача контроля сделки, её baseline/исходы/CRM-факты и AI-подсказка | `api/deal_control.py`, `api/deal_task_guidance.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `api/app.py`, frontend deal-control UI |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
 | Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
-| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |
+| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |
 
 ## Интеграционные границы и данные
 

@@ -44,4 +44,4 @@ CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK = read_bool_env(
     True,
 )
 
-logger = get_logger("transcription")
+logger = get_logger("openai")

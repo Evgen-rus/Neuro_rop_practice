@@ -190,6 +190,8 @@ class DealControlTaskUpdateRequest(BaseModel):
     local_status: Literal["active", "completed", "cancelled"] | None = None
     business_result_status: Literal["no_result", "client_fact", "next_step", "needs_rop_review"] | None = None
     business_result_note: str | None = Field(default=None, max_length=4000)
+    reschedule_reason: str | None = Field(default=None, max_length=1000)
+    source_role: Literal["manager", "rop"] | None = None
 
 
 class DealTaskGuidanceRequest(BaseModel):
@@ -334,6 +336,7 @@ def deal_control_task_update(task_id: int, body: DealControlTaskUpdateRequest) -
             db_path=DEFAULT_DB_PATH, task_id=task_id, task_text=body.task_text, touch_type=body.touch_type,
             expected_result=body.expected_result, due_at=body.due_at, local_status=body.local_status,
             business_result_status=body.business_result_status, business_result_note=body.business_result_note,
+            reschedule_reason=body.reschedule_reason, source_role=body.source_role,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

@@ -484,6 +484,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "deal_control_task_reschedules", "source_role", "TEXT")
         _ensure_column(conn, "deal_control_task_crm_facts", "contact_class", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "deal_control_task_crm_facts", "review_status", "TEXT NOT NULL DEFAULT 'candidate'")
         _ensure_column(conn, "deal_control_task_crm_facts", "fact_key", "TEXT")
@@ -2456,10 +2457,22 @@ def save_deal_control_task_outcome(
     note = str(result_note or "").strip() or None
     next_text = str(next_step_text or "").strip() or None
     next_at = str(next_step_at or "").strip() or None
+    if contact_status == "not_attempted":
+        raise ValueError("Сначала выполните действие или зафиксируйте попытку контакта")
+    if contact_status == "unknown" and not note:
+        raise ValueError("Опишите, почему контакт с клиентом не подтверждён")
+    if contact_status == "attempt_no_contact" and (not note or not next_text or not next_at):
+        raise ValueError("Для попытки без ответа укажите, что произошло, следующий шаг и его срок")
+    if contact_status == "confirmed_contact" and not note:
+        raise ValueError("Кратко зафиксируйте подтверждённый ответ клиента")
+    if result_status == "pending" and (not next_text or not next_at):
+        raise ValueError("Для незавершённой задачи укажите следующий шаг и его срок")
     if result_status in {"achieved", "partial", "postponed"} and (not next_text or not next_at):
         raise ValueError("Для этого результата укажите следующий шаг и его срок")
     if result_status in {"refused", "not_applicable"} and not note:
         raise ValueError("Укажите причину отказа или потери актуальности")
+    if result_status == "needs_rop_review" and not note:
+        raise ValueError("Опишите, какая помощь РОПа требуется")
     now = utcish_now()
     with connect(db_path) as conn:
         task = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone()
@@ -2568,8 +2581,11 @@ def review_deal_control_task_crm_fact(
 def update_deal_control_task(db_path: str | Path, *, task_id: int, task_text: str | None = None,
                              touch_type: str | None = None, expected_result: str | None = None,
                              due_at: str | None = None, local_status: str | None = None,
-                             business_result_status: str | None = None, business_result_note: str | None = None) -> dict[str, Any]:
+                             business_result_status: str | None = None, business_result_note: str | None = None,
+                             reschedule_reason: str | None = None, source_role: str | None = None) -> dict[str, Any]:
     init_db(db_path)
+    if source_role is not None and source_role not in {"manager", "rop"}:
+        raise ValueError("Неизвестный источник изменения")
     with connect(db_path) as conn:
         current = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
         if current is None:
@@ -2580,6 +2596,9 @@ def update_deal_control_task(db_path: str | Path, *, task_id: int, task_text: st
         next_task_text = task_text.strip() if task_text is not None else values["task_text"]
         next_touch_type = touch_type if touch_type is not None else values["touch_type"]
         next_expected_result = expected_result if expected_result is not None else values["expected_result"]
+        reason = str(reschedule_reason or "").strip() or None
+        if due_at is not None and due_at != values["due_at"] and source_role == "rop" and not reason:
+            raise ValueError("РОПу нужно указать причину переноса срока")
         guidance_changed = any(
             (
                 next_task_text != values["task_text"],
@@ -2603,8 +2622,12 @@ def update_deal_control_task(db_path: str | Path, *, task_id: int, task_text: st
         )
         if due_at is not None and due_at != values["due_at"]:
             conn.execute(
-                "INSERT INTO deal_control_task_reschedules (task_id, previous_due_at, next_due_at, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-                (task_id, values["due_at"], due_at, "Перенесено РОПом", utcish_now()),
+                """
+                INSERT INTO deal_control_task_reschedules (
+                    task_id, previous_due_at, next_due_at, reason, source_role, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, values["due_at"], due_at, reason, source_role, utcish_now()),
             )
         row = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)).fetchone()
     result = dict(row) if row is not None else None
@@ -2983,8 +3006,12 @@ def get_deal_control_metrics(db_path: str | Path, *, manager_id: str | None = No
             params,
         ).fetchall()
         tasks: list[dict[str, Any]] = []
+        cancelled_tasks = 0
         for row in task_rows:
             task = dict(row)
+            if str(task.get("local_status") or "") == "cancelled":
+                cancelled_tasks += 1
+                continue
             outcome = conn.execute(
                 "SELECT * FROM deal_control_task_outcomes WHERE task_id = ? ORDER BY id DESC LIMIT 1",
                 (int(task["id"]),),
@@ -3031,5 +3058,6 @@ def get_deal_control_metrics(db_path: str | Path, *, manager_id: str | None = No
         "overall": aggregate(tasks),
         "with_guidance": aggregate(with_guidance),
         "without_guidance": aggregate(without_guidance),
+        "cancelled_tasks": cancelled_tasks,
         "note": "Сравнение показывает связь с подготовленной AI-подсказкой, но не доказывает причинность.",
     }

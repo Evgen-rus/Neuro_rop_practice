@@ -445,11 +445,13 @@ def add_task(*, db_path: str | Path, deal_id: str, task_text: str, touch_type: s
 
 def edit_task(*, db_path: str | Path, task_id: int, task_text: str | None, touch_type: str | None,
               expected_result: str | None, due_at: str | None, local_status: str | None,
-              business_result_status: str | None, business_result_note: str | None) -> dict[str, Any]:
+              business_result_status: str | None, business_result_note: str | None,
+              reschedule_reason: str | None = None, source_role: str | None = None) -> dict[str, Any]:
     return update_deal_control_task(
         db_path, task_id=task_id, task_text=task_text, touch_type=touch_type,
         expected_result=expected_result, due_at=due_at, local_status=local_status,
         business_result_status=business_result_status, business_result_note=business_result_note,
+        reschedule_reason=reschedule_reason, source_role=source_role,
     )
 
 

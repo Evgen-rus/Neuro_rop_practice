@@ -243,6 +243,86 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual([item["result_status"] for item in history["outcomes"]], ["refused", "achieved"])
             self.assertEqual(len([item for item in history["events"] if item["event_type"] == "outcome_recorded"]), 2)
 
+    def test_outcome_requires_meaningful_contact_and_next_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")})
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 9, tzinfo=MSK))
+            task = create_deal_control_task(
+                db_path, deal_id="101", task_text="Позвонить клиенту", touch_type="звонок",
+                expected_result="Получить ответ", due_at="2026-07-20T15:00:00+03:00",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Сначала выполните действие"):
+                save_deal_control_task_outcome(
+                    db_path, task_id=int(task["id"]), contact_status="not_attempted",
+                    result_status="pending", result_note=None, next_step_text=None, next_step_at=None,
+                    evidence_kind=None, evidence_id=None, source_role="manager",
+                )
+            with self.assertRaisesRegex(ValueError, "попытки без ответа"):
+                save_deal_control_task_outcome(
+                    db_path, task_id=int(task["id"]), contact_status="attempt_no_contact",
+                    result_status="pending", result_note="Не дозвонился", next_step_text=None, next_step_at=None,
+                    evidence_kind=None, evidence_id=None, source_role="manager",
+                )
+            saved = save_deal_control_task_outcome(
+                db_path, task_id=int(task["id"]), contact_status="attempt_no_contact",
+                result_status="pending", result_note="Не дозвонился",
+                next_step_text="Повторить звонок", next_step_at="2026-07-21T11:00:00+03:00",
+                evidence_kind=None, evidence_id=None, source_role="manager",
+            )
+            self.assertEqual(saved["result_status"], "pending")
+
+    def test_rop_reschedule_requires_reason_and_records_role(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")})
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 9, tzinfo=MSK))
+            task = create_deal_control_task(
+                db_path, deal_id="101", task_text="Уточнить решение", touch_type="звонок",
+                expected_result="Получить срок", due_at="2026-07-20T15:00:00+03:00",
+            )
+            with self.assertRaisesRegex(ValueError, "причину переноса"):
+                update_deal_control_task(
+                    db_path, task_id=int(task["id"]), due_at="2026-07-21T12:00:00+03:00",
+                    source_role="rop",
+                )
+            update_deal_control_task(
+                db_path, task_id=int(task["id"]), due_at="2026-07-21T12:00:00+03:00",
+                reschedule_reason="Клиент перенёс встречу", source_role="rop",
+            )
+            history = list_deal_control_task_history(db_path, task_id=int(task["id"]))
+            self.assertEqual(history["reschedules"][0]["reason"], "Клиент перенёс встречу")
+            self.assertEqual(history["reschedules"][0]["source_role"], "rop")
+
+    def test_metrics_exclude_cancelled_tasks_and_keep_separate_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")})
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 9, tzinfo=MSK))
+            active = create_deal_control_task(
+                db_path, deal_id="101", task_text="Позвонить клиенту", touch_type="звонок",
+                expected_result="Получить ответ", due_at="2026-07-20T15:00:00+03:00",
+            )
+            cancelled = create_deal_control_task(
+                db_path, deal_id="101", task_text="Старая задача", touch_type="звонок",
+                expected_result=None, due_at="2026-07-19T15:00:00+03:00",
+            )
+            update_deal_control_task(db_path, task_id=int(cancelled["id"]), local_status="cancelled")
+
+            metrics = get_deal_control_metrics(db_path)
+            self.assertEqual(metrics["overall"]["tasks"], 1)
+            self.assertEqual(metrics["cancelled_tasks"], 1)
+            self.assertEqual(metrics["with_guidance"]["tasks"] + metrics["without_guidance"]["tasks"], 1)
+            self.assertEqual(list_deal_control_tasks(db_path)[0]["id"], cancelled["id"])
+            self.assertNotEqual(active["id"], cancelled["id"])
+
     def test_sync_records_attempt_once_and_detects_won_deal(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

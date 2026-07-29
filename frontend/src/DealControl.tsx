@@ -3,6 +3,7 @@ import {
   confirmDealControlTaskCrmMatch,
   createDealControlTask,
   fetchDealControl,
+  fetchDealControlMetrics,
   fetchDealTaskGuidanceJob,
   fetchJob,
   recordDealControlTaskEvent,
@@ -16,6 +17,7 @@ import {
   updateDealControlTask,
   type DealControlDashboard,
   type DealControlDeal,
+  type DealControlMetrics,
   type DealControlTask,
   type DealControlTaskOutcome,
   type DealTaskGuidanceContent,
@@ -156,7 +158,10 @@ function taskTone(task?: DealControlTask | null) {
 }
 
 function currentTaskOf(deal: DealControlDeal) {
-  return deal.current_task || deal.tasks.find((task) => task.local_status === 'active') || deal.tasks[0] || null
+  return deal.current_task
+    || deal.tasks.find((task) => task.local_status === 'active')
+    || deal.tasks.find((task) => task.local_status === 'completed')
+    || null
 }
 
 function timeRank(task: DealControlTask | null) {
@@ -168,23 +173,25 @@ function taskMatchesTime(task: DealControlTask | null, view: TimeView) {
   if (view === 'all') return true
   if (!task) return false
   if (view === 'attention') return task.time_bucket === 'overdue' || task.crm_execution_status === 'match_review'
-  if (view === 'today') return task.time_bucket === 'overdue' || task.time_bucket === 'today'
-  if (view === 'future') return task.time_bucket === 'tomorrow' || task.time_bucket === 'future'
+  if (view === 'today') return task.time_bucket === 'today'
+  if (view === 'future') return task.time_bucket === 'future'
   return task.time_bucket === view
 }
 
-function preferredTaskTimeView(data: DealControlDashboard | null): TimeView {
-  if (!data) return 'today'
-  if (data.summary.tasks_overdue) return 'overdue'
-  if (data.summary.tasks_today) return 'today'
-  if (data.summary.tasks_tomorrow) return 'tomorrow'
-  return 'future'
+function preferredTaskTimeView(deals: DealControlDeal[]): TimeView {
+  const tasks = deals.map(currentTaskOf).filter((task): task is DealControlTask => Boolean(task))
+  if (tasks.some((task) => task.time_bucket === 'overdue')) return 'overdue'
+  if (tasks.some((task) => task.time_bucket === 'today')) return 'today'
+  if (tasks.some((task) => task.time_bucket === 'tomorrow')) return 'tomorrow'
+  if (tasks.some((task) => task.time_bucket === 'future')) return 'future'
+  return 'all'
 }
 
 function taskPlanTitle(view: TimeView) {
   if (view === 'overdue') return 'Просроченные задачи'
   if (view === 'tomorrow') return 'План на завтра'
   if (view === 'future') return 'Будущие задачи'
+  if (view === 'all') return 'Все задачи'
   return 'План на сегодня'
 }
 
@@ -200,6 +207,32 @@ function compactTaskText(value: string, maxLength = 120) {
   const clipped = normalized.slice(0, maxLength)
   const lastSpace = clipped.lastIndexOf(' ')
   return `${clipped.slice(0, lastSpace > 70 ? lastSpace : maxLength).trim()}…`
+}
+
+function outcomeValidationMessage(
+  contact: DealControlTaskOutcome['contact_status'],
+  result: DealControlTaskOutcome['result_status'],
+  note: string,
+  nextStep: string,
+  nextAt: string,
+) {
+  const hasNote = Boolean(note.trim())
+  const hasNextStep = Boolean(nextStep.trim() && nextAt)
+  if (contact === 'not_attempted') return 'Сначала выполни действие или зафиксируй попытку контакта.'
+  if (contact === 'unknown' && !hasNote) return 'Опиши, почему контакт с клиентом не подтверждён.'
+  if (contact === 'attempt_no_contact' && (!hasNote || !hasNextStep)) {
+    return 'Для попытки без ответа укажи, что произошло, следующий шаг и его срок.'
+  }
+  if (contact === 'confirmed_contact' && !hasNote) return 'Кратко зафиксируй подтверждённый ответ клиента.'
+  if (result === 'pending' && !hasNextStep) return 'Для незавершённой задачи укажи следующий шаг и его срок.'
+  if (['achieved', 'partial', 'postponed'].includes(result) && !hasNextStep) {
+    return 'Для этого результата укажи следующий шаг и его срок.'
+  }
+  if (['refused', 'not_applicable'].includes(result) && !hasNote) {
+    return 'Укажи причину отказа или потери актуальности.'
+  }
+  if (result === 'needs_rop_review' && !hasNote) return 'Опиши, какая помощь РОПа требуется.'
+  return ''
 }
 
 export function DealControl({ onExit }: { onExit?: () => void }) {
@@ -228,16 +261,18 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   const [dueAt, setDueAt] = useState('')
   const [rescheduleTask, setRescheduleTask] = useState<DealControlTask | null>(null)
   const [rescheduleAt, setRescheduleAt] = useState('')
+  const [rescheduleReason, setRescheduleReason] = useState('')
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
   const [analyzingDealId, setAnalyzingDealId] = useState('')
   const [guidanceJob, setGuidanceJob] = useState<DealTaskGuidanceJob | null>(null)
   const [guidanceTaskId, setGuidanceTaskId] = useState<number | null>(null)
   const [outcomeTask, setOutcomeTask] = useState<DealControlTask | null>(null)
-  const [outcomeContact, setOutcomeContact] = useState<DealControlTaskOutcome['contact_status']>('unknown')
+  const [outcomeContact, setOutcomeContact] = useState<DealControlTaskOutcome['contact_status']>('not_attempted')
   const [outcomeResult, setOutcomeResult] = useState<DealControlTaskOutcome['result_status']>('pending')
   const [outcomeNote, setOutcomeNote] = useState('')
   const [outcomeNextStep, setOutcomeNextStep] = useState('')
   const [outcomeNextAt, setOutcomeNextAt] = useState('')
+  const [outcomeMetrics, setOutcomeMetrics] = useState<DealControlMetrics | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -350,14 +385,14 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     [data],
   )
 
-  const visibleDeals = useMemo(() => {
+  const filteredDeals = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase('ru')
     return [...(data?.deals || [])]
       .filter((deal) => !managerFilter || deal.manager_id === managerFilter)
       .filter((deal) => !stageFilter || deal.stage_name === stageFilter)
       .filter((deal) => {
         const task = currentTaskOf(deal)
-        if (statusFilter === 'pending') return task?.local_status === 'active' && task.time_bucket !== 'overdue'
+        if (statusFilter === 'pending') return task?.local_status === 'active'
         if (statusFilter === 'completed') return task?.local_status === 'completed'
         if (statusFilter === 'overdue') return task?.time_bucket === 'overdue'
         return true
@@ -369,17 +404,87 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
           .toLocaleLowerCase('ru')
           .includes(needle)
       })
-      .filter((deal) => taskMatchesTime(currentTaskOf(deal), timeView))
+  }, [data, managerFilter, search, stageFilter, statusFilter])
+
+  const visibleDeals = useMemo(() => {
+    return [...filteredDeals]
+      .filter((deal) => {
+        const task = currentTaskOf(deal)
+        if (timeView === 'all') return view === 'dashboard' || Boolean(task && task.local_status !== 'cancelled')
+        return taskMatchesTime(task, timeView)
+      })
       .sort((a, b) => {
         const first = currentTaskOf(a)
         const second = currentTaskOf(b)
         const rank = timeRank(first) - timeRank(second)
         return rank || String(first?.due_at || '').localeCompare(String(second?.due_at || ''))
       })
-  }, [data, managerFilter, search, stageFilter, statusFilter, timeView])
+  }, [filteredDeals, timeView, view])
 
-  const selected = data?.deals.find((deal) => deal.deal_id === selectedId) || visibleDeals[0] || null
+  const selected = visibleDeals.find((deal) => deal.deal_id === selectedId) || null
   const selectedTask = selected ? currentTaskOf(selected) : null
+
+  const filteredTasks = useMemo(
+    () => filteredDeals.flatMap((deal) => deal.tasks).filter((task) => task.local_status !== 'cancelled'),
+    [filteredDeals],
+  )
+
+  const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
+    const activeTasks = filteredTasks.filter((task) => task.local_status === 'active')
+    const probabilities = filteredDeals
+      .map((deal) => deal.probability)
+      .filter((value): value is number => value != null)
+    return {
+      active_deals: filteredDeals.length,
+      portfolio_amount: filteredDeals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0),
+      tasks_total: activeTasks.length,
+      tasks_today: activeTasks.filter((task) => task.time_bucket === 'today').length,
+      tasks_tomorrow: activeTasks.filter((task) => task.time_bucket === 'tomorrow').length,
+      tasks_future: activeTasks.filter((task) => task.time_bucket === 'future').length,
+      tasks_overdue: activeTasks.filter((task) => task.time_bucket === 'overdue').length,
+      tasks_completed_today: filteredTasks.filter((task) => task.time_bucket === 'completed_today').length,
+      average_probability: probabilities.length
+        ? Math.round(probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length)
+        : null,
+    }
+  }, [filteredDeals, filteredTasks])
+
+  const timeCounts = useMemo(() => {
+    const currentTasks = filteredDeals
+      .map(currentTaskOf)
+      .filter((task): task is DealControlTask => Boolean(task && task.local_status !== 'cancelled'))
+    return {
+      all: currentTasks.length,
+      overdue: currentTasks.filter((task) => task.time_bucket === 'overdue').length,
+      today: currentTasks.filter((task) => task.time_bucket === 'today').length,
+      tomorrow: currentTasks.filter((task) => task.time_bucket === 'tomorrow').length,
+      future: currentTasks.filter((task) => task.time_bucket === 'future').length,
+    }
+  }, [filteredDeals])
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))
+    if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals[0]?.deal_id || '')
+  }, [selectedId, visibleDeals])
+
+  useEffect(() => {
+    if (view === 'dashboard' || timeView === 'all') return
+    if (timeCounts[timeView as keyof typeof timeCounts]) return
+    setTimeView(preferredTaskTimeView(filteredDeals))
+  }, [filteredDeals, timeCounts, timeView, view])
+
+  useEffect(() => {
+    if (!data) return
+    if (view !== 'rop') {
+      setOutcomeMetrics(data.outcome_metrics)
+      return
+    }
+    let cancelled = false
+    void fetchDealControlMetrics(managerFilter || undefined)
+      .then((metrics) => { if (!cancelled) setOutcomeMetrics(metrics) })
+      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)) })
+    return () => { cancelled = true }
+  }, [data, managerFilter, view])
 
   useEffect(() => {
     const guidanceId = selectedTask?.guidance && !selectedTask.guidance.is_stale
@@ -563,20 +668,26 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   function beginReschedule(task: DealControlTask) {
     setRescheduleTask(task)
     setRescheduleAt(task.due_at.slice(0, 16))
+    setRescheduleReason('')
   }
 
   async function applyReschedule() {
     if (!rescheduleTask || !rescheduleAt) return
-    await patchTask(rescheduleTask, { due_at: rescheduleAt })
+    await patchTask(rescheduleTask, {
+      due_at: rescheduleAt,
+      reschedule_reason: rescheduleReason.trim() || null,
+      source_role: view === 'manager' ? 'manager' : 'rop',
+    })
     setRescheduleTask(null)
     setRescheduleAt('')
+    setRescheduleReason('')
     setNotice('Срок перенесён локально. Обновите соответствующую задачу в Bitrix вручную.')
   }
 
   function beginOutcome(task: DealControlTask) {
     const latest = task.latest_outcome
     setOutcomeTask(task)
-    setOutcomeContact(latest?.contact_status || 'unknown')
+    setOutcomeContact(latest?.contact_status || 'not_attempted')
     setOutcomeResult(latest?.result_status || 'pending')
     setOutcomeNote(latest?.result_note || '')
     setOutcomeNextStep(latest?.next_step_text || '')
@@ -585,6 +696,17 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
   async function applyOutcome() {
     if (!outcomeTask) return
+    const validationError = outcomeValidationMessage(
+      outcomeContact,
+      outcomeResult,
+      outcomeNote,
+      outcomeNextStep,
+      outcomeNextAt,
+    )
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     setError('')
     try {
       await saveDealControlTaskOutcome(outcomeTask.id, {
@@ -593,7 +715,9 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         result_note: outcomeNote.trim() || null,
         next_step_text: outcomeNextStep.trim() || null,
         next_step_at: outcomeNextAt || null,
-        evidence_kind: outcomeContact === 'confirmed_contact' ? 'manager_confirmation' : null,
+        evidence_kind: outcomeContact === 'confirmed_contact'
+          ? view === 'manager' ? 'manager_confirmation' : 'rop_confirmation'
+          : null,
         source_role: view === 'manager' ? 'manager' : 'rop',
       })
       setOutcomeTask(null)
@@ -624,10 +748,13 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   const copyForView = VIEW_COPY[view]
-  const planTasks = (data.deals || []).flatMap((deal) =>
-    deal.tasks.map((task) => ({ deal, task })),
+  const outcomeError = outcomeValidationMessage(
+    outcomeContact,
+    outcomeResult,
+    outcomeNote,
+    outcomeNextStep,
+    outcomeNextAt,
   )
-  const filteredPlanCount = (bucket: TimeView) => planTasks.filter(({ task }) => taskMatchesTime(task, bucket)).length
 
   return <main className={`dc-shell ${menuOpen ? 'menu-open' : ''}`}>
     <aside className="dc-sidebar">
@@ -643,14 +770,14 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         </button>
         <button className={view === 'rop' ? 'active' : ''} onClick={() => {
           setView('rop')
-          setTimeView(preferredTaskTimeView(data))
+          setTimeView(preferredTaskTimeView(filteredDeals))
         }} title="Контроль РОПа">
           <span>◎</span><b>Контроль РОПа</b><small>План и просрочки команды</small>
         </button>
         <button className={view === 'manager' ? 'active' : ''} onClick={() => {
           setView('manager')
-          setTimeView(preferredTaskTimeView(data))
           setManagerFilter(selected?.manager_id || managers[0]?.[0] || '')
+          setTimeView(preferredTaskTimeView(filteredDeals))
         }} title="Задачи менеджера">
           <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
         </button>
@@ -673,8 +800,8 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       {notice ? <div className="dc-alert success">{notice}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
-      <Kpis view={view} data={data} />
-      {view === 'rop' ? <OutcomeMetrics data={data} /> : null}
+      <Kpis view={view} summary={filteredSummary} />
+      {view === 'rop' && outcomeMetrics ? <OutcomeMetrics metrics={outcomeMetrics} /> : null}
       <Filters
         view={view}
         managers={managers}
@@ -704,12 +831,12 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
             view={view}
             active={timeView}
             onChange={setTimeView}
-            totalDeals={data.deals.length}
-            attention={data.summary.tasks_overdue}
-            today={data.summary.tasks_overdue + data.summary.tasks_today}
-            tomorrow={data.summary.tasks_tomorrow}
-            future={data.summary.tasks_future + data.summary.tasks_tomorrow}
-            countForPlan={filteredPlanCount}
+            totalDeals={filteredSummary.active_deals}
+            attention={filteredSummary.tasks_overdue}
+            today={filteredSummary.tasks_overdue + filteredSummary.tasks_today}
+            tomorrow={filteredSummary.tasks_tomorrow}
+            future={filteredSummary.tasks_future + filteredSummary.tasks_tomorrow}
+            countForPlan={(bucket) => timeCounts[bucket as keyof typeof timeCounts] || 0}
           />
           <div className="dc-board-title">
             <div><h2>{view === 'dashboard' ? 'Обзор портфеля сделок' : taskPlanTitle(timeView)}</h2><p>{view === 'dashboard' ? 'Каждая строка показывает стадию, контроль, прогноз оплаты и следующий шаг.' : 'Задачи выбранного периода, отсортированные по сроку.'}</p></div>
@@ -756,28 +883,28 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         <h2>Перенести срок задачи</h2>
         <p>{compactTaskText(rescheduleTask.task_text)}</p>
         <label>Новая дата и время<input type="datetime-local" value={rescheduleAt} onChange={(event) => setRescheduleAt(event.target.value)} /></label>
-        <div><button className="dc-button" onClick={() => setRescheduleTask(null)}>Отмена</button><button className="dc-button primary" disabled={!rescheduleAt} onClick={() => void applyReschedule()}>Перенести</button></div>
+        {view === 'rop' ? <label>Причина переноса<textarea value={rescheduleReason} onChange={(event) => setRescheduleReason(event.target.value)} placeholder="Почему РОП меняет согласованный срок" /></label> : null}
+        <div><button className="dc-button" onClick={() => setRescheduleTask(null)}>Отмена</button><button className="dc-button primary" disabled={!rescheduleAt || (view === 'rop' && !rescheduleReason.trim())} onClick={() => void applyReschedule()}>Перенести</button></div>
       </section>
     </div> : null}
 
     {outcomeTask ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setOutcomeTask(null) }}>
       <section className="dc-modal dc-outcome-modal">
-        <h2>Зафиксировать результат</h2>
+        <h2>{view === 'manager' ? 'Зафиксировать результат' : 'Скорректировать результат'}</h2>
         <p>{compactTaskText(outcomeTask.task_text)}</p>
         <label>Контакт с клиентом<select value={outcomeContact} onChange={(event) => setOutcomeContact(event.target.value as DealControlTaskOutcome['contact_status'])}>{Object.entries(CONTACT_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label>Результат задачи<select value={outcomeResult} onChange={(event) => setOutcomeResult(event.target.value as DealControlTaskOutcome['result_status'])}>{Object.entries(OUTCOME_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label>Что произошло<textarea value={outcomeNote} onChange={(event) => setOutcomeNote(event.target.value)} placeholder="Коротко зафиксируй ответ клиента или причину отсутствия результата" /></label>
         <label>Следующий шаг<input value={outcomeNextStep} onChange={(event) => setOutcomeNextStep(event.target.value)} placeholder="Например: отправить уточнённый расчёт" /></label>
         <label>Срок следующего шага<input type="datetime-local" value={outcomeNextAt} onChange={(event) => setOutcomeNextAt(event.target.value)} /></label>
-        <small>Для достигнутого, частичного или перенесённого результата следующий шаг и срок обязательны. При отказе обязательна причина.</small>
-        <div><button className="dc-button" onClick={() => setOutcomeTask(null)}>Отмена</button><button className="dc-button primary" onClick={() => void applyOutcome()}>Сохранить результат</button></div>
+        <small className={outcomeError ? 'dc-form-error' : ''}>{outcomeError || 'Контакт, результат и следующий шаг сохраняются отдельно от отметки задачи в Bitrix.'}</small>
+        <div><button className="dc-button" onClick={() => setOutcomeTask(null)}>Отмена</button><button className="dc-button primary" disabled={Boolean(outcomeError)} onClick={() => void applyOutcome()}>{view === 'manager' ? 'Сохранить результат' : 'Сохранить корректировку'}</button></div>
       </section>
     </div> : null}
   </main>
 }
 
-function Kpis({ view, data }: { view: DealControlView; data: DealControlDashboard }) {
-  const summary = data.summary
+function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDashboard['summary'] }) {
   const dashboard = view === 'dashboard'
   const values = dashboard
     ? [
@@ -801,8 +928,7 @@ function Kpis({ view, data }: { view: DealControlView; data: DealControlDashboar
   </section>
 }
 
-function OutcomeMetrics({ data }: { data: DealControlDashboard }) {
-  const metrics = data.outcome_metrics
+function OutcomeMetrics({ metrics }: { metrics: DealControlMetrics }) {
   const values = [
     ['Всего поставлено', metrics.overall.tasks],
     ['Действия выполнены', metrics.overall.actions_completed],
@@ -810,6 +936,7 @@ function OutcomeMetrics({ data }: { data: DealControlDashboard }) {
     ['Цель достигнута', metrics.overall.target_results],
     ['Следующий шаг', metrics.overall.next_steps],
     ['Продвинулись', metrics.overall.stage_progressed],
+    ['Отменено', metrics.cancelled_tasks],
   ]
   return <section className="dc-outcome-metrics">
     <div className="dc-section-head"><div><h3>Воронка результатов</h3><p>Не галочки, а подтверждённый контакт, результат и следующий шаг.</p></div><span>Пилот</span></div>
@@ -868,7 +995,7 @@ function TimeTabs(props: {
 }) {
   const tabs: Array<[TimeView, string, number]> = props.view === 'dashboard'
     ? [['all', 'Все сделки', props.totalDeals], ['attention', 'Требуют внимания', props.attention], ['today', 'На сегодня', props.today], ['future', 'Будущие', props.future]]
-    : [['overdue', 'Просроченные', props.countForPlan('overdue')], ['today', 'На сегодня', props.countForPlan('today')], ['tomorrow', 'На завтра', props.countForPlan('tomorrow')], ['future', 'Будущие', props.countForPlan('future')]]
+    : [['overdue', 'Просроченные', props.countForPlan('overdue')], ['today', 'Сегодня', props.countForPlan('today')], ['tomorrow', 'Завтра', props.countForPlan('tomorrow')], ['future', 'Будущие', props.countForPlan('future')], ['all', 'Все', props.countForPlan('all')]]
   return <nav className="dc-time-tabs">
     {tabs.map(([key, label, count]) => <button className={props.active === key ? 'active' : ''} key={key} onClick={() => props.onChange(key)}>{label}<span>{count}</span></button>)}
   </nav>
@@ -885,8 +1012,8 @@ function DealTable(props: {
   onReschedule: (task: DealControlTask) => void
 }) {
   return <div className="dc-table-wrap">
-    <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Стадия</span><span>Сумма и прогноз оплаты</span></div>
     <div className="dc-table-scroll">
+      <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Стадия</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
         const task = currentTaskOf(deal)
         const age = stageAge(deal.modified_at_crm)
@@ -907,8 +1034,8 @@ function DealTable(props: {
 
 function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; selectedId: string; onSelect: (id: string) => void }) {
   return <div className="dc-table-wrap task-table">
-    <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
     <div className="dc-table-scroll">
+      <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
         const task = currentTaskOf(deal)
         if (!task) return null
@@ -1056,12 +1183,26 @@ function analysisStageDetail(job: JobState, dealId: string) {
   return progress?.detail || ANALYSIS_STAGE_LABELS[stage] || 'Подготавливаем данные сделки'
 }
 
+function analysisPercent(stage: string, progress: ReturnType<typeof entityAnalysisProgress>, isDone: boolean) {
+  if (isDone) return 100
+  const base = ANALYSIS_STAGE_PROGRESS[stage] ?? 10
+  const ranges: Record<string, number> = { audio_download: 49, transcription: 71 }
+  const end = ranges[stage]
+  const current = Number(progress?.current)
+  const total = Number(progress?.total)
+  if (!end || !Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return base
+  return Math.min(end, Math.round(base + ((Math.max(0, current) / total) * (end - base))))
+}
+
 function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }) {
   const progress = entityAnalysisProgress(job, dealId)
   const stage = progress?.stage || (job.status === 'done' ? 'done' : job.status === 'error' ? 'error' : 'queued')
   const isError = job.status === 'error' || progress?.status === 'error'
   const isDone = job.status === 'done' || progress?.status === 'done' || progress?.status === 'skipped'
-  const percent = ANALYSIS_STAGE_PROGRESS[stage] ?? (isDone ? 100 : 10)
+  const percent = analysisPercent(stage, progress, isDone)
+  const counter = progress?.total && progress.total > 0
+    ? `${stage === 'transcription' ? 'Звонок' : 'Файл'} ${progress.current || 0} из ${progress.total}`
+    : ''
   const steps = [
     ['crm_context', 'История CRM', 15],
     ['transcription', 'Звонки и транскрипты', 50],
@@ -1078,7 +1219,8 @@ function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }
     <ol>
       {steps.map(([key, label, threshold]) => <li className={isError && percent < threshold ? '' : percent >= threshold ? 'done' : percent + 20 >= threshold ? 'active' : ''} key={key}><i>{percent >= threshold ? '✓' : ''}</i><span>{label}</span></li>)}
     </ol>
-    <p>{isError ? progress?.error || job.error || 'Проверьте сообщение об ошибке и повторите запуск.' : analysisStageDetail(job, dealId)}</p>
+    <p>{isError ? progress?.error || job.error || 'Проверьте сообщение об ошибке и повторите запуск.' : <>{counter ? <strong>{counter}. </strong> : null}{analysisStageDetail(job, dealId)}</>}</p>
+    {!isDone && !isError && progress?.updated_at ? <small>Последнее обновление: {dateTime(progress.updated_at)}</small> : null}
     {stage === 'skipped' ? <small>Платный полный вызов не потребовался: значимых новых клиентских данных не обнаружено.</small> : null}
   </section>
 }
@@ -1110,14 +1252,18 @@ function CurrentTask(props: {
       {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробное поручение</summary><p>{task.task_text}</p></details> : null}
       <p className="dc-task-meta">Срок: {dateTime(task.due_at)} · Касание: {task.touch_type || 'не указано'}</p>
       <div className="dc-task-actions">
-        <button className="dc-button primary" onClick={() => props.onOutcome(task)}>{task.latest_outcome ? 'Обновить результат' : 'Зафиксировать результат'}</button>
+        {props.view === 'manager'
+          ? <button className="dc-button primary" onClick={() => props.onOutcome(task)}>{task.latest_outcome ? 'Обновить результат' : 'Зафиксировать результат'}</button>
+          : task.latest_outcome
+            ? <button className="dc-button primary" onClick={() => props.onOutcome(task)}>Скорректировать результат</button>
+            : null}
         <button className="dc-button" disabled={task.local_status !== 'active'} onClick={() => props.onReschedule(task)}>Перенести срок</button>
       </div>
       {task.latest_outcome ? <div className="dc-outcome-summary">
         <div><small>Контакт</small><strong>{CONTACT_LABELS[task.latest_outcome.contact_status]}</strong></div>
         <div><small>Результат</small><strong>{OUTCOME_LABELS[task.latest_outcome.result_status]}</strong></div>
         <div><small>Следующий шаг</small><strong>{task.latest_outcome.next_step_text || 'Не назначен'}</strong><span>{dateTime(task.latest_outcome.next_step_at)}</span></div>
-      </div> : <p className="dc-boundary-note">Результат ещё не зафиксирован. Закрытие задачи в Bitrix само по себе не считается ответом клиента.</p>}
+      </div> : <p className="dc-boundary-note">{props.view === 'rop' ? 'Менеджер ещё не зафиксировал результат. Закрытие задачи в Bitrix само по себе не считается ответом клиента.' : 'Результат ещё не зафиксирован. Закрытие задачи в Bitrix само по себе не считается ответом клиента.'}</p>}
       {task.crm_facts?.length ? <details className="dc-crm-facts"><summary>Что обнаружено после обновления Bitrix: {task.crm_facts.length}</summary><ul>{task.crm_facts.map((fact) => <li key={fact.id}><span>{fact.review_status === 'confirmed' ? '✓' : fact.review_status === 'rejected' ? '×' : '?'}</span><div><strong>{fact.summary || fact.fact_kind}</strong><small>{dateTime(fact.occurred_at)} · {fact.contact_class === 'attempt' ? 'попытка, контакт не доказан' : fact.contact_class === 'deal_progress' ? 'движение сделки' : 'требует проверки'}</small>{fact.review_status === 'candidate' ? <em><button onClick={() => void props.onReviewFact(task, fact.id, 'confirmed')}>Подтвердить факт</button><button onClick={() => void props.onReviewFact(task, fact.id, 'rejected')}>Не относится</button></em> : null}</div></li>)}</ul></details> : null}
       {task.crm_execution_status === 'match_review' ? <button className="dc-link-button" onClick={() => void props.onConfirmMatch(task)}>Подтвердить совпадение с задачей Bitrix</button> : null}
       {props.view !== 'manager' ? <div className="dc-guidance-action">
@@ -1212,7 +1358,7 @@ function ManagerGuidance({ deal, task, onCopy }: {
       <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div><span>✦ Помощник продаж</span></div>
       <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
       <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
-      <div className="dc-script"><strong>Речевой модуль для звонка</strong><pre>{textOr(coaching.script, 'Готовый скрипт пока не сформирован.')}</pre><div><button className="dc-button" onClick={() => void onCopy(coaching.script || '', 'Скрипт')}>Скопировать скрипт</button><button className="dc-button primary" onClick={() => void onCopy(coaching.script || '', 'Скрипт для звонка')}>☎ Подготовить звонок</button></div></div>
+      <div className="dc-script"><strong>Речевой модуль для звонка</strong><pre>{textOr(coaching.script, 'Готовый скрипт пока не сформирован.')}</pre><div><button className="dc-button primary" onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать сценарий звонка</button></div></div>
     </section>
   </>
 }
@@ -1237,7 +1383,7 @@ function TaskGuidanceContent({ content, touchType, onCopy, ropPreview = false }:
       <div className="dc-section-head"><div><h3>Как выполнить задачу РОПа</h3><p>Подсказка относится только к текущему поручению</p></div><span>✦ Помощник продаж</span></div>
       <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{content.contact_goal}</p></div>
       <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{content.contact_questions.length ? <ol>{content.contact_questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Дополнительные вопросы не требуются.</p>}</div>
-      <div className="dc-script"><strong>{isCall ? 'Речевой модуль для звонка' : 'Готовый текст для клиента'}</strong><pre>{content.ready_text}</pre><div><button className="dc-button" onClick={() => void onCopy(content.ready_text, isCall ? 'Скрипт' : 'Текст')}>Скопировать {isCall ? 'скрипт' : 'текст'}</button><button className="dc-button primary" onClick={() => void onCopy(content.ready_text, 'Подготовка контакта')}>{isCall ? '☎ Подготовить звонок' : '✉ Подготовить сообщение'}</button></div></div>
+      <div className="dc-script"><strong>{isCall ? 'Речевой модуль для звонка' : 'Готовый текст для клиента'}</strong><pre>{content.ready_text}</pre><div><button className="dc-button primary" onClick={() => void onCopy(content.ready_text, isCall ? 'Сценарий звонка' : 'Текст сообщения')}>Скопировать {isCall ? 'сценарий звонка' : 'текст сообщения'}</button></div></div>
       <div className="dc-crm-checklist"><strong>Что зафиксировать в Bitrix после контакта</strong><ul>{content.crm_checklist.map((item) => <li key={item}>{item}</li>)}</ul></div>
     </section>
   </>

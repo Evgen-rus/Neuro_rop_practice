@@ -6,7 +6,7 @@ from dataclasses import asdict
 from unittest.mock import call, patch
 
 from api.jobs import AnalyzeOptions, JobState, _JOBS, _run_job
-from run_rop_assistant import WorkflowOptions, run_analysis
+from run_rop_assistant import WorkflowOptions, refresh_workspace_after_transcription, run_analysis
 
 
 def workflow_options() -> WorkflowOptions:
@@ -26,6 +26,30 @@ def workflow_options() -> WorkflowOptions:
 
 
 class AnalysisBatchResilienceTests(unittest.TestCase):
+    def test_deal_workspace_is_fully_refreshed_after_transcription(self) -> None:
+        commands: list[tuple[list[str], str]] = []
+
+        def fake_run(command: list[str], title: str) -> None:
+            commands.append((command, title))
+
+        with patch("run_rop_assistant.run_command", side_effect=fake_run):
+            refresh_workspace_after_transcription("deal", ["42"])
+
+        self.assertEqual(
+            [title for _, title in commands],
+            [
+                "Обновление рабочего манифеста после транскрибации",
+                "Обновление диагностики после транскрибации",
+                "Обновление контекста сделки после транскрибации",
+            ],
+        )
+        self.assertTrue(commands[0][0][1].endswith("bitrix\\deals\\3_prepare_deals_workspace.py"))
+        self.assertTrue(commands[1][0][1].endswith("bitrix\\context_diagnostics.py"))
+        self.assertTrue(commands[2][0][1].endswith("bitrix\\deals\\4_build_deals_llm_context.py"))
+        self.assertIn("42", commands[0][0])
+        self.assertIn("42", commands[1][0])
+        self.assertIn("42", commands[2][0])
+
     def test_run_analysis_continues_after_one_entity_fails(self) -> None:
         attempted: list[str] = []
 
