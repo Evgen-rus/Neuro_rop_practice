@@ -1877,6 +1877,12 @@ textarea {
   margin-top: 14px;
 }
 
+.dc-setup {
+  --dc-text: #0f1f3a;
+  --dc-line: #d9e4f0;
+  --dc-blue: #1768f2;
+}
+
 .dc-setup,
 .dc-loading {
   display: grid;
