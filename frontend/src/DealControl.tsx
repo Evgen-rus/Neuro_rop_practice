@@ -16,6 +16,7 @@ import {
   updateDealControlDeal,
   updateDealControlTask,
   type DealControlDashboard,
+  type DealControlBitrixTask,
   type DealControlDeal,
   type DealControlMetrics,
   type DealControlTask,
@@ -27,6 +28,8 @@ import {
 
 type DealControlView = 'dashboard' | 'rop' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
+
+const BITRIX_DEAL_BASE_URL = 'https://obtorg.bitrix24.ru/crm/deal/details'
 
 const OUTCOME_LABELS: Record<DealControlTaskOutcome['result_status'], string> = {
   pending: 'Результат пока не получен',
@@ -99,6 +102,10 @@ function splitIds(value: string) {
   return value.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean)
 }
 
+function bitrixDealUrl(dealId: string) {
+  return `${BITRIX_DEAL_BASE_URL}/${encodeURIComponent(dealId)}/`
+}
+
 function money(value?: string | number | null, currency = 'RUB') {
   const parsed = Number(String(value ?? '').replace(',', '.'))
   if (!Number.isFinite(parsed)) return '—'
@@ -164,27 +171,49 @@ function currentTaskOf(deal: DealControlDeal) {
     || null
 }
 
-function timeRank(task: DealControlTask | null) {
-  if (!task) return 5
-  return ({ overdue: 0, today: 1, tomorrow: 2, future: 3, completed_today: 4 } as Record<string, number>)[task.time_bucket || ''] ?? 5
+function primaryBitrixTaskOf(deal: DealControlDeal) {
+  return deal.primary_bitrix_task || deal.bitrix_tasks?.[0] || null
 }
 
-function taskMatchesTime(task: DealControlTask | null, view: TimeView) {
+function controlTimeBucket(deal: DealControlDeal) {
+  return currentTaskOf(deal)?.time_bucket || primaryBitrixTaskOf(deal)?.time_bucket || null
+}
+
+function timeRank(deal: DealControlDeal) {
+  return ({ overdue: 0, today: 1, tomorrow: 2, future: 3, completed_today: 4, unscheduled: 5 } as Record<string, number>)[controlTimeBucket(deal) || ''] ?? 6
+}
+
+function dealMatchesTime(deal: DealControlDeal, view: TimeView) {
   if (view === 'all') return true
-  if (!task) return false
-  if (view === 'attention') return task.time_bucket === 'overdue' || task.crm_execution_status === 'match_review'
-  if (view === 'today') return task.time_bucket === 'today'
-  if (view === 'future') return task.time_bucket === 'future'
-  return task.time_bucket === view
+  const task = currentTaskOf(deal)
+  const bucket = controlTimeBucket(deal)
+  if (view === 'attention') return bucket === 'overdue' || task?.crm_execution_status === 'match_review'
+  if (view === 'today') return bucket === 'today'
+  if (view === 'future') return bucket === 'future' || bucket === 'unscheduled'
+  return bucket === view
 }
 
 function preferredTaskTimeView(deals: DealControlDeal[]): TimeView {
-  const tasks = deals.map(currentTaskOf).filter((task): task is DealControlTask => Boolean(task))
-  if (tasks.some((task) => task.time_bucket === 'overdue')) return 'overdue'
-  if (tasks.some((task) => task.time_bucket === 'today')) return 'today'
-  if (tasks.some((task) => task.time_bucket === 'tomorrow')) return 'tomorrow'
-  if (tasks.some((task) => task.time_bucket === 'future')) return 'future'
+  const buckets = deals.map(controlTimeBucket).filter(Boolean)
+  if (buckets.includes('overdue')) return 'overdue'
+  if (buckets.includes('today')) return 'today'
+  if (buckets.includes('tomorrow')) return 'tomorrow'
+  if (buckets.includes('future') || buckets.includes('unscheduled')) return 'future'
   return 'all'
+}
+
+function bitrixTaskStatus(task: DealControlBitrixTask) {
+  if (task.time_bucket === 'overdue') return 'Bitrix: задача просрочена'
+  if (task.time_bucket === 'today') return 'Bitrix: задача на сегодня'
+  if (task.time_bucket === 'tomorrow') return 'Bitrix: задача на завтра'
+  if (task.time_bucket === 'unscheduled') return 'Bitrix: задача без срока'
+  return 'Bitrix: задача открыта'
+}
+
+function bitrixTaskTone(task: DealControlBitrixTask) {
+  if (task.time_bucket === 'overdue') return 'overdue'
+  if (task.time_bucket === 'today') return 'today'
+  return 'done'
 }
 
 function taskPlanTitle(view: TimeView) {
@@ -392,15 +421,17 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       .filter((deal) => !stageFilter || deal.stage_name === stageFilter)
       .filter((deal) => {
         const task = currentTaskOf(deal)
-        if (statusFilter === 'pending') return task?.local_status === 'active'
+        const bitrixTask = primaryBitrixTaskOf(deal)
+        if (statusFilter === 'pending') return task?.local_status === 'active' || Boolean(bitrixTask)
         if (statusFilter === 'completed') return task?.local_status === 'completed'
-        if (statusFilter === 'overdue') return task?.time_bucket === 'overdue'
+        if (statusFilter === 'overdue') return controlTimeBucket(deal) === 'overdue'
         return true
       })
       .filter((deal) => {
         if (!needle) return true
         const task = currentTaskOf(deal)
-        return `${deal.title || ''} ${deal.deal_id} ${deal.manager_name || ''} ${task?.task_text || ''}`
+        const bitrixText = (deal.bitrix_tasks || []).map((item) => item.subject).join(' ')
+        return `${deal.title || ''} ${deal.deal_id} ${deal.manager_name || ''} ${task?.task_text || ''} ${bitrixText}`
           .toLocaleLowerCase('ru')
           .includes(needle)
       })
@@ -410,14 +441,15 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     return [...filteredDeals]
       .filter((deal) => {
         const task = currentTaskOf(deal)
-        if (timeView === 'all') return view === 'dashboard' || Boolean(task && task.local_status !== 'cancelled')
-        return taskMatchesTime(task, timeView)
+        const bitrixTask = primaryBitrixTaskOf(deal)
+        if (timeView === 'all') return view === 'dashboard' || Boolean((task && task.local_status !== 'cancelled') || bitrixTask)
+        return dealMatchesTime(deal, timeView)
       })
       .sort((a, b) => {
-        const first = currentTaskOf(a)
-        const second = currentTaskOf(b)
-        const rank = timeRank(first) - timeRank(second)
-        return rank || String(first?.due_at || '').localeCompare(String(second?.due_at || ''))
+        const rank = timeRank(a) - timeRank(b)
+        const firstAt = currentTaskOf(a)?.due_at || primaryBitrixTaskOf(a)?.deadline
+        const secondAt = currentTaskOf(b)?.due_at || primaryBitrixTaskOf(b)?.deadline
+        return rank || String(firstAt || '').localeCompare(String(secondAt || ''))
       })
   }, [filteredDeals, timeView, view])
 
@@ -431,17 +463,25 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const activeTasks = filteredTasks.filter((task) => task.local_status === 'active')
+    const importedTasks = filteredDeals
+      .filter((deal) => !currentTaskOf(deal))
+      .map(primaryBitrixTaskOf)
+      .filter((task): task is DealControlBitrixTask => Boolean(task))
+    const activeBuckets = [
+      ...activeTasks.map((task) => task.time_bucket),
+      ...importedTasks.map((task) => task.time_bucket),
+    ]
     const probabilities = filteredDeals
       .map((deal) => deal.probability)
       .filter((value): value is number => value != null)
     return {
       active_deals: filteredDeals.length,
       portfolio_amount: filteredDeals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0),
-      tasks_total: activeTasks.length,
-      tasks_today: activeTasks.filter((task) => task.time_bucket === 'today').length,
-      tasks_tomorrow: activeTasks.filter((task) => task.time_bucket === 'tomorrow').length,
-      tasks_future: activeTasks.filter((task) => task.time_bucket === 'future').length,
-      tasks_overdue: activeTasks.filter((task) => task.time_bucket === 'overdue').length,
+      tasks_total: activeTasks.length + importedTasks.length,
+      tasks_today: activeBuckets.filter((bucket) => bucket === 'today').length,
+      tasks_tomorrow: activeBuckets.filter((bucket) => bucket === 'tomorrow').length,
+      tasks_future: activeBuckets.filter((bucket) => bucket === 'future' || bucket === 'unscheduled').length,
+      tasks_overdue: activeBuckets.filter((bucket) => bucket === 'overdue').length,
       tasks_completed_today: filteredTasks.filter((task) => task.time_bucket === 'completed_today').length,
       average_probability: probabilities.length
         ? Math.round(probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length)
@@ -450,15 +490,16 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }, [filteredDeals, filteredTasks])
 
   const timeCounts = useMemo(() => {
-    const currentTasks = filteredDeals
-      .map(currentTaskOf)
-      .filter((task): task is DealControlTask => Boolean(task && task.local_status !== 'cancelled'))
+    const controlDeals = filteredDeals.filter((deal) => {
+      const task = currentTaskOf(deal)
+      return Boolean((task && task.local_status !== 'cancelled') || primaryBitrixTaskOf(deal))
+    })
     return {
-      all: currentTasks.length,
-      overdue: currentTasks.filter((task) => task.time_bucket === 'overdue').length,
-      today: currentTasks.filter((task) => task.time_bucket === 'today').length,
-      tomorrow: currentTasks.filter((task) => task.time_bucket === 'tomorrow').length,
-      future: currentTasks.filter((task) => task.time_bucket === 'future').length,
+      all: controlDeals.length,
+      overdue: controlDeals.filter((deal) => controlTimeBucket(deal) === 'overdue').length,
+      today: controlDeals.filter((deal) => controlTimeBucket(deal) === 'today').length,
+      tomorrow: controlDeals.filter((deal) => controlTimeBucket(deal) === 'tomorrow').length,
+      future: controlDeals.filter((deal) => ['future', 'unscheduled'].includes(controlTimeBucket(deal) || '')).length,
     }
   }, [filteredDeals])
 
@@ -562,6 +603,32 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       setExpectedResult('')
       setDueAt('')
       setNotice('Поручение сохранено локально. Менеджеру нужно отразить его в Bitrix вручную.')
+      await reload()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function adoptBitrixTask(deal: DealControlDeal, bitrixTask: DealControlBitrixTask) {
+    const expected = 'Зафиксировать подтверждённый результат и следующий шаг'
+    if (!bitrixTask.deadline) {
+      setSelectedId(deal.deal_id)
+      setTaskText(bitrixTask.subject)
+      setTouchType('Задача Bitrix')
+      setExpectedResult(expected)
+      setDueAt('')
+      setNotice('Поручение подготовлено из задачи Bitrix. Укажите срок и сохраните его.')
+      return
+    }
+    setError('')
+    try {
+      await createDealControlTask(deal.deal_id, {
+        task_text: bitrixTask.subject,
+        touch_type: 'Задача Bitrix',
+        expected_result: expected,
+        due_at: bitrixTask.deadline,
+      })
+      setNotice('Задача Bitrix взята под контроль РОПа без создания дубликата в CRM.')
       await reload()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -869,6 +936,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
           dueAt={dueAt}
           setDueAt={setDueAt}
           onAddTask={addTask}
+          onAdoptBitrixTask={adoptBitrixTask}
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
@@ -1016,10 +1084,11 @@ function DealTable(props: {
       <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Стадия</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
         const task = currentTaskOf(deal)
+        const bitrixTask = primaryBitrixTaskOf(deal)
         const age = stageAge(deal.modified_at_crm)
-        return <article className={`dc-deal-row ${taskTone(task)} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><b>#{deal.deal_id} ↗</b><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
-          <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || deal.next_control_at)}</strong><div><StatusChip task={task} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div></div>
+        return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
+          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><a className="dc-bitrix-deal-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}>#{deal.deal_id} ↗</a><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
+          <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || bitrixTask?.deadline || deal.next_control_at)}</strong><div><ControlTimeChip task={task} bitrixTask={bitrixTask} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div><ControlSyncState task={task} bitrixTask={bitrixTask} /></div>
           <div className="dc-stage-cell"><small>Текущая стадия</small><strong>{deal.stage_name || 'Не указана'}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
@@ -1038,14 +1107,16 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
       <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
         const task = currentTaskOf(deal)
-        if (!task) return null
-        return <article className={`dc-task-row ${taskTone(task)} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${task.id}`} onClick={() => onSelect(deal.deal_id)}>
-          <span className={`dc-check ${task.local_status === 'completed' ? 'checked' : ''}`}>{task.local_status === 'completed' ? '✓' : ''}</span>
-          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><b>#{deal.deal_id} ↗</b></div>
+        const bitrixTask = primaryBitrixTaskOf(deal)
+        if (!task && !bitrixTask) return null
+        const rowTone = task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'
+        return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${task?.id || bitrixTask?.activity_id}`} onClick={() => onSelect(deal.deal_id)}>
+          <span className={`dc-check ${task?.local_status === 'completed' ? 'checked' : ''}`}>{task?.local_status === 'completed' ? '✓' : ''}</span>
+          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><a className="dc-bitrix-deal-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}>#{deal.deal_id} ↗</a></div>
           <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span><small>♟ {deal.manager_name}</small></div>
-          <div className="dc-task-name"><strong>{compactTaskText(task.task_text)}</strong><small>Касание: {task.touch_type || 'не указано'}</small></div>
-          <time>{dateTime(task.due_at)}</time>
-          <div className="dc-task-result-cell"><StatusChip task={task} /><small>{task.latest_outcome ? OUTCOME_LABELS[task.latest_outcome.result_status] : 'Результат не зафиксирован'}</small></div>
+          <div className="dc-task-name"><strong>{compactTaskText(task?.task_text || bitrixTask?.subject || '')}</strong><small>{task ? `Касание: ${task.touch_type || 'не указано'}` : 'Источник: Bitrix'}</small>{deal.bitrix_tasks.length > 1 ? <small>Ещё задач Bitrix: {deal.bitrix_tasks.length - 1}</small> : null}</div>
+          <time>{dateTime(task?.due_at || bitrixTask?.deadline)}</time>
+          <div className="dc-task-result-cell"><ControlTimeChip task={task} bitrixTask={bitrixTask} /><ControlSyncState task={task} bitrixTask={bitrixTask} compact /><small>{task?.latest_outcome ? OUTCOME_LABELS[task.latest_outcome.result_status] : task ? 'Результат не зафиксирован' : 'Поручение РОПа не добавлено'}</small></div>
         </article>
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
@@ -1055,6 +1126,51 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
 
 function StatusChip({ task }: { task: DealControlTask | null }) {
   return <span className={`dc-status ${taskTone(task)}`}><i />{taskStatus(task)}</span>
+}
+
+function ControlTimeChip({ task, bitrixTask }: {
+  task: DealControlTask | null
+  bitrixTask: DealControlBitrixTask | null
+}) {
+  if (task) return <StatusChip task={task} />
+  if (!bitrixTask) return <StatusChip task={null} />
+  const label = bitrixTask.time_bucket === 'overdue'
+    ? 'Просрочено'
+    : bitrixTask.time_bucket === 'today'
+      ? 'На сегодня'
+      : bitrixTask.time_bucket === 'tomorrow'
+        ? 'На завтра'
+        : 'Будущее'
+  return <span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}><i />{label}</span>
+}
+
+function ControlSyncState({ task, bitrixTask, compact = false }: {
+  task: DealControlTask | null
+  bitrixTask: DealControlBitrixTask | null
+  compact?: boolean
+}) {
+  const bitrixLabel = task?.crm_execution_status === 'match_review'
+    ? 'Bitrix: задача найдена — подтвердить связь'
+    : task?.crm_execution_status === 'crm_closed'
+      ? 'Bitrix: задача закрыта'
+      : task?.crm_execution_status === 'crm_open'
+          ? 'Bitrix: задача открыта'
+          : task && bitrixTask
+            ? 'Bitrix: открытая задача есть — не связана'
+            : bitrixTask
+              ? bitrixTaskStatus(bitrixTask)
+          : 'Bitrix: задача не найдена'
+  const bitrixTone = task?.crm_execution_status === 'match_review'
+    ? 'warn'
+    : task?.crm_execution_status === 'not_reflected' && bitrixTask
+      ? 'warn'
+      : bitrixTask || task?.crm_execution_status === 'crm_open' || task?.crm_execution_status === 'crm_closed'
+      ? 'ok'
+      : 'missing'
+  return <div className={`dc-sync-state ${compact ? 'compact' : ''}`}>
+    <span className={task ? 'ok' : 'muted'}>{task ? '✓ Поручение РОПа: сохранено' : 'Поручение РОПа: не добавлено'}</span>
+    <span className={bitrixTone}>{bitrixLabel}</span>
+  </div>
 }
 
 function DealDetail(props: {
@@ -1079,6 +1195,7 @@ function DealDetail(props: {
   dueAt: string
   setDueAt: (value: string) => void
   onAddTask: () => Promise<void>
+  onAdoptBitrixTask: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   analysisJob: JobState | null
   analyzingDealId: string
   onAnalyze: (deal: DealControlDeal) => Promise<void>
@@ -1099,7 +1216,7 @@ function DealDetail(props: {
 
   return <aside className="dc-detail">
     <header>
-      <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p></div>
+      <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p><a className="dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть в Bitrix ↗</a></div>
       <button
         className="dc-button dc-analyze-button"
         disabled={Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))}
@@ -1132,6 +1249,7 @@ function DealDetail(props: {
 
     <CurrentTask
       view={props.view}
+      deal={deal}
       task={task}
       onConfirmMatch={props.onConfirmMatch}
       onReviewFact={props.onReviewFact}
@@ -1141,6 +1259,7 @@ function DealDetail(props: {
       guidanceJob={props.guidanceJob}
       guidanceTaskId={props.guidanceTaskId}
       hasAnalysis={Boolean(coaching.report_id)}
+      onAdoptBitrixTask={props.onAdoptBitrixTask}
     />
 
     {managerView
@@ -1227,6 +1346,7 @@ function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }
 
 function CurrentTask(props: {
   view: DealControlView
+  deal: DealControlDeal
   task: DealControlTask | null
   onConfirmMatch: (task: DealControlTask) => Promise<void>
   onReviewFact: (task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') => Promise<void>
@@ -1236,8 +1356,10 @@ function CurrentTask(props: {
   guidanceJob: DealTaskGuidanceJob | null
   guidanceTaskId: number | null
   hasAnalysis: boolean
+  onAdoptBitrixTask: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
 }) {
   const task = props.task
+  const bitrixTask = primaryBitrixTaskOf(props.deal)
   const currentGuidance = task?.guidance && !task.guidance.is_stale
   const guidanceRunning = Boolean(
     task
@@ -1245,12 +1367,13 @@ function CurrentTask(props: {
     && props.guidanceJob
     && ['queued', 'running'].includes(props.guidanceJob.status),
   )
-  return <section className={`dc-current-task ${taskTone(task)}`}>
-    <div className="dc-section-head"><h3>Текущая задача</h3><StatusChip task={task} /></div>
+  return <section className={`dc-current-task ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'}`}>
+    <div className="dc-section-head"><h3>{task ? 'Текущее поручение' : bitrixTask ? 'Текущая задача Bitrix' : 'Текущая задача'}</h3><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div>
     {task ? <>
       <div className="dc-task-hero"><span>☎</span><div><h4>{compactTaskText(task.task_text)}</h4><p>{task.expected_result || 'Ожидаемый результат не указан'}</p></div></div>
       {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробное поручение</summary><p>{task.task_text}</p></details> : null}
       <p className="dc-task-meta">Срок: {dateTime(task.due_at)} · Касание: {task.touch_type || 'не указано'}</p>
+      <ControlSyncState task={task} bitrixTask={bitrixTask} />
       <div className="dc-task-actions">
         {props.view === 'manager'
           ? <button className="dc-button primary" onClick={() => props.onOutcome(task)}>{task.latest_outcome ? 'Обновить результат' : 'Зафиксировать результат'}</button>
@@ -1293,7 +1416,18 @@ function CurrentTask(props: {
         ? <TaskGuidanceProgress job={props.guidanceJob} />
         : null}
       <small className="dc-boundary-note">Выполнение поручения и результат по клиенту учитываются отдельно.</small>
-    </> : <p>РОП ещё не поставил локальное поручение по этой сделке.</p>}
+    </> : bitrixTask ? <>
+      <div className="dc-task-hero"><span>✓</span><div><h4>{compactTaskText(bitrixTask.subject)}</h4><p>Открытая задача получена из Bitrix и не создавалась нашим приложением.</p></div></div>
+      <p className="dc-task-meta">Срок: {dateTime(bitrixTask.deadline)} · Источник: Bitrix</p>
+      <ControlSyncState task={null} bitrixTask={bitrixTask} />
+      {props.deal.bitrix_tasks.length > 1 ? <details className="dc-bitrix-task-list">
+        <summary>Другие открытые задачи Bitrix: {props.deal.bitrix_tasks.length - 1}</summary>
+        <ul>{props.deal.bitrix_tasks.slice(1).map((item) => <li key={item.activity_id}><strong>{compactTaskText(item.subject)}</strong><span>{dateTime(item.deadline)}</span></li>)}</ul>
+      </details> : null}
+      {props.view !== 'manager'
+        ? <button className="dc-button primary dc-adopt-task" onClick={() => void props.onAdoptBitrixTask(props.deal, bitrixTask)}>Взять под контроль</button>
+        : <p className="dc-boundary-note">Задача уже стоит в Bitrix. Поручение РОПа к ней пока не добавлено.</p>}
+    </> : <><ControlSyncState task={null} bitrixTask={null} /><p>РОП ещё не поставил локальное поручение по этой сделке.</p></>}
   </section>
 }
 

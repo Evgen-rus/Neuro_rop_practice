@@ -495,6 +495,15 @@ export type DealTaskGuidanceJob = {
   error?: string | null
 }
 
+export type DealControlBitrixTask = {
+  activity_id: string
+  subject: string
+  deadline?: string | null
+  time_bucket: 'overdue' | 'today' | 'tomorrow' | 'future' | 'unscheduled'
+  completed: boolean
+  provider_id: string
+}
+
 export type DealControlDeal = {
   deal_id: string
   source: 'initial' | 'pipeline'
@@ -511,6 +520,8 @@ export type DealControlDeal = {
   probability?: number | null
   expected_payment_period?: string | null
   next_control_at?: string | null
+  bitrix_tasks: DealControlBitrixTask[]
+  primary_bitrix_task?: DealControlBitrixTask | null
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
   coaching: {

@@ -721,8 +721,24 @@ textarea {
   font-size: 8px;
 }
 
-.dc-deal-main p b {
+.dc-deal-main p b,
+.dc-bitrix-deal-link {
   color: var(--dc-blue);
+}
+
+.dc-bitrix-deal-link {
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.dc-bitrix-deal-link:hover,
+.dc-bitrix-detail-link:hover {
+  text-decoration: underline;
+}
+
+.dc-task-row .dc-bitrix-deal-link {
+  margin-top: 3px;
+  font-size: 9px;
 }
 
 .dc-control-cell {
@@ -927,6 +943,53 @@ textarea {
 .dc-status.future { border-color: #b9e1ca; color: #137344; background: #effaf4; }
 .dc-status.done { border-color: #aee0c2; color: #117540; background: #ebf9f1; }
 
+.dc-sync-state {
+  display: grid;
+  gap: 4px;
+  padding: 7px 9px;
+  margin: 8px 0;
+  border: 1px solid #d9e5f2;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .72);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.dc-sync-state span {
+  display: block;
+}
+
+.dc-sync-state .ok { color: #137344; }
+.dc-sync-state .warn { color: #9a6200; }
+.dc-sync-state .missing { color: #bd3030; }
+.dc-sync-state .muted { color: #687b94; }
+
+.dc-sync-state.compact {
+  padding: 0;
+  margin: 3px 0 0;
+  border: 0;
+  background: transparent;
+  font-size: 7px;
+}
+
+.dc-control-cell > .dc-sync-state {
+  display: grid;
+  align-items: start;
+  gap: 2px;
+  padding: 0;
+  margin: 5px 0 0;
+  border: 0;
+  background: transparent;
+  font-size: 7px;
+}
+
+.dc-task-result-cell .dc-sync-state {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .dc-resizer {
   position: relative;
   z-index: 5;
@@ -984,6 +1047,15 @@ textarea {
   margin-bottom: 0;
   color: #2e4667;
   font-size: 11px;
+}
+
+.dc-bitrix-detail-link {
+  display: inline-block;
+  margin-top: 5px;
+  color: var(--dc-blue);
+  font-size: 9px;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .dc-analyze-button {
@@ -1293,6 +1365,45 @@ textarea {
 .dc-task-meta {
   margin: 9px 0 !important;
   color: #62748c;
+}
+
+.dc-bitrix-task-list {
+  padding: 8px 10px;
+  margin: 8px 0;
+  border: 1px solid #d9e5f2;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 9px;
+}
+
+.dc-bitrix-task-list summary {
+  color: #315b92;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.dc-bitrix-task-list ul {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 8px 0 0;
+  list-style: none;
+}
+
+.dc-bitrix-task-list li {
+  display: grid;
+  gap: 2px;
+  padding-top: 6px;
+  border-top: 1px solid #e5edf6;
+}
+
+.dc-bitrix-task-list li span {
+  color: var(--dc-muted);
+}
+
+.dc-adopt-task {
+  width: 100%;
+  margin-top: 4px;
 }
 
 .dc-task-details {

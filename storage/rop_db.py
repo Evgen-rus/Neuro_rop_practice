@@ -352,6 +352,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 probability INTEGER,
                 expected_payment_period TEXT,
                 next_control_at TEXT,
+                bitrix_tasks_json TEXT NOT NULL DEFAULT '[]',
                 last_crm_sync_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -481,6 +482,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "daily_summary_items", "updated_at", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_message_options_json", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
+        _ensure_column(conn, "deal_control_deals", "bitrix_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
@@ -2248,6 +2250,7 @@ def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None
     value = dict(row)
     value["is_active"] = bool(value.get("is_active"))
+    value["bitrix_tasks"] = loads_json(value.pop("bitrix_tasks_json", None), [])
     return value
 
 
@@ -2334,6 +2337,26 @@ def update_deal_control_fields(db_path: str | Path, *, deal_id: str, probability
         conn.execute(
             "UPDATE deal_control_deals SET probability = ?, expected_payment_period = ?, next_control_at = ?, updated_at = ? WHERE deal_id = ?",
             (probability, expected_payment_period, next_control_at, utcish_now(), str(deal_id)),
+        )
+        row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+    result = _row_to_deal_control_deal(row)
+    assert result is not None
+    return result
+
+
+def save_deal_control_bitrix_tasks(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    tasks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        conn.execute(
+            "UPDATE deal_control_deals SET bitrix_tasks_json = ?, updated_at = ? WHERE deal_id = ?",
+            (dumps_json(tasks), utcish_now(), str(deal_id)),
         )
         row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
     result = _row_to_deal_control_deal(row)

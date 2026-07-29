@@ -22,6 +22,7 @@ from storage.rop_db import (
     list_deal_control_tasks,
     record_deal_control_task_event,
     save_deal_control_scope,
+    save_deal_control_bitrix_tasks,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -56,8 +57,61 @@ def _is_completed(activity: dict[str, Any]) -> bool:
     return str(activity.get("COMPLETED") or "").upper() in {"Y", "1", "TRUE"}
 
 
+def _is_bitrix_task(activity: dict[str, Any]) -> bool:
+    return str(activity.get("PROVIDER_ID") or "").upper().startswith("CRM_TASKS_")
+
+
+def _deadline_time(activity: dict[str, Any]) -> datetime | None:
+    parsed = parse_bitrix_dt(activity.get("DEADLINE"))
+    if parsed is None:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=MSK_TZ)
+
+
+def _deadline_bucket(deadline: datetime | None, now: datetime) -> str:
+    if deadline is None:
+        return "unscheduled"
+    if deadline < now:
+        return "overdue"
+    if deadline.date() == now.date():
+        return "today"
+    if (deadline.date() - now.date()).days == 1:
+        return "tomorrow"
+    return "future"
+
+
+def _open_bitrix_tasks(activities: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    for activity in activities:
+        if not _is_bitrix_task(activity) or _is_completed(activity):
+            continue
+        deadline = _deadline_time(activity)
+        tasks.append({
+            "activity_id": str(activity.get("ID") or ""),
+            "subject": str(activity.get("SUBJECT") or "Задача Bitrix"),
+            "deadline": deadline.isoformat() if deadline else None,
+            "time_bucket": _deadline_bucket(deadline, now),
+            "completed": False,
+            "provider_id": str(activity.get("PROVIDER_ID") or ""),
+        })
+    rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
+    return sorted(
+        tasks,
+        key=lambda item: (
+            rank.get(str(item.get("time_bucket")), 5),
+            str(item.get("deadline") or "9999-12-31"),
+            str(item.get("activity_id") or ""),
+        ),
+    )
+
+
 def _match_task_to_activity(task: dict[str, Any], activities: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return only a score; weak matches deliberately require an ROP decision."""
+    confirmed_activity_id = str(task.get("crm_match_activity_id") or "")
+    if confirmed_activity_id:
+        for activity in activities:
+            if str(activity.get("ID") or "") == confirmed_activity_id:
+                return {"activity": activity, "confidence": "high", "score": 1.0, "days_delta": 0}
     task_tokens = _tokens(task.get("task_text"))
     due_at = parse_bitrix_dt(task.get("due_at"))
     if due_at is not None and due_at.tzinfo is None:
@@ -73,7 +127,13 @@ def _match_task_to_activity(task: dict[str, Any], activities: list[dict[str, Any
             days_delta = abs((activity_at.date() - due_at.date()).days)
         date_score = 0.25 if days_delta is not None and days_delta <= 3 else 0.1 if days_delta is not None and days_delta <= 7 else 0
         score = similarity + date_score
-        confidence = "high" if similarity >= 0.55 and date_score >= 0.25 else "medium" if similarity >= 0.35 and date_score else "low"
+        confidence = (
+            "high"
+            if similarity >= 0.55 and date_score >= 0.25
+            else "medium"
+            if (similarity >= 0.35 and date_score) or (_is_bitrix_task(activity) and days_delta == 0)
+            else "low"
+        )
         candidate = {"activity": activity, "confidence": confidence, "score": score, "days_delta": days_delta}
         if best is None or candidate["score"] > best["score"]:
             best = candidate
@@ -239,10 +299,20 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     deals = list_deal_control_deals(db_path, active_only=False)
     activities = fetch_candidate_activities_bulk(crm, [("deal", {"ID": item["deal_id"]}) for item in deals])
     deals_by_id = {str(item["deal_id"]): item for item in deals}
+    for deal_item in deals:
+        deal_id = str(deal_item["deal_id"])
+        deal_activities, activity_error = activities.get(("deal", deal_id), ([], "activity unavailable"))
+        if activity_error:
+            errors.append(f"Сделка #{deal_id}: {activity_error}")
+            continue
+        save_deal_control_bitrix_tasks(
+            db_path,
+            deal_id=deal_id,
+            tasks=_open_bitrix_tasks(deal_activities, current),
+        )
     for task in list_deal_control_tasks(db_path):
         task_activities, activity_error = activities.get(("deal", str(task["deal_id"])), ([], "activity unavailable"))
         if activity_error:
-            errors.append(f"Сделка #{task['deal_id']}: {activity_error}")
             continue
         match = _match_task_to_activity(task, task_activities)
         status, activity_id, confidence = _execution_status(task, match, current)
@@ -392,14 +462,28 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         task["time_bucket"] = _task_time_bucket(task, current)
         tasks_by_deal.setdefault(str(task["deal_id"]), []).append(task)
     items = []
+    projected_tasks_without_local: list[dict[str, Any]] = []
     for deal in deals:
         deal = dict(deal)
         deal_tasks = tasks_by_deal.get(str(deal["deal_id"]), [])
         deal["tasks"] = deal_tasks
         deal["current_task"] = next((task for task in deal_tasks if task.get("local_status") == "active"), None)
+        bitrix_tasks = []
+        for bitrix_task in deal.get("bitrix_tasks") or []:
+            projected = dict(bitrix_task)
+            deadline = parse_bitrix_dt(projected.get("deadline"))
+            if deadline is not None and deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=MSK_TZ)
+            projected["time_bucket"] = _deadline_bucket(deadline, current)
+            bitrix_tasks.append(projected)
+        deal["bitrix_tasks"] = bitrix_tasks
+        deal["primary_bitrix_task"] = bitrix_tasks[0] if bitrix_tasks else None
+        if deal["current_task"] is None and deal["primary_bitrix_task"] is not None:
+            projected_tasks_without_local.append(deal["primary_bitrix_task"])
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
         items.append(deal)
     task_buckets = [_task_time_bucket(task, current) for task in all_tasks]
+    task_buckets.extend(str(task.get("time_bucket") or "unscheduled") for task in projected_tasks_without_local)
     overdue = task_buckets.count("overdue")
     today = task_buckets.count("today")
     tomorrow = task_buckets.count("tomorrow")
@@ -414,7 +498,7 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         "sync_errors": sync_errors or [],
         "summary": {
             "active_deals": len(deals), "portfolio_amount": total_amount,
-            "tasks_total": len(active_tasks), "tasks_today": today, "tasks_tomorrow": tomorrow,
+            "tasks_total": len(active_tasks) + len(projected_tasks_without_local), "tasks_today": today, "tasks_tomorrow": tomorrow,
             "tasks_future": future, "tasks_overdue": overdue, "tasks_completed_today": completed_today,
             "average_probability": round(sum(probability_values) / len(probability_values)) if probability_values else None,
         },

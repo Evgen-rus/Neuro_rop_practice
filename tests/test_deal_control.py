@@ -104,6 +104,84 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(len(deal_list_calls), 2)
             self.assertEqual(deal_list_calls[0][1]["filter"]["ID"], ["101"])
 
+    def test_sync_projects_existing_open_bitrix_tasks_and_clears_stale_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(
+                initial={"101": deal("101", manager_id="10")},
+                activities={
+                    "101": [
+                        {
+                            "ID": "900", "OWNER_ID": "101", "PROVIDER_ID": "CRM_TASKS_TASK",
+                            "SUBJECT": "Будущая задача", "DEADLINE": "2026-07-22T12:00:00+03:00",
+                            "COMPLETED": "N",
+                        },
+                        {
+                            "ID": "901", "OWNER_ID": "101", "PROVIDER_ID": "CRM_TASKS_TASK",
+                            "SUBJECT": "Просроченная задача", "DEADLINE": "2026-07-19T12:00:00+03:00",
+                            "COMPLETED": "N",
+                        },
+                        {
+                            "ID": "902", "OWNER_ID": "101", "PROVIDER_ID": "CRM_TASKS_TASK",
+                            "SUBJECT": "Закрытая задача", "DEADLINE": "2026-07-18T12:00:00+03:00",
+                            "COMPLETED": "Y",
+                        },
+                        {
+                            "ID": "903", "OWNER_ID": "101", "PROVIDER_ID": "CRM_CALL",
+                            "SUBJECT": "Запланированный звонок", "DEADLINE": "2026-07-20T13:00:00+03:00",
+                            "COMPLETED": "N",
+                        },
+                    ]
+                },
+            )
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                result = refresh_deal_control(
+                    db_path=db_path, client=client, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+                )
+            projected = result["deals"][0]["bitrix_tasks"]
+            self.assertEqual([item["activity_id"] for item in projected], ["901", "900"])
+            self.assertEqual(result["deals"][0]["primary_bitrix_task"]["time_bucket"], "overdue")
+            self.assertEqual(result["summary"]["tasks_total"], 1)
+            self.assertEqual(result["summary"]["tasks_overdue"], 1)
+
+            client.activities = {}
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                cleared = refresh_deal_control(
+                    db_path=db_path, client=client, now=datetime(2026, 7, 20, 11, tzinfo=MSK)
+                )
+            self.assertEqual(cleared["deals"][0]["bitrix_tasks"], [])
+            self.assertIsNone(cleared["deals"][0]["primary_bitrix_task"])
+            self.assertEqual(cleared["summary"]["tasks_total"], 0)
+
+    def test_exact_deadline_bitrix_task_with_different_text_requires_rop_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")})
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 9, tzinfo=MSK))
+            create_deal_control_task(
+                db_path, deal_id="101", task_text="Провести звонок по направленному предложению",
+                touch_type="звонок", expected_result="Получить решение",
+                due_at="2026-07-21T11:00:00+03:00",
+            )
+            client.activities = {
+                "101": [{
+                    "ID": "910", "OWNER_ID": "101", "PROVIDER_ID": "CRM_TASKS_TASK",
+                    "SUBJECT": "Связаться с заказчиком", "DESCRIPTION": "",
+                    "DEADLINE": "2026-07-21T11:00:00+03:00", "COMPLETED": "N",
+                }]
+            }
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                result = refresh_deal_control(
+                    db_path=db_path, client=client, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+                )
+            task = result["deals"][0]["current_task"]
+            self.assertEqual(task["crm_execution_status"], "match_review")
+            self.assertEqual(task["crm_match_activity_id"], "910")
+            self.assertEqual(result["deals"][0]["primary_bitrix_task"]["activity_id"], "910")
+
     def test_closed_crm_task_is_not_claimed_as_client_result(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
