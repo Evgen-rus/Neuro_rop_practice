@@ -336,6 +336,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   const [rescheduleReason, setRescheduleReason] = useState('')
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
   const [analyzingDealId, setAnalyzingDealId] = useState('')
+  const [analysisConfirmDeal, setAnalysisConfirmDeal] = useState<DealControlDeal | null>(null)
   const [guidanceJob, setGuidanceJob] = useState<DealTaskGuidanceJob | null>(null)
   const [guidanceTaskId, setGuidanceTaskId] = useState<number | null>(null)
   const [outcomeTask, setOutcomeTask] = useState<DealControlTask | null>(null)
@@ -394,7 +395,10 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         setAnalysisJob(next)
         if (!terminalHandled && next.status === 'done') {
           terminalHandled = true
-          setNotice(`Анализ сделки #${analyzingDealId} завершён. Карточка обновлена.`)
+          const progress = entityAnalysisProgress(next, analyzingDealId)
+          setNotice(progress?.stage === 'skipped'
+            ? 'Новых значимых данных нет — текущий анализ актуален.'
+            : `Анализ сделки #${analyzingDealId} завершён. Карточка обновлена.`)
           await reload()
         } else if (!terminalHandled && next.status === 'error') {
           terminalHandled = true
@@ -723,7 +727,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     }
   }
 
-  async function analyzeDeal(deal: DealControlDeal) {
+  async function runAnalyzeDeal(deal: DealControlDeal, confirmPaid = false) {
     if (analysisJob && ['queued', 'running'].includes(analysisJob.status)) return
     setError('')
     setNotice('')
@@ -740,7 +744,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         transcribe_audio: true,
         analyze: true,
         force_llm: false,
-        confirm_paid: false,
+        confirm_paid: confirmPaid,
         transcript_mode: 'all',
       })
       setAnalysisJob(started)
@@ -748,6 +752,14 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
+  }
+
+  async function analyzeDeal(deal: DealControlDeal) {
+    if (deal.coaching.report_id) {
+      setAnalysisConfirmDeal(deal)
+      return
+    }
+    await runAnalyzeDeal(deal)
   }
 
   async function prepareManager(task: DealControlTask) {
@@ -999,6 +1011,16 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         <div><button className="dc-button" onClick={() => setOutcomeTask(null)}>Отмена</button><button className="dc-button primary" disabled={Boolean(outcomeError)} onClick={() => void applyOutcome()}>{view === 'manager' ? 'Сохранить результат' : 'Сохранить корректировку'}</button></div>
       </section>
     </div> : null}
+
+    {analysisConfirmDeal ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setAnalysisConfirmDeal(null) }}>
+      <section className="dc-modal dc-analysis-confirm">
+        <span>✦</span>
+        <h2>Проверить новые данные?</h2>
+        <p>Система обновит информацию из Bitrix и проверит новые звонки. Если появились существенные изменения, могут потребоваться платная транскрибация и новый AI-анализ.</p>
+        <small>Без значимых изменений текущий анализ останется актуальным, повторный LLM-анализ не запустится.</small>
+        <div><button className="dc-button" onClick={() => setAnalysisConfirmDeal(null)}>Отмена</button><button className="dc-button primary" onClick={() => { const deal = analysisConfirmDeal; setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true) }}>Проверить и обновить</button></div>
+      </section>
+    </div> : null}
   </main>
 }
 
@@ -1239,13 +1261,22 @@ function DealDetail(props: {
         : <><span>✦</span>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
     </button>
   )
+  const analysisReady = (
+    <div className="dc-analysis-ready">
+      <div><span>✓</span><strong>AI-анализ проведён</strong></div>
+      {coaching.analysis_created_at ? <small>{dateTime(coaching.analysis_created_at)}</small> : null}
+      <button className="dc-button" disabled={analysisBusy} onClick={() => void props.onAnalyze(deal)}>
+        {analysisRunning ? <><span className="dc-spinner" />Обновляем…</> : 'Обновить'}
+      </button>
+    </div>
+  )
 
   return <aside className="dc-detail">
     <header>
-      <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в Bitrix ↗</a></div>
-      {hasAnalysis ? analysisButton : null}
+      <div><div className="dc-deal-title-row"><h2>Сделка #{deal.deal_id}</h2><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a></div><p>{deal.title}</p></div>
+      {hasAnalysis ? analysisReady : null}
     </header>
-    {props.analysisJob && props.analyzingDealId === deal.deal_id
+    {analysisRunning && props.analysisJob
       ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} />
       : null}
     <section className="dc-detail-stats">
@@ -1512,19 +1543,18 @@ function ManagerGuidance({ deal, task, onCopy }: {
       <div className="dc-section-head"><h3>Фокус на сегодня</h3><span>✦ От РОПа</span></div>
       <p>{coaching.manager_coaching}</p>
     </section> : null}
+    <section className="dc-manager-module">
+      <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div></div>
+      <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
+      <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
+      <div className="dc-script"><strong>Что сказать клиенту</strong><div className="dc-script-primary"><small>Основной сценарий</small><pre>{textOr(coaching.script, 'Готовый сценарий пока не сформирован.')}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё {coaching.script_variants.length} варианта начала разговора</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 2}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 2}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
+    </section>
     <section className="dc-analysis-section">
       <div className="dc-section-head"><h3>Что известно и чего не хватает</h3></div>
       <div className="dc-two-columns">
         <ListCard tone="good" title="✓ Уже известно" items={coaching.known} empty="Подтверждённые факты пока не выделены." />
         <ListCard tone="weak" title="✕ Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
       </div>
-    </section>
-    <section className="dc-manager-module">
-      <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div></div>
-      <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
-      <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
-      <div className="dc-script"><strong>Что сказать клиенту</strong><div className="dc-script-primary"><small>Основной сценарий</small><pre>{textOr(coaching.script, 'Готовый сценарий пока не сформирован.')}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё {coaching.script_variants.length} варианта начала разговора</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 2}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 2}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
-      {coaching.crm_checklist.length ? <div className="dc-crm-checklist"><strong>После звонка зафиксируй в B24</strong><ul>{coaching.crm_checklist.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
     </section>
   </>
 }

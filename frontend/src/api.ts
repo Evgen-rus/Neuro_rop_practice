@@ -534,6 +534,7 @@ export type DealControlDeal = {
   current_task?: DealControlTask | null
   coaching: {
     report_id?: number | null
+    analysis_created_at?: string | null
     current_situation?: string
     strengths: string[]
     weaknesses: string[]

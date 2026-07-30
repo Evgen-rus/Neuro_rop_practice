@@ -458,6 +458,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         )
     return {
         "report_id": report.get("id") if report else None,
+        "analysis_created_at": report.get("created_at") if report else None,
         "current_situation": str(brief.get("current_situation") or deal_state.get("summary") or ""),
         "strengths": strengths,
         "weaknesses": weaknesses,

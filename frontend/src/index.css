@@ -1766,19 +1766,21 @@ textarea {
   margin: 8px 0;
   color: #314967;
   font: inherit;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
 }
 
-.dc-script-primary {
+.dc-script > .dc-script-primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   margin-top: 8px;
 }
 
 .dc-script-primary > small,
 .dc-script-variants article > small {
   color: var(--dc-blue);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -1792,7 +1794,7 @@ textarea {
 .dc-script-variants summary {
   color: var(--dc-blue);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 850;
 }
 
@@ -1812,7 +1814,7 @@ textarea {
 .dc-script-variants article p {
   margin: 5px 0 8px;
   color: #314967;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -2456,11 +2458,23 @@ textarea {
 }
 
 .dc-detail > header h2 {
-  font-size: 26px;
+  font-size: 21px;
 }
 
 .dc-detail > header p {
   font-size: 13px;
+}
+
+.dc-deal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dc-deal-title-row .dc-bitrix-detail-link {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 10px;
 }
 
 .dc-bitrix-detail-link,
@@ -2567,6 +2581,79 @@ textarea {
 
 .dc-two-columns article {
   padding: 13px;
+}
+
+.dc-manager-module > .dc-question-list ol {
+  font-size: 12px;
+}
+
+.dc-analysis-ready {
+  display: grid;
+  min-width: 148px;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid #a9dec0;
+  border-radius: 10px;
+  background: #f2fbf6;
+}
+
+.dc-analysis-ready > div {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #147441;
+}
+
+.dc-analysis-ready > div > span {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #199957;
+  font-size: 9px;
+}
+
+.dc-analysis-ready > div strong {
+  font-size: 10px;
+}
+
+.dc-analysis-ready > small {
+  color: #58706a;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.dc-analysis-ready > .dc-button {
+  min-height: 28px;
+  padding: 5px 8px;
+  border-color: #a9c8ba;
+  color: #17643e;
+  background: #fff;
+  font-size: 9px;
+}
+
+.dc-analysis-confirm {
+  display: grid;
+  gap: 8px;
+}
+
+.dc-analysis-confirm > span {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--dc-blue);
+  background: #eaf2ff;
+  font-size: 18px;
+}
+
+.dc-analysis-confirm > small {
+  color: #59718f;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 @media (max-width: 1250px) {

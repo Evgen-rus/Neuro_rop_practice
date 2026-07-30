@@ -106,6 +106,7 @@ class DealControlTests(unittest.TestCase):
             self.assertTrue(coaching["manager_coaching"].startswith("Красавчик"))
             self.assertEqual(len(coaching["script_variants"]), 2)
             self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
+            self.assertTrue(coaching["analysis_created_at"])
 
     def test_scope_is_local_and_has_no_embedded_crm_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
