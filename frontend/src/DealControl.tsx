@@ -940,7 +940,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
           </div>
           {view === 'dashboard'
             ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} onSaveFields={saveFields} onReschedule={beginReschedule} />
-            : <TaskTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} />
+            : <TaskTable view={view} deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} />
           }
         </section>
 
@@ -1013,13 +1013,13 @@ function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDa
         ['%', 'Средняя вероятность', summary.average_probability == null ? '—' : `${summary.average_probability}%`, 'orange'],
       ]
     : [
-        ['◇', 'Без задачи в B24', summary.tasks_missing, 'blue'],
+        ['◇', view === 'rop' ? 'Всего задач на контроле' : 'Всего моих задач', summary.tasks_total, 'blue'],
         ['◷', 'Просрочено', summary.tasks_overdue, 'red'],
         ['▣', 'На сегодня', summary.tasks_today, 'blue'],
         ['▤', 'На завтра', summary.tasks_tomorrow, 'orange'],
         ['✓', 'Выполнено сегодня', `${summary.tasks_completed_today} из ${summary.tasks_plan_today}`, 'green'],
       ]
-  return <section className="dc-kpis">
+  return <section className={`dc-kpis ${dashboard ? 'dashboard' : 'tasks'}`}>
     {values.map(([icon, label, value, tone]) => <article key={String(label)} className={String(tone)}>
       <span>{icon}</span><div><small>{label}</small><strong>{value}</strong></div>
     </article>)}
@@ -1113,7 +1113,7 @@ function DealTable(props: {
   </div>
 }
 
-function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; selectedId: string; onSelect: (id: string) => void }) {
+function TaskTable({ view, deals, selectedId, onSelect }: { view: DealControlView; deals: DealControlDeal[]; selectedId: string; onSelect: (id: string) => void }) {
   return <div className="dc-table-wrap task-table">
     <div className="dc-table-scroll">
       <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
@@ -1125,7 +1125,7 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
         return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
           <span className={`dc-check ${completed ? 'checked' : ''}`}>{completed ? '✓' : ''}</span>
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><span className="dc-deal-id">#{deal.deal_id}</span></div>
-          <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span><small>♟ {deal.manager_name}</small></div>
+          <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span>{view === 'rop' ? <small>♟ {deal.manager_name}</small> : null}</div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
           <div className="dc-task-deadline-cell"><time className="dc-task-deadline">{deadline ? <><strong>{deadline.date}</strong>{deadline.time ? <span>{deadline.time}</span> : null}</> : <span>Не назначен</span>}</time></div>
           <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} />{bitrixTask?.completion_state === 'local' ? <small>В B24 ещё открыта</small> : bitrixTask?.completion_state === 'bitrix' ? <small>Подтверждено в B24</small> : null}</div>
@@ -1222,25 +1222,32 @@ function DealDetail(props: {
   const task = currentTaskOf(deal)
   const coaching = deal.coaching
   const managerView = props.view === 'manager'
-  const payment = parsePaymentPeriod(deal.expected_payment_period)
-  const monthOptions = paymentMonthOptions()
+  const hasAnalysis = Boolean(coaching.report_id)
+  const analysisBusy = Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))
+  const analysisRunning = Boolean(
+    analysisBusy
+    && props.analyzingDealId === deal.deal_id
+  )
   const taskGuidance = task?.guidance && !task.guidance.is_stale ? task.guidance.content : null
   const managerFocus = task
     ? taskGuidance?.contact_goal || coaching.contact_goal || 'Выполнить поручение РОПа и зафиксировать подтверждённый результат.'
     : coaching.contact_goal
+  const analysisButton = (
+    <button
+      className="dc-button dc-analyze-button"
+      disabled={analysisBusy}
+      onClick={() => void props.onAnalyze(deal)}
+    >
+      {analysisRunning
+        ? <><span className="dc-spinner" />Анализируем…</>
+        : <><span>✦</span>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
+    </button>
+  )
 
   return <aside className="dc-detail">
     <header>
       <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в Bitrix ↗</a></div>
-      <button
-        className="dc-button dc-analyze-button"
-        disabled={Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))}
-        onClick={() => void props.onAnalyze(deal)}
-      >
-        {props.analysisJob && props.analyzingDealId === deal.deal_id && ['queued', 'running'].includes(props.analysisJob.status)
-          ? <><span className="dc-spinner" />Анализируем…</>
-          : <><span>✦</span>{coaching.report_id ? 'Обновить анализ' : 'Провести анализ'}</>}
-      </button>
+      {hasAnalysis ? analysisButton : null}
     </header>
     {props.analysisJob && props.analyzingDealId === deal.deal_id
       ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} />
@@ -1252,13 +1259,18 @@ function DealDetail(props: {
       <div><small>Сумма</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
     </section>
 
-    <section className="dc-insight-card">
-      <div className="dc-section-head"><h3>Текущая ситуация</h3><span>✦ AI-сводка</span></div>
-      <p>{textOr(coaching.current_situation, 'По сделке ещё нет сохранённого полного анализа. CRM-поля и локальные задачи доступны, аналитические выводы появятся после анализа.')}</p>
+    {hasAnalysis ? <section className="dc-insight-card">
+      <div className="dc-section-head"><h3>Текущая ситуация</h3><span>✦ AI-анализ</span></div>
+      <p>{coaching.current_situation}</p>
+      {coaching.what_to_check_now ? <p><strong>Что проверить прямо сейчас.</strong> {coaching.what_to_check_now}</p> : null}
       <div className="dc-mini-grid">
         <div><small>Фокус РОПа</small><strong>{textOr(managerView ? managerFocus : coaching.rop_focus, 'Не сформирован')}</strong></div>
       </div>
-    </section>
+    </section> : <section className="dc-analysis-empty">
+      <span>✦</span>
+      <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы увидеть текущую ситуацию, риски и рекомендации по сделке.</p></div>
+      {analysisButton}
+    </section>}
 
     <CurrentTask
       view={props.view}
@@ -1271,21 +1283,19 @@ function DealDetail(props: {
       onOutcome={props.onOutcome}
       guidanceJob={props.guidanceJob}
       guidanceTaskId={props.guidanceTaskId}
-      hasAnalysis={Boolean(coaching.report_id)}
+      hasAnalysis={hasAnalysis}
       onAdoptBitrixTask={props.onAdoptBitrixTask}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
     />
 
-    {managerView
-      ? <ManagerGuidance deal={deal} task={task} onCopy={props.onCopy} />
-      : <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
-    }
+    {hasAnalysis
+      ? managerView
+        ? <ManagerGuidance deal={deal} task={task} onCopy={props.onCopy} />
+        : <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
+      : null}
 
     {props.view === 'dashboard' ? <section className="dc-manual-fields">
-      <div className="dc-section-head"><h3>Ручной прогноз и контроль</h3><span>Локально</span></div>
-      <label>Вероятность<select value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">Не указана</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option key={value} value={value}>{value}%</option>)}</select></label>
-      <label>Неделя оплаты<select value={payment.week} onChange={(event) => void props.onSaveFields(deal, { expected_payment_period: formatPaymentPeriod(event.target.value, payment.month) })}><option value="">—</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select></label>
-      <label>Месяц оплаты<select value={payment.month} onChange={(event) => void props.onSaveFields(deal, { expected_payment_period: formatPaymentPeriod(payment.week, event.target.value) })}><option value="">—</option>{monthOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
+      <div className="dc-section-head"><h3>Контроль сделки</h3><span>Локально</span></div>
       <label>Следующий контроль<input type="datetime-local" value={(deal.next_control_at || '').slice(0, 16)} onChange={(event) => void props.onSaveFields(deal, { next_control_at: event.target.value || null })} /></label>
     </section> : null}
 
@@ -1478,14 +1488,13 @@ function RopGuidance({ deal, task, onCopy }: {
   return <>
     {guidance ? <TaskGuidanceContent content={guidance} touchType={task?.touch_type} onCopy={onCopy} ropPreview /> : null}
     <section className="dc-analysis-section">
-      <div className="dc-section-head"><h3>Сильные и слабые стороны</h3><span>✦ Анализ нейросети</span></div>
+      <div className="dc-section-head"><h3>Сильные и слабые стороны</h3></div>
       <div className="dc-two-columns">
         <ListCard tone="good" title="✓ Сильные стороны" items={coaching.strengths} empty="Подтверждённые сильные стороны не выделены." />
         <ListCard tone="weak" title="✕ Слабые стороны" items={coaching.weaknesses} empty="Риски и пробелы не выделены." />
       </div>
     </section>
-    <section className="dc-text-section"><div className="dc-section-head"><h3>Актуализация и текущая логика сделки</h3><span>✦ Вывод</span></div><p><strong>Текущая ситуация.</strong> {textOr(coaching.current_situation, 'Анализ пока не сохранён.')}</p><p><strong>Что проверить прямо сейчас.</strong> {textOr(coaching.what_to_check_now, 'Проверь актуальность задачи, наличие клиентского ответа и следующего шага.')}</p></section>
-    <section className="dc-text-section"><div className="dc-section-head"><h3>Разбор для менеджера</h3><span>Коучинг</span></div><div className="dc-coaching-copy"><strong>Формулировка для разговора с менеджером</strong><p>{textOr(coaching.manager_coaching, 'Готовый разбор появится после полного анализа сделки.')}</p></div><div className="dc-copy-actions"><button className="dc-button" onClick={() => void onCopy(coaching.manager_coaching || '', 'Разбор')}>Скопировать разбор</button><button className="dc-button primary" onClick={() => void onCopy(coaching.rop_task_hint || coaching.manager_coaching || '', 'Поручение менеджеру')}>Скопировать поручение</button></div></section>
+    <section className="dc-text-section"><div className="dc-section-head"><h3>Разбор для менеджера</h3></div><div className="dc-coaching-copy"><strong>Формулировка для разговора с менеджером</strong><p>{textOr(coaching.manager_coaching, 'В анализе нет отдельной формулировки для разговора с менеджером.')}</p></div><div className="dc-copy-actions"><button className="dc-button" onClick={() => void onCopy(coaching.manager_coaching || '', 'Разбор')}>Скопировать разбор</button><button className="dc-button primary" onClick={() => void onCopy(coaching.rop_task_hint || coaching.manager_coaching || '', 'Текст для менеджера')}>Скопировать для менеджера</button></div></section>
   </>
 }
 
@@ -1509,14 +1518,14 @@ function ManagerGuidance({ deal, task, onCopy }: {
         </div>
       </section> : null}
     <section className="dc-analysis-section">
-      <div className="dc-section-head"><h3>Что известно и чего не хватает</h3><span>✦ Последний полный анализ</span></div>
+      <div className="dc-section-head"><h3>Что известно и чего не хватает</h3></div>
       <div className="dc-two-columns">
         <ListCard tone="good" title="✓ Уже известно" items={coaching.known} empty="Подтверждённые факты пока не выделены." />
         <ListCard tone="weak" title="✕ Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
       </div>
     </section>
     <section className="dc-manager-module">
-      <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div><span>✦ Помощник продаж</span></div>
+      <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div></div>
       <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
       <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
       <div className="dc-script"><strong>Речевой модуль для звонка</strong><pre>{textOr(coaching.script, 'Готовый скрипт пока не сформирован.')}</pre><div><button className="dc-button primary" onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать сценарий звонка</button></div></div>
