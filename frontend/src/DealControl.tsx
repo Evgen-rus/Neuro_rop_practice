@@ -188,7 +188,7 @@ function dealMatchesTime(deal: DealControlDeal, view: TimeView) {
   const task = currentTaskOf(deal)
   const bucket = controlTimeBucket(deal)
   if (view === 'attention') return bucket === 'overdue' || task?.crm_execution_status === 'match_review'
-  if (view === 'today') return bucket === 'today'
+  if (view === 'today') return bucket === 'today' || bucket === 'overdue'
   if (view === 'future') return bucket === 'future' || bucket === 'unscheduled'
   return bucket === view
 }
@@ -497,7 +497,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     return {
       all: controlDeals.length,
       overdue: controlDeals.filter((deal) => controlTimeBucket(deal) === 'overdue').length,
-      today: controlDeals.filter((deal) => controlTimeBucket(deal) === 'today').length,
+      today: controlDeals.filter((deal) => ['overdue', 'today'].includes(controlTimeBucket(deal) || '')).length,
       tomorrow: controlDeals.filter((deal) => controlTimeBucket(deal) === 'tomorrow').length,
       future: controlDeals.filter((deal) => ['future', 'unscheduled'].includes(controlTimeBucket(deal) || '')).length,
     }
