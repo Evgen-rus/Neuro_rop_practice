@@ -2199,6 +2199,72 @@ textarea {
   font-size: 10px;
 }
 
+.dc-status.missing {
+  border-color: #efb5b5;
+  color: #b42318;
+  background: #fff1f0;
+}
+
+.dc-task-row.missing {
+  border-left-color: #e5484d;
+  background: #fffafa;
+}
+
+.dc-task-name.missing {
+  border: 1px solid #f1b4b4;
+  background: #fff1f0;
+}
+
+.dc-task-name.missing strong {
+  color: #b42318;
+}
+
+.dc-task-result-cell > small {
+  display: block;
+  max-width: 110px;
+  margin-top: 5px;
+  color: #60718c;
+  font-size: 9px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.dc-bitrix-completion-note {
+  margin: -2px 0 12px !important;
+  color: #6c5b16;
+  font-size: 11px !important;
+}
+
+.dc-bitrix-completion-note.confirmed {
+  color: #117540;
+}
+
+.dc-task-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.dc-missing-task-state {
+  padding: 16px;
+  border: 1px solid #efb5b5;
+  border-radius: 12px;
+  background: #fff7f7;
+}
+
+.dc-missing-task-state strong {
+  color: #b42318;
+  font-size: 16px;
+}
+
+.dc-missing-task-state p {
+  margin: 7px 0 13px;
+  color: #5f6f86;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .dc-sync-state.compact,
 .dc-control-cell > .dc-sync-state {
   font-size: 9px;

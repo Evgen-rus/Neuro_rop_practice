@@ -42,7 +42,12 @@ from api.deal_control import confirm_task_crm_match as confirm_deal_control_task
 from api.deal_control import deal_control_metrics
 from api.deal_control import record_task_outcome as record_deal_control_task_outcome
 from api.deal_control import record_task_event as record_deal_control_task_event
-from api.deal_control import refresh_deal_control, save_deal_fields, save_scope as save_deal_control_scope
+from api.deal_control import (
+    refresh_deal_control,
+    save_bitrix_task_completion,
+    save_deal_fields,
+    save_scope as save_deal_control_scope,
+)
 from api.deal_control import review_task_crm_fact as review_deal_control_task_crm_fact
 from api.deal_control import task_history as deal_control_task_history
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
@@ -194,6 +199,12 @@ class DealControlTaskUpdateRequest(BaseModel):
     source_role: Literal["manager", "rop"] | None = None
 
 
+class DealControlBitrixTaskCompletionRequest(BaseModel):
+    deal_id: str = Field(min_length=1, max_length=80)
+    completed: bool
+    source_role: Literal["manager", "rop"]
+
+
 class DealTaskGuidanceRequest(BaseModel):
     confirm_paid: bool = False
 
@@ -338,6 +349,24 @@ def deal_control_task_update(task_id: int, body: DealControlTaskUpdateRequest) -
             business_result_status=body.business_result_status, business_result_note=body.business_result_note,
             reschedule_reason=body.reschedule_reason, source_role=body.source_role,
         )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/deal-control/bitrix-tasks/{activity_id}/completion")
+def deal_control_bitrix_task_completion(
+    activity_id: str,
+    body: DealControlBitrixTaskCompletionRequest,
+) -> dict[str, Any]:
+    try:
+        state = save_bitrix_task_completion(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=body.deal_id,
+            activity_id=activity_id,
+            completed=body.completed,
+            source_role=body.source_role,
+        )
+        return {"ok": True, "state": state}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

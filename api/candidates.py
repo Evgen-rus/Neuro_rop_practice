@@ -896,6 +896,7 @@ def fetch_candidate_activities(
             "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": str(entity_id)},
             "select": [
                 "ID", "OWNER_ID", "TYPE_ID", "PROVIDER_ID", "PROVIDER_TYPE_ID", "SUBJECT", "DESCRIPTION",
+                "ASSOCIATED_ENTITY_ID", "RESPONSIBLE_ID",
                 "DIRECTION", "COMPLETED", "START_TIME", "END_TIME", "DEADLINE", "CREATED", "LAST_UPDATED",
             ],
         },
@@ -911,6 +912,7 @@ def fetch_candidate_activities_bulk(
     result: dict[tuple[str, str], tuple[list[dict[str, Any]], str | None]] = {}
     select = [
         "ID", "OWNER_ID", "TYPE_ID", "PROVIDER_ID", "PROVIDER_TYPE_ID", "SUBJECT", "DESCRIPTION",
+        "ASSOCIATED_ENTITY_ID", "RESPONSIBLE_ID",
         "DIRECTION", "COMPLETED", "START_TIME", "END_TIME", "DEADLINE", "CREATED", "LAST_UPDATED",
     ]
     for entity_type, owner_type_id in (("lead", LEAD_OWNER_TYPE_ID), ("deal", DEAL_OWNER_TYPE_ID)):

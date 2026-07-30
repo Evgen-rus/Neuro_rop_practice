@@ -383,6 +383,20 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_deal_control_tasks_deal_due
                 ON deal_control_tasks(deal_id, due_at DESC, id DESC);
 
+            CREATE TABLE IF NOT EXISTS deal_control_bitrix_task_state (
+                activity_id TEXT NOT NULL PRIMARY KEY,
+                deal_id TEXT NOT NULL,
+                local_completed INTEGER NOT NULL DEFAULT 0,
+                local_completed_at TEXT,
+                local_completed_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_control_bitrix_task_state_deal
+                ON deal_control_bitrix_task_state(deal_id, activity_id);
+
             CREATE TABLE IF NOT EXISTS deal_control_task_reschedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
@@ -2372,6 +2386,89 @@ def save_deal_control_bitrix_tasks(
         row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
     result = _row_to_deal_control_deal(row)
     assert result is not None
+    return result
+
+
+def set_deal_control_bitrix_task_completion(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    activity_id: str,
+    completed: bool,
+    source_role: str,
+) -> dict[str, Any]:
+    init_db(db_path)
+    normalized_role = str(source_role or "").strip().lower()
+    if normalized_role not in {"manager", "rop"}:
+        raise ValueError("Роль должна быть manager или rop")
+    normalized_activity_id = str(activity_id or "").strip()
+    if not normalized_activity_id:
+        raise ValueError("Не указан ID задачи Bitrix")
+    now = utcish_now()
+    with connect(db_path) as conn:
+        deal = conn.execute(
+            "SELECT bitrix_tasks_json FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        tasks = _normalize_deal_control_bitrix_tasks(
+            loads_json(deal["bitrix_tasks_json"], [])
+        )
+        if not any(str(item.get("activity_id") or "") == normalized_activity_id for item in tasks):
+            raise ValueError("Задача Bitrix не найдена в текущем снимке сделки")
+        conn.execute(
+            """
+            INSERT INTO deal_control_bitrix_task_state (
+                activity_id, deal_id, local_completed, local_completed_at,
+                local_completed_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(activity_id) DO UPDATE SET
+                deal_id = excluded.deal_id,
+                local_completed = excluded.local_completed,
+                local_completed_at = excluded.local_completed_at,
+                local_completed_by = excluded.local_completed_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_activity_id,
+                str(deal_id),
+                int(completed),
+                now if completed else None,
+                normalized_role,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM deal_control_bitrix_task_state WHERE activity_id = ?",
+            (normalized_activity_id,),
+        ).fetchone()
+    value = dict(row)
+    value["local_completed"] = bool(value.get("local_completed"))
+    return value
+
+
+def list_deal_control_bitrix_task_states(
+    db_path: str | Path,
+    *,
+    deal_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    query = "SELECT * FROM deal_control_bitrix_task_state"
+    params: list[Any] = []
+    if deal_ids:
+        placeholders = ", ".join("?" for _ in deal_ids)
+        query += f" WHERE deal_id IN ({placeholders})"
+        params.extend(str(value) for value in deal_ids)
+    query += " ORDER BY updated_at DESC, activity_id DESC"
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["local_completed"] = bool(value.get("local_completed"))
+        result.append(value)
     return result
 
 

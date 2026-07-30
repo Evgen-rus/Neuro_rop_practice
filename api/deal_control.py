@@ -17,6 +17,7 @@ from storage.rop_db import (
     get_deal_control_scope,
     get_deal_control_metrics,
     get_latest_ui_report,
+    list_deal_control_bitrix_task_states,
     list_deal_control_deals,
     list_deal_control_task_history,
     list_deal_control_tasks,
@@ -27,6 +28,7 @@ from storage.rop_db import (
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
     set_deal_control_deal_active,
+    set_deal_control_bitrix_task_completion,
     update_deal_control_fields,
     update_deal_control_task,
     upsert_deal_control_deal,
@@ -80,18 +82,37 @@ def _deadline_bucket(deadline: datetime | None, now: datetime) -> str:
     return "future"
 
 
+def _completed_at(activity: dict[str, Any]) -> datetime | None:
+    for key in ("LAST_UPDATED", "END_TIME"):
+        parsed = parse_bitrix_dt(activity.get(key))
+        if parsed is not None:
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=MSK_TZ)
+    return None
+
+
 def _open_bitrix_tasks(activities: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
     for activity in activities:
-        if not _is_bitrix_task(activity) or _is_completed(activity):
+        if not _is_bitrix_task(activity):
+            continue
+        completed = _is_completed(activity)
+        completed_at = _completed_at(activity) if completed else None
+        if completed and (
+            completed_at is None
+            or completed_at.astimezone(MSK_TZ).date() != now.astimezone(MSK_TZ).date()
+        ):
             continue
         deadline = _deadline_time(activity)
         tasks.append({
             "activity_id": str(activity.get("ID") or ""),
+            "task_id": str(activity.get("ASSOCIATED_ENTITY_ID") or ""),
+            "responsible_id": str(activity.get("RESPONSIBLE_ID") or ""),
             "subject": str(activity.get("SUBJECT") or "Задача Bitrix"),
+            "description": str(activity.get("DESCRIPTION") or ""),
             "deadline": deadline.isoformat() if deadline else None,
             "time_bucket": _deadline_bucket(deadline, now),
-            "completed": False,
+            "completed": completed,
+            "bitrix_completed_at": completed_at.isoformat() if completed_at else None,
             "provider_id": str(activity.get("PROVIDER_ID") or ""),
         })
     rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
@@ -99,6 +120,7 @@ def _open_bitrix_tasks(activities: list[dict[str, Any]], now: datetime) -> list[
         tasks,
         key=lambda item: (
             rank.get(str(item.get("time_bucket")), 5),
+            int(bool(item.get("completed"))),
             str(item.get("deadline") or "9999-12-31"),
             str(item.get("activity_id") or ""),
         ),
@@ -454,7 +476,10 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     deals = list_deal_control_deals(db_path)
     active_deal_ids = [str(deal["deal_id"]) for deal in deals]
     all_tasks = list_deal_control_tasks(db_path, deal_ids=active_deal_ids) if active_deal_ids else []
-    active_tasks = [task for task in all_tasks if task.get("local_status") == "active"]
+    bitrix_states = {
+        str(item["activity_id"]): item
+        for item in list_deal_control_bitrix_task_states(db_path, deal_ids=active_deal_ids)
+    } if active_deal_ids else {}
     tasks_by_deal: dict[str, list[dict[str, Any]]] = {}
     for task in all_tasks:
         task = dict(task)
@@ -462,12 +487,15 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         task["time_bucket"] = _task_time_bucket(task, current)
         tasks_by_deal.setdefault(str(task["deal_id"]), []).append(task)
     items = []
-    projected_tasks_without_local: list[dict[str, Any]] = []
+    projected_primary_tasks: list[dict[str, Any]] = []
+    missing = 0
     for deal in deals:
         deal = dict(deal)
         deal_tasks = tasks_by_deal.get(str(deal["deal_id"]), [])
         deal["tasks"] = deal_tasks
-        deal["current_task"] = next((task for task in deal_tasks if task.get("local_status") == "active"), None)
+        # Keep legacy local assignments in storage/output for a possible later
+        # reactivation, but do not let them drive the current Bitrix-first UI.
+        deal["current_task"] = None
         bitrix_tasks = []
         for bitrix_task in deal.get("bitrix_tasks") or []:
             projected = dict(bitrix_task)
@@ -475,20 +503,45 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             if deadline is not None and deadline.tzinfo is None:
                 deadline = deadline.replace(tzinfo=MSK_TZ)
             projected["time_bucket"] = _deadline_bucket(deadline, current)
+            local_state = bitrix_states.get(str(projected.get("activity_id") or ""), {})
+            projected["local_completed"] = bool(local_state.get("local_completed"))
+            projected["local_completed_at"] = local_state.get("local_completed_at")
+            projected["local_completed_by"] = local_state.get("local_completed_by")
+            projected["completion_state"] = (
+                "bitrix"
+                if projected.get("completed")
+                else "local"
+                if projected["local_completed"]
+                else "open"
+            )
             bitrix_tasks.append(projected)
+        rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
+        bitrix_tasks.sort(key=lambda item: (
+            rank.get(str(item.get("time_bucket")), 5),
+            int(str(item.get("completion_state")) != "open"),
+            str(item.get("deadline") or "9999-12-31"),
+            str(item.get("activity_id") or ""),
+        ))
         deal["bitrix_tasks"] = bitrix_tasks
         deal["primary_bitrix_task"] = bitrix_tasks[0] if bitrix_tasks else None
-        if deal["current_task"] is None and deal["primary_bitrix_task"] is not None:
-            projected_tasks_without_local.append(deal["primary_bitrix_task"])
+        if deal["primary_bitrix_task"] is not None:
+            projected_primary_tasks.append(deal["primary_bitrix_task"])
+        else:
+            missing += 1
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
         items.append(deal)
-    task_buckets = [_task_time_bucket(task, current) for task in all_tasks]
-    task_buckets.extend(str(task.get("time_bucket") or "unscheduled") for task in projected_tasks_without_local)
+    task_buckets = [str(task.get("time_bucket") or "unscheduled") for task in projected_primary_tasks]
     overdue = task_buckets.count("overdue")
     today = task_buckets.count("today")
     tomorrow = task_buckets.count("tomorrow")
     future = task_buckets.count("future")
-    completed_today = task_buckets.count("completed_today")
+    completed_today = sum(
+        1
+        for task in projected_primary_tasks
+        if str(task.get("completion_state") or "open") in {"local", "bitrix"}
+        and str(task.get("time_bucket") or "") in {"overdue", "today"}
+    )
+    plan_today = missing + overdue + today
     probability_values = [int(item["probability"]) for item in deals if item.get("probability") is not None]
     total_amount = sum(float(str(item.get("amount") or "0").replace(",", ".") or 0) for item in deals if str(item.get("amount") or "").replace(",", ".").replace(".", "", 1).isdigit())
     return {
@@ -498,8 +551,9 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         "sync_errors": sync_errors or [],
         "summary": {
             "active_deals": len(deals), "portfolio_amount": total_amount,
-            "tasks_total": len(active_tasks) + len(projected_tasks_without_local), "tasks_today": today, "tasks_tomorrow": tomorrow,
+            "tasks_total": len(projected_primary_tasks), "tasks_today": today, "tasks_tomorrow": tomorrow,
             "tasks_future": future, "tasks_overdue": overdue, "tasks_completed_today": completed_today,
+            "tasks_missing": missing, "tasks_plan_today": plan_today,
             "average_probability": round(sum(probability_values) / len(probability_values)) if probability_values else None,
         },
         "outcome_metrics": get_deal_control_metrics(db_path),
@@ -516,6 +570,23 @@ def save_deal_fields(*, db_path: str | Path, deal_id: str, probability: int | No
     return update_deal_control_fields(
         db_path, deal_id=deal_id, probability=probability,
         expected_payment_period=expected_payment_period, next_control_at=next_control_at,
+    )
+
+
+def save_bitrix_task_completion(
+    *,
+    db_path: str | Path,
+    deal_id: str,
+    activity_id: str,
+    completed: bool,
+    source_role: str,
+) -> dict[str, Any]:
+    return set_deal_control_bitrix_task_completion(
+        db_path,
+        deal_id=deal_id,
+        activity_id=activity_id,
+        completed=completed,
+        source_role=source_role,
     )
 
 

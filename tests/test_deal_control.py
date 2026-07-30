@@ -18,8 +18,10 @@ from storage.rop_db import (
     list_deal_control_task_history,
     list_deal_control_tasks,
     review_deal_control_task_crm_fact,
+    save_deal_control_bitrix_tasks,
     save_deal_control_scope,
     save_deal_control_task_outcome,
+    set_deal_control_bitrix_task_completion,
     update_deal_control_task,
     upsert_deal_control_deal,
 )
@@ -202,6 +204,110 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(dashboard["deals"][0]["primary_bitrix_task"]["time_bucket"], "overdue")
             self.assertEqual(dashboard["summary"]["tasks_overdue"], 1)
 
+    def test_local_bitrix_completion_keeps_task_in_today_plan_and_can_be_reverted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="101",
+                source="initial",
+                title="Сделка 101",
+                manager_id="10",
+                manager_name="Иванов Иван",
+                stage_id="C15:NEW",
+                stage_name="Новая",
+                pipeline_id="15",
+                amount="120000",
+                currency_id="RUB",
+                created_at_crm="2026-07-19T09:00:00+03:00",
+                modified_at_crm="2026-07-20T09:00:00+03:00",
+                is_active=True,
+            )
+            save_deal_control_bitrix_tasks(
+                db_path,
+                deal_id="101",
+                tasks=[{
+                    "activity_id": "901",
+                    "task_id": "501",
+                    "responsible_id": "10",
+                    "subject": "Позвонить клиенту",
+                    "description": "",
+                    "deadline": "2026-07-20T12:00:00+03:00",
+                    "time_bucket": "today",
+                    "completed": False,
+                    "provider_id": "CRM_TASKS_TASK",
+                }],
+            )
+            set_deal_control_bitrix_task_completion(
+                db_path,
+                deal_id="101",
+                activity_id="901",
+                completed=True,
+                source_role="manager",
+            )
+            completed = build_deal_control_dashboard(
+                db_path=db_path, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+            )
+            task = completed["deals"][0]["primary_bitrix_task"]
+            self.assertEqual(task["completion_state"], "local")
+            self.assertEqual(task["time_bucket"], "today")
+            self.assertEqual(completed["summary"]["tasks_completed_today"], 1)
+            self.assertEqual(completed["summary"]["tasks_plan_today"], 1)
+
+            set_deal_control_bitrix_task_completion(
+                db_path,
+                deal_id="101",
+                activity_id="901",
+                completed=False,
+                source_role="rop",
+            )
+            reopened = build_deal_control_dashboard(
+                db_path=db_path, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+            )
+            self.assertEqual(reopened["deals"][0]["primary_bitrix_task"]["completion_state"], "open")
+            self.assertEqual(reopened["summary"]["tasks_completed_today"], 0)
+
+    def test_sync_keeps_tasks_completed_in_bitrix_today_and_ignores_legacy_assignments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = FakeBitrixClient(
+                initial={"101": deal("101", manager_id="10")},
+                activities={"101": [{
+                    "ID": "902",
+                    "OWNER_ID": "101",
+                    "PROVIDER_ID": "CRM_TASKS_TASK",
+                    "ASSOCIATED_ENTITY_ID": "502",
+                    "RESPONSIBLE_ID": "10",
+                    "SUBJECT": "Закрытая сегодня задача",
+                    "DEADLINE": "2026-07-20T09:00:00+03:00",
+                    "LAST_UPDATED": "2026-07-20T10:15:00+03:00",
+                    "COMPLETED": "Y",
+                }]},
+            )
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(
+                    db_path=db_path, client=client, now=datetime(2026, 7, 20, 11, tzinfo=MSK)
+                )
+            create_deal_control_task(
+                db_path,
+                deal_id="101",
+                task_text="Старое локальное поручение",
+                touch_type="Звонок",
+                expected_result="Не влияет",
+                due_at="2026-07-19T09:00:00+03:00",
+            )
+            dashboard = build_deal_control_dashboard(
+                db_path=db_path, now=datetime(2026, 7, 20, 11, tzinfo=MSK)
+            )
+            item = dashboard["deals"][0]
+            self.assertIsNone(item["current_task"])
+            self.assertEqual(item["primary_bitrix_task"]["completion_state"], "bitrix")
+            self.assertEqual(item["primary_bitrix_task"]["task_id"], "502")
+            self.assertEqual(dashboard["summary"]["tasks_completed_today"], 1)
+            self.assertEqual(dashboard["summary"]["tasks_overdue"], 1)
+
     def test_exact_deadline_bitrix_task_with_different_text_requires_rop_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
@@ -225,7 +331,7 @@ class DealControlTests(unittest.TestCase):
                 result = refresh_deal_control(
                     db_path=db_path, client=client, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
                 )
-            task = result["deals"][0]["current_task"]
+            task = list_deal_control_tasks(db_path)[0]
             self.assertEqual(task["crm_execution_status"], "match_review")
             self.assertEqual(task["crm_match_activity_id"], "910")
             self.assertEqual(result["deals"][0]["primary_bitrix_task"]["activity_id"], "910")
@@ -261,8 +367,9 @@ class DealControlTests(unittest.TestCase):
                 db_path=db_path,
                 now=datetime(2026, 7, 20, 16, tzinfo=MSK),
             )
-            self.assertEqual(dashboard["summary"]["tasks_overdue"], 1)
-            self.assertEqual(dashboard["deals"][0]["current_task"]["time_bucket"], "overdue")
+            self.assertEqual(dashboard["summary"]["tasks_overdue"], 0)
+            self.assertEqual(dashboard["summary"]["tasks_missing"], 1)
+            self.assertIsNone(dashboard["deals"][0]["current_task"])
 
     def test_medium_match_requires_rop_review_and_rescheduling_keeps_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -305,8 +412,9 @@ class DealControlTests(unittest.TestCase):
                 expected_result=None, due_at="2026-07-19T15:00:00+03:00",
             )
             result = build_deal_control_dashboard(db_path=db_path, now=datetime(2026, 7, 20, 10, tzinfo=MSK))
-            self.assertEqual(result["summary"]["tasks_overdue"], 1)
-            self.assertEqual(result["deals"][0]["current_task"]["view_status"], "overdue")
+            self.assertEqual(result["summary"]["tasks_overdue"], 0)
+            self.assertEqual(result["summary"]["tasks_missing"], 1)
+            self.assertIsNone(result["deals"][0]["current_task"])
 
     def test_dashboard_splits_today_tomorrow_and_completed_today(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -326,8 +434,9 @@ class DealControlTests(unittest.TestCase):
             with patch("storage.rop_db.utcish_now", return_value="2026-07-20T08:30:00+00:00"):
                 update_deal_control_task(db_path, task_id=int(completed["id"]), local_status="completed")
             result = build_deal_control_dashboard(db_path=db_path, now=datetime(2026, 7, 20, 12, tzinfo=MSK))
-            self.assertEqual(result["summary"]["tasks_tomorrow"], 1)
-            self.assertEqual(result["summary"]["tasks_completed_today"], 1)
+            self.assertEqual(result["summary"]["tasks_tomorrow"], 0)
+            self.assertEqual(result["summary"]["tasks_completed_today"], 0)
+            self.assertEqual(result["summary"]["tasks_missing"], 1)
             self.assertEqual(len(result["deals"][0]["tasks"]), 2)
 
     def test_task_keeps_immutable_baseline_and_outcome_history(self):

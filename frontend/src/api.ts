@@ -497,10 +497,18 @@ export type DealTaskGuidanceJob = {
 
 export type DealControlBitrixTask = {
   activity_id: string
+  task_id?: string
+  responsible_id?: string
   subject: string
+  description?: string
   deadline?: string | null
   time_bucket: 'overdue' | 'today' | 'tomorrow' | 'future' | 'unscheduled'
   completed: boolean
+  bitrix_completed_at?: string | null
+  local_completed: boolean
+  local_completed_at?: string | null
+  local_completed_by?: 'manager' | 'rop' | null
+  completion_state: 'open' | 'local' | 'bitrix'
   provider_id: string
 }
 
@@ -557,6 +565,8 @@ export type DealControlDashboard = {
     tasks_future: number
     tasks_overdue: number
     tasks_completed_today: number
+    tasks_missing: number
+    tasks_plan_today: number
     average_probability?: number | null
   }
   outcome_metrics: DealControlMetrics
@@ -677,6 +687,24 @@ export function updateDealControlTask(taskId: number, body: Partial<Pick<DealCon
 >> & { reschedule_reason?: string | null; source_role?: 'manager' | 'rop' | null }) {
   return api<DealControlTask>(`/api/deal-control/tasks/${taskId}`, {
     method: 'PUT', body: JSON.stringify(body),
+  })
+}
+
+export function updateDealControlBitrixTaskCompletion(
+  dealId: string,
+  activityId: string,
+  completed: boolean,
+  sourceRole: 'manager' | 'rop',
+) {
+  return api<{ ok: boolean; state: {
+    activity_id: string
+    deal_id: string
+    local_completed: boolean
+    local_completed_at?: string | null
+    local_completed_by?: 'manager' | 'rop' | null
+  } }>(`/api/deal-control/bitrix-tasks/${encodeURIComponent(activityId)}/completion`, {
+    method: 'PUT',
+    body: JSON.stringify({ deal_id: dealId, completed, source_role: sourceRole }),
   })
 }
 
