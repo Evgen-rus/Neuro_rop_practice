@@ -609,11 +609,8 @@ textarea {
 }
 
 .dc-table-scroll {
-  max-height: calc(100vh - 390px);
   min-height: 360px;
-  overflow: auto;
   padding: 6px;
-  scrollbar-gutter: stable;
 }
 
 .dc-deal-columns,
@@ -2082,9 +2079,6 @@ textarea {
     margin-top: 14px;
   }
 
-  .dc-table-scroll {
-    max-height: 520px;
-  }
 }
 
 @media (max-width: 760px) {
