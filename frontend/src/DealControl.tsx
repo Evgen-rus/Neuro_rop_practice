@@ -949,7 +949,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         <DealDetail
           view={view}
           deal={selected}
-          onSaveFields={saveFields}
           onConfirmMatch={confirmMatch}
           onReviewFact={reviewCrmFact}
           onReschedule={beginReschedule}
@@ -1190,10 +1189,6 @@ function ControlSyncState({ task, bitrixTask, compact = false }: {
 function DealDetail(props: {
   view: DealControlView
   deal: DealControlDeal | null
-  onSaveFields: (
-    deal: DealControlDeal,
-    patch: Partial<Pick<DealControlDeal, 'probability' | 'expected_payment_period' | 'next_control_at'>>,
-  ) => Promise<void>
   onConfirmMatch: (task: DealControlTask) => Promise<void>
   onReviewFact: (task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') => Promise<void>
   onReschedule: (task: DealControlTask) => void
@@ -1293,11 +1288,6 @@ function DealDetail(props: {
         ? <ManagerGuidance deal={deal} task={task} onCopy={props.onCopy} />
         : <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
       : null}
-
-    {props.view === 'dashboard' ? <section className="dc-manual-fields">
-      <div className="dc-section-head"><h3>Контроль сделки</h3><span>Локально</span></div>
-      <label>Следующий контроль<input type="datetime-local" value={(deal.next_control_at || '').slice(0, 16)} onChange={(event) => void props.onSaveFields(deal, { next_control_at: event.target.value || null })} /></label>
-    </section> : null}
 
     {props.view !== 'manager' && deal.current_task ? <TaskEditor
       taskText={props.taskText}
