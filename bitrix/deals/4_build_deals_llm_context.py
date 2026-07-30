@@ -15,6 +15,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -24,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import load_json
-from setup import BASE_DIR, get_logger
+from setup import BASE_DIR, MSK_TZ, get_logger
 
 
 DEFAULT_INPUT_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
@@ -110,6 +111,40 @@ SIGNATURE_MARKERS = (
     "\nНаш Телеграм:",
 )
 
+TASK_MEANINGFUL_KEYWORDS = (
+    "ОПЛАТ",
+    "СЧЕТ",
+    "СЧЁТ",
+    "ДОГОВОР",
+    "ДОКУМЕНТ",
+    "СРОК",
+    "ДАТ",
+    "ПРИЧИН",
+    "ЗАДЕРЖ",
+    "СОГЛАСОВ",
+    "ОТПРАВ",
+    "ПОЛУЧ",
+    "ПРОИЗВОДСТВ",
+    "КП",
+    "РЕЗУЛЬТАТ",
+)
+
+TASK_TRIVIAL_MESSAGES = {
+    "ок",
+    "ок.",
+    "спасибо",
+    "понял",
+    "поняла",
+    "принято",
+    "хорошо",
+    "+",
+}
+
+DEAL_FIELD_LABELS = {
+    "equipment_model": ("Модель оборудования (из каталога ПрактикМ)",),
+    "manufacturing_days": ("Срок изготовления (дней)",),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build compact LLM contexts from raw deal JSON")
@@ -141,6 +176,13 @@ def clean_text(value: Any, limit: int | None = None) -> str:
     return text
 
 
+def inline_text(value: Any, limit: int | None = None) -> str:
+    text = re.sub(r"\s+", " ", clean_text(value)).strip()
+    if limit and len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
 def md_escape(value: Any) -> str:
     text = clean_text(value)
     return text.replace("|", "\\|").replace("\n", "<br>") if text else "-"
@@ -163,6 +205,171 @@ def result_items(call_container: dict[str, Any] | None) -> list[dict[str, Any]]:
         if isinstance(result, list):
             return [item for item in result if isinstance(item, dict)]
     return []
+
+
+def format_moscow_datetime(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MSK_TZ)
+    return parsed.astimezone(MSK_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def field_label(definition: dict[str, Any]) -> str:
+    for key in ("formLabel", "listLabel", "filterLabel", "title"):
+        value = definition.get(key)
+        if clean_text(value):
+            return clean_text(value)
+    return ""
+
+
+def resolve_field_value(value: Any, definition: dict[str, Any]) -> Any:
+    items = definition.get("items")
+    if not isinstance(items, list):
+        return value
+    mapping = {
+        str(item.get("ID")): item.get("VALUE")
+        for item in items
+        if isinstance(item, dict) and item.get("ID") is not None
+    }
+    if isinstance(value, list):
+        return [mapping.get(str(item), item) for item in value]
+    return mapping.get(str(value), value)
+
+
+def selected_deal_fields(bundle: dict[str, Any]) -> dict[str, str]:
+    bundle = bundle.get("deal_operational_context") or bundle
+    deal = ((bundle.get("deal") or {}).get("item") or {})
+    fields = result_item((bundle.get("fields") or {}).get("deal"))
+    by_label = {
+        field_label(definition): (field_id, definition)
+        for field_id, definition in fields.items()
+        if isinstance(definition, dict) and field_label(definition)
+    }
+    selected: dict[str, str] = {}
+    for output_key, labels in DEAL_FIELD_LABELS.items():
+        for label in labels:
+            item = by_label.get(label)
+            if not item:
+                continue
+            field_id, definition = item
+            value = resolve_field_value(deal.get(field_id), definition)
+            cleaned = clean_text(" ".join(map(str, value)) if isinstance(value, list) else value, 240)
+            if cleaned and cleaned.lower() not in {"false", "none", "0", "-"}:
+                selected[output_key] = cleaned
+            break
+    return selected
+
+
+def stage_history_rows(bundle: dict[str, Any]) -> list[str]:
+    bundle = bundle.get("deal_operational_context") or bundle
+    items = result_items(bundle.get("stage_history"))
+    if not items:
+        return []
+    lookup = bundle.get("stage_history_lookup") or {}
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for item in sorted(
+        items,
+        key=lambda row: (str(row.get("CREATED_TIME") or ""), str(row.get("ID") or "")),
+    ):
+        stage_id = str(item.get("STAGE_ID") or "")
+        stage_meta = lookup.get(stage_id) if isinstance(lookup, dict) else None
+        stage_name = clean_text(((stage_meta or {}).get("stage") or {}).get("name")) or stage_id or "неизвестная стадия"
+        day = format_moscow_datetime(item.get("CREATED_TIME")).split(" ", 1)[0]
+        if not grouped[day] or grouped[day][-1] != stage_name:
+            grouped[day].append(stage_name)
+    days = list(grouped.items())[-6:]
+    return [
+        f"- {day}: {' → '.join(stages)}"
+        for day, stages in days
+    ]
+
+
+def bitrix_task_item(call_container: dict[str, Any] | None) -> dict[str, Any]:
+    if not call_container or not call_container.get("ok"):
+        return {}
+    result = call_container.get("response", {}).get("result")
+    if not isinstance(result, dict):
+        return {}
+    task = result.get("task")
+    return task if isinstance(task, dict) else {}
+
+
+def task_chat_messages(call_container: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not call_container or not call_container.get("ok"):
+        return []
+    result = call_container.get("response", {}).get("result")
+    messages = result.get("messages") if isinstance(result, dict) else []
+    return [item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else []
+
+
+def select_meaningful_task_messages(messages: list[dict[str, Any]], limit: int = 2) -> list[dict[str, Any]]:
+    candidates = []
+    for item in messages:
+        text = compact_urls(inline_text(item.get("text"), 130))
+        normalized = text.lower().strip()
+        if len(normalized) < 12 or normalized in TASK_TRIVIAL_MESSAGES:
+            continue
+        row = dict(item)
+        row["_clean_text"] = text
+        candidates.append(row)
+    recent = sorted(
+        candidates,
+        key=lambda item: (str(item.get("date") or ""), str(item.get("id") or "")),
+    )[-12:]
+    priority = [
+        item
+        for item in recent
+        if contains_keywords(item.get("_clean_text"), TASK_MEANINGFUL_KEYWORDS)
+    ]
+    selected = (priority or recent)[-limit:]
+    return sorted(selected, key=lambda item: (str(item.get("date") or ""), str(item.get("id") or "")))
+
+
+def open_task_context_rows(bundle: dict[str, Any]) -> list[str]:
+    bundle = bundle.get("deal_operational_context") or bundle
+    task_responses = bundle.get("bitrix_tasks") or {}
+    chat_responses = bundle.get("bitrix_task_chats") or {}
+    task_ids = [
+        str(item)
+        for item in (bundle.get("bitrix_open_task_ids") or [])
+        if str(item)
+    ][:3]
+    rows: list[str] = []
+    for task_id in task_ids:
+        task = bitrix_task_item(task_responses.get(task_id))
+        if not task:
+            continue
+        title = inline_text(task.get("title"), 180) or "Задача без названия"
+        description = compact_urls(inline_text(task.get("description"), 200))
+        rows.append(
+            f"- task_id={task_id}; статус={clean_text(task.get('status')) or 'не указан'}; "
+            f"срок_мск={format_moscow_datetime(task.get('deadline'))}; название={title}"
+        )
+        if description:
+            rows.append(f"  - Внутреннее описание задачи: {description}")
+        messages = select_meaningful_task_messages(task_chat_messages(chat_responses.get(task_id)))
+        for message in messages:
+            rows.append(
+                f"  - Внутренний чат задачи {format_moscow_datetime(message.get('date'))}: "
+                f"{message.get('_clean_text')}"
+            )
+    return rows
+
+
+def enriched_deal_context_rows(bundle: dict[str, Any]) -> list[str]:
+    fields = selected_deal_fields(bundle)
+    rows = []
+    if fields.get("equipment_model"):
+        rows.append(f"- Модель оборудования из карточки CRM: {fields['equipment_model']}")
+    if fields.get("manufacturing_days"):
+        rows.append(f"- Срок изготовления из карточки CRM: {fields['manufacturing_days']} дней")
+    return rows
 
 
 def activity_type(activity: dict[str, Any]) -> str:
@@ -642,6 +849,42 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
             *risks_section(comments, emails, activities),
         ]
     )
+    stage_rows = stage_history_rows(bundle)
+    if stage_rows:
+        lines.extend(
+            [
+                "",
+                "## 12. Движение сделки по стадиям CRM",
+                "",
+                "Источник: read-only история стадий Bitrix. Это факт состояния CRM, а не слова клиента.",
+                "",
+                *stage_rows,
+            ]
+        )
+    task_rows = open_task_context_rows(bundle)
+    if task_rows:
+        lines.extend(
+            [
+                "",
+                "## 13. Ближайшие открытые задачи Bitrix",
+                "",
+                "Источник: внутренние задачи и чаты Bitrix. Не считать их содержимое словами клиента.",
+                "",
+                *task_rows,
+            ]
+        )
+    field_rows = enriched_deal_context_rows(bundle)
+    if field_rows:
+        lines.extend(
+            [
+                "",
+                "## 14. Дополнительные технические параметры CRM",
+                "",
+                "Источник: пользовательские поля карточки сделки; подтверждение клиентом отдельно не установлено.",
+                "",
+                *field_rows,
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -792,6 +1035,42 @@ def build_customer_history_llm_context(bundle: dict[str, Any]) -> str:
                 lines.append(f"  - {item.get('source')}: {item.get('reason') or item.get('note') or '-'}")
             else:
                 lines.append(f"  - {clean_text(item)}")
+    stage_rows = stage_history_rows(bundle)
+    if stage_rows:
+        lines.extend(
+            [
+                "",
+                "## 10. Движение текущей сделки по стадиям CRM",
+                "",
+                "Источник: read-only история стадий Bitrix. Это факт состояния CRM, а не слова клиента.",
+                "",
+                *stage_rows,
+            ]
+        )
+    task_rows = open_task_context_rows(bundle)
+    if task_rows:
+        lines.extend(
+            [
+                "",
+                "## 11. Ближайшие открытые задачи Bitrix",
+                "",
+                "Источник: внутренние задачи и чаты Bitrix. Не считать их содержимое словами клиента.",
+                "",
+                *task_rows,
+            ]
+        )
+    field_rows = enriched_deal_context_rows(bundle)
+    if field_rows:
+        lines.extend(
+            [
+                "",
+                "## 12. Дополнительные технические параметры CRM",
+                "",
+                "Источник: пользовательские поля карточки сделки; подтверждение клиентом отдельно не установлено.",
+                "",
+                *field_rows,
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 

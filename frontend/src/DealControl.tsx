@@ -5,6 +5,7 @@ import {
   fetchDealControl,
   fetchDealTaskGuidanceJob,
   fetchJob,
+  fetchReportMarkdown,
   recordDealControlTaskEvent,
   reviewDealControlCrmFact,
   saveDealControlScope,
@@ -1235,6 +1236,42 @@ function DealDetail(props: {
   guidanceJob: DealTaskGuidanceJob | null
   guidanceTaskId: number | null
 }) {
+  const [showAnalysisMarkdown, setShowAnalysisMarkdown] = useState(false)
+  const [analysisMarkdown, setAnalysisMarkdown] = useState<string | null>(null)
+  const [analysisMarkdownError, setAnalysisMarkdownError] = useState('')
+  const [analysisMarkdownLoading, setAnalysisMarkdownLoading] = useState(false)
+  const activeReportId = props.deal?.coaching.report_id
+
+  useEffect(() => {
+    setShowAnalysisMarkdown(false)
+    setAnalysisMarkdown(null)
+    setAnalysisMarkdownError('')
+    setAnalysisMarkdownLoading(false)
+  }, [props.deal?.deal_id, activeReportId])
+
+  async function toggleAnalysisMarkdown() {
+    if (showAnalysisMarkdown) {
+      setShowAnalysisMarkdown(false)
+      return
+    }
+    if (!activeReportId) return
+    if (analysisMarkdown) {
+      setShowAnalysisMarkdown(true)
+      return
+    }
+    setAnalysisMarkdownLoading(true)
+    setAnalysisMarkdownError('')
+    try {
+      const response = await fetchReportMarkdown(activeReportId)
+      setAnalysisMarkdown(response.markdown)
+      setShowAnalysisMarkdown(true)
+    } catch (error) {
+      setAnalysisMarkdownError(error instanceof Error ? error.message : 'Markdown-отчёт недоступен')
+    } finally {
+      setAnalysisMarkdownLoading(false)
+    }
+  }
+
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
   const task = currentTaskOf(deal)
@@ -1334,6 +1371,24 @@ function DealDetail(props: {
       expectedHint={coaching.expected_crm_update}
       onAddTask={props.onAddTask}
     /> : null}
+
+    {hasAnalysis ? <section className="dc-analysis-material">
+      <button
+        className="dc-analysis-material-link"
+        disabled={analysisMarkdownLoading}
+        onClick={() => void toggleAnalysisMarkdown()}
+      >
+        {analysisMarkdownLoading
+          ? 'Открываем материал…'
+          : showAnalysisMarkdown
+            ? 'Скрыть Markdown анализа'
+            : 'Открыть Markdown анализа'}
+      </button>
+      {analysisMarkdownError ? <small>{analysisMarkdownError}</small> : null}
+      {showAnalysisMarkdown && analysisMarkdown
+        ? <pre>{analysisMarkdown}</pre>
+        : null}
+    </section> : null}
   </aside>
 }
 

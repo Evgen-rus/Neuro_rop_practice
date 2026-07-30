@@ -29,6 +29,9 @@ DEFAULT_DEAL_IDS = ["18507", "18493"]
 DEFAULT_OUTPUT_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEAL_OWNER_TYPE_ID = 2
 LEAD_OWNER_TYPE_ID = 1
+MAX_OPEN_TASKS_FOR_CONTEXT = 3
+TASK_CLOSED_STATUSES = {"5", "7"}
+ATTACHMENT_KEY_TOKENS = ("ATTACH", "DOWNLOAD", "FILE", "DISK", "STORAGE")
 
 logger = get_logger(__file__)
 
@@ -181,6 +184,107 @@ def fetch_activity_details(client: BitrixReadOnlyClient, activities: list[dict[s
     return details
 
 
+def task_ids_from_activities(activities: list[dict[str, Any]]) -> list[str]:
+    task_ids: set[str] = set()
+    for activity in activities:
+        provider_id = str(activity.get("PROVIDER_ID") or "").upper()
+        if provider_id != "CRM_TASKS_TASK":
+            continue
+        task_id = activity.get("ASSOCIATED_ENTITY_ID")
+        if is_real_id(task_id):
+            task_ids.add(str(task_id))
+    return sorted(task_ids, key=int)
+
+
+def task_item(call_result: dict[str, Any] | None) -> dict[str, Any]:
+    if not call_result or not call_result.get("ok"):
+        return {}
+    result = call_result.get("response", {}).get("result")
+    if not isinstance(result, dict):
+        return {}
+    task = result.get("task")
+    return task if isinstance(task, dict) else {}
+
+
+def select_open_task_ids(
+    task_responses: dict[str, dict[str, Any]],
+    *,
+    limit: int = MAX_OPEN_TASKS_FOR_CONTEXT,
+) -> list[str]:
+    rows: list[tuple[str, str]] = []
+    for task_id, response in task_responses.items():
+        task = task_item(response)
+        if not task:
+            continue
+        status = str(task.get("status") or "")
+        if status in TASK_CLOSED_STATUSES or task.get("closedDate"):
+            continue
+        deadline = str(task.get("deadline") or "9999-12-31T23:59:59+03:00")
+        rows.append((deadline, str(task_id)))
+    rows.sort(
+        key=lambda item: (
+            item[0],
+            int(item[1]) if item[1].isdigit() else sys.maxsize,
+            item[1],
+        )
+    )
+    return [task_id for _, task_id in rows[:limit]]
+
+
+def task_chat_id(task: dict[str, Any]) -> str | None:
+    value = task.get("chatId") or task.get("chat_id")
+    return str(value) if is_real_id(value) else None
+
+
+def strip_attachment_references(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, child in value.items():
+            upper_key = str(key).upper()
+            if any(token in upper_key for token in ATTACHMENT_KEY_TOKENS):
+                cleaned[key] = "[excluded: attachment reference]"
+            else:
+                cleaned[key] = strip_attachment_references(child)
+        return cleaned
+    if isinstance(value, list):
+        return [strip_attachment_references(item) for item in value]
+    return value
+
+
+def fetch_deal_stage_history(client: BitrixReadOnlyClient, deal_id: str) -> dict[str, Any]:
+    return client.safe_list_all(
+        "crm.stagehistory.list",
+        {
+            "entityTypeId": DEAL_OWNER_TYPE_ID,
+            "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
+            "filter": {"OWNER_ID": deal_id},
+            "select": ["*"],
+        },
+    )
+
+
+def fetch_task_context(
+    client: BitrixReadOnlyClient,
+    activities: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, dict[str, Any]]]:
+    task_responses = {
+        task_id: client.safe_call("tasks.task.get", {"taskId": task_id, "select": ["*"]})
+        for task_id in task_ids_from_activities(activities)
+    }
+    open_task_ids = select_open_task_ids(task_responses)
+    task_chats: dict[str, dict[str, Any]] = {}
+    for task_id in open_task_ids:
+        chat_id = task_chat_id(task_item(task_responses.get(task_id)))
+        if not chat_id:
+            continue
+        response = client.safe_call(
+            "im.dialog.messages.get",
+            {"DIALOG_ID": f"chat{chat_id}", "LIMIT": 50},
+        )
+        task_chats[task_id] = strip_attachment_references(response)
+    return task_responses, open_task_ids, task_chats
+
+
 def fetch_source_lead_context(client: BitrixReadOnlyClient, lead_id: Any) -> dict[str, Any] | None:
     if not lead_id:
         return None
@@ -252,6 +356,8 @@ def fetch_deal_bundle(
     activities_response = fetch_activities(client, deal_id)
     activities = activities_response.get("items", [])
     activity_details = fetch_activity_details(client, activities)
+    stage_history = fetch_deal_stage_history(client, deal_id)
+    bitrix_tasks, open_task_ids, bitrix_task_chats = fetch_task_context(client, activities)
     timeline_comments = fetch_timeline_comments(client, deal_id)
     source_lead = fetch_source_lead_context(client, deal.get("LEAD_ID"))
 
@@ -303,6 +409,12 @@ def fetch_deal_bundle(
         "read_only": True,
         "deal_id": deal_id,
         "stage_info": stage_lookup.get(stage_id),
+        "stage_history": stage_history,
+        "stage_history_lookup": {
+            str(item.get("STAGE_ID")): stage_lookup.get(str(item.get("STAGE_ID")))
+            for item in stage_history.get("items", [])
+            if isinstance(item, dict) and item.get("STAGE_ID")
+        },
         "deal": {"response": deal_response, "item": deal},
         "company": company,
         "contacts": contacts,
@@ -318,6 +430,9 @@ def fetch_deal_bundle(
         "source_lead": source_lead,
         "activities": activities_response,
         "activity_details": activity_details,
+        "bitrix_tasks": bitrix_tasks,
+        "bitrix_open_task_ids": open_task_ids,
+        "bitrix_task_chats": bitrix_task_chats,
         "timeline_comments": timeline_comments,
         "invoice_attempts": [
             client.safe_list_all("crm.invoice.list", {"filter": {"UF_DEAL_ID": deal_id}, "select": ["*"]}),
@@ -357,6 +472,15 @@ def main() -> None:
                 include_internal_context=args.include_internal_context,
                 pipeline_map_path=Path(args.pipeline_map),
             )
+            customer_history["deal_operational_context"] = {
+                "deal": bundle.get("deal"),
+                "fields": {"deal": (bundle.get("fields") or {}).get("deal")},
+                "stage_history": bundle.get("stage_history"),
+                "stage_history_lookup": bundle.get("stage_history_lookup"),
+                "bitrix_tasks": bundle.get("bitrix_tasks"),
+                "bitrix_open_task_ids": bundle.get("bitrix_open_task_ids"),
+                "bitrix_task_chats": bundle.get("bitrix_task_chats"),
+            }
             customer_history_path = output_dir / f"deal_{deal_id}_customer_history_bundle.json"
             save_json(customer_history_path, customer_history)
             logger.info("Saved customer history bundle: %s", customer_history_path)

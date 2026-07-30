@@ -30,6 +30,9 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertIn("call_opening_variants", prompt)
         self.assertIn("Красавчик", prompt)
         self.assertIn("без канцелярита и мата", prompt)
+        self.assertIn("История стадий Bitrix подтверждает движение карточки", prompt)
+        self.assertIn("сообщения в чатах задач — внутренний рабочий контекст", prompt)
+        self.assertIn("ближайшего незавершённого шага к деньгам", prompt)
 
     def test_converted_lead_handoff_uses_local_related_deal(self) -> None:
         with patch(
