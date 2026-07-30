@@ -10,7 +10,9 @@ from zoneinfo import ZoneInfo
 from api.deal_control import build_deal_control_dashboard, refresh_deal_control
 from storage.rop_db import (
     confirm_deal_control_task_crm_match,
+    connect,
     create_deal_control_task,
+    dumps_json,
     get_deal_control_metrics,
     get_deal_control_scope,
     list_deal_control_task_history,
@@ -19,6 +21,7 @@ from storage.rop_db import (
     save_deal_control_scope,
     save_deal_control_task_outcome,
     update_deal_control_task,
+    upsert_deal_control_deal,
 )
 
 
@@ -153,6 +156,51 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(cleared["deals"][0]["bitrix_tasks"], [])
             self.assertIsNone(cleared["deals"][0]["primary_bitrix_task"])
             self.assertEqual(cleared["summary"]["tasks_total"], 0)
+
+    def test_dashboard_reads_legacy_wrapped_bitrix_tasks_json(self):
+        """DB may still hold `{tasks, scheduled_activities}` after a format rollback."""
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="101",
+                source="initial",
+                title="Сделка 101",
+                manager_id="10",
+                manager_name="Иванов Иван",
+                stage_id="C15:NEW",
+                stage_name="Новая",
+                pipeline_id="15",
+                amount="120000",
+                currency_id="RUB",
+                created_at_crm="2026-07-19T09:00:00+03:00",
+                modified_at_crm="2026-07-20T09:00:00+03:00",
+                is_active=True,
+            )
+            legacy = {
+                "tasks": [{
+                    "activity_id": "901",
+                    "subject": "Просроченная задача",
+                    "deadline": "2026-07-19T12:00:00+03:00",
+                    "time_bucket": "overdue",
+                    "completed": False,
+                    "provider_id": "CRM_TASKS_TASK",
+                }],
+                "scheduled_activities": [],
+            }
+            with connect(db_path) as conn:
+                conn.execute(
+                    "UPDATE deal_control_deals SET bitrix_tasks_json = ? WHERE deal_id = ?",
+                    (dumps_json(legacy), "101"),
+                )
+            dashboard = build_deal_control_dashboard(
+                db_path=db_path, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+            )
+            projected = dashboard["deals"][0]["bitrix_tasks"]
+            self.assertEqual([item["activity_id"] for item in projected], ["901"])
+            self.assertEqual(dashboard["deals"][0]["primary_bitrix_task"]["time_bucket"], "overdue")
+            self.assertEqual(dashboard["summary"]["tasks_overdue"], 1)
 
     def test_exact_deadline_bitrix_task_with_different_text_requires_rop_confirmation(self):
         with tempfile.TemporaryDirectory() as directory:

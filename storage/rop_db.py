@@ -2245,12 +2245,23 @@ def daily_paid_capacity_used(db_path: str | Path, *, day_prefix: str) -> int:
 DEAL_CONTROL_SCOPE_KEY = "active"
 
 
+def _normalize_deal_control_bitrix_tasks(value: Any) -> list[dict[str, Any]]:
+    """Accept list or legacy `{tasks, scheduled_activities}` wrapper from DB."""
+    if isinstance(value, dict):
+        value = value.get("tasks")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     value = dict(row)
     value["is_active"] = bool(value.get("is_active"))
-    value["bitrix_tasks"] = loads_json(value.pop("bitrix_tasks_json", None), [])
+    value["bitrix_tasks"] = _normalize_deal_control_bitrix_tasks(
+        loads_json(value.pop("bitrix_tasks_json", None), [])
+    )
     return value
 
 
