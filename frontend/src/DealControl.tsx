@@ -3,7 +3,6 @@ import {
   confirmDealControlTaskCrmMatch,
   createDealControlTask,
   fetchDealControl,
-  fetchDealControlMetrics,
   fetchDealTaskGuidanceJob,
   fetchJob,
   recordDealControlTaskEvent,
@@ -18,7 +17,6 @@ import {
   type DealControlDashboard,
   type DealControlBitrixTask,
   type DealControlDeal,
-  type DealControlMetrics,
   type DealControlTask,
   type DealControlTaskOutcome,
   type DealTaskGuidanceContent,
@@ -193,15 +191,6 @@ function dealMatchesTime(deal: DealControlDeal, view: TimeView) {
   return bucket === view
 }
 
-function preferredTaskTimeView(deals: DealControlDeal[]): TimeView {
-  const buckets = deals.map(controlTimeBucket).filter(Boolean)
-  if (buckets.includes('overdue')) return 'overdue'
-  if (buckets.includes('today')) return 'today'
-  if (buckets.includes('tomorrow')) return 'tomorrow'
-  if (buckets.includes('future') || buckets.includes('unscheduled')) return 'future'
-  return 'all'
-}
-
 function bitrixTaskStatus(task: DealControlBitrixTask) {
   if (task.time_bucket === 'overdue') return 'Bitrix: задача просрочена'
   if (task.time_bucket === 'today') return 'Bitrix: задача на сегодня'
@@ -301,7 +290,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   const [outcomeNote, setOutcomeNote] = useState('')
   const [outcomeNextStep, setOutcomeNextStep] = useState('')
   const [outcomeNextAt, setOutcomeNextAt] = useState('')
-  const [outcomeMetrics, setOutcomeMetrics] = useState<DealControlMetrics | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -507,25 +495,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))
     if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals[0]?.deal_id || '')
   }, [selectedId, visibleDeals])
-
-  useEffect(() => {
-    if (view === 'dashboard' || timeView === 'all') return
-    if (timeCounts[timeView as keyof typeof timeCounts]) return
-    setTimeView(preferredTaskTimeView(filteredDeals))
-  }, [filteredDeals, timeCounts, timeView, view])
-
-  useEffect(() => {
-    if (!data) return
-    if (view !== 'rop') {
-      setOutcomeMetrics(data.outcome_metrics)
-      return
-    }
-    let cancelled = false
-    void fetchDealControlMetrics(managerFilter || undefined)
-      .then((metrics) => { if (!cancelled) setOutcomeMetrics(metrics) })
-      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)) })
-    return () => { cancelled = true }
-  }, [data, managerFilter, view])
 
   useEffect(() => {
     const guidanceId = selectedTask?.guidance && !selectedTask.guidance.is_stale
@@ -837,14 +806,14 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         </button>
         <button className={view === 'rop' ? 'active' : ''} onClick={() => {
           setView('rop')
-          setTimeView(preferredTaskTimeView(filteredDeals))
+          setTimeView('today')
         }} title="Контроль РОПа">
           <span>◎</span><b>Контроль РОПа</b><small>План и просрочки команды</small>
         </button>
         <button className={view === 'manager' ? 'active' : ''} onClick={() => {
           setView('manager')
           setManagerFilter(selected?.manager_id || managers[0]?.[0] || '')
-          setTimeView(preferredTaskTimeView(filteredDeals))
+          setTimeView('today')
         }} title="Задачи менеджера">
           <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
         </button>
@@ -868,7 +837,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
       <Kpis view={view} summary={filteredSummary} />
-      {view === 'rop' && outcomeMetrics ? <OutcomeMetrics metrics={outcomeMetrics} /> : null}
       <Filters
         view={view}
         managers={managers}
@@ -996,30 +964,6 @@ function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDa
   </section>
 }
 
-function OutcomeMetrics({ metrics }: { metrics: DealControlMetrics }) {
-  const values = [
-    ['Всего поставлено', metrics.overall.tasks],
-    ['Действия выполнены', metrics.overall.actions_completed],
-    ['Контакты подтверждены', metrics.overall.confirmed_contacts],
-    ['Цель достигнута', metrics.overall.target_results],
-    ['Следующий шаг', metrics.overall.next_steps],
-    ['Продвинулись', metrics.overall.stage_progressed],
-    ['Отменено', metrics.cancelled_tasks],
-  ]
-  return <section className="dc-outcome-metrics">
-    <div className="dc-section-head"><div><h3>Воронка результатов</h3><p>Не галочки, а подтверждённый контакт, результат и следующий шаг.</p></div><span>Пилот</span></div>
-    <div>{values.map(([label, value]) => <article key={String(label)}><small>{label}</small><strong>{value}</strong></article>)}</div>
-    <details>
-      <summary>Сравнить задачи с подготовленной AI-подсказкой и без неё</summary>
-      <table><thead><tr><th>Группа</th><th>Задач</th><th>Контакт</th><th>Цель</th><th>Следующий шаг</th></tr></thead><tbody>
-        <tr><td>С AI-подготовкой</td><td>{metrics.with_guidance.tasks}</td><td>{metrics.with_guidance.confirmed_contacts}</td><td>{metrics.with_guidance.target_results}</td><td>{metrics.with_guidance.next_steps}</td></tr>
-        <tr><td>Без подготовки</td><td>{metrics.without_guidance.tasks}</td><td>{metrics.without_guidance.confirmed_contacts}</td><td>{metrics.without_guidance.target_results}</td><td>{metrics.without_guidance.next_steps}</td></tr>
-      </tbody></table>
-      <small>{metrics.note}</small>
-    </details>
-  </section>
-}
-
 function Filters(props: {
   view: DealControlView
   managers: Array<[string, string]>
@@ -1087,7 +1031,7 @@ function DealTable(props: {
         const bitrixTask = primaryBitrixTaskOf(deal)
         const age = stageAge(deal.modified_at_crm)
         return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><a className="dc-bitrix-deal-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}>#{deal.deal_id} ↗</a><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
+          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
           <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || bitrixTask?.deadline || deal.next_control_at)}</strong><div><ControlTimeChip task={task} bitrixTask={bitrixTask} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div><ControlSyncState task={task} bitrixTask={bitrixTask} /></div>
           <div className="dc-stage-cell"><small>Текущая стадия</small><strong>{deal.stage_name || 'Не указана'}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
@@ -1112,7 +1056,7 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
         const rowTone = task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'
         return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${task?.id || bitrixTask?.activity_id}`} onClick={() => onSelect(deal.deal_id)}>
           <span className={`dc-check ${task?.local_status === 'completed' ? 'checked' : ''}`}>{task?.local_status === 'completed' ? '✓' : ''}</span>
-          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><a className="dc-bitrix-deal-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}>#{deal.deal_id} ↗</a></div>
+          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong></div>
           <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span><small>♟ {deal.manager_name}</small></div>
           <div className="dc-task-name"><strong>{compactTaskText(task?.task_text || bitrixTask?.subject || '')}</strong><small>{task ? `Касание: ${task.touch_type || 'не указано'}` : 'Источник: Bitrix'}</small>{deal.bitrix_tasks.length > 1 ? <small>Ещё задач Bitrix: {deal.bitrix_tasks.length - 1}</small> : null}</div>
           <time>{dateTime(task?.due_at || bitrixTask?.deadline)}</time>
@@ -1208,15 +1152,13 @@ function DealDetail(props: {
   const coaching = deal.coaching
   const managerView = props.view === 'manager'
   const taskGuidance = task?.guidance && !task.guidance.is_stale ? task.guidance.content : null
-  const managerKnown = taskGuidance?.known_facts || coaching.known
-  const managerUnknowns = taskGuidance?.missing_facts || coaching.unknowns
   const managerFocus = task
     ? taskGuidance?.contact_goal || coaching.contact_goal || 'Выполнить поручение РОПа и зафиксировать подтверждённый результат.'
     : coaching.contact_goal
 
   return <aside className="dc-detail">
     <header>
-      <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p><a className="dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть в Bitrix ↗</a></div>
+      <div><h2>Сделка #{deal.deal_id}</h2><p>{deal.title}</p><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в Bitrix ↗</a></div>
       <button
         className="dc-button dc-analyze-button"
         disabled={Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))}
@@ -1241,9 +1183,7 @@ function DealDetail(props: {
       <div className="dc-section-head"><h3>Текущая ситуация</h3><span>✦ AI-сводка</span></div>
       <p>{textOr(coaching.current_situation, 'По сделке ещё нет сохранённого полного анализа. CRM-поля и локальные задачи доступны, аналитические выводы появятся после анализа.')}</p>
       <div className="dc-mini-grid">
-        <div><small>{managerView ? 'Что уже есть' : 'Сильные стороны'}</small><strong>{(managerView ? managerKnown : coaching.strengths).length || 0} фактов</strong></div>
-        <div><small>{managerView ? 'Что не закрыто' : 'Слабые стороны'}</small><strong>{(managerView ? managerUnknowns : coaching.weaknesses).length || 0} пунктов</strong></div>
-        <div><small>{managerView ? 'Мой фокус' : 'Фокус РОПа'}</small><strong>{textOr(managerView ? managerFocus : coaching.rop_focus, 'Не сформирован')}</strong></div>
+        <div><small>Фокус РОПа</small><strong>{textOr(managerView ? managerFocus : coaching.rop_focus, 'Не сформирован')}</strong></div>
       </div>
     </section>
 
