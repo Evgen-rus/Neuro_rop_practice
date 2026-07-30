@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from api.deal_control import build_deal_control_dashboard, refresh_deal_control
+from api.deal_control import _analysis_coaching, build_deal_control_dashboard, refresh_deal_control
 from storage.rop_db import (
     confirm_deal_control_task_crm_match,
     connect,
@@ -21,6 +21,7 @@ from storage.rop_db import (
     save_deal_control_bitrix_tasks,
     save_deal_control_scope,
     save_deal_control_task_outcome,
+    save_ui_report,
     set_deal_control_bitrix_task_completion,
     update_deal_control_task,
     upsert_deal_control_deal,
@@ -78,6 +79,34 @@ def deal(deal_id: str, *, manager_id: str, closed: str = "N") -> dict:
 
 
 class DealControlTests(unittest.TestCase):
+    def test_analysis_coaching_projects_manager_message_call_variants_and_crm_checklist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json={
+                    "deal_control_brief": {
+                        "manager_coaching": "Красавчик, что согласовал следующий звонок. Теперь получи дату решения.",
+                        "call_script": "Добрый день! Хочу сверить статус решения.",
+                        "call_opening_variants": [
+                            "Добрый день! Уточню статус нашего предложения.",
+                            "Добрый день! Давайте определим следующий шаг.",
+                        ],
+                    },
+                    "manager_action_block": {
+                        "manager_checklist": ["Позиция клиента", "Дата следующего шага"],
+                    },
+                },
+            )
+
+            coaching = _analysis_coaching(db_path, "101")
+
+            self.assertTrue(coaching["manager_coaching"].startswith("Красавчик"))
+            self.assertEqual(len(coaching["script_variants"]), 2)
+            self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
+
     def test_scope_is_local_and_has_no_embedded_crm_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

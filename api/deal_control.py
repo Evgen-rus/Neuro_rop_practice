@@ -446,6 +446,16 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
                 shaker.get("question"),
             ]
         )
+    script_variants = texts(brief.get("call_opening_variants"), 2)
+    if not script_variants:
+        script_variants = texts(
+            [
+                item.get("text")
+                for item in backups
+                if isinstance(item, dict)
+            ],
+            2,
+        )
     return {
         "report_id": report.get("id") if report else None,
         "current_situation": str(brief.get("current_situation") or deal_state.get("summary") or ""),
@@ -464,6 +474,8 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "contact_goal": str(brief.get("contact_goal") or manager.get("goal") or ""),
         "questions": questions,
         "script": str(brief.get("call_script") or primary.get("text") or primary.get("call_script") or backup_script),
+        "script_variants": script_variants,
+        "crm_checklist": texts(manager.get("manager_checklist")),
         "script_channel": str(manager.get("recommended_channel") or ""),
         "rop_task_hint": str(rop.get("message_to_manager") or rop.get("check_for_rop") or ""),
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),

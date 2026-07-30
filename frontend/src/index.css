@@ -1694,6 +1694,22 @@ textarea {
   background: #fff;
 }
 
+.dc-manager-focus {
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid #9fc0ff;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eef4ff, #f8fbff);
+}
+
+.dc-manager-focus p {
+  margin: 0;
+  color: #173f77;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
 .dc-contact-goal {
   padding: 10px;
   margin-bottom: 8px;
@@ -1755,7 +1771,53 @@ textarea {
   white-space: pre-wrap;
 }
 
+.dc-script-primary {
+  margin-top: 8px;
+}
+
+.dc-script-primary > small,
+.dc-script-variants article > small {
+  color: var(--dc-blue);
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.dc-script-variants {
+  margin-top: 10px;
+  border-top: 1px solid var(--dc-line);
+  padding-top: 9px;
+}
+
+.dc-script-variants summary {
+  color: var(--dc-blue);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.dc-script-variants > div {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dc-script-variants article {
+  padding: 9px;
+  border: 1px solid #c8d9f5;
+  border-radius: 9px;
+  background: #f8fbff;
+}
+
+.dc-script-variants article p {
+  margin: 5px 0 8px;
+  color: #314967;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
 .dc-crm-checklist {
+  margin-top: 8px;
   padding: 10px;
   border: 1px solid #b7cef4;
   border-radius: 10px;

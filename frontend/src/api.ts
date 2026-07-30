@@ -545,6 +545,8 @@ export type DealControlDeal = {
     contact_goal?: string
     questions: string[]
     script?: string
+    script_variants: string[]
+    crm_checklist: string[]
     script_channel?: string
     rop_task_hint?: string
     expected_crm_update?: string

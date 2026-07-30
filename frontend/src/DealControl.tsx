@@ -1485,7 +1485,7 @@ function RopGuidance({ deal, task, onCopy }: {
         <ListCard tone="weak" title="✕ Слабые стороны" items={coaching.weaknesses} empty="Риски и пробелы не выделены." />
       </div>
     </section>
-    <section className="dc-text-section"><div className="dc-section-head"><h3>Разбор для менеджера</h3></div><div className="dc-coaching-copy"><strong>Формулировка для разговора с менеджером</strong><p>{textOr(coaching.manager_coaching, 'В анализе нет отдельной формулировки для разговора с менеджером.')}</p></div><div className="dc-copy-actions"><button className="dc-button" onClick={() => void onCopy(coaching.manager_coaching || '', 'Разбор')}>Скопировать разбор</button><button className="dc-button primary" onClick={() => void onCopy(coaching.rop_task_hint || coaching.manager_coaching || '', 'Текст для менеджера')}>Скопировать для менеджера</button></div></section>
+    <section className="dc-text-section"><div className="dc-section-head"><h3>Сообщение менеджеру</h3></div><div className="dc-coaching-copy"><strong>Готово к отправке</strong><p>{textOr(coaching.manager_coaching, 'В анализе нет готового сообщения менеджеру.')}</p></div><div className="dc-copy-actions"><button className="dc-button primary" disabled={!coaching.manager_coaching} onClick={() => void onCopy(coaching.manager_coaching || '', 'Текст для менеджера')}>Скопировать менеджеру</button></div></section>
   </>
 }
 
@@ -1508,6 +1508,10 @@ function ManagerGuidance({ deal, task, onCopy }: {
             : 'Ниже показана базовая подготовка из последнего полного анализа сделки. РОП может отдельно подготовить подсказку именно к текущей задаче.'}</p>
         </div>
       </section> : null}
+    {coaching.manager_coaching ? <section className="dc-manager-focus">
+      <div className="dc-section-head"><h3>Фокус на сегодня</h3><span>✦ От РОПа</span></div>
+      <p>{coaching.manager_coaching}</p>
+    </section> : null}
     <section className="dc-analysis-section">
       <div className="dc-section-head"><h3>Что известно и чего не хватает</h3></div>
       <div className="dc-two-columns">
@@ -1519,7 +1523,8 @@ function ManagerGuidance({ deal, task, onCopy }: {
       <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div></div>
       <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
       <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
-      <div className="dc-script"><strong>Речевой модуль для звонка</strong><pre>{textOr(coaching.script, 'Готовый скрипт пока не сформирован.')}</pre><div><button className="dc-button primary" onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать сценарий звонка</button></div></div>
+      <div className="dc-script"><strong>Что сказать клиенту</strong><div className="dc-script-primary"><small>Основной сценарий</small><pre>{textOr(coaching.script, 'Готовый сценарий пока не сформирован.')}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё {coaching.script_variants.length} варианта начала разговора</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 2}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 2}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
+      {coaching.crm_checklist.length ? <div className="dc-crm-checklist"><strong>После звонка зафиксируй в B24</strong><ul>{coaching.crm_checklist.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
     </section>
   </>
 }

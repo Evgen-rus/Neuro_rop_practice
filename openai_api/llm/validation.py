@@ -1133,6 +1133,25 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
             _expect_non_empty_string(control_brief.get(field), f"deal_control_brief.{field}", errors)
         for field in ("strengths", "weaknesses", "known_facts", "missing_facts", "contact_questions"):
             _validate_short_text_list(control_brief.get(field), f"deal_control_brief.{field}", 5, errors)
+        opening_variants = control_brief.get("call_opening_variants")
+        _validate_short_text_list(
+            opening_variants,
+            "deal_control_brief.call_opening_variants",
+            2,
+            errors,
+        )
+        manager_action = analysis.get("manager_action_block")
+        recommended_channel = (
+            manager_action.get("recommended_channel")
+            if isinstance(manager_action, dict)
+            else None
+        )
+        if recommended_channel == "phone" and (
+            not isinstance(opening_variants, list) or len(opening_variants) != 2
+        ):
+            errors.append(
+                "deal_control_brief.call_opening_variants must contain exactly 2 items for phone contact"
+            )
 
     deal_mode = _expect_dict(analysis.get("deal_mode"), "deal_mode", errors)
     if deal_mode:
