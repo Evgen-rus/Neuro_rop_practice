@@ -126,6 +126,16 @@ function dateTime(value?: string | null) {
   }).format(parsed)
 }
 
+function dateTimeParts(value?: string | null) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return { date: value, time: '' }
+  return {
+    date: new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(parsed),
+    time: new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(parsed),
+  }
+}
+
 function dateOnly(value?: string | null) {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -1031,8 +1041,8 @@ function DealTable(props: {
         const bitrixTask = primaryBitrixTaskOf(deal)
         const age = stageAge(deal.modified_at_crm)
         return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
-          <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || bitrixTask?.deadline || deal.next_control_at)}</strong><div><ControlTimeChip task={task} bitrixTask={bitrixTask} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div><ControlSyncState task={task} bitrixTask={bitrixTask} /></div>
+          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span className="dc-deal-id">#{deal.deal_id}</span><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
+          <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || bitrixTask?.deadline || deal.next_control_at)}</strong><div><ControlTimeChip task={task} bitrixTask={bitrixTask} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div></div>
           <div className="dc-stage-cell"><small>Текущая стадия</small><strong>{deal.stage_name || 'Не указана'}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
@@ -1054,13 +1064,14 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
         const bitrixTask = primaryBitrixTaskOf(deal)
         if (!task && !bitrixTask) return null
         const rowTone = task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'
+        const deadline = dateTimeParts(task?.due_at || bitrixTask?.deadline)
         return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${task?.id || bitrixTask?.activity_id}`} onClick={() => onSelect(deal.deal_id)}>
           <span className={`dc-check ${task?.local_status === 'completed' ? 'checked' : ''}`}>{task?.local_status === 'completed' ? '✓' : ''}</span>
-          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong></div>
+          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><span className="dc-deal-id">#{deal.deal_id}</span></div>
           <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span><small>♟ {deal.manager_name}</small></div>
-          <div className="dc-task-name"><strong>{compactTaskText(task?.task_text || bitrixTask?.subject || '')}</strong><small>{task ? `Касание: ${task.touch_type || 'не указано'}` : 'Источник: Bitrix'}</small>{deal.bitrix_tasks.length > 1 ? <small>Ещё задач Bitrix: {deal.bitrix_tasks.length - 1}</small> : null}</div>
-          <time>{dateTime(task?.due_at || bitrixTask?.deadline)}</time>
-          <div className="dc-task-result-cell"><ControlTimeChip task={task} bitrixTask={bitrixTask} /><ControlSyncState task={task} bitrixTask={bitrixTask} compact /><small>{task?.latest_outcome ? OUTCOME_LABELS[task.latest_outcome.result_status] : task ? 'Результат не зафиксирован' : 'Поручение РОПа не добавлено'}</small></div>
+          <div className="dc-task-name"><strong>{compactTaskText(task?.task_text || bitrixTask?.subject || '').replace(/^CRM:\s*/i, '')}</strong>{task?.touch_type ? <small>Касание: {task.touch_type}</small> : null}</div>
+          <div className="dc-task-deadline-cell"><time className="dc-task-deadline">{deadline ? <><strong>{deadline.date}</strong>{deadline.time ? <span>{deadline.time}</span> : null}</> : <span>Не назначен</span>}</time></div>
+          <div className="dc-task-result-cell"><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div>
         </article>
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}

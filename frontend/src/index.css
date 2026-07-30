@@ -1967,6 +1967,374 @@ textarea {
   text-transform: uppercase;
 }
 
+/* Readability pass aligned with the three-screen visual reference. */
+.dc-shell {
+  font-size: 14px;
+}
+
+.dc-content {
+  padding: 24px clamp(16px, 2.2vw, 42px) 32px;
+}
+
+.dc-header h1 {
+  font-size: clamp(31px, 2.5vw, 39px);
+}
+
+.dc-header p {
+  font-size: 14px;
+}
+
+.dc-refresh {
+  font-size: 13px;
+}
+
+.dc-kpis article {
+  min-height: 104px;
+  gap: 15px;
+  padding: 18px 20px;
+}
+
+.dc-kpis article > span {
+  width: 48px;
+  height: 48px;
+  font-size: 22px;
+}
+
+.dc-kpis small {
+  font-size: 13px;
+}
+
+.dc-kpis strong {
+  font-size: clamp(24px, 1.8vw, 31px);
+}
+
+.dc-kpis article:nth-child(2) strong {
+  font-size: clamp(19px, 1.45vw, 25px);
+}
+
+.dc-filters {
+  min-height: 72px;
+  padding: 13px 15px;
+}
+
+.dc-filters select,
+.dc-filters input {
+  min-height: 44px;
+  padding: 9px 12px;
+}
+
+.dc-filters > span {
+  font-size: 12px;
+}
+
+.dc-board {
+  padding: 16px;
+}
+
+.dc-time-tabs {
+  gap: 9px;
+  margin-bottom: 13px;
+}
+
+.dc-time-tabs button {
+  min-height: 42px;
+  padding: 8px 15px;
+  font-size: 13px;
+}
+
+.dc-time-tabs button span {
+  min-width: 21px;
+  height: 21px;
+  font-size: 10px;
+}
+
+.dc-board-title {
+  padding-bottom: 14px;
+}
+
+.dc-board-title h2 {
+  font-size: 23px;
+}
+
+.dc-board-title p,
+.dc-board-title > span {
+  font-size: 12px;
+}
+
+.dc-deal-columns,
+.dc-task-columns {
+  font-size: 9px;
+}
+
+.dc-deal-columns,
+.dc-deal-row {
+  grid-template-columns: minmax(210px, 1.35fr) minmax(145px, .9fr) minmax(155px, 1fr) minmax(180px, 1.05fr);
+  min-width: 720px;
+}
+
+.dc-task-columns,
+.dc-task-row {
+  grid-template-columns: 36px minmax(180px, 1.15fr) minmax(125px, .75fr) minmax(185px, 1.15fr) 82px 105px;
+  min-width: 715px;
+}
+
+.dc-deal-columns span,
+.dc-task-columns span {
+  padding: 9px 12px;
+}
+
+.dc-deal-row {
+  min-height: 112px;
+  margin-bottom: 8px;
+}
+
+.dc-deal-row > div {
+  padding: 12px 13px;
+}
+
+.dc-deal-row small,
+.dc-stage-cell > small,
+.dc-control-cell > small,
+.dc-forecast-cell > small {
+  font-size: 9px;
+}
+
+.dc-deal-row strong {
+  color: #0a1d3a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dc-deal-main p,
+.dc-stage-cell p {
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin-top: 8px;
+  font-size: 10px;
+}
+
+.dc-deal-id {
+  color: var(--dc-blue);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.dc-control-cell > strong,
+.dc-forecast-cell > strong {
+  font-size: 14px;
+}
+
+.dc-control-cell button {
+  font-size: 10px;
+}
+
+.dc-forecast-cell select,
+.dc-forecast-cell input {
+  height: 32px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.dc-task-row {
+  min-height: 88px;
+}
+
+.dc-task-row > * {
+  padding: 11px 12px;
+}
+
+.dc-task-row strong {
+  color: #0a1d3a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dc-task-row small {
+  font-size: 10px;
+}
+
+.dc-stage-pill {
+  padding: 5px 8px;
+  font-size: 10px;
+}
+
+.dc-task-name {
+  margin: 8px 10px;
+  padding: 9px 11px !important;
+}
+
+.dc-task-name strong {
+  color: #1753ac;
+}
+
+.dc-task-row time {
+  font-size: 11px;
+}
+
+.dc-task-deadline-cell {
+  align-items: center;
+}
+
+.dc-task-deadline {
+  display: grid;
+  min-width: 66px;
+  min-height: 52px;
+  place-content: center;
+  padding: 7px 9px;
+  border: 1px solid #cddbea;
+  border-radius: 10px;
+  color: #10294c;
+  background: #fff;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.dc-task-deadline strong,
+.dc-task-deadline span {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.dc-task-result-cell {
+  align-items: center;
+  justify-content: center;
+}
+
+.dc-status {
+  min-height: 29px;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+
+.dc-sync-state.compact,
+.dc-control-cell > .dc-sync-state {
+  font-size: 9px;
+}
+
+.dc-detail {
+  padding: 19px;
+}
+
+.dc-detail > header {
+  gap: 12px;
+  margin-bottom: 15px;
+}
+
+.dc-detail > header h2 {
+  font-size: 26px;
+}
+
+.dc-detail > header p {
+  font-size: 13px;
+}
+
+.dc-bitrix-detail-link,
+.dc-analyze-button {
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.dc-detail-stats {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+.dc-detail-stats div {
+  min-height: 72px;
+  padding: 10px 11px;
+}
+
+.dc-detail-stats small {
+  font-size: 10px;
+}
+
+.dc-detail-stats strong {
+  font-size: 12px;
+}
+
+.dc-insight-card,
+.dc-current-task,
+.dc-analysis-section,
+.dc-text-section,
+.dc-manager-module,
+.dc-manual-fields,
+.dc-task-editor {
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.dc-section-head {
+  margin-bottom: 11px;
+}
+
+.dc-section-head h3 {
+  font-size: 17px;
+}
+
+.dc-section-head > span {
+  padding: 5px 8px;
+  font-size: 9px;
+}
+
+.dc-insight-card > p,
+.dc-text-section > p,
+.dc-current-task > p,
+.dc-manager-module p {
+  margin-bottom: 11px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dc-mini-grid div {
+  padding: 11px;
+}
+
+.dc-mini-grid small {
+  font-size: 9px;
+}
+
+.dc-mini-grid strong {
+  color: #10284c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dc-task-hero h4 {
+  font-size: 17px;
+}
+
+.dc-task-hero p {
+  font-size: 12px;
+}
+
+.dc-guidance-summary strong,
+.dc-crm-checklist > strong,
+.dc-two-columns article > strong,
+.dc-coaching-copy strong,
+.dc-contact-goal strong,
+.dc-question-list > strong,
+.dc-script > strong {
+  font-size: 12px;
+}
+
+.dc-guidance-summary p,
+.dc-coaching-copy p,
+.dc-two-columns ul {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dc-guidance-summary small {
+  font-size: 10px;
+}
+
+.dc-two-columns article {
+  padding: 13px;
+}
+
 @media (max-width: 1250px) {
   .dc-content {
     padding-right: 24px;
@@ -1974,12 +2342,12 @@ textarea {
   }
 
   .dc-kpis article {
-    padding: 13px;
+    padding: 15px;
   }
 
   .dc-kpis article > span {
-    width: 36px;
-    height: 36px;
+    width: 42px;
+    height: 42px;
   }
 
   .dc-filters > span {
@@ -2081,8 +2449,7 @@ textarea {
     width: 100%;
   }
 
-  .dc-detail-stats,
-  .dc-mini-grid {
+  .dc-detail-stats {
     grid-template-columns: 1fr 1fr;
   }
 
