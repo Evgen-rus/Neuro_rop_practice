@@ -854,14 +854,6 @@ textarea {
   text-align: center;
 }
 
-.dc-status i {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: currentColor;
-}
-
 .dc-status.overdue { border-color: #efb5b5; color: #ca3030; background: #fff0f0; }
 .dc-status.today { border-color: #efcc86; color: #a66700; background: #fff7e7; }
 .dc-status.future { border-color: #b9e1ca; color: #137344; background: #effaf4; }

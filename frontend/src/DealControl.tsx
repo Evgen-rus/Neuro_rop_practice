@@ -1080,7 +1080,7 @@ function TaskTable({ deals, selectedId, onSelect }: { deals: DealControlDeal[]; 
 }
 
 function StatusChip({ task }: { task: DealControlTask | null }) {
-  return <span className={`dc-status ${taskTone(task)}`}><i />{taskStatus(task)}</span>
+  return <span className={`dc-status ${taskTone(task)}`}>{taskStatus(task)}</span>
 }
 
 function ControlTimeChip({ task, bitrixTask }: {
@@ -1096,7 +1096,7 @@ function ControlTimeChip({ task, bitrixTask }: {
       : bitrixTask.time_bucket === 'tomorrow'
         ? 'На завтра'
         : 'Будущее'
-  return <span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}><i />{label}</span>
+  return <span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span>
 }
 
 function ControlSyncState({ task, bitrixTask, compact = false }: {
