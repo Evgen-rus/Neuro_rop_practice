@@ -1498,7 +1498,7 @@ def default_analysis_profile() -> dict[str, Any]:
 def _normalize_analysis_profile(payload: dict[str, Any] | None) -> dict[str, Any]:
     base = default_analysis_profile()
     incoming = payload if isinstance(payload, dict) else {}
-    for key in ("timezone", "period_preset", "review_view"):
+    for key in ("period_preset", "review_view"):
         if key in incoming:
             base[key] = incoming[key]
     legacy_periods = {

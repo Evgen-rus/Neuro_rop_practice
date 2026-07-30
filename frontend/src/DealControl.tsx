@@ -24,6 +24,7 @@ import {
   type DealTaskGuidanceJob,
   type JobState,
 } from './api'
+import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
 
 type DealControlView = 'dashboard' | 'rop' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -123,23 +124,22 @@ function money(value?: string | number | null, currency = 'RUB') {
 
 function dateTime(value?: string | null) {
   if (!value) return 'Не назначен'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat('ru-RU', {
+  return formatMoscowDateTime(value, {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(parsed)
+  }) || value
 }
 
 function dateTimeParts(value?: string | null) {
   if (!value) return null
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return { date: value, time: '' }
+  const date = formatMoscowDateTime(value, { day: '2-digit', month: '2-digit' })
+  const time = formatMoscowDateTime(value, { hour: '2-digit', minute: '2-digit' })
+  if (!date || !time) return { date: value, time: '' }
   return {
-    date: new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(parsed),
-    time: new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(parsed),
+    date,
+    time,
   }
 }
 
@@ -149,13 +149,16 @@ const PAYMENT_MONTHS = [
 ] as const
 
 function paymentMonthOptions() {
-  const current = new Date()
+  const current = moscowDateParts()
+  const currentMonthIndex = current.year * 12 + current.month - 1
   return Array.from({ length: 6 }, (_, offset) => {
-    const date = new Date(current.getFullYear(), current.getMonth() + offset, 1)
-    const month = PAYMENT_MONTHS[date.getMonth()][0]
+    const absoluteMonth = currentMonthIndex + offset
+    const year = Math.floor(absoluteMonth / 12)
+    const monthIndex = absoluteMonth % 12
+    const month = PAYMENT_MONTHS[monthIndex][0]
     return {
-      value: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
-      label: `${month}.${date.getFullYear() === current.getFullYear() ? '' : ` ${date.getFullYear()}`}`,
+      value: `${year}-${String(monthIndex + 1).padStart(2, '0')}`,
+      label: `${month}.${year === current.year ? '' : ` ${year}`}`,
     }
   })
 }
@@ -163,7 +166,7 @@ function paymentMonthOptions() {
 function parsePaymentPeriod(value?: string | null) {
   const normalized = String(value || '').toLocaleLowerCase('ru')
   const week = normalized.match(/([1-5])\s*нед/)?.[1] || ''
-  const year = Number(normalized.match(/20\d{2}/)?.[0] || new Date().getFullYear())
+  const year = Number(normalized.match(/20\d{2}/)?.[0] || moscowDateParts().year)
   const monthEntry = PAYMENT_MONTHS.find(([token]) => normalized.includes(token))
   const month = monthEntry ? `${year}-${String(monthEntry[1] + 1).padStart(2, '0')}` : ''
   return { week, month }
@@ -183,18 +186,16 @@ function formatPaymentPeriod(week: string, month: string) {
 
 function dateOnly(value?: string | null) {
   if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat('ru-RU', {
+  return formatMoscowDateTime(value, {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
-  }).format(parsed)
+  }) || value
 }
 
 function stageAge(value?: string | null) {
   if (!value) return null
-  const parsed = new Date(value)
+  const parsed = parseMoscowDateTime(value)
   if (Number.isNaN(parsed.getTime())) return null
   return Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 86_400_000))
 }

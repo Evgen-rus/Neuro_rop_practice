@@ -126,6 +126,18 @@ class AnalysisProfileStorageTests(unittest.TestCase):
             self.assertEqual(get_last_analysis_profile(db)["id"], default["id"])
             gc.collect()
 
+    def test_profiles_always_use_moscow_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "state.sqlite"
+            profile = create_analysis_profile(
+                db,
+                name="Часовой пояс клиента",
+                profile={"timezone": "Asia/Novosibirsk"},
+            )
+
+            self.assertEqual(profile["profile"]["timezone"], "Europe/Moscow")
+            gc.collect()
+
     def test_legacy_calendar_periods_are_normalized_to_workdays(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = Path(directory) / "state.sqlite"

@@ -52,7 +52,7 @@ from api.deal_control import review_task_crm_fact as review_deal_control_task_cr
 from api.deal_control import task_history as deal_control_task_history
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
 from openai_api.bitrix_links import bitrix_entity_url
-from setup import BASE_DIR
+from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     attach_job_to_daily_summary,
@@ -558,7 +558,7 @@ def analysis_profile_preview(profile_id: int, body: AnalysisProfilePreviewReques
         raise HTTPException(status_code=404, detail="Профиль не найден")
     try:
         profile_settings = profile.get("profile") if isinstance(profile.get("profile"), dict) else {}
-        timezone_name = str(profile_settings.get("timezone") or "Europe/Moscow")
+        timezone_name = "Europe/Moscow"
         preset = body.period_preset if body and body.period_preset else str(profile_settings.get("period_preset") or "today_and_previous_workday")
         if preset == "custom":
             if not body or not body.date_from or not body.date_to:
@@ -1127,9 +1127,9 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
     if saved.get("control_mode"):
         state, decision = "snoozed", "Назначен контроль"
         if saved.get("control_mode") == "days":
-            next_control_date = (datetime.now().date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
+            next_control_date = (datetime.now(MSK_TZ).date() + timedelta(days=int(saved.get("control_days") or 1))).isoformat()
         elif saved.get("control_mode") == "daily":
-            next_control_date = (datetime.now().date() + timedelta(days=1)).isoformat()
+            next_control_date = (datetime.now(MSK_TZ).date() + timedelta(days=1)).isoformat()
         else:
             next_control_date = str(saved.get("control_date") or "") or None
     else:
@@ -1300,7 +1300,7 @@ def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
             state="snoozed",
             report_id=report_id,
             decision=body.decision,
-            next_control_date=(datetime.now().date() + timedelta(days=2)).isoformat(),
+            next_control_date=(datetime.now(MSK_TZ).date() + timedelta(days=2)).isoformat(),
             **_candidate_review_values(report),
         )
     elif body.decision == "Вернуть в контроль":

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import './index.css'
 import { DealControl } from './DealControl'
+import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
 import {
   asRecord,
   asString,
@@ -71,17 +72,6 @@ const DECISIONS = [
   'Закрытие обосновано',
   'Недостаточно данных',
 ]
-
-function dateInTimeZone(timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date())
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
-  return `${value.year}-${value.month}-${value.day}`
-}
 
 const OUTCOMES = [
   'задача выполнена',
@@ -155,7 +145,7 @@ function EntityProgressView({ progress }: { progress: Partial<EntityProgress> })
     <div className="entity-progress-meta">
       {total > 0 ? <span>{current} из {total}</span> : null}
       {maxAttempts > 1 && attempt > 0 ? <span>Попытка {attempt} из {maxAttempts}</span> : null}
-      {progress.updated_at ? <span>Обновлено {new Date(progress.updated_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span> : null}
+      {progress.updated_at ? <span>Обновлено {formatMoscowDateTime(progress.updated_at, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) || progress.updated_at}</span> : null}
     </div>
     {progress.error ? <div className="entity-progress-error">{progress.error}</div> : null}
   </div>
@@ -420,10 +410,12 @@ function tableCell(value: string | null | undefined): string {
 }
 
 function tableDate(value: string | null | undefined): string {
-  const matched = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/)
-  if (!matched) return tableCell(value)
-  const [, year, month, day, hours, minutes] = matched
-  return hours && minutes ? `${day}.${month}.${year} ${hours}:${minutes}` : `${day}.${month}.${year}`
+  const raw = String(value || '')
+  if (!raw) return ''
+  const hasTime = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(raw)
+  return formatMoscowDateTime(raw, hasTime
+    ? { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+    : { day: '2-digit', month: '2-digit', year: 'numeric' }) || tableCell(value)
 }
 
 function sheetsText(value: string): string {
@@ -501,9 +493,7 @@ function reviewTokenFromPath(): string | null {
 }
 
 function historyDateLabel(value: string): string {
-  const parsed = new Date(`${value}T12:00:00`)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(parsed)
+  return formatMoscowDateTime(value, { day: 'numeric', month: 'long', year: 'numeric' }) || value
 }
 
 export default function App() {
@@ -585,8 +575,8 @@ function MainApp() {
   const [dailyRun, setDailyRun] = useState<DailySummaryRun | null>(null)
   const [dailyLoading, setDailyLoading] = useState(false)
   const [dailyError, setDailyError] = useState<string | null>(null)
-  const [customPeriodFrom, setCustomPeriodFrom] = useState(() => dateInTimeZone('Europe/Moscow'))
-  const [customPeriodTo, setCustomPeriodTo] = useState(() => dateInTimeZone('Europe/Moscow'))
+  const [customPeriodFrom, setCustomPeriodFrom] = useState(() => moscowDateInputValue())
+  const [customPeriodTo, setCustomPeriodTo] = useState(() => moscowDateInputValue())
   const dailySelectedCandidates = useMemo(
     () => (dailyPreview?.candidates || []).filter((candidate) => dailySelected.has(candidate.journey_key || `${candidate.entity_type}:${candidate.entity_id}`)),
     [dailyPreview, dailySelected],
@@ -1296,7 +1286,7 @@ function MainApp() {
                 <input value={activeProfile.name} onChange={(event) => setActiveProfile({ ...activeProfile, name: event.target.value })} />
               </div>
               <div className="field">
-                <label>Период по Москве</label>
+                <label>Период</label>
                 <select value={activeProfile.profile.period_preset} onChange={(event) => patchActiveProfile({ period_preset: event.target.value as AnalysisProfile['profile']['period_preset'] })}>
                   <option value="today_and_previous_workday">Сегодня + предыдущий рабочий день</option>
                   <option value="today">Только сегодня</option>
@@ -2188,11 +2178,9 @@ type LeadMaterialTab = 'summary' | 'bant' | 'evidence' | 'audit' | 'history' | '
 
 function formatLeadDate(value: string | null | undefined, includeTime = true): string {
   if (!value) return 'дата не указана'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString('ru-RU', includeTime
+  return formatMoscowDateTime(value, includeTime
     ? { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }
-    : { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : { day: '2-digit', month: '2-digit', year: 'numeric' }) || value
 }
 
 function CommunicationSummaryItem(props: { title: string; item?: LeadReportActivity | null; emptyText: string }) {
