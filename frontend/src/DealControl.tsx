@@ -143,6 +143,44 @@ function dateTimeParts(value?: string | null) {
   }
 }
 
+const PAYMENT_MONTHS = [
+  ['янв', 0], ['фев', 1], ['мар', 2], ['апр', 3], ['май', 4], ['июн', 5],
+  ['июл', 6], ['авг', 7], ['сен', 8], ['окт', 9], ['ноя', 10], ['дек', 11],
+] as const
+
+function paymentMonthOptions() {
+  const current = new Date()
+  return Array.from({ length: 6 }, (_, offset) => {
+    const date = new Date(current.getFullYear(), current.getMonth() + offset, 1)
+    const month = PAYMENT_MONTHS[date.getMonth()][0]
+    return {
+      value: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: `${month}.${date.getFullYear() === current.getFullYear() ? '' : ` ${date.getFullYear()}`}`,
+    }
+  })
+}
+
+function parsePaymentPeriod(value?: string | null) {
+  const normalized = String(value || '').toLocaleLowerCase('ru')
+  const week = normalized.match(/([1-5])\s*нед/)?.[1] || ''
+  const year = Number(normalized.match(/20\d{2}/)?.[0] || new Date().getFullYear())
+  const monthEntry = PAYMENT_MONTHS.find(([token]) => normalized.includes(token))
+  const month = monthEntry ? `${year}-${String(monthEntry[1] + 1).padStart(2, '0')}` : ''
+  return { week, month }
+}
+
+function formatPaymentPeriod(week: string, month: string) {
+  const parts: string[] = []
+  if (week) parts.push(`${week} нед.`)
+  if (month) {
+    const [yearText, monthText] = month.split('-')
+    const monthIndex = Number(monthText) - 1
+    const monthLabel = PAYMENT_MONTHS.find(([, index]) => index === monthIndex)?.[0]
+    if (monthLabel) parts.push(`${monthLabel}. ${yearText}`)
+  }
+  return parts.join(', ') || null
+}
+
 function dateOnly(value?: string | null) {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -273,7 +311,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [, setNotice] = useState('')
   const [view, setView] = useState<DealControlView>('dashboard')
   const [selectedId, setSelectedId] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -847,7 +885,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
     <section className="dc-content">
       <header className="dc-header">
-        <div><h1>{copyForView.title}</h1><p>{copyForView.subtitle}</p></div>
+        <div><h1>{copyForView.title}</h1></div>
         <div className="dc-refresh">
           <span>Обновлено {dateTime(data.generated_at)}</span>
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
@@ -857,7 +895,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       </header>
 
       {error ? <div className="dc-alert error">{error}</div> : null}
-      {notice ? <div className="dc-alert success">{notice}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
       <Kpis view={view} summary={filteredSummary} />
@@ -1015,7 +1052,6 @@ function Filters(props: {
       <option value="pending">Не выполнено</option><option value="completed">Выполнено</option><option value="overdue">Просрочено</option>
     </select>
     <input value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder={props.view === 'dashboard' ? 'Найти сделку, ID или задачу' : 'Найти сделку или задачу'} />
-    <span>{props.view === 'dashboard' ? 'Табличный обзор и детализация справа' : 'Просроченные задачи всегда выше остальных'}</span>
   </section>
 }
 
@@ -1048,6 +1084,7 @@ function DealTable(props: {
   ) => Promise<void>
   onReschedule: (task: DealControlTask) => void
 }) {
+  const monthOptions = paymentMonthOptions()
   return <div className="dc-table-wrap">
     <div className="dc-table-scroll">
       <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Стадия</span><span>Сумма и прогноз оплаты</span></div>
@@ -1055,14 +1092,20 @@ function DealTable(props: {
         const task = currentTaskOf(deal)
         const bitrixTask = primaryBitrixTaskOf(deal)
         const age = stageAge(deal.modified_at_crm)
+        const controlDeadline = dateTimeParts(task?.due_at || bitrixTask?.deadline || deal.next_control_at)
+        const payment = parsePaymentPeriod(deal.expected_payment_period)
+        const savePayment = (week: string, month: string) => void props.onSaveFields(deal, {
+          expected_payment_period: formatPaymentPeriod(week, month),
+        })
         return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span className="dc-deal-id">#{deal.deal_id}</span><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div>
-          <div className="dc-control-cell"><small>Контроль</small><strong>{dateTime(task?.due_at || bitrixTask?.deadline || deal.next_control_at)}</strong><div><ControlTimeChip task={task} bitrixTask={bitrixTask} /><button disabled={!task} onClick={(event) => { event.stopPropagation(); if (task) props.onReschedule(task) }}>Переставить</button></div></div>
-          <div className="dc-stage-cell"><small>Текущая стадия</small><strong>{deal.stage_name || 'Не указана'}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div>
-          <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
-            <select value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
-            <input defaultValue={deal.expected_payment_period || ''} onBlur={(event) => void props.onSaveFields(deal, { expected_payment_period: event.target.value || null })} placeholder="Неделя / месяц" />
-          </div></div>
+          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span className="dc-deal-id">#{deal.deal_id}</span><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
+          <div className="dc-control-cell"><div className="dc-cell-card"><small>Контроль</small><time className="dc-control-deadline">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
+          <div className="dc-stage-cell"><div className="dc-cell-card"><small>Текущая стадия</small><strong>{deal.stage_name || 'Не указана'}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div></div>
+          <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
+            <select aria-label="Вероятность оплаты" value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
+            <select aria-label="Неделя оплаты" value={payment.week} onChange={(event) => savePayment(event.target.value, payment.month)}><option value="">— нед.</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select>
+            <select aria-label="Месяц оплаты" value={payment.month} onChange={(event) => savePayment(payment.week, event.target.value)}><option value="">— мес.</option>{monthOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select>
+          </div></div></div>
         </article>
       })}
       {!props.deals.length ? <p className="dc-empty">В выбранном разделе сделок нет.</p> : null}
@@ -1179,6 +1222,8 @@ function DealDetail(props: {
   const task = currentTaskOf(deal)
   const coaching = deal.coaching
   const managerView = props.view === 'manager'
+  const payment = parsePaymentPeriod(deal.expected_payment_period)
+  const monthOptions = paymentMonthOptions()
   const taskGuidance = task?.guidance && !task.guidance.is_stale ? task.guidance.content : null
   const managerFocus = task
     ? taskGuidance?.contact_goal || coaching.contact_goal || 'Выполнить поручение РОПа и зафиксировать подтверждённый результат.'
@@ -1239,7 +1284,8 @@ function DealDetail(props: {
     {props.view === 'dashboard' ? <section className="dc-manual-fields">
       <div className="dc-section-head"><h3>Ручной прогноз и контроль</h3><span>Локально</span></div>
       <label>Вероятность<select value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">Не указана</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option key={value} value={value}>{value}%</option>)}</select></label>
-      <label>Неделя / месяц оплаты<input defaultValue={deal.expected_payment_period || ''} onBlur={(event) => void props.onSaveFields(deal, { expected_payment_period: event.target.value || null })} /></label>
+      <label>Неделя оплаты<select value={payment.week} onChange={(event) => void props.onSaveFields(deal, { expected_payment_period: formatPaymentPeriod(event.target.value, payment.month) })}><option value="">—</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select></label>
+      <label>Месяц оплаты<select value={payment.month} onChange={(event) => void props.onSaveFields(deal, { expected_payment_period: formatPaymentPeriod(payment.week, event.target.value) })}><option value="">—</option>{monthOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
       <label>Следующий контроль<input type="datetime-local" value={(deal.next_control_at || '').slice(0, 16)} onChange={(event) => void props.onSaveFields(deal, { next_control_at: event.target.value || null })} /></label>
     </section> : null}
 

@@ -2127,6 +2127,120 @@ textarea {
   font-size: 10px;
 }
 
+.dc-deal-columns,
+.dc-deal-row {
+  grid-template-columns: minmax(195px, 1.2fr) minmax(130px, .78fr) minmax(145px, .9fr) minmax(215px, 1.2fr);
+  min-width: 710px;
+}
+
+.dc-deal-row {
+  min-height: 132px;
+}
+
+.dc-deal-row > div {
+  justify-content: flex-start;
+  padding: 7px;
+  background: transparent;
+}
+
+.dc-cell-card {
+  display: flex;
+  width: 100%;
+  min-height: 112px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #ceddef;
+  border-radius: 11px;
+  background: #f5f8fc;
+}
+
+.dc-cell-card.plain {
+  border-color: transparent;
+  background: #fff;
+}
+
+.dc-cell-card > small {
+  min-height: 13px;
+  margin-bottom: 6px;
+  color: #71829a;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.dc-cell-card > strong {
+  display: block;
+  color: #0a1d3a;
+}
+
+.dc-control-cell > .dc-cell-card,
+.dc-stage-cell > .dc-cell-card,
+.dc-forecast-cell > .dc-cell-card {
+  gap: 0;
+  margin-top: 0;
+}
+
+.dc-control-deadline {
+  display: grid;
+  min-height: 42px;
+  place-content: center;
+  color: #10294c;
+  line-height: 1.05;
+  text-align: center;
+}
+
+.dc-control-deadline strong {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.dc-control-deadline span {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dc-control-cell .dc-status {
+  align-self: center;
+  margin-top: 7px;
+}
+
+.dc-stage-cell .dc-cell-card {
+  background: #f2f6fd;
+}
+
+.dc-stage-cell .dc-cell-card > strong {
+  color: #1753ac;
+}
+
+.dc-stage-cell .dc-cell-card > p {
+  margin-top: auto;
+}
+
+.dc-forecast-cell .dc-cell-card {
+  background: #f6f9fc;
+}
+
+.dc-forecast-cell .dc-cell-card > strong {
+  font-size: 14px;
+}
+
+.dc-forecast-cell .dc-cell-card > div {
+  display: grid;
+  grid-template-columns: minmax(52px, .8fr) minmax(62px, 1fr) minmax(64px, 1fr);
+  gap: 4px;
+  margin-top: auto;
+}
+
+.dc-forecast-cell .dc-cell-card select {
+  width: 100%;
+  min-width: 0;
+}
+
 .dc-task-row {
   min-height: 88px;
 }
