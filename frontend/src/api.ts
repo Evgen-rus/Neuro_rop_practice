@@ -532,6 +532,7 @@ export type DealControlDeal = {
   primary_bitrix_task?: DealControlBitrixTask | null
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
+  manager_situation?: ManagerSituationState | null
   coaching: {
     report_id?: number | null
     analysis_created_at?: string | null
@@ -551,6 +552,7 @@ export type DealControlDeal = {
     script_channel?: string
     rop_task_hint?: string
     expected_crm_update?: string
+    manager_situation?: ManagerSituationState | null
   }
 }
 
@@ -576,13 +578,82 @@ export type DealControlDashboard = {
   deals: DealControlDeal[]
 }
 
+export type ManagerSituationState = {
+  state: 'pending' | 'confirmed' | 'refined'
+  review_id?: number | null
+  source_report_id?: number | null
+  revision?: number | null
+  manager_context?: string | null
+  confirmed_at?: string | null
+  is_current: boolean
+}
+
+export type ManagerSituationJob = {
+  job_id: string
+  deal_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
+  detail: string
+  percent: number
+  situation_id?: number | null
+  situation?: ManagerSituationState | null
+  error?: string | null
+}
+
+export type ManagerQuickHelpContent = {
+  problem_summary: string
+  diagnosis: string
+  recommended_action: string
+  action_steps: string[]
+  client_message: string
+  call_script: string
+  facts_to_clarify: string[]
+  crm_checklist: string[]
+}
+
+export type ManagerQuickHelpEntry = {
+  id: number
+  deal_id: string
+  source_report_id?: number | null
+  situation_review_id?: number | null
+  question: string
+  content: ManagerQuickHelpContent
+  created_at: string
+  model_meta?: Record<string, unknown> | null
+}
+
+export type ManagerQuickHelpJob = {
+  job_id: string
+  deal_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
+  detail: string
+  percent: number
+  quick_help_id?: number | null
+  entry_id?: number | null
+  entry?: ManagerQuickHelpEntry | null
+  error?: string | null
+}
+
+export type ManagerQuickHelpHistory = {
+  entries: ManagerQuickHelpEntry[]
+  has_more?: boolean
+  next_before_id?: number | null
+}
+
+type ManagerSituationResponse = {
+  manager_situation?: ManagerSituationState
+  situation?: ManagerSituationState
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   const response = await fetch(path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers || {}),
-    },
     ...init,
+    headers,
   })
   if (!response.ok) {
     let detail = response.statusText
@@ -652,6 +723,110 @@ export function previewAnalysisProfile(
 
 export function fetchDealControl() {
   return api<DealControlDashboard>('/api/deal-control')
+}
+
+export function confirmManagerSituation(dealId: string) {
+  return api<ManagerSituationResponse>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/situation/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function startManagerSituationRefinement(dealId: string, context: string, confirmPaid = true) {
+  return api<ManagerSituationJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/situation/refine`, {
+    method: 'POST',
+    body: JSON.stringify({ context, confirm_paid: confirmPaid }),
+  })
+}
+
+export function fetchManagerSituationJob(jobId: string) {
+  return api<ManagerSituationJob>(`/api/deal-control/situation-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function startManagerQuickHelp(dealId: string, question: string, confirmPaid = true) {
+  return api<ManagerQuickHelpJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/quick-help`, {
+    method: 'POST',
+    body: JSON.stringify({ question, confirm_paid: confirmPaid }),
+  })
+}
+
+export function fetchManagerQuickHelpJob(jobId: string) {
+  return api<ManagerQuickHelpJob>(`/api/deal-control/quick-help-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export async function fetchManagerQuickHelpHistory(dealId: string, limit = 20, beforeId?: number) {
+  const query = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, limit))) })
+  if (beforeId != null) query.set('before_id', String(beforeId))
+  const payload = await api<ManagerQuickHelpHistory & { items?: unknown[] } | unknown[]>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/quick-help-history?${query.toString()}`,
+  )
+  const rawEntries = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.entries)
+        ? payload.entries
+        : []
+  const entries = rawEntries
+    .map(normalizeManagerQuickHelpEntry)
+    .filter((item): item is ManagerQuickHelpEntry => Boolean(item))
+  return {
+    entries,
+    has_more: !Array.isArray(payload) ? payload.has_more : undefined,
+    next_before_id: !Array.isArray(payload) ? payload.next_before_id : undefined,
+  }
+}
+
+function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry | null {
+  const record = asRecord(value)
+  const nonEmptyRecord = (item: unknown) => {
+    const candidate = asRecord(item)
+    return Object.keys(candidate).length ? candidate : null
+  }
+  let content = nonEmptyRecord(record.content)
+  if (!content) content = nonEmptyRecord(record.answer)
+  if (!content && typeof record.answer_json === 'string') {
+    try { content = nonEmptyRecord(JSON.parse(record.answer_json)) } catch { content = null }
+  }
+  if (!content) return null
+  const id = Number(record.id ?? record.quick_help_id)
+  if (!Number.isFinite(id)) return null
+  return {
+    id,
+    deal_id: asString(record.deal_id),
+    source_report_id: record.source_report_id == null ? null : Number(record.source_report_id),
+    situation_review_id: record.situation_review_id == null ? null : Number(record.situation_review_id),
+    question: asString(record.question),
+    content: {
+      problem_summary: asString(content.problem_summary),
+      diagnosis: asString(content.diagnosis),
+      recommended_action: asString(content.recommended_action),
+      action_steps: asStringList(content.action_steps),
+      client_message: asString(content.client_message),
+      call_script: asString(content.call_script),
+      facts_to_clarify: asStringList(content.facts_to_clarify),
+      crm_checklist: asStringList(content.crm_checklist),
+    },
+    created_at: asString(record.created_at),
+    model_meta: asRecord(record.model_meta),
+  }
+}
+
+export async function transcribeManagerVoice(
+  dealId: string,
+  audio: Blob,
+  confirmPaid = true,
+) {
+  const body = new FormData()
+  const extension = audio.type.includes('ogg') ? 'ogg' : audio.type.includes('mp4') ? 'mp4' : 'webm'
+  body.append('audio', audio, `manager-voice-${encodeURIComponent(dealId)}.${extension}`)
+  body.append('deal_id', dealId)
+  body.append('confirm_paid', String(confirmPaid))
+  body.append('language', 'ru')
+  return api<{ text: string }>('/api/deal-control/voice/transcribe', {
+    method: 'POST',
+    body,
+  })
 }
 
 export function syncDealControl() {

@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   confirmDealControlTaskCrmMatch,
+  confirmManagerSituation,
   createDealControlTask,
   fetchDealControl,
   fetchDealTaskGuidanceJob,
+  fetchManagerQuickHelpHistory,
+  fetchManagerQuickHelpJob,
+  fetchManagerSituationJob,
   fetchJob,
   fetchReportMarkdown,
   recordDealControlTaskEvent,
@@ -12,7 +16,10 @@ import {
   saveDealControlTaskOutcome,
   startAnalyze,
   startDealTaskGuidance,
+  startManagerQuickHelp,
+  startManagerSituationRefinement,
   syncDealControl,
+  transcribeManagerVoice,
   updateDealControlDeal,
   updateDealControlBitrixTaskCompletion,
   updateDealControlTask,
@@ -24,6 +31,11 @@ import {
   type DealTaskGuidanceContent,
   type DealTaskGuidanceJob,
   type JobState,
+  type ManagerQuickHelpContent,
+  type ManagerQuickHelpEntry,
+  type ManagerQuickHelpJob,
+  type ManagerSituationJob,
+  type ManagerSituationState,
 } from './api'
 import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
 
@@ -306,6 +318,47 @@ function outcomeValidationMessage(
   }
   if (result === 'needs_rop_review' && !hasNote) return 'Опиши, какая помощь РОПа требуется.'
   return ''
+}
+
+const MANAGER_SITUATION_DRAFT_PREFIX = 'rop-assistant:manager-situation:'
+const MANAGER_QUICK_HELP_DRAFT_PREFIX = 'rop-assistant:manager-quick-help:'
+
+function managerSituationOf(deal: DealControlDeal): ManagerSituationState {
+  return deal.manager_situation || deal.coaching.manager_situation || {
+    state: 'pending',
+    source_report_id: deal.coaching.report_id || null,
+    is_current: false,
+  }
+}
+
+function managerSituationIsConfirmed(situation: ManagerSituationState) {
+  return situation.is_current && ['confirmed', 'refined'].includes(situation.state)
+}
+
+function readDealDraft(prefix: string, dealId: string) {
+  if (!dealId || typeof window === 'undefined') return ''
+  try {
+    return window.localStorage.getItem(`${prefix}${dealId}`) || ''
+  } catch {
+    return ''
+  }
+}
+
+function writeDealDraft(prefix: string, dealId: string, value: string) {
+  if (!dealId || typeof window === 'undefined') return
+  try {
+    if (value) window.localStorage.setItem(`${prefix}${dealId}`, value)
+    else window.localStorage.removeItem(`${prefix}${dealId}`)
+  } catch {
+    // Local storage can be disabled in private or embedded browser contexts.
+  }
+}
+
+function appendVoiceText(current: string, transcript: string) {
+  const next = transcript.trim()
+  if (!next) return current
+  if (!current.trim()) return next
+  return `${current.trim()}\n${next}`
 }
 
 export function DealControl({ onExit }: { onExit?: () => void }) {
@@ -963,6 +1016,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         <DealDetail
           view={view}
           deal={selected}
+          onReload={reload}
           onConfirmMatch={confirmMatch}
           onReviewFact={reviewCrmFact}
           onReschedule={beginReschedule}
@@ -1213,6 +1267,7 @@ function ControlSyncState({ task, bitrixTask, compact = false }: {
 function DealDetail(props: {
   view: DealControlView
   deal: DealControlDeal | null
+  onReload: () => Promise<void>
   onConfirmMatch: (task: DealControlTask) => Promise<void>
   onReviewFact: (task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') => Promise<void>
   onReschedule: (task: DealControlTask) => void
@@ -1240,7 +1295,22 @@ function DealDetail(props: {
   const [analysisMarkdown, setAnalysisMarkdown] = useState<string | null>(null)
   const [analysisMarkdownError, setAnalysisMarkdownError] = useState('')
   const [analysisMarkdownLoading, setAnalysisMarkdownLoading] = useState(false)
+  const [situationModalOpen, setSituationModalOpen] = useState(false)
+  const [situationContext, setSituationContext] = useState('')
+  const [situationError, setSituationError] = useState('')
+  const [situationJob, setSituationJob] = useState<ManagerSituationJob | null>(null)
+  const [quickHelpDraft, setQuickHelpDraft] = useState('')
+  const [quickHelpError, setQuickHelpError] = useState('')
+  const [quickHelpJob, setQuickHelpJob] = useState<ManagerQuickHelpJob | null>(null)
+  const [quickHelpAnswer, setQuickHelpAnswer] = useState<ManagerQuickHelpEntry | null>(null)
+  const [quickHelpHistory, setQuickHelpHistory] = useState<ManagerQuickHelpEntry[]>([])
+  const [quickHelpHistoryLoaded, setQuickHelpHistoryLoaded] = useState(false)
+  const [quickHelpHistoryLoading, setQuickHelpHistoryLoading] = useState(false)
+  const [quickHelpHistoryError, setQuickHelpHistoryError] = useState('')
   const activeReportId = props.deal?.coaching.report_id
+  const activeDealId = props.deal?.deal_id || ''
+  const detailView = props.view
+  const reloadDetail = props.onReload
 
   useEffect(() => {
     setShowAnalysisMarkdown(false)
@@ -1248,6 +1318,183 @@ function DealDetail(props: {
     setAnalysisMarkdownError('')
     setAnalysisMarkdownLoading(false)
   }, [props.deal?.deal_id, activeReportId])
+
+  useEffect(() => {
+    setSituationModalOpen(false)
+    setSituationContext(readDealDraft(MANAGER_SITUATION_DRAFT_PREFIX, activeDealId))
+    setSituationError('')
+    setSituationJob(null)
+    setQuickHelpDraft(readDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId))
+    setQuickHelpError('')
+    setQuickHelpJob(null)
+    setQuickHelpAnswer(null)
+    setQuickHelpHistory([])
+    setQuickHelpHistoryLoaded(false)
+    setQuickHelpHistoryLoading(false)
+    setQuickHelpHistoryError('')
+  }, [activeDealId, activeReportId])
+
+  useEffect(() => {
+    writeDealDraft(MANAGER_SITUATION_DRAFT_PREFIX, activeDealId, situationContext)
+  }, [activeDealId, situationContext])
+
+  useEffect(() => {
+    writeDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId, quickHelpDraft)
+  }, [activeDealId, quickHelpDraft])
+
+  const situationJobId = situationJob?.job_id
+  const situationJobStatus = situationJob?.status
+  useEffect(() => {
+    if (detailView !== 'manager' || !situationJobId || !['queued', 'running'].includes(situationJobStatus || '')) return
+    let cancelled = false
+    let terminalHandled = false
+    const poll = async () => {
+      try {
+        const next = await fetchManagerSituationJob(situationJobId)
+        if (cancelled || next.deal_id !== activeDealId) return
+        setSituationJob(next)
+        if (terminalHandled) return
+        if (next.status === 'done') {
+          terminalHandled = true
+          setSituationModalOpen(false)
+          setSituationContext('')
+          setSituationError('')
+          await reloadDetail()
+        } else if (next.status === 'error') {
+          terminalHandled = true
+          setSituationError(next.error || 'Не удалось пересобрать текущую ситуацию')
+        }
+      } catch (reason) {
+        if (!cancelled) setSituationError(reason instanceof Error ? reason.message : String(reason))
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 1200)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeDealId, detailView, reloadDetail, situationJobId, situationJobStatus])
+
+  const quickHelpJobId = quickHelpJob?.job_id
+  const quickHelpJobStatus = quickHelpJob?.status
+  useEffect(() => {
+    if (detailView !== 'manager' || !quickHelpJobId || !['queued', 'running'].includes(quickHelpJobStatus || '')) return
+    let cancelled = false
+    let terminalHandled = false
+    const poll = async () => {
+      try {
+        const next = await fetchManagerQuickHelpJob(quickHelpJobId)
+        if (cancelled || next.deal_id !== activeDealId) return
+        setQuickHelpJob(next)
+        if (terminalHandled) return
+        if (next.status === 'done') {
+          terminalHandled = true
+          if (next.entry) {
+            setQuickHelpAnswer(next.entry)
+          }
+          try {
+            const history = await fetchManagerQuickHelpHistory(activeDealId, 1)
+            if (!cancelled && history.entries[0]) {
+              setQuickHelpAnswer(history.entries[0])
+              setQuickHelpHistory((current) => current.length ? [history.entries[0], ...current.filter((item) => item.id !== history.entries[0].id)] : history.entries)
+            } else if (!cancelled && !next.entry) {
+              setQuickHelpError('Ответ готов, но его содержимое не удалось загрузить из истории.')
+            }
+          } catch (reason) {
+            if (!cancelled) setQuickHelpError(reason instanceof Error ? reason.message : 'Ответ готов, но история помощи недоступна')
+          }
+        } else if (next.status === 'error') {
+          terminalHandled = true
+          setQuickHelpError(next.error || 'Не удалось получить помощь тренера')
+        }
+      } catch (reason) {
+        if (!cancelled) setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 1200)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeDealId, detailView, quickHelpJobId, quickHelpJobStatus])
+
+  async function confirmSituation() {
+    if (!props.deal) return
+    setSituationError('')
+    try {
+      await confirmManagerSituation(props.deal.deal_id)
+      setSituationContext('')
+      await props.onReload()
+    } catch (reason) {
+      setSituationError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function refineSituation() {
+    if (!props.deal) return
+    const context = situationContext.trim()
+    if (context.length < 1 || context.length > 4000) {
+      setSituationError('Добавь контекст от 1 до 4000 символов.')
+      return
+    }
+    if (situationJob && ['queued', 'running'].includes(situationJob.status)) return
+    setSituationError('')
+    try {
+      const started = await startManagerSituationRefinement(props.deal.deal_id, context, true)
+      setSituationJob(started)
+      if (started.status === 'error') setSituationError(started.error || 'Не удалось пересобрать текущую ситуацию')
+      if (started.status === 'done') {
+        setSituationModalOpen(false)
+        setSituationContext('')
+        await props.onReload()
+      }
+    } catch (reason) {
+      setSituationError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function requestQuickHelp(question: string) {
+    if (!props.deal) return
+    const normalized = question.trim()
+    if (normalized.length < 1 || normalized.length > 4000) {
+      setQuickHelpError('Опиши вопрос от 1 до 4000 символов.')
+      return
+    }
+    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
+    setQuickHelpError('')
+    setQuickHelpAnswer(null)
+    try {
+      const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true)
+      setQuickHelpDraft('')
+      setQuickHelpJob(started)
+      if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
+      if (started.status === 'done') {
+        if (started.entry) setQuickHelpAnswer(started.entry)
+        const history = await fetchManagerQuickHelpHistory(props.deal.deal_id, 1)
+        if (history.entries[0]) setQuickHelpAnswer(history.entries[0])
+      }
+    } catch (reason) {
+      setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function loadQuickHelpHistory() {
+    if (!props.deal || quickHelpHistoryLoading) return
+    setQuickHelpHistoryLoading(true)
+    setQuickHelpHistoryError('')
+    try {
+      const history = await fetchManagerQuickHelpHistory(props.deal.deal_id, 20)
+      setQuickHelpHistory(history.entries)
+      setQuickHelpHistoryLoaded(true)
+      if (!quickHelpAnswer && history.entries[0]) setQuickHelpAnswer(history.entries[0])
+    } catch (reason) {
+      setQuickHelpHistoryError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setQuickHelpHistoryLoading(false)
+    }
+  }
 
   async function toggleAnalysisMarkdown() {
     if (showAnalysisMarkdown) {
@@ -1272,12 +1519,20 @@ function DealDetail(props: {
     }
   }
 
+  async function transcribeVoice(audio: Blob) {
+    if (!props.deal) throw new Error('Сделка не выбрана')
+    const response = await transcribeManagerVoice(props.deal.deal_id, audio, true)
+    if (!response.text?.trim()) throw new Error('Транскрибация не вернула текст. Попробуй ещё раз или введи текст вручную.')
+    return response.text.trim()
+  }
+
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
   const task = currentTaskOf(deal)
   const coaching = deal.coaching
   const managerView = props.view === 'manager'
   const hasAnalysis = Boolean(coaching.report_id)
+  const managerSituation = managerSituationOf(deal)
   const analysisBusy = Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))
   const analysisRunning = Boolean(
     analysisBusy
@@ -1313,7 +1568,7 @@ function DealDetail(props: {
       <div><div className="dc-deal-title-row"><h2>Сделка #{deal.deal_id}</h2><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a></div><p>{deal.title}</p></div>
       {hasAnalysis ? analysisReady : null}
     </header>
-    {analysisRunning && props.analysisJob
+    {!managerView && analysisRunning && props.analysisJob
       ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} />
       : null}
     <section className="dc-detail-stats">
@@ -1322,7 +1577,42 @@ function DealDetail(props: {
       <div><small>{managerView ? 'Создана' : 'Менеджер'}</small><strong>{managerView ? dateOnly(deal.created_at_crm) : deal.manager_name || '—'}</strong></div>
       <div><small>Сумма</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
     </section>
+    {managerView && analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
 
+    {managerView ? <ManagerDealScreen
+      deal={deal}
+      situation={managerSituation}
+      hasAnalysis={hasAnalysis}
+      analysisEmptyAction={analysisButton}
+      situationModalOpen={situationModalOpen}
+      situationContext={situationContext}
+      situationError={situationError}
+      situationJob={situationJob}
+      quickHelpDraft={quickHelpDraft}
+      quickHelpError={quickHelpError}
+      quickHelpJob={quickHelpJob}
+      quickHelpAnswer={quickHelpAnswer}
+      quickHelpHistory={quickHelpHistory}
+      quickHelpHistoryLoaded={quickHelpHistoryLoaded}
+      quickHelpHistoryLoading={quickHelpHistoryLoading}
+      quickHelpHistoryError={quickHelpHistoryError}
+      showAnalysisMarkdown={showAnalysisMarkdown}
+      analysisMarkdown={analysisMarkdown}
+      analysisMarkdownError={analysisMarkdownError}
+      analysisMarkdownLoading={analysisMarkdownLoading}
+      onOpenSituation={() => { setSituationError(''); setSituationModalOpen(true) }}
+      onCloseSituation={() => setSituationModalOpen(false)}
+      onSituationContext={setSituationContext}
+      onConfirmSituation={() => void confirmSituation()}
+      onRefineSituation={() => void refineSituation()}
+      onQuickHelpDraft={setQuickHelpDraft}
+      onQuickHelp={requestQuickHelp}
+      onLoadQuickHelpHistory={() => void loadQuickHelpHistory()}
+      onToggleMarkdown={() => void toggleAnalysisMarkdown()}
+      onCopy={props.onCopy}
+      onTranscribe={transcribeVoice}
+      onToggleBitrixCompletion={props.onToggleBitrixCompletion}
+    /> : <>
     {hasAnalysis ? <section className="dc-insight-card">
       <div className="dc-section-head"><h3>Текущая ситуация</h3><span>✦ AI-анализ</span></div>
       <p>{coaching.current_situation}</p>
@@ -1389,7 +1679,415 @@ function DealDetail(props: {
         ? <pre>{analysisMarkdown}</pre>
         : null}
     </section> : null}
+    </>}
   </aside>
+}
+
+type ManagerDealScreenProps = {
+  deal: DealControlDeal
+  situation: ManagerSituationState
+  hasAnalysis: boolean
+  analysisEmptyAction: ReactNode
+  situationModalOpen: boolean
+  situationContext: string
+  situationError: string
+  situationJob: ManagerSituationJob | null
+  quickHelpDraft: string
+  quickHelpError: string
+  quickHelpJob: ManagerQuickHelpJob | null
+  quickHelpAnswer: ManagerQuickHelpEntry | null
+  quickHelpHistory: ManagerQuickHelpEntry[]
+  quickHelpHistoryLoaded: boolean
+  quickHelpHistoryLoading: boolean
+  quickHelpHistoryError: string
+  showAnalysisMarkdown: boolean
+  analysisMarkdown: string | null
+  analysisMarkdownError: string
+  analysisMarkdownLoading: boolean
+  onOpenSituation: () => void
+  onCloseSituation: () => void
+  onSituationContext: (value: string) => void
+  onConfirmSituation: () => void
+  onRefineSituation: () => void
+  onQuickHelpDraft: (value: string) => void
+  onQuickHelp: (question: string) => Promise<void>
+  onLoadQuickHelpHistory: () => void
+  onToggleMarkdown: () => void
+  onCopy: (text: string, label: string) => Promise<void>
+  onTranscribe: (audio: Blob) => Promise<string>
+  onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
+}
+
+function ManagerDealScreen(props: ManagerDealScreenProps) {
+  const confirmed = managerSituationIsConfirmed(props.situation)
+  return <>
+    <ManagerSituationActions
+      deal={props.deal}
+      situation={props.situation}
+      hasAnalysis={props.hasAnalysis}
+      analysisEmptyAction={props.analysisEmptyAction}
+      modalOpen={props.situationModalOpen}
+      context={props.situationContext}
+      error={props.situationError}
+      job={props.situationJob}
+      onOpenModal={props.onOpenSituation}
+      onCloseModal={props.onCloseSituation}
+      onContext={props.onSituationContext}
+      onConfirm={props.onConfirmSituation}
+      onRefine={props.onRefineSituation}
+      onTranscribe={props.onTranscribe}
+    />
+    <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
+    {confirmed ? <>
+      <ManagerQuickHelp
+        dealId={props.deal.deal_id}
+        draft={props.quickHelpDraft}
+        error={props.quickHelpError}
+        job={props.quickHelpJob}
+        answer={props.quickHelpAnswer}
+        onDraft={props.onQuickHelpDraft}
+        onRequest={props.onQuickHelp}
+        onCopy={props.onCopy}
+        onTranscribe={props.onTranscribe}
+      />
+      <RopRecommendationsAccordion coaching={props.deal.coaching} />
+      <section className="dc-analysis-material dc-manager-markdown">
+        <button
+          className="dc-analysis-material-link"
+          disabled={props.analysisMarkdownLoading || !props.deal.coaching.report_id}
+          onClick={props.onToggleMarkdown}
+        >
+          {props.analysisMarkdownLoading
+            ? 'Открываем материал…'
+            : props.showAnalysisMarkdown
+              ? 'Скрыть Markdown анализа'
+              : 'Открыть Markdown анализа'}
+        </button>
+        {props.analysisMarkdownError ? <small className="dc-manager-error">{props.analysisMarkdownError}</small> : null}
+        {props.showAnalysisMarkdown && props.analysisMarkdown ? <pre>{props.analysisMarkdown}</pre> : null}
+      </section>
+      <ManagerQuickHelpHistory
+        entries={props.quickHelpHistory}
+        loaded={props.quickHelpHistoryLoaded}
+        loading={props.quickHelpHistoryLoading}
+        error={props.quickHelpHistoryError}
+        onOpen={props.onLoadQuickHelpHistory}
+      />
+    </> : null}
+  </>
+}
+
+function ManagerSituationActions(props: {
+  deal: DealControlDeal
+  situation: ManagerSituationState
+  hasAnalysis: boolean
+  analysisEmptyAction: ReactNode
+  modalOpen: boolean
+  context: string
+  error: string
+  job: ManagerSituationJob | null
+  onOpenModal: () => void
+  onCloseModal: () => void
+  onContext: (value: string) => void
+  onConfirm: () => void
+  onRefine: () => void
+  onTranscribe: (audio: Blob) => Promise<string>
+}) {
+  const confirmed = managerSituationIsConfirmed(props.situation)
+  const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const stateLabel = !props.situation.is_current || props.situation.state === 'pending'
+    ? 'Нужно подтверждение'
+    : props.situation.state === 'refined' ? 'Уточнена менеджером' : 'Подтверждена менеджером'
+  return <>
+    <section className={`dc-manager-situation ${confirmed ? 'confirmed' : 'pending'}`}>
+      <div className="dc-section-head">
+        <div><h3>Текущая ситуация</h3><p>Проверь базу перед тем, как просить личную помощь тренера.</p></div>
+        <span>{stateLabel}</span>
+      </div>
+      {props.hasAnalysis
+        ? <>
+          <p className="dc-manager-situation-copy">{props.deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
+          {props.deal.coaching.what_to_check_now ? <p className="dc-manager-situation-check"><strong>Что проверить сейчас.</strong> {props.deal.coaching.what_to_check_now}</p> : null}
+        </>
+        : <div className="dc-analysis-empty dc-manager-analysis-empty">
+          <span>✦</span><div><h3>Анализ не проведён</h3><p>Проведи полный анализ сделки, чтобы получить текущую ситуацию и подтвердить её.</p></div>{props.analysisEmptyAction}
+        </div>}
+      {props.job ? <ManagerJobProgress job={props.job} label="Пересборка ситуации" /> : null}
+      {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
+      {props.hasAnalysis ? <div className="dc-manager-situation-actions">
+        <button className="dc-button primary" disabled={busy || confirmed} onClick={props.onConfirm}>
+          {confirmed ? '✓ Ситуация подтверждена' : 'Подтвердить ситуацию'}
+        </button>
+        <button className="dc-button" disabled={busy} onClick={props.onOpenModal}>
+          {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}
+        </button>
+      </div> : null}
+    </section>
+    {props.modalOpen ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
+      <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">
+        <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Добавить контекст</h2><p>Это пояснение менеджера для пересборки рабочей ситуации, не доказательство ответа клиента.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
+        <div className="dc-manager-voice-field">
+          <textarea
+            value={props.context}
+            maxLength={4000}
+            onChange={(event) => props.onContext(event.target.value)}
+            placeholder="Что уже пробовал менеджер, где застрял, что изменилось после последнего контакта?"
+            aria-label="Контекст менеджера"
+          />
+          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onContext(appendVoiceText(props.context, text))} />
+        </div>
+        <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
+        <div><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || props.context.trim().length < 1 || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
+      </section>
+    </div> : null}
+  </>
+}
+
+function ManagerBitrixTaskCard({ deal, onToggleCompletion }: {
+  deal: DealControlDeal
+  onToggleCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
+}) {
+  const task = primaryBitrixTaskOf(deal)
+  return <section className={`dc-manager-bitrix-task ${task ? bitrixTaskTone(task) : 'missing'}`}>
+    <div className="dc-section-head"><div><h3>Текущая задача Bitrix</h3><p>Это рабочая задача из CRM, она видна независимо от подтверждения ситуации.</p></div><span>Bitrix</span></div>
+    {task ? <>
+      <div className="dc-manager-bitrix-task-main"><span className="dc-manager-task-icon">✓</span><div><strong>{compactTaskText(task.subject).replace(/^CRM:\s*/i, '')}</strong>{task.description ? <p>{compactTaskText(task.description, 240)}</p> : null}</div></div>
+      <div className="dc-manager-bitrix-meta"><span><small>Срок</small><strong>{dateTime(task.deadline)}</strong></span><span><small>Статус</small><strong>{task.completion_state === 'bitrix' ? 'Выполнено в B24' : task.completion_state === 'local' ? 'Отмечено в приложении' : bitrixTaskStatus(task)}</strong></span></div>
+      <div className="dc-manager-bitrix-actions">
+        {task.completion_state === 'bitrix'
+          ? <button className="dc-button" disabled>Выполнено в B24</button>
+          : <button className="dc-button primary" onClick={() => void onToggleCompletion(deal, task)}>{task.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}</button>}
+        {bitrixTaskUrl(task) ? <a className="dc-button" href={bitrixTaskUrl(task) || undefined} target="_blank" rel="noreferrer">Открыть задачу в B24 ↗</a> : null}
+      </div>
+    </> : <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Следующий контролируемый шаг по сделке не назначен.</p><a className="dc-button" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>}
+  </section>
+}
+
+function ManagerQuickHelp(props: {
+  dealId: string
+  draft: string
+  error: string
+  job: ManagerQuickHelpJob | null
+  answer: ManagerQuickHelpEntry | null
+  onDraft: (value: string) => void
+  onRequest: (question: string) => Promise<void>
+  onCopy: (text: string, label: string) => Promise<void>
+  onTranscribe: (audio: Blob) => Promise<string>
+}) {
+  const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  return <section className="dc-manager-quick-help">
+    <div className="dc-section-head"><div><h3>Быстрая ИИ-помощь</h3><p>Личный тренер: опиши, где застрял, и получи одно конкретное следующее действие.</p></div><span>✦ Тренер</span></div>
+    <div className="dc-manager-voice-field dc-manager-quick-help-field">
+      <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Например: я уже третий раз звоню, клиент не берёт трубку — что изменить?" aria-label="Вопрос личному тренеру" />
+      <ManagerVoiceInput dealId={props.dealId} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+    </div>
+    <div className="dc-manager-quick-help-actions"><small>{props.draft.length}/4000</small><button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void props.onRequest(props.draft)}>{busy ? <><span className="dc-spinner" />Тренер разбирает…</> : 'Получить помощь'}</button></div>
+    {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
+    {props.job ? <ManagerJobProgress job={props.job} label="Подготовка ответа тренера" /> : null}
+    {props.answer ? <ManagerQuickHelpAnswer entry={props.answer} onCopy={props.onCopy} /> : null}
+  </section>
+}
+
+function ManagerQuickHelpAnswer({ entry, onCopy }: {
+  entry: ManagerQuickHelpEntry
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  const content: ManagerQuickHelpContent = entry.content
+  return <article className="dc-manager-answer">
+    <div className="dc-manager-answer-heading"><div><span>Ответ тренера</span><small>{dateTime(entry.created_at)}</small></div><small>На вопрос: {entry.question}</small></div>
+    <div className="dc-manager-answer-grid">
+      <section><h4>Краткое понимание</h4><p>{content.problem_summary || 'Понимание ситуации не сформировано.'}</p></section>
+      <section className="diagnosis"><h4>Что сейчас мешает</h4><p>{content.diagnosis || 'Точное препятствие не выделено.'}</p></section>
+      <section className="next-action"><h4>Что сделать сейчас</h4><p>{content.recommended_action || 'Ближайшее действие не сформировано.'}</p>{content.action_steps.length ? <ol>{content.action_steps.slice(0, 4).map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol> : null}</section>
+    </div>
+    <div className="dc-manager-answer-columns">
+      <section className="dc-manager-answer-copy"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!content.client_message} onClick={() => void onCopy(content.client_message, 'Сообщение клиенту')}>Скопировать</button></div><pre>{content.client_message || 'Сообщение пока не сформировано.'}</pre></section>
+      <section className="dc-manager-answer-copy"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!content.call_script} onClick={() => void onCopy(content.call_script, 'Речевой модуль')}>Скопировать</button></div><pre>{content.call_script || 'Речевой модуль пока не сформирован.'}</pre></section>
+    </div>
+    <div className="dc-manager-answer-columns">
+      <ManagerAnswerList title="Что выяснить" items={content.facts_to_clarify.slice(0, 4)} empty="Дополнительные факты не выделены." />
+      <ManagerAnswerList title="CRM checklist" items={content.crm_checklist.slice(0, 4)} empty="Что зафиксировать в CRM не указано." />
+    </div>
+  </article>
+}
+
+function ManagerAnswerList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return <section className="dc-manager-answer-list"><h4>{title}</h4><ul>{items.length ? items.map((item) => <li key={item}>{item}</li>) : <li className="muted">{empty}</li>}</ul></section>
+}
+
+function ManagerQuickHelpHistory({ entries, loaded, loading, error, onOpen }: {
+  entries: ManagerQuickHelpEntry[]
+  loaded: boolean
+  loading: boolean
+  error: string
+  onOpen: () => void
+}) {
+  const sorted = [...entries].sort((first, second) => second.id - first.id)
+  return <details className="dc-manager-history" onToggle={(event) => { if (event.currentTarget.open && !loaded) onOpen() }}>
+    <summary><span>История быстрой помощи</span><small>{loaded ? `${entries.length} запросов` : 'Загрузить по запросу'}</small></summary>
+    {loading ? <p className="dc-manager-history-state"><span className="dc-spinner" />Загружаем историю…</p> : null}
+    {error ? <p className="dc-manager-error">{error}</p> : null}
+    {!loading && !error && loaded && !sorted.length ? <p className="dc-manager-history-state">Запросов по этой сделке пока нет.</p> : null}
+    {sorted.length ? <ol>{sorted.map((entry) => <li key={entry.id}><div><strong>{dateTime(entry.created_at)}</strong><span>{entry.question}</span></div><p>{entry.content.problem_summary || entry.content.recommended_action}</p></li>)}</ol> : null}
+  </details>
+}
+
+function RopRecommendationsAccordion({ coaching }: { coaching: DealControlDeal['coaching'] }) {
+  return <details className="dc-manager-recommendations">
+    <summary><span>Рекомендации по сделке от РОПа</span><small>Свернуть / развернуть</small></summary>
+    <div className="dc-manager-recommendations-body">
+      {coaching.rop_focus ? <section><h4>Фокус контроля</h4><p>{coaching.rop_focus}</p></section> : null}
+      {coaching.manager_coaching ? <section><h4>Комментарий РОПа менеджеру</h4><p>{coaching.manager_coaching}</p></section> : null}
+      <div className="dc-manager-recommendation-columns">
+        <ManagerAnswerList title="Уже известно" items={coaching.known} empty="Подтверждённые факты не выделены." />
+        <ManagerAnswerList title="Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
+      </div>
+      {coaching.crm_checklist.length ? <ManagerAnswerList title="Что зафиксировать в CRM" items={coaching.crm_checklist} empty="Чеклист не сформирован." /> : null}
+    </div>
+  </details>
+}
+
+function ManagerJobProgress({ job, label }: { job: Pick<ManagerSituationJob, 'status' | 'detail' | 'percent' | 'error'>; label: string }) {
+  const error = job.status === 'error'
+  const done = job.status === 'done'
+  return <div className={`dc-manager-job ${error ? 'error' : done ? 'done' : ''}`} role="status" aria-live="polite">
+    <div><strong>{error ? `${label}: ошибка` : done ? `${label}: готово` : job.detail || `${label}…`}</strong><b>{Math.max(0, Math.min(100, job.percent || 0))}%</b></div>
+    <span><i style={{ width: `${Math.max(0, Math.min(100, job.percent || 0))}%` }} /></span>
+    {error ? <small>{job.error || 'Повтори действие после проверки ошибки.'}</small> : null}
+  </div>
+}
+
+function ManagerVoiceInput({ dealId, disabled, onTranscribe, onTranscript }: {
+  dealId: string
+  disabled?: boolean
+  onTranscribe: (audio: Blob) => Promise<string>
+  onTranscript: (text: string) => void
+}) {
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<BlobPart[]>([])
+  const cancelRef = useRef(false)
+  const mountedRef = useRef(true)
+  const timerRef = useRef<number | null>(null)
+  const intervalRef = useRef<number | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const [seconds, setSeconds] = useState(0)
+  const [error, setError] = useState('')
+
+  function clearTimers() {
+    if (timerRef.current != null) window.clearTimeout(timerRef.current)
+    if (intervalRef.current != null) window.clearInterval(intervalRef.current)
+    timerRef.current = null
+    intervalRef.current = null
+  }
+
+  function releaseMedia() {
+    clearTimers()
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    recorderRef.current = null
+    chunksRef.current = []
+    if (mountedRef.current) {
+      setRecording(false)
+      setSeconds(0)
+    }
+  }
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      cancelRef.current = true
+      clearTimers()
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop()
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      recorderRef.current = null
+      chunksRef.current = []
+    }
+  }, [dealId])
+
+  function reportError(message: string) {
+    setError(message)
+  }
+
+  async function startRecording() {
+    setError('')
+    if (typeof window === 'undefined' || !('MediaRecorder' in window)) {
+      reportError('Этот браузер не поддерживает запись голосовых сообщений. Введи текст вручную.')
+      return
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      reportError('Браузер не дал доступ к микрофону. Проверь HTTPS/localhost и разрешение микрофона.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+      const mimeType = mimeCandidates.find((value) => typeof MediaRecorder.isTypeSupported !== 'function' || MediaRecorder.isTypeSupported(value)) || ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      streamRef.current = stream
+      recorderRef.current = recorder
+      chunksRef.current = []
+      cancelRef.current = false
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunksRef.current.push(event.data)
+      }
+      recorder.onstop = async () => {
+        const cancelled = cancelRef.current
+        const chunks = chunksRef.current
+        const type = recorder.mimeType || mimeType || 'audio/webm'
+        releaseMedia()
+        if (cancelled || !chunks.length || !mountedRef.current) return
+        setTranscribing(true)
+        try {
+          const transcript = await onTranscribe(new Blob(chunks, { type }))
+          if (mountedRef.current) onTranscript(transcript)
+        } catch (reason) {
+          if (mountedRef.current) reportError(reason instanceof Error ? reason.message : 'Не удалось распознать запись. Попробуй ещё раз или введи текст вручную.')
+        } finally {
+          if (mountedRef.current) setTranscribing(false)
+        }
+      }
+      recorder.start(250)
+      setRecording(true)
+      setSeconds(0)
+      intervalRef.current = window.setInterval(() => setSeconds((value) => Math.min(300, value + 1)), 1000)
+      timerRef.current = window.setTimeout(() => stopRecording(), 300_000)
+    } catch (reason) {
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      reportError(reason instanceof DOMException && reason.name === 'NotAllowedError'
+        ? 'Доступ к микрофону запрещён. Разреши микрофон в настройках браузера или введи текст вручную.'
+        : 'Не удалось начать запись. Проверь микрофон и разрешение браузера.')
+    }
+  }
+
+  function stopRecording() {
+    const recorder = recorderRef.current
+    if (!recorder || recorder.state === 'inactive') return
+    cancelRef.current = false
+    recorder.stop()
+  }
+
+  function cancelRecording() {
+    cancelRef.current = true
+    const recorder = recorderRef.current
+    if (recorder && recorder.state !== 'inactive') recorder.stop()
+    else releaseMedia()
+  }
+
+  return <div className="dc-manager-voice-control">
+    {recording
+      ? <><button type="button" className="dc-manager-voice-button recording" onClick={stopRecording} disabled={disabled}>■ Остановить {String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}</button><button type="button" className="dc-manager-voice-cancel" onClick={cancelRecording} disabled={disabled}>Отмена</button></>
+      : <button type="button" className="dc-manager-voice-button" onClick={() => void startRecording()} disabled={disabled || transcribing} title="Записать голосом">{transcribing ? <><span className="dc-spinner" />Распознаём…</> : '🎙 Говорить'}</button>}
+    {error ? <small className="dc-manager-voice-error" role="alert">{error}</small> : null}
+  </div>
 }
 
 function entityAnalysisProgress(job: JobState, dealId: string) {
