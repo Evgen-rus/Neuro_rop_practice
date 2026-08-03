@@ -352,11 +352,13 @@ def call_structured_output_json(
     schema: dict[str, Any],
     schema_name: str,
     model: str = ANALYSIS_MODEL,
+    reasoning_effort: str | None = None,
     max_output_tokens: int = ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     retry_callback: RetryCallback | None = None,
     log_title: str = "structured output prompt",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call Responses structured outputs without changing the legacy JSON client."""
+    effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
     log_model_text_payload(
         logger,
         title=log_title,
@@ -366,7 +368,7 @@ def call_structured_output_json(
             "api": "responses.create",
             "response_format": "json_schema",
             "schema_name": schema_name,
-            "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+            "reasoning_effort": effective_reasoning_effort,
         },
     )
     response = run_with_retry(
@@ -374,7 +376,7 @@ def call_structured_output_json(
             model=model,
             input=prompt,
             max_output_tokens=max_output_tokens,
-            reasoning={"effort": ANALYSIS_REASONING_EFFORT},
+            reasoning={"effort": effective_reasoning_effort},
             text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
             store=False,
         ),
@@ -387,7 +389,7 @@ def call_structured_output_json(
     estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
     metadata = {
         "model": model,
-        "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+        "reasoning_effort": effective_reasoning_effort,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),

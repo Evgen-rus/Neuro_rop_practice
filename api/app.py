@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,18 @@ from api.deal_control import (
 from api.deal_control import review_task_crm_fact as review_deal_control_task_crm_fact
 from api.deal_control import task_history as deal_control_task_history
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
+from api.deal_manager_quick_help import (
+    get_quick_help_job,
+    list_quick_help_history,
+    start_quick_help_job,
+)
+from api.deal_manager_situation import (
+    StorageContractUnavailable,
+    confirm_deal_manager_situation,
+    get_situation_job,
+    start_situation_refine_job,
+)
+from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
@@ -206,6 +218,16 @@ class DealControlBitrixTaskCompletionRequest(BaseModel):
 
 
 class DealTaskGuidanceRequest(BaseModel):
+    confirm_paid: bool = False
+
+
+class DealManagerSituationRefineRequest(BaseModel):
+    context: str = Field(min_length=1, max_length=4000)
+    confirm_paid: bool = False
+
+
+class DealManagerQuickHelpRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
     confirm_paid: bool = False
 
 
@@ -457,6 +479,111 @@ def deal_control_task_guidance_job_get(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Задание подготовки менеджера не найдено")
     return job
+
+
+@app.post("/api/deal-control/deals/{deal_id}/situation/confirm")
+def deal_manager_situation_confirm(deal_id: str) -> dict[str, Any]:
+    try:
+        return confirm_deal_manager_situation(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур ситуации сделки ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/situation/refine")
+def deal_manager_situation_refine(
+    deal_id: str,
+    body: DealManagerSituationRefineRequest,
+) -> dict[str, Any]:
+    try:
+        return start_situation_refine_job(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            context=body.context,
+            confirm_paid=body.confirm_paid,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур ситуации сделки ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/situation-jobs/{job_id}")
+def deal_manager_situation_job_get(job_id: str) -> dict[str, Any]:
+    job = get_situation_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание уточнения ситуации не найдено")
+    return job
+
+
+@app.post("/api/deal-control/deals/{deal_id}/quick-help")
+def deal_manager_quick_help_start(
+    deal_id: str,
+    body: DealManagerQuickHelpRequest,
+) -> dict[str, Any]:
+    try:
+        return start_quick_help_job(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            question=body.question,
+            confirm_paid=body.confirm_paid,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/quick-help-jobs/{job_id}")
+def deal_manager_quick_help_job_get(job_id: str) -> dict[str, Any]:
+    job = get_quick_help_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание quick help не найдено")
+    return job
+
+
+@app.get("/api/deal-control/deals/{deal_id}/quick-help-history")
+def deal_manager_quick_help_history_get(
+    deal_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    before_id: int | None = Query(default=None, ge=1),
+) -> dict[str, Any]:
+    try:
+        return list_quick_help_history(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            limit=limit,
+            before_id=before_id,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/voice/transcribe")
+async def deal_manager_voice_transcribe(
+    request: Request,
+) -> dict[str, str]:
+    try:
+        form = await request.form()
+        audio = form.get("audio")
+        if audio is None or not hasattr(audio, "read"):
+            raise AudioTranscriptionRequestError("Аудио не передано")
+        deal_id = str(form.get("deal_id") or "").strip()
+        confirm_paid = str(form.get("confirm_paid") or "").strip().lower() == "true"
+        language = str(form.get("language") or "ru")
+        return await transcribe_manager_voice(
+            audio=audio,
+            deal_id=deal_id,
+            confirm_paid=confirm_paid,
+            language=language,
+        )
+    except AudioTranscriptionRequestError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001 - provider details stay out of HTTP/log output
+        raise HTTPException(status_code=502, detail="Транскрибация не выполнена") from error
 
 
 @app.get("/api/pipelines")

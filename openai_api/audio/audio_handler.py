@@ -2,8 +2,6 @@
 Модуль для обработки голосовых сообщений и их преобразования в текст.
 """
 
-import io
-import openai
 import sys
 from pathlib import Path
 from openai import AsyncOpenAI
@@ -13,7 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai_api.config import OPENAI_API_KEY, TRANSCRIPTION_MODEL, logger
-from openai_api.logging_utils import log_model_binary_payload
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry_async
 
 # Инициализация клиента OpenAI
@@ -40,15 +37,9 @@ async def transcribe_voice(
         Exception: В случае ошибки при транскрибации
     """
     try:
-        logger.info(f"Начинаю транскрибацию голосового сообщения, размер: {len(voice_data)} байт")
-        log_model_binary_payload(
-            logger,
-            title="audio.transcriptions.create",
-            model=TRANSCRIPTION_MODEL,
-            file_name=file_name,
-            data=voice_data,
-            metadata={"language": language},
-        )
+        # Browser recordings are handled in memory. Never log audio size,
+        # hashes, bytes, file content, or transcript content.
+        logger.info("Начинаю транскрибацию голосового сообщения")
         
         # Отправляем запрос на транскрибацию
         transcript = await run_with_retry_async(
@@ -62,16 +53,16 @@ async def transcribe_voice(
             on_event=retry_callback,
         )
         
-        # Получаем и логируем результат
+        # Return the transcript to the caller; do not log its content.
         text = transcript.text
-        logger.info(f"Голосовое сообщение успешно транскрибировано: {text[:50]}...")
+        logger.info("Голосовое сообщение успешно транскрибировано")
         
         return text
         
     except Exception as e:
         # Если произошла ошибка с моделью, пробуем запасную модель
         if "invalid model ID" in str(e):
-            logger.warning(f"Модель {TRANSCRIPTION_MODEL} недоступна, используем whisper-1")
+            logger.warning("Основная модель транскрибации недоступна, используем запасную")
             try:
                 transcript = await run_with_retry_async(
                     lambda: client.audio.transcriptions.create(
@@ -84,12 +75,12 @@ async def transcribe_voice(
                     on_event=retry_callback,
                 )
                 text = transcript.text
-                logger.info(f"Голосовое сообщение транскрибировано запасной моделью: {text[:50]}...")
+                logger.info("Голосовое сообщение транскрибировано запасной моделью")
                 return text
                 
             except Exception as inner_e:
-                logger.error(f"Ошибка при использовании запасной модели: {inner_e}")
+                logger.error("Ошибка при использовании запасной модели: %s", inner_e.__class__.__name__)
                 raise
         else:
-            logger.error(f"Ошибка при транскрибации: {e}")
+            logger.error("Ошибка при транскрибации: %s", e.__class__.__name__)
             raise 
