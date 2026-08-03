@@ -65,6 +65,29 @@ class DealManagerQuickHelpTests(unittest.TestCase):
     def setUp(self) -> None:
         quick_help._QUICK_HELP_JOBS.clear()
 
+    def test_only_one_active_quick_help_job_per_deal(self) -> None:
+        active = quick_help.DealManagerQuickHelpJob(
+            job_id="active",
+            deal_id="101",
+            question="Первый вопрос",
+            situation_id=21,
+            status="running",
+            stage="llm",
+        )
+        quick_help._QUICK_HELP_JOBS[active.job_id] = active
+        with patch.object(
+            quick_help,
+            "load_manager_screen_context",
+            return_value={"situation_id": 21},
+        ):
+            result = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="Второй вопрос",
+                confirm_paid=True,
+            )
+        self.assertEqual(result["job_id"], "active")
+
     def test_schema_and_prompt_are_strict_and_history_free(self) -> None:
         prompt = build_quick_help_prompt(
             question="Что сказать клиенту после паузы?",

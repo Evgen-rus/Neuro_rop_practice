@@ -377,6 +377,24 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_deal_manager_situation_reviews_latest
                 ON deal_manager_situation_reviews(deal_id, source_report_id, revision DESC, id DESC);
 
+            CREATE TABLE IF NOT EXISTS deal_manager_quick_help (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                situation_review_id INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                answer_json TEXT NOT NULL,
+                model_meta_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id),
+                FOREIGN KEY(situation_review_id) REFERENCES deal_manager_situation_reviews(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_manager_quick_help_history
+                ON deal_manager_quick_help(deal_id, manager_id, id DESC);
+
             CREATE TABLE IF NOT EXISTS deal_control_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
@@ -1233,6 +1251,120 @@ def get_deal_manager_situation_state(db_path: str | Path, *, deal_id: str) -> di
         "confirmed_at": review.get("created_at") if review is not None else None,
         "is_current": is_current,
     }
+
+
+def _row_to_deal_manager_quick_help(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["content"] = loads_json(value.pop("answer_json", None), {})
+    value["model_meta"] = loads_json(value.pop("model_meta_json", None), None)
+    return value
+
+
+def save_deal_manager_quick_help(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    situation_review_id: int,
+    question: str,
+    answer_json: dict[str, Any],
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one independent quick-help question and validated answer."""
+    normalized_question = str(question or "").strip()
+    if not 1 <= len(normalized_question) <= 4000:
+        raise ValueError("Вопрос должен содержать от 1 до 4000 знаков")
+    if not isinstance(answer_json, dict) or not answer_json:
+        raise ValueError("Ответ quick help должен быть непустым JSON-объектом")
+    if model_meta is not None and not isinstance(model_meta, dict):
+        raise ValueError("Метаданные модели должны быть JSON-объектом")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        manager_id = _deal_manager_situation_review_context(
+            conn,
+            deal_id=str(deal_id),
+            source_report_id=int(source_report_id),
+        )
+        review = conn.execute(
+            """
+            SELECT id FROM deal_manager_situation_reviews
+            WHERE id = ? AND deal_id = ? AND manager_id = ? AND source_report_id = ?
+            """,
+            (int(situation_review_id), str(deal_id), manager_id, int(source_report_id)),
+        ).fetchone()
+        if review is None:
+            raise ValueError("Текущая подтверждённая ситуация сделки не найдена")
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_manager_quick_help (
+                deal_id, manager_id, source_report_id, situation_review_id,
+                question, answer_json, model_meta_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(deal_id),
+                manager_id,
+                int(source_report_id),
+                int(situation_review_id),
+                normalized_question,
+                dumps_json(answer_json),
+                dumps_json(model_meta) if model_meta is not None else None,
+                utcish_now(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM deal_manager_quick_help WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    result = _row_to_deal_manager_quick_help(row)
+    assert result is not None
+    return result
+
+
+def list_deal_manager_quick_help(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    limit: int = 20,
+    before_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return quick-help history for the deal's current local manager."""
+    if not 1 <= int(limit) <= 100:
+        raise ValueError("limit должен быть от 1 до 100")
+    if before_id is not None and int(before_id) < 1:
+        raise ValueError("before_id должен быть положительным")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        deal = conn.execute(
+            "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        manager_id = str(deal["manager_id"] or "").strip()
+        if not manager_id:
+            raise ValueError("У сделки не указан локальный ответственный менеджер")
+        clauses = ["deal_id = ?", "manager_id = ?"]
+        params: list[Any] = [str(deal_id), manager_id]
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(int(before_id))
+        params.append(int(limit))
+        rows = conn.execute(
+            "SELECT * FROM deal_manager_quick_help WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY id DESC LIMIT ?",
+            params,
+        ).fetchall()
+    return [
+        value
+        for row in rows
+        if (value := _row_to_deal_manager_quick_help(row)) is not None
+    ]
 
 
 def get_ui_report_by_share_token(db_path: str | Path, share_token: str) -> dict[str, Any] | None:

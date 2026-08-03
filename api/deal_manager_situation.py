@@ -55,7 +55,7 @@ def _storage_call_alias(names: tuple[str, ...], db_path: str | Path, **kwargs: A
     for name in names:
         function = getattr(storage, name, None)
         if callable(function):
-            return function(db_path, **kwargs)
+            return _storage_call(name, db_path, **kwargs)
     raise StorageContractUnavailable(f"Storage contract is missing: {' or '.join(names)}")
 
 
@@ -188,16 +188,16 @@ def load_manager_screen_context(
     """Load only the bounded context shared by situation and quick help."""
     deal = _load_deal(db_path, str(deal_id))
     report, analysis_projection, report_id = _latest_full_analysis(db_path, str(deal_id))
-    situation = None
+    situation = _storage_call_alias(
+        ("get_deal_manager_situation_state", "get_current_deal_manager_situation", "get_latest_deal_manager_situation"),
+        db_path,
+        deal_id=str(deal_id),
+    )
     situation_review = None
-    if require_confirmed_situation:
-        situation = _storage_call_alias(
-            ("get_deal_manager_situation_state", "get_current_deal_manager_situation", "get_latest_deal_manager_situation"),
-            db_path,
-            deal_id=str(deal_id),
-        )
-        if not isinstance(situation, dict) or not _situation_status(situation):
-            raise ValueError("Сначала подтвердите текущую ситуацию сделки")
+    current_status = _situation_status(situation if isinstance(situation, dict) else None)
+    if require_confirmed_situation and not current_status:
+        raise ValueError("Сначала подтвердите текущую ситуацию сделки")
+    if current_status:
         situation_review = _storage_call_alias(
             ("get_latest_deal_manager_situation_review", "get_current_deal_manager_situation_review"),
             db_path,
@@ -335,7 +335,7 @@ def _run_situation_job(job_id: str, db_path: str | Path) -> None:
         context = load_manager_screen_context(
             db_path,
             job.deal_id,
-            require_confirmed_situation=True,
+            require_confirmed_situation=False,
         )
         previous = context["situation_projection"]
         _touch(job, stage="llm", detail="AI уточняет рабочую ситуацию менеджера", percent=55)
@@ -382,7 +382,7 @@ def start_situation_refine_job(
     loaded = load_manager_screen_context(
         db_path,
         str(deal_id),
-        require_confirmed_situation=True,
+        require_confirmed_situation=False,
     )
     with _SITUATION_LOCK:
         existing = next(

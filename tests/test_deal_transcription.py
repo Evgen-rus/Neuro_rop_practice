@@ -100,6 +100,29 @@ class DealTranscriptionRouteTests(unittest.TestCase):
         route = next(route for route in app.routes if route.path == "/api/deal-control/voice/transcribe")
         self.assertEqual(route.methods, {"POST"})
 
+    def test_multipart_http_contract_passes_audio_and_deal_id(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from api.app import app
+
+        with patch(
+            "api.app.transcribe_manager_voice",
+            new=AsyncMock(return_value={"text": "текст из голоса"}),
+        ) as transcribe:
+            response = TestClient(app).post(
+                "/api/deal-control/voice/transcribe",
+                data={"deal_id": "101", "confirm_paid": "true", "language": "ru"},
+                files={"audio": ("voice.webm", b"fake-webm", "audio/webm")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"text": "текст из голоса"})
+        kwargs = transcribe.await_args.kwargs
+        self.assertEqual(kwargs["deal_id"], "101")
+        self.assertTrue(kwargs["confirm_paid"])
+        self.assertEqual(kwargs["language"], "ru")
+        self.assertEqual(kwargs["audio"].content_type, "audio/webm")
+
 
 if __name__ == "__main__":
     unittest.main()

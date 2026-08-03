@@ -1750,7 +1750,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onCopy={props.onCopy}
         onTranscribe={props.onTranscribe}
       />
-      <RopRecommendationsAccordion coaching={props.deal.coaching} />
+      <RopRecommendationsAccordion coaching={props.deal.coaching} onCopy={props.onCopy} />
       <section className="dc-analysis-material dc-manager-markdown">
         <button
           className="dc-analysis-material-link"
@@ -1772,6 +1772,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         loading={props.quickHelpHistoryLoading}
         error={props.quickHelpHistoryError}
         onOpen={props.onLoadQuickHelpHistory}
+        onCopy={props.onCopy}
       />
     </> : null}
   </>
@@ -1825,7 +1826,7 @@ function ManagerSituationActions(props: {
     </section>
     {props.modalOpen ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
       <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">
-        <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Добавить контекст</h2><p>Это пояснение менеджера для пересборки рабочей ситуации, не доказательство ответа клиента.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
+        <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Дополнить текущую ситуацию</h2><p>Напиши, что произошло, что уже предпринимал и какой важный контекст не попал в CRM. Это пояснение менеджера, а не доказательство ответа клиента.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
         <div className="dc-manager-voice-field">
           <textarea
             value={props.context}
@@ -1876,7 +1877,7 @@ function ManagerQuickHelp(props: {
 }) {
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   return <section className="dc-manager-quick-help">
-    <div className="dc-section-head"><div><h3>Быстрая ИИ-помощь</h3><p>Личный тренер: опиши, где застрял, и получи одно конкретное следующее действие.</p></div><span>✦ Тренер</span></div>
+    <div className="dc-section-head"><div><h3>Быстрая ИИ помощь менеджеру</h3><p>Опиши, что происходит прямо сейчас, что уже пробовал и где застрял. Помощник предложит следующий шаг и готовый текст клиенту.</p></div><span>✦ Тренер</span></div>
     <div className="dc-manager-voice-field dc-manager-quick-help-field">
       <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Например: я уже третий раз звоню, клиент не берёт трубку — что изменить?" aria-label="Вопрос личному тренеру" />
       <ManagerVoiceInput dealId={props.dealId} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
@@ -1915,34 +1916,48 @@ function ManagerAnswerList({ title, items, empty }: { title: string; items: stri
   return <section className="dc-manager-answer-list"><h4>{title}</h4><ul>{items.length ? items.map((item) => <li key={item}>{item}</li>) : <li className="muted">{empty}</li>}</ul></section>
 }
 
-function ManagerQuickHelpHistory({ entries, loaded, loading, error, onOpen }: {
+function ManagerQuickHelpHistory({ entries, loaded, loading, error, onOpen, onCopy }: {
   entries: ManagerQuickHelpEntry[]
   loaded: boolean
   loading: boolean
   error: string
   onOpen: () => void
+  onCopy: (text: string, label: string) => Promise<void>
 }) {
   const sorted = [...entries].sort((first, second) => second.id - first.id)
   return <details className="dc-manager-history" onToggle={(event) => { if (event.currentTarget.open && !loaded) onOpen() }}>
     <summary><span>История быстрой помощи</span><small>{loaded ? `${entries.length} запросов` : 'Загрузить по запросу'}</small></summary>
     {loading ? <p className="dc-manager-history-state"><span className="dc-spinner" />Загружаем историю…</p> : null}
     {error ? <p className="dc-manager-error">{error}</p> : null}
-    {!loading && !error && loaded && !sorted.length ? <p className="dc-manager-history-state">Запросов по этой сделке пока нет.</p> : null}
-    {sorted.length ? <ol>{sorted.map((entry) => <li key={entry.id}><div><strong>{dateTime(entry.created_at)}</strong><span>{entry.question}</span></div><p>{entry.content.problem_summary || entry.content.recommended_action}</p></li>)}</ol> : null}
+    {!loading && !error && loaded && !sorted.length ? <p className="dc-manager-history-state">Менеджер еще не запрашивал быструю помощь по этой сделке.</p> : null}
+    {sorted.length ? <ol>{sorted.map((entry) => <li key={entry.id}>
+      <details className="dc-manager-history-entry">
+        <summary><span><strong>{dateTime(entry.created_at)}</strong>{entry.question}</span><small>Показать ответ</small></summary>
+        <ManagerQuickHelpAnswer entry={entry} onCopy={onCopy} />
+      </details>
+    </li>)}</ol> : null}
   </details>
 }
 
-function RopRecommendationsAccordion({ coaching }: { coaching: DealControlDeal['coaching'] }) {
+function RopRecommendationsAccordion({ coaching, onCopy }: {
+  coaching: DealControlDeal['coaching']
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
   return <details className="dc-manager-recommendations">
     <summary><span>Рекомендации по сделке от РОПа</span><small>Свернуть / развернуть</small></summary>
     <div className="dc-manager-recommendations-body">
-      {coaching.rop_focus ? <section><h4>Фокус контроля</h4><p>{coaching.rop_focus}</p></section> : null}
-      {coaching.manager_coaching ? <section><h4>Комментарий РОПа менеджеру</h4><p>{coaching.manager_coaching}</p></section> : null}
+      <section><h4>Фокус на сегодня</h4><p>{coaching.manager_coaching || coaching.rop_focus || 'Фокус появится после полного анализа сделки.'}</p></section>
       <div className="dc-manager-recommendation-columns">
         <ManagerAnswerList title="Уже известно" items={coaching.known} empty="Подтверждённые факты не выделены." />
         <ManagerAnswerList title="Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
       </div>
-      {coaching.crm_checklist.length ? <ManagerAnswerList title="Что зафиксировать в CRM" items={coaching.crm_checklist} empty="Чеклист не сформирован." /> : null}
+      <section className="dc-manager-recommendation-work"><h4>Как проработать сделку</h4>
+        {coaching.rop_focus ? <p>{coaching.rop_focus}</p> : null}
+        <div className="dc-contact-goal"><strong>Цель контакта</strong><p>{coaching.contact_goal || 'Выполнить текущую задачу и получить конкретный подтверждённый результат.'}</p></div>
+        <div className="dc-question-list"><strong>Что выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
+        <div className="dc-script"><strong>{coaching.script_channel === 'message' ? 'Текст клиенту' : 'Речевой модуль'}</strong><div className="dc-script-primary"><pre>{coaching.script || 'Готовый текст пока не сформирован.'}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Основной сценарий')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё варианты</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 1}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 1}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
+      </section>
+      <ManagerAnswerList title="Что зафиксировать в CRM" items={coaching.crm_checklist} empty="Чеклист не сформирован." />
     </div>
   </details>
 }

@@ -5468,6 +5468,12 @@ ul.facts.bad li:before {
 .dc-manager-history > ol strong { color: #315579; font-size: 10px; }
 .dc-manager-history > ol span { color: #243e61; font-size: 12px; }
 .dc-manager-history > ol p { margin: 6px 0 0; color: #5d7089; font-size: 11px; line-height: 1.45; }
+.dc-manager-history-entry > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; }
+.dc-manager-history-entry > summary::-webkit-details-marker { display: none; }
+.dc-manager-history-entry > summary > span { display: grid; gap: 3px; min-width: 0; }
+.dc-manager-history-entry > summary > small { flex: 0 0 auto; color: var(--dc-muted); font-size: 10px; }
+.dc-manager-history-entry > .dc-manager-answer { margin-top: 10px; }
+.dc-manager-recommendation-work { display: grid; gap: 10px; }
 .dc-manager-history-state { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 14px 14px; color: var(--dc-muted); font-size: 11px; }
 
 .dc-manager-markdown { margin-top: 0; }

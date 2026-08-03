@@ -11,12 +11,15 @@ import json
 import os
 from typing import Any
 
+from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
 from openai_api.llm.llm_client import call_structured_output_json
 
 
-MANAGER_MODEL = os.getenv("DEAL_MANAGER_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
-# OpenAI's xhigh effort is the API value for the product choice "очень высокий".
-MANAGER_REASONING_EFFORT = os.getenv("DEAL_MANAGER_REASONING_EFFORT", "xhigh").strip() or "xhigh"
+MANAGER_MODEL = os.getenv("DEAL_MANAGER_MODEL", ANALYSIS_MODEL).strip() or ANALYSIS_MODEL
+MANAGER_REASONING_EFFORT = (
+    os.getenv("DEAL_MANAGER_REASONING_EFFORT", ANALYSIS_REASONING_EFFORT).strip()
+    or ANALYSIS_REASONING_EFFORT
+)
 MAX_MANAGER_CONTEXT_CHARS = 4000
 MAX_SITUATION_OUTPUT_TOKENS = 2400
 
@@ -348,18 +351,19 @@ def build_situation_prompt(
         [
             "SYSTEM_RULES:\nТы уточняешь рабочую ситуацию менеджера по одной сделке.",
             "RULES:\n"
-            "- Опирайся только на переданные ANALYSIS_CONTEXT, DEAL_CONTEXT, CURRENT_BITRIX_TASK, "
-            "PREVIOUS_MANAGER_PROJECTION и MANAGER_CONTEXT.\n"
+            "- Опирайся только на переданные CONFIRMED_ANALYSIS_CONTEXT, DEAL_CONTEXT, CURRENT_BITRIX_TASK, "
+            "PREVIOUS_MANAGER_PROJECTION и NEW_MANAGER_CONTEXT.\n"
             "- Не выдумывай факты, слова клиента, договорённости, даты, суммы или результат звонка.\n"
             "- Bitrix-задача показывает рабочее поручение и не доказывает контакт с клиентом.\n"
             "- Если контекст менеджера расходится с анализом, явно отрази неопределённость и вынеси вопрос в facts_to_clarify.\n"
             "- Не объявляй звонок контактом и не утверждай, что сделка продвинулась без подтверждённого клиентского факта.\n"
+            "- Не повторяй уже известные факты как вопросы. Основной текст и сценарии пиши без плейсхолдеров.\n"
             "- Верни только полный объект по JSON-схеме. Пиши спокойно, прямо и по-русски.",
-            _section("ANALYSIS_CONTEXT", analysis_projection),
+            _section("CONFIRMED_ANALYSIS_CONTEXT", analysis_projection),
             _section("DEAL_CONTEXT", project_deal(deal)),
             _section("CURRENT_BITRIX_TASK", current_bitrix_task),
             _section("PREVIOUS_MANAGER_PROJECTION", previous_manager_projection),
-            _section("MANAGER_CONTEXT", context),
+            _section("NEW_MANAGER_CONTEXT", context),
         ]
     )
 

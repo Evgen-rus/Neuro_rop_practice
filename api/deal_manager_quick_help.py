@@ -138,14 +138,24 @@ def start_quick_help_job(
         str(deal_id),
         require_confirmed_situation=True,
     )
-    job_id = uuid.uuid4().hex
-    job = DealManagerQuickHelpJob(
-        job_id=job_id,
-        deal_id=str(deal_id),
-        question=normalized_question,
-        situation_id=context["situation_id"],
-    )
     with _QUICK_HELP_LOCK:
+        existing = next(
+            (
+                item
+                for item in _QUICK_HELP_JOBS.values()
+                if item.deal_id == str(deal_id) and item.status in {"queued", "running"}
+            ),
+            None,
+        )
+        if existing is not None:
+            return asdict(existing)
+        job_id = uuid.uuid4().hex
+        job = DealManagerQuickHelpJob(
+            job_id=job_id,
+            deal_id=str(deal_id),
+            question=normalized_question,
+            situation_id=context["situation_id"],
+        )
         _QUICK_HELP_JOBS[job_id] = job
     thread = threading.Thread(target=_run_quick_help_job, args=(job_id, db_path), daemon=True)
     thread.start()

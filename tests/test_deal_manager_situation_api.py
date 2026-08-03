@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api import deal_manager_situation as situation
+from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
 from openai_api.llm.deal_manager_situation import (
     MANAGER_MODEL,
     MANAGER_REASONING_EFFORT,
@@ -64,6 +65,10 @@ def dispatcher(*, saved=None, state=None, calls=None):
             return REPORT
         if name == "list_deal_control_deals":
             return [DEAL]
+        if name == "get_deal_manager_situation_state":
+            return state or {"status": "pending", "state": "pending", "is_current": False}
+        if name == "get_latest_deal_manager_situation_review":
+            return None
         if name == "save_deal_manager_situation_confirmation":
             return saved or {"id": 21, "status": "confirmed", "deal_id": "101"}
         if name == "save_deal_manager_situation_refined_projection":
@@ -86,15 +91,16 @@ class DealManagerSituationTests(unittest.TestCase):
             previous_manager_projection={"current_situation": "Старая версия"},
             manager_context="Менеджер уточнил: клиент просил вернуться в пятницу",
         )
-        self.assertIn("ANALYSIS_CONTEXT", prompt)
+        self.assertIn("CONFIRMED_ANALYSIS_CONTEXT", prompt)
         self.assertIn("CURRENT_BITRIX_TASK", prompt)
         self.assertIn("PREVIOUS_MANAGER_PROJECTION", prompt)
+        self.assertIn("NEW_MANAGER_CONTEXT", prompt)
         self.assertIn("Менеджер уточнил", prompt)
         self.assertIn("КП отправлено", prompt)
         self.assertNotIn("private_extra", prompt)
         self.assertNotIn("не передавать", prompt)
-        self.assertEqual(MANAGER_MODEL, "gpt-5.6-luna")
-        self.assertEqual(MANAGER_REASONING_EFFORT, "xhigh")
+        self.assertEqual(MANAGER_MODEL, ANALYSIS_MODEL)
+        self.assertEqual(MANAGER_REASONING_EFFORT, ANALYSIS_REASONING_EFFORT)
         self.assertEqual(situation_schema()["properties"]["questions"]["maxItems"], 4)
 
     def test_confirm_uses_canonical_storage_and_never_calls_llm(self) -> None:
@@ -145,6 +151,10 @@ class DealManagerSituationTests(unittest.TestCase):
                 return REPORT
             if name == "list_deal_control_deals":
                 return [DEAL]
+            if name == "get_deal_manager_situation_state":
+                return current
+            if name == "get_latest_deal_manager_situation_review":
+                return {"refined_coaching": current["manager_projection"]}
             if name == "save_deal_manager_situation_refined_projection":
                 return {"id": 22, "status": "refined", "deal_id": "101"}
             raise AssertionError(name)
@@ -172,17 +182,47 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertEqual(save_kwargs["manager_context"], "Клиент попросил вернуться после внутреннего согласования")
         self.assertNotIn("raw_output_text", save_kwargs["model_meta"])
 
-    def test_refine_requires_paid_confirmation_and_existing_situation(self) -> None:
+    def test_refine_requires_paid_confirmation_but_allows_pending_situation(self) -> None:
         with self.assertRaisesRegex(ValueError, "платный"):
             situation.start_situation_refine_job(
                 db_path=Path("state.sqlite"), deal_id="101", context="Уточнение", confirm_paid=False
             )
-        with patch.object(situation, "_storage_call", side_effect=dispatcher()), \
-             patch.object(storage, "get_deal_manager_situation_state", return_value=None, create=True):
-            with self.assertRaisesRegex(ValueError, "подтвердите"):
-                situation.start_situation_refine_job(
-                    db_path=Path("state.sqlite"), deal_id="101", context="Уточнение", confirm_paid=True
-                )
+        refined = {
+            "current_situation": "Ситуация дополнена менеджером",
+            "what_to_check_now": "Проверить дату решения",
+            "rop_focus": "Зафиксировать следующий шаг",
+            "manager_coaching": "Сменить повторяющийся сценарий контакта",
+            "known": ["КП отправлено"],
+            "unknowns": ["Дата решения"],
+            "contact_goal": "Получить дату решения",
+            "questions": ["Когда будет принято решение?"],
+            "script": "Подскажите, когда вернётесь с решением?",
+            "script_variants": [],
+            "crm_checklist": ["Дата следующего контакта"],
+            "script_channel": "звонок",
+        }
+        calls = []
+
+        def pending_call(name, db_path, **kwargs):
+            calls.append((name, kwargs))
+            if name == "get_latest_ui_report":
+                return REPORT
+            if name == "list_deal_control_deals":
+                return [DEAL]
+            if name == "get_deal_manager_situation_state":
+                return {"status": "pending", "state": "pending", "is_current": False}
+            if name == "save_deal_manager_situation_refined_projection":
+                return {"id": 23, "action": "context_added", "deal_id": "101"}
+            raise AssertionError(name)
+
+        with patch.object(situation, "_storage_call", side_effect=pending_call), \
+             patch.object(situation, "generate_deal_manager_situation", return_value=(refined, {})), \
+             patch.object(situation.threading, "Thread", ImmediateThread):
+            started = situation.start_situation_refine_job(
+                db_path=Path("state.sqlite"), deal_id="101", context="Уточнение", confirm_paid=True
+            )
+        self.assertEqual(started["status"], "done")
+        self.assertEqual(calls[-1][0], "save_deal_manager_situation_refined_projection")
 
     def test_only_one_active_refine_job_per_deal(self) -> None:
         active = situation.DealManagerSituationJob(
