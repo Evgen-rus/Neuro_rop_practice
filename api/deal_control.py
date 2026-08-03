@@ -14,8 +14,10 @@ from storage.rop_db import (
     DEFAULT_DB_PATH,
     create_deal_control_task,
     confirm_deal_control_task_crm_match,
+    get_deal_manager_situation_state,
     get_deal_control_scope,
     get_deal_control_metrics,
+    get_latest_deal_manager_situation_review,
     get_latest_ui_report,
     list_deal_control_bitrix_task_states,
     list_deal_control_deals,
@@ -41,6 +43,20 @@ DEAL_SELECT = [
     "CURRENCY_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY", "CLOSEDATE",
 ]
 TOKEN_RE = re.compile(r"[\wа-яё-]{3,}", re.IGNORECASE)
+MANAGER_SITUATION_REFINED_FIELDS = frozenset({
+    "current_situation",
+    "what_to_check_now",
+    "rop_focus",
+    "manager_coaching",
+    "known",
+    "unknowns",
+    "contact_goal",
+    "questions",
+    "script",
+    "script_variants",
+    "crm_checklist",
+    "script_channel",
+})
 
 
 def _tokens(value: Any) -> set[str]:
@@ -456,7 +472,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
             ],
             2,
         )
-    return {
+    coaching = {
         "report_id": report.get("id") if report else None,
         "analysis_created_at": report.get("created_at") if report else None,
         "current_situation": str(brief.get("current_situation") or deal_state.get("summary") or ""),
@@ -481,6 +497,33 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "rop_task_hint": str(rop.get("message_to_manager") or rop.get("check_for_rop") or ""),
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),
     }
+    if report is None or report.get("id") is None:
+        return coaching
+    review = get_latest_deal_manager_situation_review(
+        db_path,
+        deal_id=str(deal_id),
+        source_report_id=int(report["id"]),
+    )
+    refined = review.get("refined_coaching") if review is not None else None
+    if not isinstance(refined, dict):
+        return coaching
+    for field in MANAGER_SITUATION_REFINED_FIELDS:
+        value = refined.get(field)
+        if _has_refined_value(value):
+            coaching[field] = value
+    return coaching
+
+
+def _has_refined_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_refined_value(item) for item in value)
+    if isinstance(value, dict):
+        return bool(value)
+    return True
 
 
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
@@ -542,6 +585,10 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         else:
             missing += 1
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
+        deal["manager_situation"] = get_deal_manager_situation_state(
+            db_path,
+            deal_id=str(deal["deal_id"]),
+        )
         items.append(deal)
     task_buckets = [str(task.get("time_bucket") or "unscheduled") for task in projected_primary_tasks]
     overdue = task_buckets.count("overdue")

@@ -358,6 +358,25 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS deal_manager_situation_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                revision INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK(action IN ('confirmed', 'context_added')),
+                manager_context TEXT,
+                refined_coaching_json TEXT,
+                model_meta_json TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(deal_id, source_report_id, revision),
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_manager_situation_reviews_latest
+                ON deal_manager_situation_reviews(deal_id, source_report_id, revision DESC, id DESC);
+
             CREATE TABLE IF NOT EXISTS deal_control_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
@@ -870,6 +889,350 @@ def get_latest_ui_report(
             (str(entity_type), str(entity_id)),
         ).fetchone()
     return _row_to_ui_report(row)
+
+
+def _row_to_deal_manager_situation_review(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["refined_coaching"] = loads_json(value.pop("refined_coaching_json", None), None)
+    value["model_meta"] = loads_json(value.pop("model_meta_json", None), None)
+    return value
+
+
+def get_latest_deal_manager_situation_review(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Return the newest append-only review for a deal or one source report."""
+    init_db(db_path)
+    clauses = ["deal_id = ?"]
+    params: list[Any] = [str(deal_id)]
+    if source_report_id is not None:
+        clauses.append("source_report_id = ?")
+        params.append(int(source_report_id))
+    query = (
+        "SELECT * FROM deal_manager_situation_reviews WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY source_report_id DESC, revision DESC, id DESC LIMIT 1"
+    )
+    with connect(db_path) as conn:
+        row = conn.execute(query, params).fetchone()
+    return _row_to_deal_manager_situation_review(row)
+
+
+def next_deal_manager_situation_revision(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+) -> int:
+    """Return the next revision number without creating a review row."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(MAX(revision), 0) + 1
+            FROM deal_manager_situation_reviews
+            WHERE deal_id = ? AND source_report_id = ?
+            """,
+            (str(deal_id), int(source_report_id)),
+        ).fetchone()
+    return int(row[0]) if row is not None else 1
+
+
+def get_next_deal_manager_situation_revision(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+) -> int:
+    """Explicit ``get_*`` alias for callers that treat revision as a read."""
+    return next_deal_manager_situation_revision(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+    )
+
+
+def _deal_manager_situation_review_context(
+    conn: sqlite3.Connection,
+    *,
+    deal_id: str,
+    source_report_id: int,
+) -> str:
+    deal = conn.execute(
+        "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+        (str(deal_id),),
+    ).fetchone()
+    if deal is None:
+        raise ValueError("Сделка ещё не добавлена в контур контроля")
+    manager_id = str(deal["manager_id"] or "").strip()
+    if not manager_id:
+        raise ValueError("У сделки не указан локальный ответственный менеджер")
+    report = conn.execute(
+        """
+        SELECT id FROM ui_reports
+        WHERE id = ? AND entity_type = 'deal' AND entity_id = ? AND report_json IS NOT NULL
+        """,
+        (int(source_report_id), str(deal_id)),
+    ).fetchone()
+    if report is None:
+        raise ValueError("Отчёт сделки не найден или не содержит анализа")
+    return manager_id
+
+
+def _append_deal_manager_situation_review(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    action: str,
+    manager_context: str | None,
+    refined_coaching: dict[str, Any] | None,
+    model_meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if action not in {"confirmed", "context_added"}:
+        raise ValueError("Неизвестное действие подтверждения manager situation")
+    if refined_coaching is not None and not isinstance(refined_coaching, dict):
+        raise ValueError("Refined coaching должен быть JSON-объектом")
+    if model_meta is not None and not isinstance(model_meta, dict):
+        raise ValueError("Метаданные модели должны быть JSON-объектом")
+    normalized_context = None if manager_context is None else str(manager_context).strip() or None
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        # The row is append-only. Serialise the max(revision)+insert pair so
+        # two simultaneous manager actions cannot receive the same revision.
+        conn.execute("BEGIN IMMEDIATE")
+        manager_id = _deal_manager_situation_review_context(
+            conn,
+            deal_id=str(deal_id),
+            source_report_id=int(source_report_id),
+        )
+        revision = int(conn.execute(
+            """
+            SELECT COALESCE(MAX(revision), 0) + 1
+            FROM deal_manager_situation_reviews
+            WHERE deal_id = ? AND source_report_id = ?
+            """,
+            (str(deal_id), int(source_report_id)),
+        ).fetchone()[0])
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_manager_situation_reviews (
+                deal_id, manager_id, source_report_id, revision, action,
+                manager_context, refined_coaching_json, model_meta_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(deal_id),
+                manager_id,
+                int(source_report_id),
+                revision,
+                action,
+                normalized_context,
+                dumps_json(refined_coaching) if refined_coaching is not None else None,
+                dumps_json(model_meta) if model_meta is not None else None,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM deal_manager_situation_reviews WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    result = _row_to_deal_manager_situation_review(row)
+    assert result is not None
+    return result
+
+
+def save_deal_manager_situation_review(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    action: str,
+    manager_context: str | None = None,
+    refined_coaching: dict[str, Any] | None = None,
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one manager-provided review for a saved deal analysis."""
+    return _append_deal_manager_situation_review(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+        action=action,
+        manager_context=manager_context,
+        refined_coaching=refined_coaching,
+        model_meta=model_meta,
+    )
+
+
+def save_deal_manager_situation_confirmation(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    manager_context: str | None = None,
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append a plain confirmation without changing the AI coaching."""
+    return _append_deal_manager_situation_review(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+        action="confirmed",
+        manager_context=manager_context,
+        refined_coaching=None,
+        model_meta=model_meta,
+    )
+
+
+def save_deal_manager_situation_confirmed(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    manager_context: str | None = None,
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Alias for ``save_deal_manager_situation_confirmation``."""
+    return save_deal_manager_situation_confirmation(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+        manager_context=manager_context,
+        model_meta=model_meta,
+    )
+
+
+def save_deal_manager_situation_refined_projection(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    refined_coaching: dict[str, Any],
+    manager_context: str | None = None,
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append a manager-provided refined projection for the saved analysis."""
+    return _append_deal_manager_situation_review(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+        action="context_added",
+        manager_context=manager_context,
+        refined_coaching=refined_coaching,
+        model_meta=model_meta,
+    )
+
+
+def save_deal_manager_situation_refined(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    refined_coaching: dict[str, Any],
+    manager_context: str | None = None,
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Short alias for ``save_deal_manager_situation_refined_projection``."""
+    return save_deal_manager_situation_refined_projection(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+        refined_coaching=refined_coaching,
+        manager_context=manager_context,
+        model_meta=model_meta,
+    )
+
+
+def list_deal_manager_situation_review_history(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return append-only review history, newest revision first."""
+    init_db(db_path)
+    clauses = ["deal_id = ?"]
+    params: list[Any] = [str(deal_id)]
+    if source_report_id is not None:
+        clauses.append("source_report_id = ?")
+        params.append(int(source_report_id))
+    query = (
+        "SELECT * FROM deal_manager_situation_reviews WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY source_report_id DESC, revision DESC, id DESC"
+    )
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        value
+        for row in rows
+        if (value := _row_to_deal_manager_situation_review(row)) is not None
+    ]
+
+
+def list_deal_manager_situation_reviews(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Alias for ``list_deal_manager_situation_review_history``."""
+    return list_deal_manager_situation_review_history(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+    )
+
+
+def get_deal_manager_situation_review_history(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Explicit ``get_*`` alias for the append-only review history."""
+    return list_deal_manager_situation_review_history(
+        db_path,
+        deal_id=deal_id,
+        source_report_id=source_report_id,
+    )
+
+
+def get_deal_manager_situation_state(db_path: str | Path, *, deal_id: str) -> dict[str, Any]:
+    """Project the current manager-situation state without mutating history."""
+    report = get_latest_ui_report(db_path, entity_type="deal", entity_id=str(deal_id))
+    source_report_id = int(report["id"]) if report is not None else None
+    review = (
+        get_latest_deal_manager_situation_review(
+            db_path,
+            deal_id=str(deal_id),
+            source_report_id=source_report_id,
+        )
+        if source_report_id is not None
+        else None
+    )
+    status = "pending"
+    is_current = False
+    if review is not None:
+        status = "refined" if review.get("action") == "context_added" else "confirmed"
+        is_current = int(review.get("source_report_id") or 0) == int(source_report_id or 0)
+    return {
+        "status": status,
+        "state": status,
+        "review_id": int(review["id"]) if review is not None and review.get("id") is not None else None,
+        "source_report_id": source_report_id,
+        "revision": int(review["revision"]) if review is not None and review.get("revision") is not None else None,
+        "manager_context": review.get("manager_context") if review is not None else None,
+        "confirmed_at": review.get("created_at") if review is not None else None,
+        "is_current": is_current,
+    }
 
 
 def get_ui_report_by_share_token(db_path: str | Path, share_token: str) -> dict[str, Any] | None:
