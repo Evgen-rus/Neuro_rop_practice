@@ -20,6 +20,7 @@ HTTP response; it is not saved or logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import subprocess
 
@@ -105,13 +106,63 @@ def _probe_duration_seconds(audio_data: bytes) -> float:
         raise AudioTranscriptionRequestError("Не удалось прочитать аудио")
     try:
         duration = float(result.stdout.decode("utf-8", errors="replace").strip())
-    except (TypeError, ValueError) as error:
-        raise AudioTranscriptionRequestError("Не удалось определить длительность аудио") from error
+    except (TypeError, ValueError):
+        duration = _probe_packet_timeline_duration_seconds(audio_data)
     if not math.isfinite(duration) or duration <= 0:
         raise AudioTranscriptionRequestError("Не удалось определить длительность аудио")
     if duration > MAX_AUDIO_DURATION_SECONDS:
         raise AudioTranscriptionRequestError("Одна запись не может быть длиннее 5 минут")
     return duration
+
+
+def _probe_packet_timeline_duration_seconds(audio_data: bytes) -> float:
+    """Derive duration for live WebM recordings that omit format.duration."""
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "packet=pts_time,duration_time",
+        "-of",
+        "json",
+        "-i",
+        "pipe:0",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            input=audio_data,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        raise AudioTranscriptionRequestError("Не удалось проверить длительность аудио") from error
+    if result.returncode != 0:
+        raise AudioTranscriptionRequestError("Не удалось определить длительность аудио")
+    try:
+        packets = json.loads(result.stdout.decode("utf-8", errors="replace")).get("packets", [])
+    except (AttributeError, json.JSONDecodeError) as error:
+        raise AudioTranscriptionRequestError("Не удалось определить длительность аудио") from error
+    if not isinstance(packets, list):
+        raise AudioTranscriptionRequestError("Не удалось определить длительность аудио")
+
+    starts: list[float] = []
+    ends: list[float] = []
+    for packet in packets:
+        try:
+            start = float(packet["pts_time"])
+            packet_duration = max(0.0, float(packet.get("duration_time", 0.0)))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(start) and math.isfinite(packet_duration):
+            starts.append(start)
+            ends.append(start + packet_duration)
+    if not starts or not ends:
+        raise AudioTranscriptionRequestError("Не удалось определить длительность аудио")
+    return max(ends) - min(starts)
 
 
 async def _read_upload(upload: UploadFile) -> bytes:

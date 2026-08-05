@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from subprocess import CompletedProcess
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.deal_transcription import (
     AudioTranscriptionRequestError,
     MAX_AUDIO_DURATION_SECONDS,
     MAX_AUDIO_BYTES,
+    _probe_duration_seconds,
     transcribe_manager_voice,
     validate_audio_upload,
 )
@@ -30,6 +32,41 @@ class FakeUpload:
 
 
 class DealTranscriptionTests(unittest.IsolatedAsyncioTestCase):
+    def test_live_webm_duration_uses_packet_timeline_when_header_is_missing(self) -> None:
+        format_probe = CompletedProcess(args=[], returncode=0, stdout=b"N/A\n", stderr=b"")
+        packet_probe = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                b'{"packets":['
+                b'{"pts_time":"-0.007000","duration_time":"0.020000"},'
+                b'{"pts_time":"2.993000","duration_time":"0.020000"}'
+                b"]}"
+            ),
+            stderr=b"",
+        )
+
+        with patch("api.deal_transcription.subprocess.run", side_effect=[format_probe, packet_probe]) as run:
+            duration = _probe_duration_seconds(b"live-webm")
+
+        self.assertAlmostEqual(duration, 3.02)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("format=duration", run.call_args_list[0].args[0])
+        self.assertIn("packet=pts_time,duration_time", run.call_args_list[1].args[0])
+
+    def test_live_webm_packet_timeline_keeps_five_minute_limit(self) -> None:
+        format_probe = CompletedProcess(args=[], returncode=0, stdout=b"N/A\n", stderr=b"")
+        packet_probe = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=b'{"packets":[{"pts_time":"0","duration_time":"0.02"},{"pts_time":"300.01","duration_time":"0.02"}]}',
+            stderr=b"",
+        )
+
+        with patch("api.deal_transcription.subprocess.run", side_effect=[format_probe, packet_probe]):
+            with self.assertRaisesRegex(AudioTranscriptionRequestError, "5 минут"):
+                _probe_duration_seconds(b"too-long-live-webm")
+
     async def test_multipart_recording_is_transcribed_in_memory(self) -> None:
         upload = FakeUpload(b"browser-audio")
         with patch("api.deal_transcription._probe_duration_seconds", return_value=42.0) as probe, \
