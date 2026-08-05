@@ -465,6 +465,7 @@ textarea {
 
 .dc-board,
 .dc-detail {
+  min-width: 0;
   border: 1px solid var(--dc-line);
   border-radius: 16px;
   background: #fff;
@@ -1899,8 +1900,12 @@ textarea {
 }
 
 .dc-modal-layer {
+  --dc-text: #0f1f3a;
+  --dc-muted: #697a95;
+  --dc-line: #d9e4f0;
+  --dc-blue: #1768f2;
   position: fixed;
-  z-index: 100;
+  z-index: 1400;
   inset: 0;
   display: grid;
   place-items: center;
@@ -5491,6 +5496,10 @@ ul.facts.bad li:before {
 .dc-manager-assistant-open { width: 100%; margin-top: 4px; }
 
 .dc-manager-assistant-layer {
+  --dc-text: #0f1f3a;
+  --dc-muted: #697a95;
+  --dc-line: #d9e4f0;
+  --dc-blue: #1768f2;
   position: fixed;
   z-index: 1200;
   inset: 0;
@@ -5562,7 +5571,25 @@ ul.facts.bad li:before {
 .dc-manager-answer-copy { min-width: 0; padding: 11px; border: 1px solid #d9e4ef; border-radius: 10px; background: #fff; }
 .dc-manager-answer-copy.speech { grid-column: 1 / -1; border-color: #d8c9f2; background: #faf7ff; }
 .dc-manager-answer-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 10px 10px; }
-.dc-manager-answer-actions .dc-button { min-height: 34px; font-size: 10px; }
+.dc-manager-answer-actions .dc-button {
+  max-width: 100%;
+  min-height: 34px;
+  border-color: #9bbce2;
+  color: #1d4f85;
+  background: #f8fbff;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  text-align: center;
+  white-space: normal;
+}
+.dc-manager-answer-actions .dc-button.primary { border-color: #1768f2; color: #fff; background: #1768f2; }
+
+.dc-script > div > .dc-button,
+.dc-copy-actions > .dc-button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
 
 .dc-manager-assistant-typing { display: flex; gap: 5px; align-items: center; width: fit-content; padding: 10px 13px; border: 1px solid #d9e4ef; border-radius: 11px; background: #fff; }
 .dc-manager-assistant-typing span { width: 6px; height: 6px; border-radius: 50%; background: #4788e9; animation: dc-assistant-dot 1.05s infinite ease-in-out; }

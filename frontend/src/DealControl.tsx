@@ -1837,7 +1837,7 @@ function ManagerSituationActions(props: {
         </button>
       </div> : null}
     </section>
-    {props.modalOpen ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
+    {props.modalOpen ? createPortal(<div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
       <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">
         <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Дополнить текущую ситуацию</h2><p>Напиши, что произошло, что уже предпринимал и какой важный контекст не попал в CRM. Это пояснение менеджера, а не доказательство ответа клиента.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
         <div className="dc-manager-voice-field">
@@ -1853,7 +1853,7 @@ function ManagerSituationActions(props: {
         <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
         <div><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || props.context.trim().length < 1 || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
       </section>
-    </div> : null}
+    </div>, document.body) : null}
   </>
 }
 
@@ -1991,7 +1991,7 @@ function ManagerAssistantModal(props: {
         <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Помощник менеджера</strong><small>Работа по текущей сделке</small></div></div>
         <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span></div>
         <nav>
-          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Ответ ИИ</button>
+          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Чат с ИИ</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
           <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
         </nav>
