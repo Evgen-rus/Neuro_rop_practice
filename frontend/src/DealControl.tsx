@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   confirmDealControlTaskCrmMatch,
   confirmManagerSituation,
   createDealControlTask,
   fetchDealControl,
   fetchDealTaskGuidanceJob,
-  fetchManagerQuickHelpHistory,
+  fetchManagerAssistantWorkspace,
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
   fetchJob,
   fetchReportMarkdown,
   recordDealControlTaskEvent,
+  recordManagerCommunicationCompleted,
   reviewDealControlCrmFact,
   saveDealControlScope,
   saveDealControlTaskOutcome,
@@ -25,6 +27,7 @@ import {
   updateDealControlTask,
   type DealControlDashboard,
   type DealControlBitrixTask,
+  type DealControlCommunicationsToday,
   type DealControlDeal,
   type DealControlTask,
   type DealControlTaskOutcome,
@@ -34,6 +37,7 @@ import {
   type ManagerQuickHelpContent,
   type ManagerQuickHelpEntry,
   type ManagerQuickHelpJob,
+  type ManagerAssistantWorkspace,
   type ManagerSituationJob,
   type ManagerSituationState,
 } from './api'
@@ -1302,11 +1306,9 @@ function DealDetail(props: {
   const [quickHelpDraft, setQuickHelpDraft] = useState('')
   const [quickHelpError, setQuickHelpError] = useState('')
   const [quickHelpJob, setQuickHelpJob] = useState<ManagerQuickHelpJob | null>(null)
-  const [quickHelpAnswer, setQuickHelpAnswer] = useState<ManagerQuickHelpEntry | null>(null)
-  const [quickHelpHistory, setQuickHelpHistory] = useState<ManagerQuickHelpEntry[]>([])
-  const [quickHelpHistoryLoaded, setQuickHelpHistoryLoaded] = useState(false)
-  const [quickHelpHistoryLoading, setQuickHelpHistoryLoading] = useState(false)
-  const [quickHelpHistoryError, setQuickHelpHistoryError] = useState('')
+  const [assistantWorkspace, setAssistantWorkspace] = useState<ManagerAssistantWorkspace | null>(null)
+  const [assistantLoading, setAssistantLoading] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
   const detailView = props.view
@@ -1327,11 +1329,9 @@ function DealDetail(props: {
     setQuickHelpDraft(readDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId))
     setQuickHelpError('')
     setQuickHelpJob(null)
-    setQuickHelpAnswer(null)
-    setQuickHelpHistory([])
-    setQuickHelpHistoryLoaded(false)
-    setQuickHelpHistoryLoading(false)
-    setQuickHelpHistoryError('')
+    setAssistantWorkspace(null)
+    setAssistantLoading(false)
+    setAssistantOpen(false)
   }, [activeDealId, activeReportId])
 
   useEffect(() => {
@@ -1341,6 +1341,31 @@ function DealDetail(props: {
   useEffect(() => {
     writeDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId, quickHelpDraft)
   }, [activeDealId, quickHelpDraft])
+
+  const loadAssistantWorkspace = useCallback(async (open = false) => {
+    if (!activeDealId) return null
+    setAssistantLoading(true)
+    try {
+      const workspace = await fetchManagerAssistantWorkspace(activeDealId)
+      setAssistantWorkspace(workspace)
+      if (open) setAssistantOpen(true)
+      return workspace
+    } catch (reason) {
+      setQuickHelpError(reason instanceof Error ? reason.message : 'Не удалось загрузить помощника')
+      return null
+    } finally {
+      setAssistantLoading(false)
+    }
+  }, [activeDealId])
+
+  useEffect(() => {
+    if (detailView !== 'manager' || !props.deal || !managerSituationIsConfirmed(managerSituationOf(props.deal))) return
+    let cancelled = false
+    void fetchManagerAssistantWorkspace(activeDealId)
+      .then((workspace) => { if (!cancelled) setAssistantWorkspace(workspace) })
+      .catch(() => { /* the main situation card already explains why help is unavailable */ })
+    return () => { cancelled = true }
+  }, [activeDealId, activeReportId, detailView, props.deal])
 
   const situationJobId = situationJob?.job_id
   const situationJobStatus = situationJob?.status
@@ -1390,20 +1415,7 @@ function DealDetail(props: {
         if (terminalHandled) return
         if (next.status === 'done') {
           terminalHandled = true
-          if (next.entry) {
-            setQuickHelpAnswer(next.entry)
-          }
-          try {
-            const history = await fetchManagerQuickHelpHistory(activeDealId, 1)
-            if (!cancelled && history.entries[0]) {
-              setQuickHelpAnswer(history.entries[0])
-              setQuickHelpHistory((current) => current.length ? [history.entries[0], ...current.filter((item) => item.id !== history.entries[0].id)] : history.entries)
-            } else if (!cancelled && !next.entry) {
-              setQuickHelpError('Ответ готов, но его содержимое не удалось загрузить из истории.')
-            }
-          } catch (reason) {
-            if (!cancelled) setQuickHelpError(reason instanceof Error ? reason.message : 'Ответ готов, но история помощи недоступна')
-          }
+          if (!cancelled) await loadAssistantWorkspace(true)
         } else if (next.status === 'error') {
           terminalHandled = true
           setQuickHelpError(next.error || 'Не удалось получить помощь тренера')
@@ -1418,7 +1430,7 @@ function DealDetail(props: {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeDealId, detailView, quickHelpJobId, quickHelpJobStatus])
+  }, [activeDealId, detailView, loadAssistantWorkspace, quickHelpJobId, quickHelpJobStatus])
 
   async function confirmSituation() {
     if (!props.deal) return
@@ -1464,35 +1476,27 @@ function DealDetail(props: {
     }
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
     setQuickHelpError('')
-    setQuickHelpAnswer(null)
     try {
       const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true)
       setQuickHelpDraft('')
       setQuickHelpJob(started)
       if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
       if (started.status === 'done') {
-        if (started.entry) setQuickHelpAnswer(started.entry)
-        const history = await fetchManagerQuickHelpHistory(props.deal.deal_id, 1)
-        if (history.entries[0]) setQuickHelpAnswer(history.entries[0])
+        await loadAssistantWorkspace(true)
       }
     } catch (reason) {
       setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
     }
   }
 
-  async function loadQuickHelpHistory() {
-    if (!props.deal || quickHelpHistoryLoading) return
-    setQuickHelpHistoryLoading(true)
-    setQuickHelpHistoryError('')
+  async function completeAssistantCommunication(quickHelpId: number) {
+    if (!props.deal) return
+    setQuickHelpError('')
     try {
-      const history = await fetchManagerQuickHelpHistory(props.deal.deal_id, 20)
-      setQuickHelpHistory(history.entries)
-      setQuickHelpHistoryLoaded(true)
-      if (!quickHelpAnswer && history.entries[0]) setQuickHelpAnswer(history.entries[0])
+      await recordManagerCommunicationCompleted(props.deal.deal_id, quickHelpId)
+      await loadAssistantWorkspace(false)
     } catch (reason) {
-      setQuickHelpHistoryError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setQuickHelpHistoryLoading(false)
+      setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
     }
   }
 
@@ -1591,11 +1595,9 @@ function DealDetail(props: {
       quickHelpDraft={quickHelpDraft}
       quickHelpError={quickHelpError}
       quickHelpJob={quickHelpJob}
-      quickHelpAnswer={quickHelpAnswer}
-      quickHelpHistory={quickHelpHistory}
-      quickHelpHistoryLoaded={quickHelpHistoryLoaded}
-      quickHelpHistoryLoading={quickHelpHistoryLoading}
-      quickHelpHistoryError={quickHelpHistoryError}
+      assistantWorkspace={assistantWorkspace}
+      assistantLoading={assistantLoading}
+      assistantOpen={assistantOpen}
       showAnalysisMarkdown={showAnalysisMarkdown}
       analysisMarkdown={analysisMarkdown}
       analysisMarkdownError={analysisMarkdownError}
@@ -1607,7 +1609,9 @@ function DealDetail(props: {
       onRefineSituation={() => void refineSituation()}
       onQuickHelpDraft={setQuickHelpDraft}
       onQuickHelp={requestQuickHelp}
-      onLoadQuickHelpHistory={() => void loadQuickHelpHistory()}
+      onOpenAssistant={() => void loadAssistantWorkspace(true)}
+      onCloseAssistant={() => setAssistantOpen(false)}
+      onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
       onToggleMarkdown={() => void toggleAnalysisMarkdown()}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
@@ -1641,6 +1645,8 @@ function DealDetail(props: {
       onAdoptBitrixTask={props.onAdoptBitrixTask}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
     />
+
+    {props.view === 'rop' ? <DailyCommunicationWidget summary={deal.communications_today} /> : null}
 
     {hasAnalysis
       ? managerView
@@ -1695,11 +1701,9 @@ type ManagerDealScreenProps = {
   quickHelpDraft: string
   quickHelpError: string
   quickHelpJob: ManagerQuickHelpJob | null
-  quickHelpAnswer: ManagerQuickHelpEntry | null
-  quickHelpHistory: ManagerQuickHelpEntry[]
-  quickHelpHistoryLoaded: boolean
-  quickHelpHistoryLoading: boolean
-  quickHelpHistoryError: string
+  assistantWorkspace: ManagerAssistantWorkspace | null
+  assistantLoading: boolean
+  assistantOpen: boolean
   showAnalysisMarkdown: boolean
   analysisMarkdown: string | null
   analysisMarkdownError: string
@@ -1711,7 +1715,9 @@ type ManagerDealScreenProps = {
   onRefineSituation: () => void
   onQuickHelpDraft: (value: string) => void
   onQuickHelp: (question: string) => Promise<void>
-  onLoadQuickHelpHistory: () => void
+  onOpenAssistant: () => void
+  onCloseAssistant: () => void
+  onCompleteCommunication: (quickHelpId: number) => void
   onToggleMarkdown: () => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
@@ -1744,10 +1750,11 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         draft={props.quickHelpDraft}
         error={props.quickHelpError}
         job={props.quickHelpJob}
-        answer={props.quickHelpAnswer}
+        started={Boolean(props.assistantWorkspace?.started)}
+        loading={props.assistantLoading}
         onDraft={props.onQuickHelpDraft}
         onRequest={props.onQuickHelp}
-        onCopy={props.onCopy}
+        onOpen={props.onOpenAssistant}
         onTranscribe={props.onTranscribe}
       />
       <RopRecommendationsAccordion coaching={props.deal.coaching} onCopy={props.onCopy} />
@@ -1766,15 +1773,21 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         {props.analysisMarkdownError ? <small className="dc-manager-error">{props.analysisMarkdownError}</small> : null}
         {props.showAnalysisMarkdown && props.analysisMarkdown ? <pre>{props.analysisMarkdown}</pre> : null}
       </section>
-      <ManagerQuickHelpHistory
-        entries={props.quickHelpHistory}
-        loaded={props.quickHelpHistoryLoaded}
-        loading={props.quickHelpHistoryLoading}
-        error={props.quickHelpHistoryError}
-        onOpen={props.onLoadQuickHelpHistory}
-        onCopy={props.onCopy}
-      />
     </> : null}
+    {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
+      deal={props.deal}
+      workspace={props.assistantWorkspace}
+      draft={props.quickHelpDraft}
+      error={props.quickHelpError}
+      job={props.quickHelpJob}
+      onDraft={props.onQuickHelpDraft}
+      onRequest={props.onQuickHelp}
+      onClose={props.onCloseAssistant}
+      onEditSituation={() => { props.onCloseAssistant(); props.onOpenSituation() }}
+      onCopy={props.onCopy}
+      onTranscribe={props.onTranscribe}
+      onCompleteCommunication={props.onCompleteCommunication}
+    /> : null}
   </>
 }
 
@@ -1869,46 +1882,46 @@ function ManagerQuickHelp(props: {
   draft: string
   error: string
   job: ManagerQuickHelpJob | null
-  answer: ManagerQuickHelpEntry | null
+  started: boolean
+  loading: boolean
   onDraft: (value: string) => void
   onRequest: (question: string) => Promise<void>
-  onCopy: (text: string, label: string) => Promise<void>
+  onOpen: () => void
   onTranscribe: (audio: Blob) => Promise<string>
 }) {
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   return <section className="dc-manager-quick-help">
-    <div className="dc-section-head"><div><h3>Быстрая ИИ помощь менеджеру</h3><p>Опиши, что происходит прямо сейчас, что уже пробовал и где застрял. Помощник предложит следующий шаг и готовый текст клиенту.</p></div><span>✦ Тренер</span></div>
-    <div className="dc-manager-voice-field dc-manager-quick-help-field">
-      <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Например: я уже третий раз звоню, клиент не берёт трубку — что изменить?" aria-label="Вопрос личному тренеру" />
-      <ManagerVoiceInput dealId={props.dealId} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
-    </div>
-    <div className="dc-manager-quick-help-actions"><small>{props.draft.length}/4000</small><button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void props.onRequest(props.draft)}>{busy ? <><span className="dc-spinner" />Тренер разбирает…</> : 'Получить помощь'}</button></div>
+    <div className="dc-section-head"><div><h3>{props.started ? 'Помощник менеджера' : 'Быстрая ИИ помощь менеджеру'}</h3><p>{props.started ? 'Диалог по сделке уже начат' : 'Помощник уже видит контекст выбранной сделки. Опишите ситуацию или задайте вопрос.'}</p></div><span>AI</span></div>
+    {props.started ? <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading} onClick={props.onOpen}>{props.loading ? <><span className="dc-spinner" />Открываем…</> : 'Открыть помощника'}</button> : <>
+      <div className="dc-manager-voice-field dc-manager-quick-help-field">
+        <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Опишите ситуацию или задайте вопрос..." aria-label="Вопрос помощнику менеджера" />
+        <ManagerVoiceInput dealId={props.dealId} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+      </div>
+      <div className="dc-manager-quick-help-actions"><small>{props.draft.length}/4000</small><button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void props.onRequest(props.draft)}>{busy ? <><span className="dc-spinner" />Обрабатываем…</> : 'Отправить'}</button></div>
+    </>}
     {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
     {props.job ? <ManagerJobProgress job={props.job} label="Подготовка ответа тренера" /> : null}
-    {props.answer ? <ManagerQuickHelpAnswer entry={props.answer} onCopy={props.onCopy} /> : null}
   </section>
 }
 
-function ManagerQuickHelpAnswer({ entry, onCopy }: {
+function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }: {
   entry: ManagerQuickHelpEntry
   onCopy: (text: string, label: string) => Promise<void>
+  onEdit: () => void
+  onComplete: () => void
+  onBitrix: () => void
 }) {
   const content: ManagerQuickHelpContent = entry.content
   return <article className="dc-manager-answer">
-    <div className="dc-manager-answer-heading"><div><span>Ответ тренера</span><small>{dateTime(entry.created_at)}</small></div><small>На вопрос: {entry.question}</small></div>
-    <div className="dc-manager-answer-grid">
-      <section><h4>Краткое понимание</h4><p>{content.problem_summary || 'Понимание ситуации не сформировано.'}</p></section>
-      <section className="diagnosis"><h4>Что сейчас мешает</h4><p>{content.diagnosis || 'Точное препятствие не выделено.'}</p></section>
-      <section className="next-action"><h4>Что сделать сейчас</h4><p>{content.recommended_action || 'Ближайшее действие не сформировано.'}</p>{content.action_steps.length ? <ol>{content.action_steps.slice(0, 4).map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol> : null}</section>
+    <div className="dc-manager-answer-summary">
+      <span>✓</span><div><h4>Как я понял ситуацию</h4><p>{content.problem_summary || 'Понимание ситуации не сформировано.'}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
     </div>
-    <div className="dc-manager-answer-columns">
+    <div className="dc-manager-answer-modules">
+      <section className="dc-manager-answer-action"><h4>Что делать сейчас</h4><p>{content.recommended_action || 'Ближайшее действие не сформировано.'}</p>{content.action_steps.length ? <ol>{content.action_steps.slice(0, 4).map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol> : null}</section>
       <section className="dc-manager-answer-copy"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!content.client_message} onClick={() => void onCopy(content.client_message, 'Сообщение клиенту')}>Скопировать</button></div><pre>{content.client_message || 'Сообщение пока не сформировано.'}</pre></section>
-      <section className="dc-manager-answer-copy"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!content.call_script} onClick={() => void onCopy(content.call_script, 'Речевой модуль')}>Скопировать</button></div><pre>{content.call_script || 'Речевой модуль пока не сформирован.'}</pre></section>
+      <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль для звонка</h4><button className="dc-button" disabled={!content.call_script} onClick={() => void onCopy(content.call_script, 'Речевой модуль')}>Скопировать</button></div><pre>{content.call_script || 'Речевой модуль пока не сформирован.'}</pre></section>
     </div>
-    <div className="dc-manager-answer-columns">
-      <ManagerAnswerList title="Что выяснить" items={content.facts_to_clarify.slice(0, 4)} empty="Дополнительные факты не выделены." />
-      <ManagerAnswerList title="CRM checklist" items={content.crm_checklist.slice(0, 4)} empty="Что зафиксировать в CRM не указано." />
-    </div>
+    <div className="dc-manager-answer-actions"><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div>
   </article>
 }
 
@@ -1916,27 +1929,107 @@ function ManagerAnswerList({ title, items, empty }: { title: string; items: stri
   return <section className="dc-manager-answer-list"><h4>{title}</h4><ul>{items.length ? items.map((item) => <li key={item}>{item}</li>) : <li className="muted">{empty}</li>}</ul></section>
 }
 
-function ManagerQuickHelpHistory({ entries, loaded, loading, error, onOpen, onCopy }: {
-  entries: ManagerQuickHelpEntry[]
-  loaded: boolean
-  loading: boolean
+function ManagerAssistantModal(props: {
+  deal: DealControlDeal
+  workspace: ManagerAssistantWorkspace
+  draft: string
   error: string
-  onOpen: () => void
+  job: ManagerQuickHelpJob | null
+  onDraft: (value: string) => void
+  onRequest: (question: string) => Promise<void>
+  onClose: () => void
+  onEditSituation: () => void
   onCopy: (text: string, label: string) => Promise<void>
+  onTranscribe: (audio: Blob) => Promise<string>
+  onCompleteCommunication: (quickHelpId: number) => void
 }) {
-  const sorted = [...entries].sort((first, second) => second.id - first.id)
-  return <details className="dc-manager-history" onToggle={(event) => { if (event.currentTarget.open && !loaded) onOpen() }}>
-    <summary><span>История быстрой помощи</span><small>{loaded ? `${entries.length} запросов` : 'Загрузить по запросу'}</small></summary>
-    {loading ? <p className="dc-manager-history-state"><span className="dc-spinner" />Загружаем историю…</p> : null}
-    {error ? <p className="dc-manager-error">{error}</p> : null}
-    {!loading && !error && loaded && !sorted.length ? <p className="dc-manager-history-state">Менеджер еще не запрашивал быструю помощь по этой сделке.</p> : null}
-    {sorted.length ? <ol>{sorted.map((entry) => <li key={entry.id}>
-      <details className="dc-manager-history-entry">
-        <summary><span><strong>{dateTime(entry.created_at)}</strong>{entry.question}</span><small>Показать ответ</small></summary>
-        <ManagerQuickHelpAnswer entry={entry} onCopy={onCopy} />
-      </details>
-    </li>)}</ol> : null}
-  </details>
+  const [view, setView] = useState<'answer' | 'history' | 'context'>('answer')
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const entries = [...props.workspace.entries].sort((first, second) => first.id - second.id)
+  const task = primaryBitrixTaskOf(props.deal)
+  const onClose = props.onClose
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
+
+  async function send() {
+    if (busy || !props.draft.trim()) return
+    setView('answer')
+    await props.onRequest(props.draft)
+  }
+
+  function bitrixComment(entry: ManagerQuickHelpEntry) {
+    const checklist = entry.content.crm_checklist.length
+      ? `\nЧто зафиксировать:\n${entry.content.crm_checklist.map((item) => `• ${item}`).join('\n')}`
+      : ''
+    return `Запрос менеджера: ${entry.question}\nРекомендованное действие: ${entry.content.recommended_action}${checklist}`
+  }
+
+  async function prepareBitrixComment(entry: ManagerQuickHelpEntry) {
+    await props.onCopy(bitrixComment(entry), 'Комментарий для Bitrix24')
+    window.open(bitrixDealUrl(props.deal.deal_id), '_blank', 'noopener,noreferrer')
+  }
+
+  function complete(entry: ManagerQuickHelpEntry) {
+    props.onCompleteCommunication(entry.id)
+    props.onDraft('')
+    window.setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  return createPortal(<div className="dc-manager-assistant-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
+    <section className="dc-manager-assistant-modal" role="dialog" aria-modal="true" aria-labelledby="manager-assistant-title">
+      <aside className="dc-manager-assistant-sidebar">
+        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Помощник менеджера</strong><small>Работа по текущей сделке</small></div></div>
+        <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span></div>
+        <nav>
+          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Ответ ИИ</button>
+          <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
+          <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
+        </nav>
+        <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
+      </aside>
+      <main className="dc-manager-assistant-main">
+        <header><div><h2 id="manager-assistant-title">Быстрая ИИ помощь менеджеру</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
+        <div className="dc-manager-assistant-content">
+          {view === 'answer' ? <section className="dc-manager-assistant-thread">
+            {entries.map((entry) => <div className="dc-manager-assistant-turn" key={entry.id}>
+              <div className="dc-manager-assistant-user-message"><small>Ваш запрос</small><p>{entry.question}</p></div>
+              <ManagerQuickHelpAnswer
+                entry={entry}
+                onCopy={props.onCopy}
+                onEdit={props.onEditSituation}
+                onComplete={() => complete(entry)}
+                onBitrix={() => void prepareBitrixComment(entry)}
+              />
+            </div>)}
+            {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Помощник готовит ответ'}</small></div> : null}
+          </section> : null}
+          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
+          {view === 'context' ? <section className="dc-manager-assistant-context-grid">
+            <div><small>Этап</small><strong>{props.workspace.context.stage || 'Не указан'}</strong></div>
+            <div><small>Текущая задача</small><strong>{props.workspace.context.current_task || 'Нет открытой задачи'}</strong></div>
+            <div><small>Последняя коммуникация</small><strong>{props.workspace.context.last_communication ? `${dateTime(props.workspace.context.last_communication.occurred_at)} · ${props.workspace.context.last_communication.text}` : 'Нет доступных данных'}</strong></div>
+            <div><small>Главный риск</small><strong>{props.workspace.context.main_risk || 'Не выделен'}</strong></div>
+          </section> : null}
+        </div>
+        <footer>
+          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+          <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Напишите, что произошло после коммуникации или что ещё нужно сделать..." aria-label="Продолжение диалога с помощником" />
+          <button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void send()}>{busy ? <span className="dc-spinner" /> : 'Отправить'}</button>
+          {props.error ? <small className="dc-manager-error">{props.error}</small> : null}
+        </footer>
+      </main>
+    </section>
+  </div>, document.body)
 }
 
 function RopRecommendationsAccordion({ coaching, onCopy }: {
@@ -2156,6 +2249,59 @@ function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }
     <p>{isError ? progress?.error || job.error || 'Проверьте сообщение об ошибке и повторите запуск.' : <>{counter ? <strong>{counter}. </strong> : null}{analysisStageDetail(job, dealId)}</>}</p>
     {!isDone && !isError && progress?.updated_at ? <small>Последнее обновление: {dateTime(progress.updated_at)}</small> : null}
     {stage === 'skipped' ? <small>Платный полный вызов не потребовался: значимых новых клиентских данных не обнаружено.</small> : null}
+  </section>
+}
+
+function communicationDuration(seconds: number) {
+  const safe = Math.max(0, Math.round(seconds || 0))
+  const minutes = Math.floor(safe / 60)
+  const remainder = safe % 60
+  if (!minutes) return `${remainder} сек`
+  return remainder ? `${minutes} мин ${remainder} сек` : `${minutes} мин`
+}
+
+function countLabel(value: number, one: string, few: string, many: string) {
+  const normalized = Math.abs(Math.trunc(value)) % 100
+  if (normalized >= 11 && normalized <= 14) return many
+  const last = normalized % 10
+  if (last === 1) return one
+  if (last >= 2 && last <= 4) return few
+  return many
+}
+
+function DailyCommunicationWidget({ summary }: { summary?: DealControlCommunicationsToday | null }) {
+  const [open, setOpen] = useState(false)
+  const target = Math.max(1, summary?.target || 3)
+  const completed = Math.max(0, summary?.completed || 0)
+  const available = Boolean(summary?.available)
+  const done = available && completed >= target
+  const progress = available ? Math.max(0, Math.min(100, summary?.progress_percent || 0)) : 0
+  const items = summary?.items || []
+  return <section className={`dc-communication-widget ${done ? 'done' : available ? 'partial' : 'unavailable'}`}>
+    <div className="dc-communication-head">
+      <div className="dc-communication-title"><span>{done ? '✓' : available ? '!' : '—'}</span><h3>Коммуникации по задаче сегодня</h3></div>
+      <div className="dc-communication-score"><small>{done ? 'План выполнен' : available ? 'В работе' : 'Нет данных'}</small><strong>{completed}/{target}</strong></div>
+    </div>
+    <div className="dc-communication-progress"><div><span style={{ width: `${progress}%` }} /></div><b>{progress}%</b></div>
+    <div className="dc-communication-stats">
+      <span>☎ {summary?.calls || 0} {countLabel(summary?.calls || 0, 'звонок', 'звонка', 'звонков')}</span>
+      <span>✉ {summary?.messages || 0} {countLabel(summary?.messages || 0, 'сообщение', 'сообщения', 'сообщений')}</span>
+      <span>◴ {communicationDuration(summary?.duration_seconds || 0)}</span>
+      <button type="button" disabled={!items.length} aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть' : 'Детали'} <i>{open ? '⌃' : '⌄'}</i></button>
+    </div>
+    {!available ? <p className="dc-communication-note">Обновите Bitrix, чтобы получить активности за текущий московский день.</p> : null}
+    {open && items.length ? <div className="dc-communication-details">
+      {items.map((item) => {
+        const call = item.channel === 'call'
+        const time = formatMoscowDateTime(item.occurred_at, { hour: '2-digit', minute: '2-digit' }) || '—'
+        const boundary = item.contact_class === 'confirmed_contact' ? 'контакт подтверждён' : 'результат клиента не подтверждён'
+        return <article key={item.event_id}>
+          <span>{call ? '☎' : '✉'}</span>
+          <div><strong>{item.subject || (call ? 'Звонок' : 'Сообщение')}</strong><small>{time} · {boundary}</small></div>
+          <b>{call ? communicationDuration(item.duration_seconds || 0) : 'текст'}</b>
+        </article>
+      })}
+    </div> : null}
   </section>
 }
 

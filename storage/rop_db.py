@@ -353,6 +353,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 expected_payment_period TEXT,
                 next_control_at TEXT,
                 bitrix_tasks_json TEXT NOT NULL DEFAULT '[]',
+                communications_today_json TEXT NOT NULL DEFAULT '{}',
                 last_crm_sync_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -394,6 +395,25 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_deal_manager_quick_help_history
                 ON deal_manager_quick_help(deal_id, manager_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS deal_manager_assistant_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK(event_type IN ('communication_completed')),
+                quick_help_id INTEGER,
+                payload_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(quick_help_id) REFERENCES deal_manager_quick_help(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_manager_assistant_events_history
+                ON deal_manager_assistant_events(deal_id, manager_id, id DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_manager_assistant_events_unique
+                ON deal_manager_assistant_events(deal_id, manager_id, event_type, quick_help_id)
+                WHERE quick_help_id IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS deal_control_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -534,6 +554,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "lead_workflow_state", "manager_message_options_json", "TEXT")
         _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
         _ensure_column(conn, "deal_control_deals", "bitrix_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "deal_control_deals", "communications_today_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
@@ -1365,6 +1386,114 @@ def list_deal_manager_quick_help(
         for row in rows
         if (value := _row_to_deal_manager_quick_help(row)) is not None
     ]
+
+
+def record_deal_manager_assistant_event(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    event_type: str,
+    quick_help_id: int | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one manager-assistant action without changing CRM task/result state."""
+    normalized_type = str(event_type or "").strip()
+    if normalized_type != "communication_completed":
+        raise ValueError("Неизвестное событие помощника менеджера")
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Данные события должны быть JSON-объектом")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        deal = conn.execute(
+            "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        manager_id = str(deal["manager_id"] or "").strip()
+        if not manager_id:
+            raise ValueError("У сделки не указан локальный ответственный менеджер")
+        if quick_help_id is not None:
+            quick_help = conn.execute(
+                """
+                SELECT id FROM deal_manager_quick_help
+                WHERE id = ? AND deal_id = ? AND manager_id = ?
+                """,
+                (int(quick_help_id), str(deal_id), manager_id),
+            ).fetchone()
+            if quick_help is None:
+                raise ValueError("Ответ помощника для этой сделки не найден")
+        conn.execute(
+            """
+            INSERT INTO deal_manager_assistant_events (
+                deal_id, manager_id, event_type, quick_help_id, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id, manager_id, event_type, quick_help_id)
+            WHERE quick_help_id IS NOT NULL DO NOTHING
+            """,
+            (
+                str(deal_id),
+                manager_id,
+                normalized_type,
+                int(quick_help_id) if quick_help_id is not None else None,
+                dumps_json(payload) if payload is not None else None,
+                utcish_now(),
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM deal_manager_assistant_events
+            WHERE deal_id = ? AND manager_id = ? AND event_type = ?
+              AND ((quick_help_id = ?) OR (quick_help_id IS NULL AND ? IS NULL))
+            ORDER BY id DESC LIMIT 1
+            """,
+            (
+                str(deal_id), manager_id, normalized_type,
+                int(quick_help_id) if quick_help_id is not None else None,
+                int(quick_help_id) if quick_help_id is not None else None,
+            ),
+        ).fetchone()
+    assert row is not None
+    result = dict(row)
+    result["payload"] = loads_json(result.pop("payload_json", None), None)
+    return result
+
+
+def list_deal_manager_assistant_events(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return local assistant actions for the deal's current manager."""
+    if not 1 <= int(limit) <= 200:
+        raise ValueError("limit должен быть от 1 до 200")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        deal = conn.execute(
+            "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        manager_id = str(deal["manager_id"] or "").strip()
+        if not manager_id:
+            raise ValueError("У сделки не указан локальный ответственный менеджер")
+        rows = conn.execute(
+            """
+            SELECT * FROM deal_manager_assistant_events
+            WHERE deal_id = ? AND manager_id = ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (str(deal_id), manager_id, int(limit)),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = loads_json(item.pop("payload_json", None), None)
+        result.append(item)
+    return result
 
 
 def get_ui_report_by_share_token(db_path: str | Path, share_token: str) -> dict[str, Any] | None:
@@ -2771,6 +2900,8 @@ def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
     value["bitrix_tasks"] = _normalize_deal_control_bitrix_tasks(
         loads_json(value.pop("bitrix_tasks_json", None), [])
     )
+    communications_today = loads_json(value.pop("communications_today_json", None), {})
+    value["communications_today"] = communications_today if isinstance(communications_today, dict) else {}
     return value
 
 
@@ -2877,6 +3008,26 @@ def save_deal_control_bitrix_tasks(
         conn.execute(
             "UPDATE deal_control_deals SET bitrix_tasks_json = ?, updated_at = ? WHERE deal_id = ?",
             (dumps_json(tasks), utcish_now(), str(deal_id)),
+        )
+        row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+    result = _row_to_deal_control_deal(row)
+    assert result is not None
+    return result
+
+
+def save_deal_control_communications_today(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        conn.execute(
+            "UPDATE deal_control_deals SET communications_today_json = ?, updated_at = ? WHERE deal_id = ?",
+            (dumps_json(summary), utcish_now(), str(deal_id)),
         )
         row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
     result = _row_to_deal_control_deal(row)

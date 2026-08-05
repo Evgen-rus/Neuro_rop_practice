@@ -6,7 +6,9 @@ from pathlib import Path
 
 from storage.rop_db import (
     connect,
+    list_deal_manager_assistant_events,
     list_deal_manager_quick_help,
+    record_deal_manager_assistant_event,
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
     save_ui_report,
@@ -110,6 +112,37 @@ class DealManagerQuickHelpStorageTests(unittest.TestCase):
                     answer_json={"recommended_action": "Проверить контекст"},
                 )
             self.assertNotEqual(report_id, next_report_id)
+
+    def test_assistant_communication_event_is_local_idempotent_and_manager_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            report_id, review_id = _seed_deal(db_path)
+            answer = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="Что делать после звонка?",
+                answer_json={"recommended_action": "Зафиксировать результат"},
+            )
+            first = record_deal_manager_assistant_event(
+                db_path,
+                deal_id="101",
+                event_type="communication_completed",
+                quick_help_id=int(answer["id"]),
+            )
+            repeated = record_deal_manager_assistant_event(
+                db_path,
+                deal_id="101",
+                event_type="communication_completed",
+                quick_help_id=int(answer["id"]),
+            )
+
+            self.assertEqual(first["id"], repeated["id"])
+            self.assertEqual(len(list_deal_manager_assistant_events(db_path, deal_id="101")), 1)
+            with connect(db_path) as conn:
+                conn.execute("UPDATE deal_control_deals SET manager_id = '77' WHERE deal_id = '101'")
+            self.assertEqual(list_deal_manager_assistant_events(db_path, deal_id="101"), [])
 
 
 if __name__ == "__main__":

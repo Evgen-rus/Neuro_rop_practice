@@ -170,6 +170,81 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 db_path=Path("state.sqlite"), deal_id="101", limit=101
             )
 
+    def test_assistant_workspace_combines_help_crm_history_and_context(self) -> None:
+        entry = {
+            "id": 31,
+            "deal_id": "101",
+            "question": "Что делать после отправки КП?",
+            "content": ANSWER,
+            "created_at": "2026-08-05T11:20:00+03:00",
+        }
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "list_deal_manager_quick_help":
+                return [entry]
+            if name == "list_deal_manager_assistant_events":
+                return [{
+                    "id": 7,
+                    "event_type": "communication_completed",
+                    "created_at": "2026-08-05T11:40:00+03:00",
+                }]
+            raise AssertionError(name)
+
+        communications = [{
+            "event_id": "crm_activity:500",
+            "occurred_at": "2026-08-04T16:10:00+03:00",
+            "channel": "whatsapp",
+            "direction": "outgoing",
+            "source_label": "CRM/WhatsApp",
+            "subject": "КП отправлено",
+            "preview": "КП отправлено клиенту",
+            "contact_class": "attempt",
+        }]
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch.object(quick_help, "_load_local_communications", return_value=communications):
+            result = quick_help.get_manager_assistant_workspace(
+                db_path=Path("state.sqlite"), deal_id="101"
+            )
+
+        self.assertTrue(result["started"])
+        self.assertEqual(result["entries"][0]["id"], 31)
+        self.assertEqual(result["context"]["stage"], "КП")
+        self.assertEqual(result["context"]["current_task"], "Позвонить клиенту")
+        self.assertEqual(result["context"]["main_risk"], "Нет даты решения")
+        self.assertEqual(result["context"]["last_communication"]["occurred_at"], "2026-08-04T16:10:00+03:00")
+        self.assertEqual(
+            [item["kind"] for item in result["timeline"]],
+            ["communication_completed", "assistant_request", "communication"],
+        )
+
+    def test_communication_completed_uses_confirmed_deal_context(self) -> None:
+        calls = []
+
+        def storage_call(name, db_path, **kwargs):
+            calls.append((name, kwargs))
+            return {"id": 8, **kwargs}
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT) as load, \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call):
+            result = quick_help.record_manager_communication_completed(
+                db_path=Path("state.sqlite"), deal_id="101", quick_help_id=31
+            )
+
+        load.assert_called_once_with(Path("state.sqlite"), "101", require_confirmed_situation=True)
+        self.assertEqual(result["event_type"], "communication_completed")
+        self.assertEqual(calls[0][1]["quick_help_id"], 31)
+
+    def test_assistant_workspace_routes_are_present(self) -> None:
+        from api.app import app
+
+        methods = {route.path: route.methods for route in app.routes}
+        self.assertEqual(methods["/api/deal-control/deals/{deal_id}/assistant-workspace"], {"GET"})
+        self.assertEqual(
+            methods["/api/deal-control/deals/{deal_id}/assistant/communication-completed"],
+            {"POST"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

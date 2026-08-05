@@ -512,6 +512,28 @@ export type DealControlBitrixTask = {
   provider_id: string
 }
 
+export type DealControlCommunicationItem = {
+  event_id: string
+  channel: 'call' | 'email' | 'message' | string
+  direction: 'incoming' | 'outgoing' | 'unknown' | string
+  occurred_at: string
+  subject?: string
+  duration_seconds?: number | null
+  contact_class?: string
+}
+
+export type DealControlCommunicationsToday = {
+  date: string
+  available: boolean
+  target: number
+  completed: number
+  progress_percent: number
+  calls: number
+  messages: number
+  duration_seconds: number
+  items: DealControlCommunicationItem[]
+}
+
 export type DealControlDeal = {
   deal_id: string
   source: 'initial' | 'pipeline'
@@ -529,6 +551,7 @@ export type DealControlDeal = {
   expected_payment_period?: string | null
   next_control_at?: string | null
   bitrix_tasks: DealControlBitrixTask[]
+  communications_today: DealControlCommunicationsToday
   primary_bitrix_task?: DealControlBitrixTask | null
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
@@ -639,6 +662,26 @@ export type ManagerQuickHelpHistory = {
   entries: ManagerQuickHelpEntry[]
   has_more?: boolean
   next_before_id?: number | null
+}
+
+export type ManagerAssistantTimelineEntry = {
+  id: string
+  kind: 'assistant_request' | 'communication' | 'communication_completed' | string
+  occurred_at?: string | null
+  text: string
+  contact_class?: string | null
+}
+
+export type ManagerAssistantWorkspace = {
+  started: boolean
+  entries: ManagerQuickHelpEntry[]
+  timeline: ManagerAssistantTimelineEntry[]
+  context: {
+    stage: string
+    current_task: string
+    last_communication?: { occurred_at?: string | null; text: string } | null
+    main_risk: string
+  }
 }
 
 type ManagerSituationResponse = {
@@ -827,6 +870,19 @@ export async function transcribeManagerVoice(
     method: 'POST',
     body,
   })
+}
+
+export function fetchManagerAssistantWorkspace(dealId: string) {
+  return api<ManagerAssistantWorkspace>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/assistant-workspace`,
+  )
+}
+
+export function recordManagerCommunicationCompleted(dealId: string, quickHelpId: number) {
+  return api<{ ok: boolean }>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/assistant/communication-completed`,
+    { method: 'POST', body: JSON.stringify({ quick_help_id: quickHelpId }) },
+  )
 }
 
 export function syncDealControl() {

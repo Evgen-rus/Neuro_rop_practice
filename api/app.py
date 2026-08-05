@@ -52,8 +52,10 @@ from api.deal_control import review_task_crm_fact as review_deal_control_task_cr
 from api.deal_control import task_history as deal_control_task_history
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
 from api.deal_manager_quick_help import (
+    get_manager_assistant_workspace,
     get_quick_help_job,
     list_quick_help_history,
+    record_manager_communication_completed,
     start_quick_help_job,
 )
 from api.deal_manager_situation import (
@@ -229,6 +231,10 @@ class DealManagerSituationRefineRequest(BaseModel):
 class DealManagerQuickHelpRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     confirm_paid: bool = False
+
+
+class DealManagerCommunicationCompletedRequest(BaseModel):
+    quick_help_id: int = Field(ge=1)
 
 
 class DealControlTaskOutcomeRequest(BaseModel):
@@ -558,6 +564,34 @@ def deal_manager_quick_help_history_get(
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/deals/{deal_id}/assistant-workspace")
+def deal_manager_assistant_workspace_get(deal_id: str) -> dict[str, Any]:
+    try:
+        return get_manager_assistant_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур помощника ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/assistant/communication-completed")
+def deal_manager_assistant_communication_completed(
+    deal_id: str,
+    body: DealManagerCommunicationCompletedRequest,
+) -> dict[str, Any]:
+    try:
+        event = record_manager_communication_completed(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            quick_help_id=body.quick_help_id,
+        )
+        return {"ok": True, "event": event}
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур помощника ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

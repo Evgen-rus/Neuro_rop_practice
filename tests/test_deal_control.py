@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from api.deal_control import _analysis_coaching, build_deal_control_dashboard, refresh_deal_control
+from api.deal_control import _analysis_coaching, _today_communications, build_deal_control_dashboard, refresh_deal_control
 from storage.rop_db import (
     confirm_deal_control_task_crm_match,
     connect,
@@ -79,6 +79,48 @@ def deal(deal_id: str, *, manager_id: str, closed: str = "N") -> dict:
 
 
 class DealControlTests(unittest.TestCase):
+    def test_today_communications_counts_completed_calls_and_messages_in_moscow_day(self):
+        activities = [
+            {
+                "ID": "701", "OWNER_ID": "101", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+                "SUBJECT": "Сообщение клиенту", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T09:14:00+03:00",
+            },
+            {
+                "ID": "702", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Первая попытка дозвона", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T10:22:00+03:00", "END_TIME": "2026-07-20T10:22:10+03:00",
+            },
+            {
+                "ID": "703", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Повторная попытка дозвона", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T12:47:00+03:00", "END_TIME": "2026-07-20T12:47:10+03:00",
+            },
+            {
+                "ID": "704", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Запланированный звонок", "DIRECTION": "2", "COMPLETED": "N",
+                "START_TIME": "2026-07-20T15:00:00+03:00",
+            },
+            {
+                "ID": "705", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Вчерашний звонок", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-19T12:00:00+03:00", "END_TIME": "2026-07-19T12:00:30+03:00",
+            },
+        ]
+
+        result = _today_communications(activities, datetime(2026, 7, 20, 14, tzinfo=MSK))
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["target"], 3)
+        self.assertEqual(result["completed"], 3)
+        self.assertEqual(result["progress_percent"], 100)
+        self.assertEqual(result["calls"], 2)
+        self.assertEqual(result["messages"], 1)
+        self.assertEqual(result["duration_seconds"], 20)
+        self.assertEqual([item["event_id"] for item in result["items"]], [
+            "crm_activity:701", "crm_activity:702", "crm_activity:703",
+        ])
+
     def test_analysis_coaching_projects_manager_message_call_variants_and_crm_checklist(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

@@ -9,6 +9,7 @@ from typing import Any
 
 from api.candidates import fetch_candidate_activities_bulk, load_pipeline_stage_names, make_client, parse_bitrix_dt
 from api.jobs import unwrap_analysis_payload
+from bitrix.customer_history import activity_type, build_normalized_communications
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -26,6 +27,7 @@ from storage.rop_db import (
     record_deal_control_task_event,
     save_deal_control_scope,
     save_deal_control_bitrix_tasks,
+    save_deal_control_communications_today,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -57,6 +59,7 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
     "crm_checklist",
     "script_channel",
 })
+DAILY_COMMUNICATION_TARGET = 3
 
 
 def _tokens(value: Any) -> set[str]:
@@ -141,6 +144,77 @@ def _open_bitrix_tasks(activities: list[dict[str, Any]], now: datetime) -> list[
             str(item.get("activity_id") or ""),
         ),
     )
+
+
+def _empty_daily_communications(now: datetime, *, available: bool) -> dict[str, Any]:
+    current = now if now.tzinfo else now.replace(tzinfo=MSK_TZ)
+    return {
+        "date": current.astimezone(MSK_TZ).date().isoformat(),
+        "available": available,
+        "target": DAILY_COMMUNICATION_TARGET,
+        "completed": 0,
+        "progress_percent": 0,
+        "calls": 0,
+        "messages": 0,
+        "duration_seconds": 0,
+        "items": [],
+    }
+
+
+def _today_communications(activities: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+    current = now if now.tzinfo else now.replace(tzinfo=MSK_TZ)
+    current_date = current.astimezone(MSK_TZ).date()
+    touchpoints: list[dict[str, Any]] = []
+    for activity in activities:
+        kind = activity_type(activity)
+        if kind not in {"call", "email", "message"} or not _is_completed(activity):
+            continue
+        touchpoints.append({
+            "when": activity.get("START_TIME") or activity.get("CREATED") or activity.get("END_TIME"),
+            "event_type": kind,
+            "entity_type": "deal",
+            "entity_id": str(activity.get("OWNER_ID") or ""),
+            "entity_key": f"deal:{activity.get('OWNER_ID') or ''}",
+            "id": str(activity.get("ID") or ""),
+            "subject": str(activity.get("SUBJECT") or ""),
+            "text": str(activity.get("DESCRIPTION") or ""),
+            "direction": activity.get("DIRECTION"),
+            "raw": activity,
+        })
+    events = build_normalized_communications({"client_touchpoints": touchpoints, "internal_context": []})
+    today_events: list[dict[str, Any]] = []
+    for event in events:
+        occurred = parse_bitrix_dt(event.get("occurred_at"))
+        if occurred is None:
+            continue
+        localized = (occurred if occurred.tzinfo else occurred.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
+        if localized.date() != current_date:
+            continue
+        today_events.append({
+            "event_id": str(event.get("event_id") or ""),
+            "channel": str(event.get("channel") or "unknown"),
+            "direction": str(event.get("direction") or "unknown"),
+            "occurred_at": localized.isoformat(timespec="seconds"),
+            "subject": str(event.get("subject") or ""),
+            "duration_seconds": event.get("duration_seconds"),
+            "contact_class": str(event.get("contact_class") or "attempt"),
+        })
+    today_events.sort(key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")))
+    calls = sum(1 for event in today_events if event["channel"] == "call")
+    messages = len(today_events) - calls
+    duration = round(sum(float(event.get("duration_seconds") or 0) for event in today_events))
+    completed = len(today_events)
+    return {
+        "date": current_date.isoformat(),
+        "available": True,
+        "target": DAILY_COMMUNICATION_TARGET,
+        "completed": completed,
+        "progress_percent": min(100, round(completed / DAILY_COMMUNICATION_TARGET * 100)),
+        "calls": calls,
+        "messages": messages,
+        "duration_seconds": duration,
+        "items": today_events,
+    }
 
 
 def _match_task_to_activity(task: dict[str, Any], activities: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -342,11 +416,21 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         deal_activities, activity_error = activities.get(("deal", deal_id), ([], "activity unavailable"))
         if activity_error:
             errors.append(f"Сделка #{deal_id}: {activity_error}")
+            save_deal_control_communications_today(
+                db_path,
+                deal_id=deal_id,
+                summary=_empty_daily_communications(current, available=False),
+            )
             continue
         save_deal_control_bitrix_tasks(
             db_path,
             deal_id=deal_id,
             tasks=_open_bitrix_tasks(deal_activities, current),
+        )
+        save_deal_control_communications_today(
+            db_path,
+            deal_id=deal_id,
+            summary=_today_communications(deal_activities, current),
         )
     for task in list_deal_control_tasks(db_path):
         task_activities, activity_error = activities.get(("deal", str(task["deal_id"])), ([], "activity unavailable"))
@@ -547,6 +631,11 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     missing = 0
     for deal in deals:
         deal = dict(deal)
+        communications_today = deal.get("communications_today")
+        current_date = current.astimezone(MSK_TZ).date().isoformat()
+        if not isinstance(communications_today, dict) or communications_today.get("date") != current_date:
+            communications_today = _empty_daily_communications(current, available=False)
+        deal["communications_today"] = communications_today
         deal_tasks = tasks_by_deal.get(str(deal["deal_id"]), [])
         deal["tasks"] = deal_tasks
         # Keep legacy local assignments in storage/output for a possible later
