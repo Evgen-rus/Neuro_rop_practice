@@ -23,7 +23,7 @@
 | Полный LLM-анализ и его рендеринг | `openai_api/llm/analyze_lead.py`, `openai_api/llm/analyze_deal.py` |
 | LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py` |
 | Change detection | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py` |
-| Контроль сделки, исходы задач и AI-подсказка менеджеру | `api/deal_control.py`, `api/deal_task_guidance.py`, `openai_api/llm/deal_task_guidance.py`, `storage/rop_db.py` |
+| Контроль сделки, исходы задач, дневные коммуникации и AI-подсказка менеджеру | `api/deal_control.py`, `api/deal_task_guidance.py`, `bitrix/customer_history.py`, `openai_api/llm/deal_task_guidance.py`, `storage/rop_db.py` |
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
 | Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
 | Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` |
@@ -42,6 +42,7 @@
 - Lead с подтверждённой конверсией переводится в deal-flow. Отсутствующий `CONTACT_ID` не доказывает отсутствие связанной сделки.
 - CRM-запись о звонке, `COMPLETED=Y` или внутренний комментарий сами по себе не доказывают содержательный контакт с клиентом. Для лида это требует подходящего transcript/contact evidence; попытки, подтверждённый контакт и внутреннюю информацию хранить раздельно.
 - В deal-control исполнение поручения, подтверждённый контакт, целевой результат и движение сделки — отдельные состояния. Найденная или закрытая CRM-активность подтверждает не больше исполнения/попытки, пока клиентский результат не зафиксирован отдельно.
+- Дневная проекция коммуникаций deal-control строится при read-only синхронизации только из завершённых CRM-активностей звонка, email или сообщения за текущий московский день и сохраняется в SQLite вместе с датой среза. Она показывает выполнение плана касаний (текущая цель — 3), но не превращает звонок или исходящее сообщение в подтверждённый ответ клиента; при неуспешном чтении Bitrix UI обязан показывать недоступность данных, а не нулевой подтверждённый результат.
 - Открытые задачи Bitrix (`CRM_TASKS_TASK`) проецируются в deal-control отдельно от локальных поручений РОПа. При первом и последующих обновлениях они доступны для контроля без CRM-записи и без автоматического объявления поручением РОПа; закрытые задачи и прочие CRM-активности не становятся текущей задачей.
 - История стадий отражает движение CRM, а задачи Bitrix, их описания и чаты — внутренний рабочий контекст. Они не доказывают слова клиента, содержательный контакт или согласование условий без отдельного клиентского evidence.
 - Дополнительные deal-источники Bitrix являются необязательными: недоступная история стадий, отсутствующие пользовательские поля, задачи или чаты не должны останавливать подготовку и анализ сделки.
@@ -56,7 +57,7 @@
 
 ### 1. UI, API и CLI
 
-`frontend/src/App.tsx` — корневой локальный интерфейс; `frontend/src/DealControl.tsx` — три связанных представления контроля сделок (дашборд, экран РОПа и задачи менеджера); `frontend/src/api.ts` — их HTTP-контракт. Представления используют один набор deal-control данных, read-only проекцию открытых задач Bitrix и локальных исходов, а не отдельные хранилища. При наличии готового анализа правая карточка может по запросу пользователя раскрыть сохранённый Markdown-отчёт через существующий report API; этот просмотр не создаёт новый LLM-вызов и не добавляет Markdown обратно во вход анализа. `api/app.py` валидирует запросы, читает/сохраняет локальное состояние и делегирует доменную работу специализированным модулям.
+`frontend/src/App.tsx` — корневой локальный интерфейс; `frontend/src/DealControl.tsx` — три связанных представления контроля сделок (дашборд, экран РОПа и задачи менеджера); `frontend/src/api.ts` — их HTTP-контракт. Представления используют один набор deal-control данных, read-only проекцию открытых задач Bitrix, дневную проекцию коммуникаций и локальные исходы, а не отдельные хранилища. Виджет дневных коммуникаций выводится в правой карточке экрана РОПа сразу под текущей задачей и раскрывает список метаданных активностей из того же deal-control ответа без body сообщения или описания активности. При наличии готового анализа правая карточка может по запросу пользователя раскрыть сохранённый Markdown-отчёт через существующий report API; этот просмотр не создаёт новый LLM-вызов и не добавляет Markdown обратно во вход анализа. `api/app.py` валидирует запросы, читает/сохраняет локальное состояние и делегирует доменную работу специализированным модулям.
 
 `api/jobs.py` не дублирует Bitrix, transcription или LLM-логику: он запускает `run_rop_assistant.py`, читает его progress events и материализует готовые результаты в `ui_reports`. Состояние активных jobs находится в памяти процесса. SQLite хранит снимки и результаты daily-summary, но перезапуск API не возобновляет subprocess автоматически.
 
@@ -84,7 +85,7 @@ Lead и deal preparation scripts получают raw context, подготав�
 
 ### 5. SQLite, кандидаты и daily summary
 
-`storage/rop_db.py` — единственный слой доступа к SQLite `reports/rop_assistant/rop_assistant.sqlite`. Он хранит change state, запуски и отчёты, решения и workflow лида, настройки/профили UI, candidate lifecycle, daily-summary, deal-control baselines/outcomes/reschedules/events и compact shadow runs/feedback. Исходы и переносы deal-control сохраняют роль автора; отменённые задачи выводятся отдельной метрикой. Миграции выполняются idempotently в `init_db()`; не добавляй обращения к таблицам мимо этого модуля.
+`storage/rop_db.py` — единственный слой доступа к SQLite `reports/rop_assistant/rop_assistant.sqlite`. Он хранит change state, запуски и отчёты, решения и workflow лида, настройки/профили UI, candidate lifecycle, daily-summary, deal-control baselines/outcomes/reschedules/events, read-only срез дневных коммуникаций и compact shadow runs/feedback. Срез коммуникаций хранится в `deal_control_deals.communications_today_json`, обновляется вместе с Bitrix-sync и считается актуальным только для записанной московской даты. Исходы и переносы deal-control сохраняют роль автора; отменённые задачи выводятся отдельной метрикой. Миграции выполняются idempotently в `init_db()`; не добавляй обращения к таблицам мимо этого модуля.
 
 `api/candidates.py` читает Bitrix и локальное состояние, ранжирует кандидатов и строит preview профиля без LLM. `daily_summary_runs` сохраняет snapshot профиля и scope; оплачиваемая обработка начинается только после явного подтверждения пользователя. Journey/candidate lifecycle учитывает переход лида в сделку, но решение по одной сущности не должно скрывать остальные кандидаты воронки.
 
@@ -118,7 +119,7 @@ Compact run доступен только для уже сохранённых f
 | Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
 | Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
-| Задача контроля сделки, её baseline/исходы/CRM-факты и AI-подсказка | `api/deal_control.py`, `api/deal_task_guidance.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `api/app.py`, frontend deal-control UI |
+| Задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации и AI-подсказка | `api/deal_control.py`, `api/deal_task_guidance.py`, `bitrix/customer_history.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx` |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
 | Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
 | Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |
