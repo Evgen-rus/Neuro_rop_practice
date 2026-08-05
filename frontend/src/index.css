@@ -5510,6 +5510,26 @@ ul.facts.bad li:before {
   backdrop-filter: blur(4px);
 }
 
+.dc-task-communication-progress {
+  display: flex;
+  width: 100%;
+  max-width: 72px;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.dc-task-communication-progress i {
+  display: block;
+  height: 5px;
+  flex: 1 1 0;
+  border-radius: 99px;
+  background: #dfe7ef;
+}
+
+.dc-task-communication-progress.partial i.filled { background: #ef9b19; }
+.dc-task-communication-progress.done i.filled { background: #1aa45c; }
+.dc-task-communication-progress.unavailable { opacity: .7; }
+
 .dc-manager-assistant-modal {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);

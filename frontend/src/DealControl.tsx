@@ -1209,7 +1209,7 @@ function TaskTable({ view, deals, selectedId, onSelect }: { view: DealControlVie
           <div><span className="dc-stage-pill">{deal.stage_name || 'Не указана'}</span>{view === 'rop' ? <small>♟ {deal.manager_name}</small> : null}</div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
           <div className="dc-task-deadline-cell"><time className="dc-task-deadline">{deadline ? <><strong>{deadline.date}</strong>{deadline.time ? <span>{deadline.time}</span> : null}</> : <span>Не назначен</span>}</time></div>
-          <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} />{bitrixTask?.completion_state === 'local' ? <small>В B24 ещё открыта</small> : bitrixTask?.completion_state === 'bitrix' ? <small>Подтверждено в B24</small> : null}</div>
+          <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} />{view === 'rop' ? <TaskCommunicationProgress summary={deal.communications_today} /> : null}{bitrixTask?.completion_state === 'local' ? <small>В B24 ещё открыта</small> : bitrixTask?.completion_state === 'bitrix' ? <small>Подтверждено в B24</small> : null}</div>
         </article>
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
@@ -1266,6 +1266,17 @@ function ControlSyncState({ task, bitrixTask, compact = false }: {
     <span className={task ? 'ok' : 'muted'}>{task ? '✓ Поручение РОПа: сохранено' : 'Поручение РОПа: не добавлено'}</span>
     <span className={bitrixTone}>{bitrixLabel}</span>
   </div>
+}
+
+function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunicationsToday | null }) {
+  const target = 3
+  const available = Boolean(summary?.available)
+  const completed = Math.max(0, Math.min(target, summary?.completed || 0))
+  const done = available && completed >= target
+  const label = available ? `Касания за сегодня: ${completed} из ${target}` : 'Касания за сегодня: данные недоступны'
+  return <span className={`dc-task-communication-progress ${done ? 'done' : available ? 'partial' : 'unavailable'}`} role="img" aria-label={label} title={label}>
+    {Array.from({ length: target }, (_, index) => <i className={index < completed ? 'filled' : ''} key={index} />)}
+  </span>
 }
 
 function DealDetail(props: {
