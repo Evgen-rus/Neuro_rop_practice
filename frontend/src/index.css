@@ -5237,7 +5237,6 @@ ul.facts.bad li:before {
 }
 
 /* Manager screen: confirmation-gated situation, personal trainer and lazy history. */
-.dc-manager-situation,
 .dc-manager-bitrix-task,
 .dc-manager-quick-help {
   margin-bottom: 14px;
@@ -5248,18 +5247,115 @@ ul.facts.bad li:before {
   box-shadow: 0 5px 16px rgba(34, 68, 110, .045);
 }
 
+.dc-manager-situation {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid #bfe0cb;
+  border-radius: 14px;
+  background: var(--dc-surface);
+  box-shadow: 0 9px 24px rgba(31, 54, 86, .08);
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
 .dc-manager-situation.pending {
-  border-color: #e8d3a8;
-  background: #fffaf0;
+  border-color: #cbd9ea;
 }
 
 .dc-manager-situation.confirmed {
-  border-color: #b9dfca;
-  background: #fbfffc;
+  border-color: #bfe0cb;
+}
+
+.dc-manager-situation-head {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #dcece2;
+  background: linear-gradient(90deg, #f3fbf6 0%, var(--dc-surface) 72%);
+}
+
+.dc-manager-situation.pending .dc-manager-situation-head {
+  border-color: #e1e9f2;
+  background: linear-gradient(90deg, #f7faff 0%, var(--dc-surface) 72%);
+}
+
+.dc-manager-situation-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #cce8d7;
+  border-radius: 10px;
+  color: var(--dc-green);
+  background: #e4f5eb;
+}
+
+.dc-manager-situation.pending .dc-manager-situation-icon {
+  border-color: #d4e2fa;
+  color: var(--dc-blue);
+  background: var(--dc-blue-weak);
+}
+
+.dc-manager-situation-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dc-manager-situation-heading {
+  min-width: 0;
+}
+
+.dc-manager-situation-heading h3 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--dc-text);
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-manager-situation-heading p {
+  margin: 3px 0 0;
+  color: var(--dc-muted);
+  font-size: 9.5px;
+  line-height: 1.3;
+}
+
+.dc-manager-situation-status {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #0f6f3f;
+  background: var(--dc-green-weak);
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dc-manager-situation.pending .dc-manager-situation-status {
+  color: var(--dc-blue);
+  background: var(--dc-blue-weak);
+}
+
+.dc-manager-situation-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dc-manager-situation-body {
+  padding: 10px 12px 9px;
 }
 
 .dc-manager-situation-copy,
-.dc-manager-situation-check,
 .dc-manager-bitrix-task p,
 .dc-manager-quick-help p {
   font-size: 13px;
@@ -5267,18 +5363,91 @@ ul.facts.bad li:before {
 }
 
 .dc-manager-situation-copy {
-  margin: 0 0 10px;
-  color: #243b5a;
+  margin: 0;
+  color: #465d79;
+  font-size: 10.5px;
+  line-height: 1.48;
   white-space: pre-wrap;
 }
 
-.dc-manager-situation-check {
-  margin: 0 0 11px;
-  padding: 9px 11px;
-  border-left: 3px solid #e2a63a;
-  border-radius: 0 9px 9px 0;
-  color: #5b4b2a;
-  background: #fffdf6;
+.dc-manager-situation-focus {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid #ecd79c;
+  border-radius: 10px;
+  background: #fff9eb;
+}
+
+.dc-manager-situation-focus-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  color: #9c6414;
+  background: #fff1c9;
+}
+
+.dc-manager-situation-focus-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dc-manager-situation-focus > div {
+  min-width: 0;
+}
+
+.dc-manager-situation-focus strong {
+  display: block;
+  color: #6c4f1e;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.dc-manager-situation-focus-text {
+  margin: 2px 0 0;
+  color: #715f42;
+  font-size: 9.5px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.dc-manager-situation-focus-text.collapsed {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.dc-manager-situation-focus-toggle {
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  color: #a06a18;
+  background: transparent;
+  cursor: pointer;
+  font-size: 8.8px;
+  font-weight: 900;
+}
+
+.dc-manager-situation-focus-toggle:hover {
+  color: #7d500f;
+}
+
+.dc-manager-situation-focus-toggle svg {
+  width: 10px;
+  height: 10px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  transition: transform .18s ease;
+}
+
+.dc-manager-situation-focus-toggle.open svg {
+  transform: rotate(180deg);
 }
 
 .dc-manager-situation-actions,
@@ -5290,7 +5459,26 @@ ul.facts.bad li:before {
   gap: 8px;
 }
 
-.dc-manager-situation-actions { margin-top: 10px; }
+.dc-manager-situation-actions {
+  padding: 8px 10px;
+  border-top: 1px solid var(--dc-line);
+  background: var(--dc-surface-2);
+}
+
+.dc-manager-situation-actions .dc-button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 900;
+}
+
+.dc-manager-situation.confirmed .dc-manager-situation-actions .dc-button.primary:disabled {
+  color: #fff;
+  background: var(--dc-green);
+  opacity: 1;
+}
+
 .dc-manager-quick-help-actions { justify-content: space-between; margin-top: 8px; }
 .dc-manager-quick-help-actions small,
 .dc-manager-field-footer small { color: var(--dc-muted); font-size: 10px; }
@@ -5970,6 +6158,21 @@ ul.facts.bad li:before {
 }
 
 @media (max-width: 480px) {
+  .dc-manager-situation-head {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .dc-manager-situation-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .dc-manager-situation-status {
+    grid-column: 1 / -1;
+    width: max-content;
+    margin-left: 42px;
+  }
+
   .dc-bitrix-task-top {
     grid-template-columns: 1fr;
     gap: 8px;
