@@ -298,6 +298,26 @@ function compactTaskText(value: string, maxLength = 120) {
   return `${clipped.slice(0, lastSpace > 70 ? lastSpace : maxLength).trim()}…`
 }
 
+function bitrixTaskDisplayTitle(deal: DealControlDeal, task: DealControlBitrixTask) {
+  const subject = task.subject.replace(/^CRM:\s*/i, '').replace(/\s+/g, ' ').trim()
+  const dealTitle = (deal.title || '').replace(/\s+/g, ' ').trim()
+  if (dealTitle && subject.slice(0, dealTitle.length).toLocaleLowerCase('ru') === dealTitle.toLocaleLowerCase('ru')) {
+    const remainder = subject.slice(dealTitle.length).replace(/^\s*\/\s*/, '').trim()
+    if (remainder) return compactTaskText(remainder, 140)
+  }
+  return compactTaskText(subject, 140)
+}
+
+function bitrixTaskDeadline(task: DealControlBitrixTask) {
+  if (!task.deadline) return { label: 'Без срока', value: '' }
+  const date = formatMoscowDateTime(task.deadline, { day: '2-digit', month: '2-digit' }) || ''
+  const time = formatMoscowDateTime(task.deadline, { hour: '2-digit', minute: '2-digit' }) || ''
+  if (task.time_bucket === 'today') return { label: 'Сегодня', value: time }
+  if (task.time_bucket === 'tomorrow') return { label: 'Завтра', value: time }
+  if (task.time_bucket === 'overdue') return { label: 'Просрочено', value: `${date}${time ? `, ${time}` : ''}` }
+  return { label: date || 'Срок', value: time }
+}
+
 function outcomeValidationMessage(
   contact: DealControlTaskOutcome['contact_status'],
   result: DealControlTaskOutcome['result_status'],
@@ -1873,18 +1893,10 @@ function ManagerBitrixTaskCard({ deal, onToggleCompletion }: {
   onToggleCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
 }) {
   const task = primaryBitrixTaskOf(deal)
+  if (task) return <BitrixTaskCard deal={deal} task={task} onToggleCompletion={onToggleCompletion} />
   return <section className={`dc-manager-bitrix-task ${task ? bitrixTaskTone(task) : 'missing'}`}>
     <div className="dc-section-head"><div><h3>Текущая задача Bitrix</h3><p>Это рабочая задача из CRM, она видна независимо от подтверждения ситуации.</p></div><span>Bitrix</span></div>
-    {task ? <>
-      <div className="dc-manager-bitrix-task-main"><span className="dc-manager-task-icon">✓</span><div><strong>{compactTaskText(task.subject).replace(/^CRM:\s*/i, '')}</strong>{task.description ? <p>{compactTaskText(task.description, 240)}</p> : null}</div></div>
-      <div className="dc-manager-bitrix-meta"><span><small>Срок</small><strong>{dateTime(task.deadline)}</strong></span><span><small>Статус</small><strong>{task.completion_state === 'bitrix' ? 'Выполнено в B24' : task.completion_state === 'local' ? 'Отмечено в приложении' : bitrixTaskStatus(task)}</strong></span></div>
-      <div className="dc-manager-bitrix-actions">
-        {task.completion_state === 'bitrix'
-          ? <button className="dc-button" disabled>Выполнено в B24</button>
-          : <button className="dc-button primary" onClick={() => void onToggleCompletion(deal, task)}>{task.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}</button>}
-        {bitrixTaskUrl(task) ? <a className="dc-button" href={bitrixTaskUrl(task) || undefined} target="_blank" rel="noreferrer">Открыть задачу в B24 ↗</a> : null}
-      </div>
-    </> : <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Следующий контролируемый шаг по сделке не назначен.</p><a className="dc-button" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>}
+    <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Следующий контролируемый шаг по сделке не назначен.</p><a className="dc-button" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>
   </section>
 }
 
@@ -2316,6 +2328,69 @@ function DailyCommunicationWidget({ summary }: { summary?: DealControlCommunicat
   </section>
 }
 
+function BitrixTaskCard({ deal, task, onToggleCompletion }: {
+  deal: DealControlDeal
+  task: DealControlBitrixTask
+  onToggleCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const description = task.description?.trim() || ''
+  const deadline = bitrixTaskDeadline(task)
+  const title = bitrixTaskDisplayTitle(deal, task)
+  const completed = task.completion_state !== 'open'
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [task.activity_id])
+
+  return <section className={`dc-bitrix-task-card ${completed ? 'done' : task.time_bucket}`} aria-label="Текущая задача Bitrix">
+    <header className="dc-bitrix-task-top">
+      <div className="dc-bitrix-task-mainline">
+        <span className="dc-bitrix-task-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="5" y="4" width="14" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M9 4.5V3.8C9 2.8 9.8 2 10.8 2h2.4C14.2 2 15 2.8 15 3.8v.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M8.5 10.8l2.1 2.1 4.7-4.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <div className="dc-bitrix-task-heading">
+          <h3 className="dc-bitrix-task-title"><span>Задача:</span> {title || 'Без названия'}</h3>
+          <p className="dc-bitrix-task-deal">{deal.title || `Сделка #${deal.deal_id}`}</p>
+        </div>
+      </div>
+      <div className="dc-bitrix-task-deadline">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+        <span>{deadline.label}</span>
+        {deadline.value ? <strong>{deadline.value}</strong> : null}
+      </div>
+    </header>
+
+    {description ? <div className="dc-bitrix-task-body">
+      <p className={`dc-bitrix-task-description ${expanded ? 'expanded' : 'collapsed'}`}>{description}</p>
+      <button className={`dc-bitrix-task-description-toggle ${expanded ? 'open' : ''}`} type="button" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? 'Скрыть' : 'Показать полностью'}
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+    </div> : null}
+
+    <footer className="dc-bitrix-task-actions">
+      {task.completion_state === 'bitrix'
+        ? <button className="dc-button primary" disabled>Выполнено в B24</button>
+        : <button className={`dc-button ${task.completion_state === 'local' ? '' : 'primary'}`} onClick={() => void onToggleCompletion(deal, task)}>
+            {task.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}
+          </button>}
+      {bitrixTaskUrl(task)
+        ? <a className="dc-button" href={bitrixTaskUrl(task) || undefined} target="_blank" rel="noreferrer">Открыть в Bitrix24 ↗</a>
+        : <button className="dc-button" disabled title="Bitrix не передал ID связанной задачи">Открыть в Bitrix24 ↗</button>}
+    </footer>
+  </section>
+}
+
 function CurrentTask(props: {
   view: DealControlView
   deal: DealControlDeal
@@ -2340,6 +2415,15 @@ function CurrentTask(props: {
     && props.guidanceJob
     && ['queued', 'running'].includes(props.guidanceJob.status),
   )
+  if (!task && bitrixTask) {
+    return <>
+      <BitrixTaskCard deal={props.deal} task={bitrixTask} onToggleCompletion={props.onToggleBitrixCompletion} />
+      {props.deal.bitrix_tasks.length > 1 ? <details className="dc-bitrix-task-list">
+        <summary>Другие задачи Bitrix: {props.deal.bitrix_tasks.length - 1}</summary>
+        <ul>{props.deal.bitrix_tasks.slice(1).map((item) => <li key={item.activity_id}><strong>{compactTaskText(item.subject)}</strong><span>{dateTime(item.deadline)}</span></li>)}</ul>
+      </details> : null}
+    </>
+  }
   return <section className={`dc-current-task ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'}`}>
     <div className="dc-section-head"><h3>{task ? 'Текущее поручение' : bitrixTask ? 'Текущая задача Bitrix' : 'Текущая задача'}</h3><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div>
     {task ? <>
@@ -2389,28 +2473,6 @@ function CurrentTask(props: {
         ? <TaskGuidanceProgress job={props.guidanceJob} />
         : null}
       <small className="dc-boundary-note">Выполнение поручения и результат по клиенту учитываются отдельно.</small>
-    </> : bitrixTask ? <>
-      <div className="dc-task-hero"><span>☎</span><div><h4>{compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '')}</h4>{bitrixTask.description ? <p>{compactTaskText(bitrixTask.description, 220)}</p> : null}</div></div>
-      <p className="dc-task-meta">Срок: {dateTime(bitrixTask.deadline)} · Этап: {props.deal.stage_name || 'не указан'}</p>
-      {bitrixTask.completion_state === 'local'
-        ? <p className="dc-bitrix-completion-note">Выполнено в приложении · В B24 ещё открыта</p>
-        : bitrixTask.completion_state === 'bitrix'
-          ? <p className="dc-bitrix-completion-note confirmed">Выполнение подтверждено в B24</p>
-          : null}
-      <div className="dc-task-actions">
-        {bitrixTask.completion_state === 'bitrix'
-          ? <button className="dc-button primary" disabled>Выполнено в B24</button>
-          : <button className={`dc-button ${bitrixTask.completion_state === 'local' ? '' : 'primary'}`} onClick={() => void props.onToggleBitrixCompletion(props.deal, bitrixTask)}>
-              {bitrixTask.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}
-            </button>}
-        {bitrixTaskUrl(bitrixTask)
-          ? <a className="dc-button dc-task-link" href={bitrixTaskUrl(bitrixTask) || undefined} target="_blank" rel="noreferrer">Открыть задачу в B24 ↗</a>
-          : <button className="dc-button" disabled title="Bitrix не передал ID связанной задачи">Открыть задачу в B24</button>}
-      </div>
-      {props.deal.bitrix_tasks.length > 1 ? <details className="dc-bitrix-task-list">
-        <summary>Другие задачи Bitrix: {props.deal.bitrix_tasks.length - 1}</summary>
-        <ul>{props.deal.bitrix_tasks.slice(1).map((item) => <li key={item.activity_id}><strong>{compactTaskText(item.subject)}</strong><span>{dateTime(item.deadline)}</span></li>)}</ul>
-      </details> : null}
     </> : <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Это критичное состояние: по сделке не назначен следующий контролируемый шаг.</p><a className="dc-button" href={bitrixDealUrl(props.deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>}
   </section>
 }

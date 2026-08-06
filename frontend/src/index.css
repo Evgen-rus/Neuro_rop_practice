@@ -5344,6 +5344,225 @@ ul.facts.bad li:before {
 .dc-manager-bitrix-meta strong { color: #294363; font-size: 12px; }
 .dc-manager-bitrix-actions .dc-button { min-height: 34px; padding: 7px 10px; font-size: 11px; text-decoration: none; }
 
+/* Shared compact Bitrix task card used by dashboard, ROP and manager views. */
+.dc-bitrix-task-card {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid #e4d3ad;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(34, 68, 110, .055);
+}
+
+.dc-bitrix-task-card.today {
+  border-color: #e4d3ad;
+}
+
+.dc-bitrix-task-card.overdue {
+  border-color: #e8b5b5;
+}
+
+.dc-bitrix-task-card.future {
+  border-color: #c5d7e9;
+}
+
+.dc-bitrix-task-card.done {
+  border-color: #bfe0cb;
+}
+
+.dc-bitrix-task-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px 10px;
+  border-bottom: 1px solid #eee2c8;
+  background: linear-gradient(90deg, #fffaf1 0%, #fff 68%);
+}
+
+.dc-bitrix-task-card.overdue .dc-bitrix-task-top {
+  border-color: #f0d8d8;
+  background: linear-gradient(90deg, #fff7f7 0%, #fff 68%);
+}
+
+.dc-bitrix-task-card.future .dc-bitrix-task-top {
+  border-color: #dce8f2;
+  background: linear-gradient(90deg, #f6faff 0%, #fff 68%);
+}
+
+.dc-bitrix-task-card.done .dc-bitrix-task-top {
+  border-color: #d9ecdf;
+  background: linear-gradient(90deg, #f4fbf7 0%, #fff 68%);
+}
+
+.dc-bitrix-task-mainline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.dc-bitrix-task-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 1px solid #d6e4fb;
+  border-radius: 10px;
+  color: var(--dc-blue);
+  background: #eaf2ff;
+}
+
+.dc-bitrix-task-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.dc-bitrix-task-heading {
+  min-width: 0;
+}
+
+.dc-bitrix-task-title {
+  overflow: hidden;
+  margin: 0;
+  color: #1a2e4a;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-bitrix-task-title span {
+  color: #6d7d92;
+  font-weight: 800;
+}
+
+.dc-bitrix-task-deal {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #7a899d;
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-bitrix-task-deadline {
+  min-height: 34px;
+  padding: 7px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #efc873;
+  border-radius: 10px;
+  color: #9d5c00;
+  background: #fff4da;
+  box-shadow: 0 3px 10px rgba(157, 92, 0, .08);
+  white-space: nowrap;
+}
+
+.dc-bitrix-task-card.overdue .dc-bitrix-task-deadline {
+  border-color: #e8b5b5;
+  color: #a72e2e;
+  background: #fff1f1;
+}
+
+.dc-bitrix-task-card.future .dc-bitrix-task-deadline {
+  border-color: #c8dcef;
+  color: #2867a8;
+  background: #eef6ff;
+}
+
+.dc-bitrix-task-card.done .dc-bitrix-task-deadline {
+  border-color: #bfe0cb;
+  color: #118347;
+  background: #edf9f2;
+}
+
+.dc-bitrix-task-deadline svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.dc-bitrix-task-deadline span {
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.dc-bitrix-task-deadline strong {
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 950;
+  letter-spacing: -.01em;
+}
+
+.dc-bitrix-task-body {
+  padding: 9px 12px 10px;
+}
+
+.dc-bitrix-task-description {
+  margin: 0;
+  color: #4d617b;
+  font-size: 11px;
+  line-height: 1.46;
+  white-space: pre-wrap;
+}
+
+.dc-bitrix-task-description.collapsed {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dc-bitrix-task-description-toggle {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  color: var(--dc-blue);
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.dc-bitrix-task-description-toggle:hover {
+  color: #0f5de2;
+}
+
+.dc-bitrix-task-description-toggle svg {
+  width: 11px;
+  height: 11px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  transition: transform .18s ease;
+}
+
+.dc-bitrix-task-description-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.dc-bitrix-task-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--dc-line);
+  background: #fbfcfe;
+}
+
+.dc-bitrix-task-actions .dc-button {
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 11px;
+  text-decoration: none;
+}
+
 .dc-manager-quick-help {
   border-color: #b9d4ff;
   background: #f8fbff;
@@ -5686,6 +5905,7 @@ ul.facts.bad li:before {
 .dc-communication-details article > b { color: #243b59; font-size: 9px; white-space: nowrap; }
 
 @media (max-width: 720px) {
+  .dc-bitrix-task-actions .dc-button { flex: 1 1 160px; }
   .dc-manager-answer-grid,
   .dc-manager-answer-columns,
   .dc-manager-recommendation-columns,
@@ -5704,4 +5924,16 @@ ul.facts.bad li:before {
   .dc-manager-answer-copy.speech { grid-column: auto; }
   .dc-manager-assistant-user-message { width: 92%; }
   .dc-manager-assistant-history li { grid-template-columns: 76px 8px minmax(0, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .dc-bitrix-task-top {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .dc-bitrix-task-deadline {
+    width: max-content;
+    margin-left: 44px;
+  }
 }
