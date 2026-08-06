@@ -2335,9 +2335,13 @@ function BitrixTaskCard({ deal, task, onToggleCompletion }: {
 }) {
   const [expanded, setExpanded] = useState(false)
   const description = task.description?.trim() || ''
+  const hasDescription = Boolean(description)
+  // Короткие тексты не режем — кнопка «Показать полностью» только когда реально нужно.
+  const canCollapse = description.length > 140
   const deadline = bitrixTaskDeadline(task)
   const title = bitrixTaskDisplayTitle(deal, task)
   const completed = task.completion_state !== 'open'
+  const openUrl = bitrixTaskUrl(task)
 
   useEffect(() => {
     setExpanded(false)
@@ -2368,25 +2372,35 @@ function BitrixTaskCard({ deal, task, onToggleCompletion }: {
       </div>
     </header>
 
-    {description ? <div className="dc-bitrix-task-body">
-      <p className={`dc-bitrix-task-description ${expanded ? 'expanded' : 'collapsed'}`}>{description}</p>
-      <button className={`dc-bitrix-task-description-toggle ${expanded ? 'open' : ''}`} type="button" onClick={() => setExpanded((value) => !value)}>
+    <div className="dc-bitrix-task-body">
+      {hasDescription
+        ? <p className={`dc-bitrix-task-description ${canCollapse && !expanded ? 'collapsed' : ''}`}>{description}</p>
+        : <p className="dc-bitrix-task-description muted">Описание задачи в Bitrix не заполнено</p>}
+      {hasDescription && canCollapse ? <button
+        className={`dc-bitrix-task-description-toggle ${expanded ? 'open' : ''}`}
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+      >
         {expanded ? 'Скрыть' : 'Показать полностью'}
         <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      </button>
-    </div> : null}
+      </button> : null}
+    </div>
 
     <footer className="dc-bitrix-task-actions">
       {task.completion_state === 'bitrix'
-        ? <button className="dc-button primary" disabled>Выполнено в B24</button>
-        : <button className={`dc-button ${task.completion_state === 'local' ? '' : 'primary'}`} onClick={() => void onToggleCompletion(deal, task)}>
+        ? <button className="dc-bitrix-task-btn primary" type="button" disabled>Выполнено в B24</button>
+        : <button
+            className={`dc-bitrix-task-btn ${task.completion_state === 'local' ? 'secondary' : 'primary'}`}
+            type="button"
+            onClick={() => void onToggleCompletion(deal, task)}
+          >
             {task.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}
           </button>}
-      {bitrixTaskUrl(task)
-        ? <a className="dc-button" href={bitrixTaskUrl(task) || undefined} target="_blank" rel="noreferrer">Открыть в Bitrix24 ↗</a>
-        : <button className="dc-button" disabled title="Bitrix не передал ID связанной задачи">Открыть в Bitrix24 ↗</button>}
+      {openUrl
+        ? <a className="dc-bitrix-task-btn secondary" href={openUrl} target="_blank" rel="noreferrer">Открыть в Bitrix24 ↗</a>
+        : <button className="dc-bitrix-task-btn secondary" type="button" disabled title="Bitrix не передал ID связанной задачи">Открыть в Bitrix24 ↗</button>}
     </footer>
   </section>
 }
