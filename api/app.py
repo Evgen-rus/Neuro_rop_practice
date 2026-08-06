@@ -45,6 +45,7 @@ from api.deal_control import record_task_event as record_deal_control_task_event
 from api.deal_control import (
     refresh_deal_control,
     save_bitrix_task_completion,
+    save_checklist_item_completion,
     save_deal_fields,
     save_scope as save_deal_control_scope,
 )
@@ -217,6 +218,10 @@ class DealControlBitrixTaskCompletionRequest(BaseModel):
     deal_id: str = Field(min_length=1, max_length=80)
     completed: bool
     source_role: Literal["manager", "rop"]
+
+
+class DealControlChecklistItemCompletionRequest(BaseModel):
+    completed: bool
 
 
 class DealTaskGuidanceRequest(BaseModel):
@@ -564,6 +569,24 @@ def deal_manager_quick_help_history_get(
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/deal-control/deals/{deal_id}/checklist/{item_id}/completion")
+def deal_control_checklist_item_completion(
+    deal_id: str,
+    item_id: str,
+    body: DealControlChecklistItemCompletionRequest,
+) -> dict[str, Any]:
+    try:
+        checklist = save_checklist_item_completion(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            item_id=item_id,
+            completed=body.completed,
+        )
+        return {"ok": True, "checklist": checklist}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

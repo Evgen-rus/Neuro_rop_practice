@@ -354,6 +354,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 next_control_at TEXT,
                 bitrix_tasks_json TEXT NOT NULL DEFAULT '[]',
                 communications_today_json TEXT NOT NULL DEFAULT '{}',
+                checklist_state_json TEXT NOT NULL DEFAULT '{}',
                 last_crm_sync_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -555,6 +556,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
         _ensure_column(conn, "deal_control_deals", "bitrix_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "deal_control_deals", "communications_today_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "deal_control_deals", "checklist_state_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
@@ -2902,6 +2904,8 @@ def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
     )
     communications_today = loads_json(value.pop("communications_today_json", None), {})
     value["communications_today"] = communications_today if isinstance(communications_today, dict) else {}
+    checklist_state = loads_json(value.pop("checklist_state_json", None), {})
+    value["checklist_state"] = checklist_state if isinstance(checklist_state, dict) else {}
     return value
 
 
@@ -3033,6 +3037,47 @@ def save_deal_control_communications_today(
     result = _row_to_deal_control_deal(row)
     assert result is not None
     return result
+
+
+def save_deal_control_checklist_item_state(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    item_id: str,
+    completed: bool,
+    source_report_id: int,
+) -> dict[str, Any]:
+    """Persist manager-owned checklist state without changing Bitrix task semantics."""
+    init_db(db_path)
+    normalized_item_id = str(item_id or "").strip()
+    if not normalized_item_id:
+        raise ValueError("Не указан пункт чек-листа")
+    now = utcish_now()
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT checklist_state_json FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        state = loads_json(row["checklist_state_json"], {})
+        if not isinstance(state, dict) or int(state.get("source_report_id") or 0) != int(source_report_id):
+            state = {"source_report_id": int(source_report_id), "items": {}}
+        items = state.get("items")
+        if not isinstance(items, dict):
+            items = {}
+        items[normalized_item_id] = {
+            "completed": bool(completed),
+            "completed_at": now if completed else None,
+            "completed_by": "manager" if completed else None,
+        }
+        state["items"] = items
+        state["updated_at"] = now
+        conn.execute(
+            "UPDATE deal_control_deals SET checklist_state_json = ?, updated_at = ? WHERE deal_id = ?",
+            (dumps_json(state), now, str(deal_id)),
+        )
+    return state
 
 
 def set_deal_control_bitrix_task_completion(

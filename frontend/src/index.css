@@ -5237,6 +5237,224 @@ ul.facts.bad li:before {
 }
 
 /* Manager screen: confirmation-gated situation, personal trainer and lazy history. */
+.dc-deal-checklist,
+.dc-rop-current-summary {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid #cfdae7;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(31, 54, 86, .065);
+}
+
+.dc-deal-checklist > header,
+.dc-rop-current-summary > header {
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #dce5ef;
+  background: #fbfdff;
+}
+
+.dc-deal-checklist-icon,
+.dc-rop-current-summary > header > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #1768f2;
+  background: #edf4ff;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.dc-deal-checklist header h3,
+.dc-rop-current-summary header h3 {
+  margin: 0;
+  color: #17243b;
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 950;
+}
+
+.dc-deal-checklist header p,
+.dc-rop-current-summary header p {
+  margin: 3px 0 0;
+  color: #71819a;
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+.dc-deal-checklist header > strong,
+.dc-rop-current-summary header > strong {
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #1768f2;
+  background: #edf4ff;
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dc-deal-checklist-body {
+  padding: 10px 11px 11px;
+}
+
+.dc-deal-checklist-progress {
+  position: relative;
+  height: 7px;
+  margin-bottom: 10px;
+  border-radius: 999px;
+  background: #e8eef5;
+}
+
+.dc-deal-checklist-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1768f2, #55a1ff);
+  transition: width .18s ease;
+}
+
+.dc-deal-checklist-progress > b {
+  position: absolute;
+  right: 0;
+  bottom: 10px;
+  color: #5c7089;
+  font-size: 8px;
+}
+
+.dc-deal-checklist ul {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.dc-deal-checklist li {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 23px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid #dfe7f0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.dc-deal-checklist li.done {
+  border-color: #c8e7d4;
+  background: #f6fcf8;
+}
+
+.dc-deal-checklist li > button {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #b9cce0;
+  border-radius: 7px;
+  color: #fff;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.dc-deal-checklist li.done > button {
+  border-color: #12824b;
+  background: #12824b;
+}
+
+.dc-deal-checklist li > button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.dc-deal-checklist li > span {
+  color: #304864;
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.dc-deal-checklist li > em {
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #c63a3a;
+  background: #fff3f3;
+  font-size: 7.5px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dc-deal-checklist li.done > em {
+  color: #12824b;
+  background: #edf9f2;
+}
+
+.dc-deal-checklist-empty {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed #cbd8e6;
+  border-radius: 9px;
+  color: #71819a;
+  background: #fbfdff;
+  font-size: 10px;
+  text-align: center;
+}
+
+.dc-rop-current-summary > header {
+  background: linear-gradient(90deg, #f5f8ff, #fff);
+}
+
+.dc-rop-current-summary > div {
+  padding: 11px;
+}
+
+.dc-rop-current-summary > div > p {
+  margin: 0 0 7px;
+  padding: 9px 10px;
+  border: 1px solid #dde6f0;
+  border-radius: 9px;
+  color: #405874;
+  background: #fbfdff;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.dc-rop-current-summary > div > p b {
+  color: #243e5f;
+}
+
+.dc-rop-current-summary aside {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #edcf8e;
+  border-radius: 9px;
+  background: #fff8e8;
+}
+
+.dc-rop-current-summary aside b {
+  color: #6b4a15;
+  font-size: 10px;
+}
+
+.dc-rop-current-summary aside span {
+  color: #715f42;
+  font-size: 9.5px;
+  line-height: 1.42;
+}
+
 .dc-manager-bitrix-task,
 .dc-manager-quick-help {
   margin-bottom: 14px;
@@ -6136,6 +6354,7 @@ ul.facts.bad li:before {
 .dc-communication-widget.done .dc-communication-title > span { color: #16824b; background: #eef9f2; }
 .dc-communication-widget.unavailable .dc-communication-title > span { color: #71839a; background: #f1f5f9; }
 .dc-communication-title h3 { margin: 0; color: #17233a; font-size: 14px; line-height: 1.2; letter-spacing: -.01em; }
+.dc-communication-title p { margin: 2px 0 0; color: #71819a; font-size: 8.5px; }
 .dc-communication-score { display: flex; gap: 8px; align-items: center; }
 .dc-communication-score small { padding: 5px 8px; border-radius: 99px; color: #9a5b00; background: #fff7e8; font-size: 9px; font-weight: 900; white-space: nowrap; }
 .dc-communication-widget.done .dc-communication-score small { color: #0f6f3e; background: #eef9f2; }
@@ -6187,6 +6406,26 @@ ul.facts.bad li:before {
 }
 
 @media (max-width: 480px) {
+  .dc-deal-checklist li {
+    grid-template-columns: 23px minmax(0, 1fr);
+  }
+
+  .dc-deal-checklist li > em {
+    grid-column: 2;
+    width: max-content;
+  }
+
+  .dc-deal-checklist > header,
+  .dc-rop-current-summary > header {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .dc-deal-checklist header > strong,
+  .dc-rop-current-summary header > strong {
+    grid-column: 2;
+    width: max-content;
+  }
+
   .dc-manager-situation-head {
     grid-template-columns: 32px minmax(0, 1fr);
   }

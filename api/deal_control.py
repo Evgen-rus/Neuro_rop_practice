@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from storage.rop_db import (
     save_deal_control_scope,
     save_deal_control_bitrix_tasks,
     save_deal_control_communications_today,
+    save_deal_control_checklist_item_state,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -60,6 +62,7 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
     "script_channel",
 })
 DAILY_COMMUNICATION_TARGET = 3
+CHECKLIST_LIMIT = 5
 
 
 def _tokens(value: Any) -> set[str]:
@@ -610,6 +613,81 @@ def _has_refined_value(value: Any) -> bool:
     return True
 
 
+def _checklist_action(value: Any, *, source: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n.;:")
+    if not text:
+        return ""
+    lowered = text.lower()
+    negative_match = re.match(
+        r"^не\s+(?:подтвержд[её]н(?:а|о|ы)?|зафиксирован(?:а|о|ы)?|согласован(?:а|о|ы)?)\s+(.+)$",
+        lowered,
+    )
+    if negative_match:
+        action = f"Подтвердить {negative_match.group(1)}"
+    elif lowered.startswith("нет данных о "):
+        action = f"Уточнить {lowered.removeprefix('нет данных о ')}"
+    elif source == "crm":
+        action = f"Зафиксировать в CRM {lowered}"
+    elif re.match(r"^(кто|когда|где|как|какой|какая|какие|актуален ли|актуальна ли)\b", lowered):
+        action = f"Уточнить, {lowered}"
+    elif lowered.startswith("дата "):
+        action = f"Подтвердить дату {lowered.removeprefix('дата ')}"
+    elif re.match(r"^(бюджет|срок|ЛПР)\b", text, flags=re.IGNORECASE):
+        action = f"Подтвердить {lowered}"
+    elif lowered.startswith("точный состав "):
+        action = f"Получить {lowered}"
+    elif re.match(r"^(уточнить|подтвердить|получить|зафиксировать|согласовать|обновить|назначить|проверить|определить)\b", lowered):
+        action = text[0].upper() + text[1:]
+    else:
+        action = f"Уточнить {lowered}"
+    action = re.sub(r"\bлпр\b", "ЛПР", action, flags=re.IGNORECASE)
+    action = re.sub(r"\bчз\b", "ЧЗ", action, flags=re.IGNORECASE)
+    action = re.sub(r"\b1с\b", "1С", action, flags=re.IGNORECASE)
+    return action.rstrip(".") + "."
+
+
+def _deal_checklist(deal: dict[str, Any], coaching: dict[str, Any]) -> dict[str, Any]:
+    report_id = int(coaching.get("report_id") or 0)
+    candidates: list[tuple[str, str]] = []
+    for value in coaching.get("unknowns") or []:
+        candidates.append(("missing", _checklist_action(value, source="missing")))
+    candidates.append(("focus", _checklist_action(coaching.get("what_to_check_now"), source="focus")))
+    for value in coaching.get("crm_checklist") or []:
+        candidates.append(("crm", _checklist_action(value, source="crm")))
+
+    state = deal.get("checklist_state") if isinstance(deal.get("checklist_state"), dict) else {}
+    state_items = state.get("items") if report_id and int(state.get("source_report_id") or 0) == report_id else {}
+    if not isinstance(state_items, dict):
+        state_items = {}
+    seen: set[str] = set()
+    items: list[dict[str, Any]] = []
+    for source, text in candidates:
+        normalized = re.sub(r"\W+", " ", text.lower(), flags=re.UNICODE).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        item_id = hashlib.sha256(f"{report_id}:{source}:{normalized}".encode("utf-8")).hexdigest()[:16]
+        saved = state_items.get(item_id) if isinstance(state_items.get(item_id), dict) else {}
+        items.append({
+            "id": item_id,
+            "text": text,
+            "completed": bool(saved.get("completed")),
+            "completed_at": saved.get("completed_at"),
+            "completed_by": saved.get("completed_by"),
+            "source": source,
+        })
+        if len(items) >= CHECKLIST_LIMIT:
+            break
+    completed = sum(1 for item in items if item["completed"])
+    return {
+        "source_report_id": report_id or None,
+        "items": items,
+        "completed": completed,
+        "total": len(items),
+        "progress_percent": round(completed * 100 / len(items)) if items else 0,
+    }
+
+
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
                                  sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
     current = now or datetime.now(MSK_TZ)
@@ -674,6 +752,7 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         else:
             missing += 1
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
+        deal["checklist"] = _deal_checklist(deal, deal["coaching"])
         deal["manager_situation"] = get_deal_manager_situation_state(
             db_path,
             deal_id=str(deal["deal_id"]),
@@ -737,6 +816,37 @@ def save_bitrix_task_completion(
         completed=completed,
         source_role=source_role,
     )
+
+
+def save_checklist_item_completion(
+    *,
+    db_path: str | Path,
+    deal_id: str,
+    item_id: str,
+    completed: bool,
+) -> dict[str, Any]:
+    deal = next(
+        (item for item in list_deal_control_deals(db_path) if str(item.get("deal_id")) == str(deal_id)),
+        None,
+    )
+    if deal is None:
+        raise ValueError("Сделка ещё не добавлена в контур контроля")
+    coaching = _analysis_coaching(db_path, str(deal_id))
+    checklist = _deal_checklist(deal, coaching)
+    report_id = checklist.get("source_report_id")
+    if not report_id:
+        raise ValueError("Чек-лист появится после успешного анализа сделки")
+    if not any(str(item.get("id")) == str(item_id) for item in checklist["items"]):
+        raise ValueError("Пункт не найден в актуальном чек-листе")
+    state = save_deal_control_checklist_item_state(
+        db_path,
+        deal_id=str(deal_id),
+        item_id=str(item_id),
+        completed=completed,
+        source_report_id=int(report_id),
+    )
+    deal["checklist_state"] = state
+    return _deal_checklist(deal, coaching)
 
 
 def add_task(*, db_path: str | Path, deal_id: str, task_text: str, touch_type: str | None,

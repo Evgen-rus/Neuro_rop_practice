@@ -534,6 +534,23 @@ export type DealControlCommunicationsToday = {
   items: DealControlCommunicationItem[]
 }
 
+export type DealControlChecklistItem = {
+  id: string
+  text: string
+  completed: boolean
+  completed_at?: string | null
+  completed_by?: 'manager' | null
+  source: 'missing' | 'focus' | 'crm' | string
+}
+
+export type DealControlChecklist = {
+  source_report_id?: number | null
+  items: DealControlChecklistItem[]
+  completed: number
+  total: number
+  progress_percent: number
+}
+
 export type DealControlDeal = {
   deal_id: string
   source: 'initial' | 'pipeline'
@@ -556,6 +573,7 @@ export type DealControlDeal = {
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
   manager_situation?: ManagerSituationState | null
+  checklist: DealControlChecklist
   coaching: {
     report_id?: number | null
     analysis_created_at?: string | null
@@ -940,6 +958,17 @@ export function updateDealControlBitrixTaskCompletion(
     method: 'PUT',
     body: JSON.stringify({ deal_id: dealId, completed, source_role: sourceRole }),
   })
+}
+
+export function updateDealControlChecklistItemCompletion(
+  dealId: string,
+  itemId: string,
+  completed: boolean,
+) {
+  return api<{ ok: boolean; checklist: DealControlChecklist }>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/checklist/${encodeURIComponent(itemId)}/completion`,
+    { method: 'PUT', body: JSON.stringify({ completed }) },
+  )
 }
 
 export function fetchDealControlMetrics(managerId?: string) {

@@ -24,6 +24,7 @@ import {
   transcribeManagerVoice,
   updateDealControlDeal,
   updateDealControlBitrixTaskCompletion,
+  updateDealControlChecklistItemCompletion,
   updateDealControlTask,
   type DealControlDashboard,
   type DealControlBitrixTask,
@@ -759,6 +760,17 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     }
   }
 
+  async function toggleChecklistItem(deal: DealControlDeal, itemId: string, completed: boolean) {
+    setError('')
+    try {
+      await updateDealControlChecklistItemCompletion(deal.deal_id, itemId, completed)
+      setNotice(completed ? 'Пункт чек-листа выполнен.' : 'Пункт чек-листа возвращён в работу.')
+      await reload()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
   async function confirmMatch(task: DealControlTask) {
     try {
       await confirmDealControlTaskCrmMatch(task.id)
@@ -1058,6 +1070,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
           onAddTask={addTask}
           onAdoptBitrixTask={adoptBitrixTask}
           onToggleBitrixCompletion={toggleBitrixCompletion}
+          onToggleChecklistItem={toggleChecklistItem}
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
@@ -1320,6 +1333,7 @@ function DealDetail(props: {
   onAddTask: () => Promise<void>
   onAdoptBitrixTask: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
+  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   analysisJob: JobState | null
   analyzingDealId: string
   onAnalyze: (deal: DealControlDeal) => Promise<void>
@@ -1605,7 +1619,7 @@ function DealDetail(props: {
     <section className="dc-detail-stats">
       <div><small>Этап</small><strong>{deal.stage_name || '—'}</strong></div>
       <div><small>Вероятность</small><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
-      <div><small>{managerView ? 'Создана' : 'Менеджер'}</small><strong>{managerView ? dateOnly(deal.created_at_crm) : deal.manager_name || '—'}</strong></div>
+      <div><small>Менеджер</small><strong>{deal.manager_name || '—'}</strong></div>
       <div><small>Сумма</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
     </section>
     {managerView && analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
@@ -1625,10 +1639,6 @@ function DealDetail(props: {
       assistantWorkspace={assistantWorkspace}
       assistantLoading={assistantLoading}
       assistantOpen={assistantOpen}
-      showAnalysisMarkdown={showAnalysisMarkdown}
-      analysisMarkdown={analysisMarkdown}
-      analysisMarkdownError={analysisMarkdownError}
-      analysisMarkdownLoading={analysisMarkdownLoading}
       onOpenSituation={() => { setSituationError(''); setSituationModalOpen(true) }}
       onCloseSituation={() => setSituationModalOpen(false)}
       onSituationContext={setSituationContext}
@@ -1639,10 +1649,14 @@ function DealDetail(props: {
       onOpenAssistant={() => void loadAssistantWorkspace(true)}
       onCloseAssistant={() => setAssistantOpen(false)}
       onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
-      onToggleMarkdown={() => void toggleAnalysisMarkdown()}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
+      onToggleChecklistItem={props.onToggleChecklistItem}
+    /> : props.view === 'rop' ? <RopDealScreen
+      deal={deal}
+      hasAnalysis={hasAnalysis}
+      analysisEmptyAction={analysisButton}
     /> : <>
     {hasAnalysis ? <DealSituationCard deal={deal} /> : <section className="dc-analysis-empty">
       <span>✦</span>
@@ -1666,12 +1680,8 @@ function DealDetail(props: {
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
     />
 
-    {props.view === 'rop' ? <DailyCommunicationWidget summary={deal.communications_today} /> : null}
-
     {hasAnalysis
-      ? managerView
-        ? <ManagerGuidance deal={deal} task={task} onCopy={props.onCopy} />
-        : <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
+      ? <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
       : null}
 
     {props.view !== 'manager' && deal.current_task ? <TaskEditor
@@ -1724,10 +1734,6 @@ type ManagerDealScreenProps = {
   assistantWorkspace: ManagerAssistantWorkspace | null
   assistantLoading: boolean
   assistantOpen: boolean
-  showAnalysisMarkdown: boolean
-  analysisMarkdown: string | null
-  analysisMarkdownError: string
-  analysisMarkdownLoading: boolean
   onOpenSituation: () => void
   onCloseSituation: () => void
   onSituationContext: (value: string) => void
@@ -1738,10 +1744,10 @@ type ManagerDealScreenProps = {
   onOpenAssistant: () => void
   onCloseAssistant: () => void
   onCompleteCommunication: (quickHelpId: number) => void
-  onToggleMarkdown: () => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
+  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
 }
 
 function ManagerDealScreen(props: ManagerDealScreenProps) {
@@ -1763,7 +1769,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onRefine={props.onRefineSituation}
       onTranscribe={props.onTranscribe}
     />
-    <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
+    <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
     {confirmed ? <>
       <ManagerQuickHelp
         dealId={props.deal.deal_id}
@@ -1777,23 +1783,8 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onOpen={props.onOpenAssistant}
         onTranscribe={props.onTranscribe}
       />
-      <RopRecommendationsAccordion coaching={props.deal.coaching} onCopy={props.onCopy} />
-      <section className="dc-analysis-material dc-manager-markdown">
-        <button
-          className="dc-analysis-material-link"
-          disabled={props.analysisMarkdownLoading || !props.deal.coaching.report_id}
-          onClick={props.onToggleMarkdown}
-        >
-          {props.analysisMarkdownLoading
-            ? 'Открываем материал…'
-            : props.showAnalysisMarkdown
-              ? 'Скрыть Markdown анализа'
-              : 'Открыть Markdown анализа'}
-        </button>
-        {props.analysisMarkdownError ? <small className="dc-manager-error">{props.analysisMarkdownError}</small> : null}
-        {props.showAnalysisMarkdown && props.analysisMarkdown ? <pre>{props.analysisMarkdown}</pre> : null}
-      </section>
     </> : null}
+    <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
     {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
       deal={props.deal}
       workspace={props.assistantWorkspace}
@@ -1809,6 +1800,73 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onCompleteCommunication={props.onCompleteCommunication}
     /> : null}
   </>
+}
+
+function RopDealScreen({ deal, hasAnalysis, analysisEmptyAction }: {
+  deal: DealControlDeal
+  hasAnalysis: boolean
+  analysisEmptyAction: ReactNode
+}) {
+  return <>
+    {!hasAnalysis ? <section className="dc-analysis-empty">
+      <span>✦</span>
+      <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы сформировать чек-лист и текущий итог.</p></div>
+      {analysisEmptyAction}
+    </section> : null}
+    <DealChecklistCard deal={deal} editable={false} />
+    <DailyCommunicationWidget summary={deal.communications_today} />
+    <RopCurrentSummary deal={deal} />
+  </>
+}
+
+function DealChecklistCard({ deal, editable, onToggle }: {
+  deal: DealControlDeal
+  editable: boolean
+  onToggle?: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+}) {
+  const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
+  return <section className="dc-deal-checklist">
+    <header>
+      <span className="dc-deal-checklist-icon">✓</span>
+      <div><h3>Чек-лист дожима</h3><p>Что ещё нужно закрыть, чтобы приблизить сделку к решению</p></div>
+      <strong>{checklist.completed} из {checklist.total}</strong>
+    </header>
+    <div className="dc-deal-checklist-body">
+      <div className="dc-deal-checklist-progress"><span style={{ width: `${checklist.progress_percent}%` }} /><b>Выполнено {checklist.progress_percent}%</b></div>
+      {checklist.items.length ? <ul>{checklist.items.map((item) => <li className={item.completed ? 'done' : ''} key={item.id}>
+        <button
+          type="button"
+          disabled={!editable || !onToggle}
+          aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
+          onClick={() => onToggle ? void onToggle(deal, item.id, !item.completed) : undefined}
+        >{item.completed ? '✓' : ''}</button>
+        <span>{item.text}</span>
+        <em>{item.completed ? 'Выполнено' : 'Не выполнено'}</em>
+      </li>)}</ul> : <p className="dc-deal-checklist-empty">Чек-лист появится после успешного анализа сделки.</p>}
+    </div>
+  </section>
+}
+
+function RopCurrentSummary({ deal }: { deal: DealControlDeal }) {
+  const checklist = deal.checklist
+  const remaining = checklist?.items.filter((item) => !item.completed).map((item) => item.text) || []
+  const completed = checklist?.items.filter((item) => item.completed).map((item) => item.text) || []
+  const analysisTime = deal.coaching.analysis_created_at
+    ? formatMoscowDateTime(deal.coaching.analysis_created_at, { hour: '2-digit', minute: '2-digit' })
+    : ''
+  return <section className="dc-rop-current-summary">
+    <header>
+      <span>AI</span>
+      <div><h3>{analysisTime ? `Итог на ${analysisTime}` : 'Текущий итог'}</h3><p>Срез сформирован из последнего сохранённого анализа и чек-листа</p></div>
+      <strong>{deal.coaching.report_id ? 'Последний анализ' : 'Нет анализа'}</strong>
+    </header>
+    <div>
+      <p>{deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
+      {completed.length ? <p><b>Менеджер закрыл:</b> {completed.join(' ')}</p> : null}
+      {remaining.length ? <p><b>Осталось:</b> {remaining.join(' ')}</p> : null}
+      <aside><b>Вывод для РОПа</b><span>{deal.coaching.rop_focus || deal.coaching.what_to_check_now || 'Управленческий вывод появится после анализа сделки.'}</span></aside>
+    </div>
+  </section>
 }
 
 function DealSituationCard({ deal }: { deal: DealControlDeal }) {
@@ -2036,10 +2094,6 @@ function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }:
   </article>
 }
 
-function ManagerAnswerList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
-  return <section className="dc-manager-answer-list"><h4>{title}</h4><ul>{items.length ? items.map((item) => <li key={item}>{item}</li>) : <li className="muted">{empty}</li>}</ul></section>
-}
-
 function ManagerAssistantModal(props: {
   deal: DealControlDeal
   workspace: ManagerAssistantWorkspace
@@ -2141,29 +2195,6 @@ function ManagerAssistantModal(props: {
       </main>
     </section>
   </div>, document.body)
-}
-
-function RopRecommendationsAccordion({ coaching, onCopy }: {
-  coaching: DealControlDeal['coaching']
-  onCopy: (text: string, label: string) => Promise<void>
-}) {
-  return <details className="dc-manager-recommendations">
-    <summary><span>Рекомендации по сделке от РОПа</span><small>Свернуть / развернуть</small></summary>
-    <div className="dc-manager-recommendations-body">
-      <section><h4>Фокус на сегодня</h4><p>{coaching.manager_coaching || coaching.rop_focus || 'Фокус появится после полного анализа сделки.'}</p></section>
-      <div className="dc-manager-recommendation-columns">
-        <ManagerAnswerList title="Уже известно" items={coaching.known} empty="Подтверждённые факты не выделены." />
-        <ManagerAnswerList title="Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
-      </div>
-      <section className="dc-manager-recommendation-work"><h4>Как проработать сделку</h4>
-        {coaching.rop_focus ? <p>{coaching.rop_focus}</p> : null}
-        <div className="dc-contact-goal"><strong>Цель контакта</strong><p>{coaching.contact_goal || 'Выполнить текущую задачу и получить конкретный подтверждённый результат.'}</p></div>
-        <div className="dc-question-list"><strong>Что выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
-        <div className="dc-script"><strong>{coaching.script_channel === 'message' ? 'Текст клиенту' : 'Речевой модуль'}</strong><div className="dc-script-primary"><pre>{coaching.script || 'Готовый текст пока не сформирован.'}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Основной сценарий')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё варианты</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 1}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 1}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
-      </section>
-      <ManagerAnswerList title="Что зафиксировать в CRM" items={coaching.crm_checklist} empty="Чеклист не сформирован." />
-    </div>
-  </details>
 }
 
 function ManagerJobProgress({ job, label }: { job: Pick<ManagerSituationJob, 'status' | 'detail' | 'percent' | 'error'>; label: string }) {
@@ -2388,16 +2419,21 @@ function DailyCommunicationWidget({ summary }: { summary?: DealControlCommunicat
   const done = available && completed >= target
   const progress = available ? Math.max(0, Math.min(100, summary?.progress_percent || 0)) : 0
   const items = summary?.items || []
+  const lastTouch = items.reduce((latest, item) => !latest || item.occurred_at > latest.occurred_at ? item : latest, items[0])
+  const lastTouchTime = lastTouch
+    ? formatMoscowDateTime(lastTouch.occurred_at, { hour: '2-digit', minute: '2-digit' }) || '—'
+    : '—'
   return <section className={`dc-communication-widget ${done ? 'done' : available ? 'partial' : 'unavailable'}`}>
     <div className="dc-communication-head">
-      <div className="dc-communication-title"><span>{done ? '✓' : available ? '!' : '—'}</span><h3>Коммуникации по задаче сегодня</h3></div>
-      <div className="dc-communication-score"><small>{done ? 'План выполнен' : available ? 'В работе' : 'Нет данных'}</small><strong>{completed}/{target}</strong></div>
+      <div className="dc-communication-title"><span>↗</span><div><h3>Коммуникации сегодня</h3><p>Отдельно от выполнения чек-листа</p></div></div>
+      <div className="dc-communication-score"><small>{available ? `${completed} касаний` : 'Нет данных'}</small></div>
     </div>
     <div className="dc-communication-progress"><div><span style={{ width: `${progress}%` }} /></div><b>{progress}%</b></div>
     <div className="dc-communication-stats">
       <span>☎ {summary?.calls || 0} {countLabel(summary?.calls || 0, 'звонок', 'звонка', 'звонков')}</span>
       <span>✉ {summary?.messages || 0} {countLabel(summary?.messages || 0, 'сообщение', 'сообщения', 'сообщений')}</span>
       <span>◴ {communicationDuration(summary?.duration_seconds || 0)}</span>
+      <span>Последнее {lastTouchTime}</span>
       <button type="button" disabled={!items.length} aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть' : 'Детали'} <i>{open ? '⌃' : '⌄'}</i></button>
     </div>
     {!available ? <p className="dc-communication-note">Обновите Bitrix, чтобы получить активности за текущий московский день.</p> : null}
@@ -2606,45 +2642,6 @@ function RopGuidance({ deal, task, onCopy }: {
       </div>
     </section>
     <section className="dc-text-section"><div className="dc-section-head"><h3>Сообщение менеджеру</h3></div><div className="dc-coaching-copy"><strong>Готово к отправке</strong><p>{textOr(coaching.manager_coaching, 'В анализе нет готового сообщения менеджеру.')}</p></div><div className="dc-copy-actions"><button className="dc-button primary" disabled={!coaching.manager_coaching} onClick={() => void onCopy(coaching.manager_coaching || '', 'Текст для менеджера')}>Скопировать менеджеру</button></div></section>
-  </>
-}
-
-function ManagerGuidance({ deal, task, onCopy }: {
-  deal: DealControlDeal
-  task: DealControlTask | null
-  onCopy: (text: string, label: string) => Promise<void>
-}) {
-  const coaching = deal.coaching
-  if (task?.guidance && !task.guidance.is_stale) {
-    return <TaskGuidanceContent content={task.guidance.content} touchType={task.touch_type} onCopy={onCopy} />
-  }
-  return <>
-    {task ? <section className="dc-guidance-missing">
-        <span>✦</span>
-        <div>
-          <h3>{task.guidance?.is_stale ? 'AI-подсказка устарела' : 'Подсказка к задаче ещё не подготовлена'}</h3>
-          <p>{task.guidance?.is_stale
-            ? 'Задача или анализ сделки изменились. Ниже показана базовая подготовка из последнего полного анализа; она не заменяет подсказку к текущей задаче.'
-            : 'Ниже показана базовая подготовка из последнего полного анализа сделки. РОП может отдельно подготовить подсказку именно к текущей задаче.'}</p>
-        </div>
-      </section> : null}
-    {coaching.manager_coaching ? <section className="dc-manager-focus">
-      <div className="dc-section-head"><h3>Фокус на сегодня</h3><span>✦ От РОПа</span></div>
-      <p>{coaching.manager_coaching}</p>
-    </section> : null}
-    <section className="dc-manager-module">
-      <div className="dc-section-head"><div><h3>Как проработать сделку</h3><p>Открой перед звонком и двигайся по шагам</p></div></div>
-      <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{textOr(coaching.contact_goal, 'Выполнить поручение РОПа и получить конкретный подтверждённый результат.')}</p></div>
-      <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{coaching.questions.length ? <ol>{coaching.questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Вопросы появятся после полного анализа сделки.</p>}</div>
-      <div className="dc-script"><strong>Что сказать клиенту</strong><div className="dc-script-primary"><small>Основной сценарий</small><pre>{textOr(coaching.script, 'Готовый сценарий пока не сформирован.')}</pre><button className="dc-button primary" disabled={!coaching.script} onClick={() => void onCopy(coaching.script || '', 'Сценарий звонка')}>Скопировать основной сценарий</button></div>{coaching.script_variants.length ? <details className="dc-script-variants"><summary>Ещё {coaching.script_variants.length} варианта начала разговора</summary><div>{coaching.script_variants.map((variant, index) => <article key={`${index}-${variant}`}><small>Вариант {index + 2}</small><p>{variant}</p><button className="dc-button" onClick={() => void onCopy(variant, `Вариант ${index + 2}`)}>Скопировать вариант</button></article>)}</div></details> : null}</div>
-    </section>
-    <section className="dc-analysis-section">
-      <div className="dc-section-head"><h3>Что известно и чего не хватает</h3></div>
-      <div className="dc-two-columns">
-        <ListCard tone="good" title="✓ Уже известно" items={coaching.known} empty="Подтверждённые факты пока не выделены." />
-        <ListCard tone="weak" title="✕ Нужно выяснить" items={coaching.unknowns} empty="Дополнительные вопросы не выделены." />
-      </div>
-    </section>
   </>
 }
 

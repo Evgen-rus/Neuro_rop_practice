@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from api.deal_control import _analysis_coaching, _today_communications, build_deal_control_dashboard, refresh_deal_control
+from api.deal_control import (
+    _analysis_coaching,
+    _today_communications,
+    build_deal_control_dashboard,
+    refresh_deal_control,
+    save_checklist_item_completion,
+)
 from storage.rop_db import (
     confirm_deal_control_task_crm_match,
     connect,
@@ -149,6 +155,60 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(len(coaching["script_variants"]), 2)
             self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
             self.assertTrue(coaching["analysis_created_at"])
+
+    def test_shared_deal_checklist_projects_actions_and_persists_manager_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="101",
+                source="initial",
+                title="Сделка 101",
+                manager_id="10",
+                manager_name="Иванов Иван",
+                stage_id="C15:NEW",
+                stage_name="Новая",
+                pipeline_id="15",
+                amount="120000",
+                currency_id="RUB",
+                created_at_crm="2026-07-19T09:00:00+03:00",
+                modified_at_crm="2026-07-20T09:00:00+03:00",
+                is_active=True,
+            )
+            save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json={
+                    "deal_control_brief": {
+                        "current_situation": "Клиент получил КП.",
+                        "missing_facts": ["Не подтверждён ЛПР", "Бюджет клиента", "Дата решения"],
+                        "what_to_check_now": "Получить дату решения",
+                    },
+                    "manager_action_block": {"manager_checklist": ["Следующий шаг"]},
+                },
+            )
+
+            first = build_deal_control_dashboard(db_path=db_path)["deals"][0]["checklist"]
+            self.assertEqual(first["completed"], 0)
+            self.assertEqual(first["total"], 5)
+            self.assertEqual(first["items"][0]["text"], "Подтвердить ЛПР.")
+            self.assertIn("Подтвердить бюджет клиента.", [item["text"] for item in first["items"]])
+            self.assertIn("Подтвердить дату решения.", [item["text"] for item in first["items"]])
+            self.assertIn("Зафиксировать в CRM следующий шаг.", [item["text"] for item in first["items"]])
+
+            updated = save_checklist_item_completion(
+                db_path=db_path,
+                deal_id="101",
+                item_id=first["items"][0]["id"],
+                completed=True,
+            )
+            self.assertEqual(updated["completed"], 1)
+            self.assertTrue(updated["items"][0]["completed"])
+
+            projected = build_deal_control_dashboard(db_path=db_path)["deals"][0]["checklist"]
+            self.assertEqual(projected["completed"], 1)
+            self.assertEqual(projected["progress_percent"], 20)
 
     def test_scope_is_local_and_has_no_embedded_crm_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
