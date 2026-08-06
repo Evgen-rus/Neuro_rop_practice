@@ -5247,7 +5247,8 @@ ul.facts.bad li:before {
   box-shadow: 0 5px 16px rgba(34, 68, 110, .045);
 }
 
-.dc-manager-situation {
+.dc-manager-situation,
+.dc-overview-situation {
   overflow: hidden;
   margin-bottom: 14px;
   border: 1px solid #bfe0cb;
@@ -5258,6 +5259,10 @@ ul.facts.bad li:before {
 }
 
 .dc-manager-situation.pending {
+  border-color: #cbd9ea;
+}
+
+.dc-overview-situation {
   border-color: #cbd9ea;
 }
 
@@ -5276,7 +5281,8 @@ ul.facts.bad li:before {
   background: linear-gradient(90deg, #f3fbf6 0%, var(--dc-surface) 72%);
 }
 
-.dc-manager-situation.pending .dc-manager-situation-head {
+.dc-manager-situation.pending .dc-manager-situation-head,
+.dc-overview-situation .dc-manager-situation-head {
   border-color: #e1e9f2;
   background: linear-gradient(90deg, #f7faff 0%, var(--dc-surface) 72%);
 }
@@ -5292,7 +5298,8 @@ ul.facts.bad li:before {
   background: #e4f5eb;
 }
 
-.dc-manager-situation.pending .dc-manager-situation-icon {
+.dc-manager-situation.pending .dc-manager-situation-icon,
+.dc-overview-situation .dc-manager-situation-icon {
   border-color: #d4e2fa;
   color: var(--dc-blue);
   background: var(--dc-blue-weak);
@@ -5339,7 +5346,8 @@ ul.facts.bad li:before {
   white-space: nowrap;
 }
 
-.dc-manager-situation.pending .dc-manager-situation-status {
+.dc-manager-situation.pending .dc-manager-situation-status,
+.dc-overview-situation .dc-manager-situation-status {
   color: var(--dc-blue);
   background: var(--dc-blue-weak);
 }
@@ -5477,6 +5485,27 @@ ul.facts.bad li:before {
   color: #fff;
   background: var(--dc-green);
   opacity: 1;
+}
+
+.dc-overview-situation-focus {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--dc-line);
+  background: var(--dc-surface-2);
+}
+
+.dc-overview-situation-focus small {
+  color: var(--dc-muted);
+  font-size: 8.5px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.dc-overview-situation-focus strong {
+  color: #294363;
+  font-size: 10px;
+  line-height: 1.42;
 }
 
 .dc-manager-quick-help-actions { justify-content: space-between; margin-top: 8px; }

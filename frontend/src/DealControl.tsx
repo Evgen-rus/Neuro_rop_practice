@@ -1573,10 +1573,6 @@ function DealDetail(props: {
     analysisBusy
     && props.analyzingDealId === deal.deal_id
   )
-  const taskGuidance = task?.guidance && !task.guidance.is_stale ? task.guidance.content : null
-  const managerFocus = task
-    ? taskGuidance?.contact_goal || coaching.contact_goal || 'Выполнить поручение РОПа и зафиксировать подтверждённый результат.'
-    : coaching.contact_goal
   const analysisButton = (
     <button
       className="dc-button dc-analyze-button"
@@ -1648,14 +1644,7 @@ function DealDetail(props: {
       onTranscribe={transcribeVoice}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
     /> : <>
-    {hasAnalysis ? <section className="dc-insight-card">
-      <div className="dc-section-head"><h3>Текущая ситуация</h3><span>✦ AI-анализ</span></div>
-      <p>{coaching.current_situation}</p>
-      {coaching.what_to_check_now ? <p><strong>Что проверить прямо сейчас.</strong> {coaching.what_to_check_now}</p> : null}
-      <div className="dc-mini-grid">
-        <div><small>Фокус РОПа</small><strong>{textOr(managerView ? managerFocus : coaching.rop_focus, 'Не сформирован')}</strong></div>
-      </div>
-    </section> : <section className="dc-analysis-empty">
+    {hasAnalysis ? <DealSituationCard deal={deal} /> : <section className="dc-analysis-empty">
       <span>✦</span>
       <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы увидеть текущую ситуацию, риски и рекомендации по сделке.</p></div>
       {analysisButton}
@@ -1820,6 +1809,63 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onCompleteCommunication={props.onCompleteCommunication}
     /> : null}
   </>
+}
+
+function DealSituationCard({ deal }: { deal: DealControlDeal }) {
+  const [focusExpanded, setFocusExpanded] = useState(false)
+  const focusText = deal.coaching.what_to_check_now?.trim() || ''
+  const canCollapseFocus = focusText.length > 115
+
+  useEffect(() => {
+    setFocusExpanded(false)
+  }, [deal.deal_id, focusText])
+
+  return <section className="dc-overview-situation">
+    <header className="dc-manager-situation-head">
+      <span className="dc-manager-situation-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4 15.5h3l2.1-6 3.4 10 2.2-7H20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" opacity=".42" />
+        </svg>
+      </span>
+      <div className="dc-manager-situation-heading">
+        <h3>Текущая ситуация</h3>
+        <p>Проверьте ключевые факты перед следующим действием</p>
+      </div>
+      <span className="dc-manager-situation-status"><i />AI-анализ</span>
+    </header>
+
+    <div className="dc-manager-situation-body">
+      <p className="dc-manager-situation-copy">{deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
+      {focusText ? <div className="dc-manager-situation-focus">
+        <span className="dc-manager-situation-focus-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </span>
+        <div>
+          <strong>Что проверить сейчас</strong>
+          <p className={`dc-manager-situation-focus-text ${canCollapseFocus && !focusExpanded ? 'collapsed' : ''}`}>{focusText}</p>
+          {canCollapseFocus ? <button
+            className={`dc-manager-situation-focus-toggle ${focusExpanded ? 'open' : ''}`}
+            type="button"
+            onClick={() => setFocusExpanded((value) => !value)}
+          >
+            {focusExpanded ? 'Скрыть' : 'Показать полностью'}
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button> : null}
+        </div>
+      </div> : null}
+    </div>
+
+    <footer className="dc-overview-situation-focus">
+      <small>Фокус РОПа</small>
+      <strong>{textOr(deal.coaching.rop_focus, 'Не сформирован')}</strong>
+    </footer>
+  </section>
 }
 
 function ManagerSituationActions(props: {
