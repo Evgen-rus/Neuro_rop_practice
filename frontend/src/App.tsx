@@ -565,7 +565,7 @@ function SharedReportCard({ report }: { report: UiReportDetail }) {
 }
 
 function MainApp() {
-  const [tab, setTab] = useState<Tab>('summary')
+  const [tab, setTab] = useState<Tab>('deals')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   const [analysisProfiles, setAnalysisProfiles] = useState<AnalysisProfile[]>([])

@@ -1664,7 +1664,7 @@ function DealDetail(props: {
       {analysisButton}
     </section>}
 
-    <CurrentTask
+    {hasAnalysis ? <CurrentTask
       view={props.view}
       deal={deal}
       task={task}
@@ -1678,13 +1678,13 @@ function DealDetail(props: {
       hasAnalysis={hasAnalysis}
       onAdoptBitrixTask={props.onAdoptBitrixTask}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
-    />
+    /> : null}
 
     {hasAnalysis
       ? <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
       : null}
 
-    {props.view !== 'manager' && deal.current_task ? <TaskEditor
+    {hasAnalysis && props.view !== 'manager' && deal.current_task ? <TaskEditor
       taskText={props.taskText}
       setTaskText={props.setTaskText}
       touchType={props.touchType}
