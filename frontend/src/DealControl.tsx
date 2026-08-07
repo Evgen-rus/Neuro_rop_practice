@@ -1769,8 +1769,8 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onRefine={props.onRefineSituation}
       onTranscribe={props.onTranscribe}
     />
-    <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
     {confirmed ? <>
+      <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerQuickHelp
         dealId={props.deal.deal_id}
         draft={props.quickHelpDraft}
@@ -1783,22 +1783,22 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onOpen={props.onOpenAssistant}
         onTranscribe={props.onTranscribe}
       />
+      <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
+      {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
+        deal={props.deal}
+        workspace={props.assistantWorkspace}
+        draft={props.quickHelpDraft}
+        error={props.quickHelpError}
+        job={props.quickHelpJob}
+        onDraft={props.onQuickHelpDraft}
+        onRequest={props.onQuickHelp}
+        onClose={props.onCloseAssistant}
+        onEditSituation={() => { props.onCloseAssistant(); props.onOpenSituation() }}
+        onCopy={props.onCopy}
+        onTranscribe={props.onTranscribe}
+        onCompleteCommunication={props.onCompleteCommunication}
+      /> : null}
     </> : null}
-    <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
-    {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
-      deal={props.deal}
-      workspace={props.assistantWorkspace}
-      draft={props.quickHelpDraft}
-      error={props.quickHelpError}
-      job={props.quickHelpJob}
-      onDraft={props.onQuickHelpDraft}
-      onRequest={props.onQuickHelp}
-      onClose={props.onCloseAssistant}
-      onEditSituation={() => { props.onCloseAssistant(); props.onOpenSituation() }}
-      onCopy={props.onCopy}
-      onTranscribe={props.onTranscribe}
-      onCompleteCommunication={props.onCompleteCommunication}
-    /> : null}
   </>
 }
 
@@ -1888,7 +1888,6 @@ function DealSituationCard({ deal }: { deal: DealControlDeal }) {
       </span>
       <div className="dc-manager-situation-heading">
         <h3>Текущая ситуация</h3>
-        <p>Проверьте ключевые факты перед следующим действием</p>
       </div>
       <span className="dc-manager-situation-status"><i />AI-анализ</span>
     </header>
@@ -1942,18 +1941,11 @@ function ManagerSituationActions(props: {
   onRefine: () => void
   onTranscribe: (audio: Blob) => Promise<string>
 }) {
-  const [focusExpanded, setFocusExpanded] = useState(false)
   const confirmed = managerSituationIsConfirmed(props.situation)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
-  const focusText = props.deal.coaching.what_to_check_now?.trim() || ''
-  const canCollapseFocus = focusText.length > 115
   const stateLabel = !props.situation.is_current || props.situation.state === 'pending'
     ? 'Требует проверки'
     : props.situation.state === 'refined' ? 'Уточнена менеджером' : 'Подтверждена'
-
-  useEffect(() => {
-    setFocusExpanded(false)
-  }, [props.deal.deal_id, focusText])
 
   return <>
     <section className={`dc-manager-situation ${confirmed ? 'confirmed' : 'pending'}`}>
@@ -1966,7 +1958,6 @@ function ManagerSituationActions(props: {
         </span>
         <div className="dc-manager-situation-heading">
           <h3>Текущая ситуация</h3>
-          <p>Проверьте ключевые факты перед следующим действием</p>
         </div>
         <span className="dc-manager-situation-status"><i />{stateLabel}</span>
       </header>
@@ -1975,31 +1966,9 @@ function ManagerSituationActions(props: {
         {props.hasAnalysis
           ? <>
             <p className="dc-manager-situation-copy">{props.deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
-            {focusText ? <div className="dc-manager-situation-focus">
-              <span className="dc-manager-situation-focus-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </span>
-              <div>
-                <strong>Что проверить сейчас</strong>
-                <p className={`dc-manager-situation-focus-text ${canCollapseFocus && !focusExpanded ? 'collapsed' : ''}`}>{focusText}</p>
-                {canCollapseFocus ? <button
-                  className={`dc-manager-situation-focus-toggle ${focusExpanded ? 'open' : ''}`}
-                  type="button"
-                  onClick={() => setFocusExpanded((value) => !value)}
-                >
-                  {focusExpanded ? 'Скрыть' : 'Показать полностью'}
-                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                    <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button> : null}
-              </div>
-            </div> : null}
           </>
           : <div className="dc-analysis-empty dc-manager-analysis-empty">
-            <span>✦</span><div><h3>Анализ не проведён</h3><p>Проведи полный анализ сделки, чтобы получить текущую ситуацию и подтвердить её.</p></div>{props.analysisEmptyAction}
+            <span>✦</span><div><h3>Анализ не проведён</h3><p>Проведи полный анализ сделки, чтобы получить текущую ситуацию.</p></div>{props.analysisEmptyAction}
           </div>}
         {props.job ? <ManagerJobProgress job={props.job} label="Пересборка ситуации" /> : null}
         {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
