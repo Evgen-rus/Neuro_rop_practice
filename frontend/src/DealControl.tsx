@@ -1038,7 +1038,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
             countForPlan={(bucket) => timeCounts[bucket as keyof typeof timeCounts] || 0}
           />
           <div className="dc-board-title">
-            <div><h2>{view === 'dashboard' ? 'Обзор портфеля сделок' : taskPlanTitle(timeView)}</h2><p>{view === 'dashboard' ? 'Каждая строка показывает стадию, контроль, прогноз оплаты и следующий шаг.' : 'Задачи выбранного периода, отсортированные по сроку.'}</p></div>
+            <div><h2>{view === 'dashboard' ? 'Обзор портфеля сделок' : taskPlanTitle(timeView)}</h2></div>
             <span>{view === 'dashboard' ? 'Сначала критичные ›' : 'Фокус дня ›'}</span>
           </div>
           {view === 'dashboard'
@@ -2382,30 +2382,30 @@ function countLabel(value: number, one: string, few: string, many: string) {
 
 function DailyCommunicationWidget({ summary }: { summary?: DealControlCommunicationsToday | null }) {
   const [open, setOpen] = useState(false)
-  const target = Math.max(1, summary?.target || 3)
   const completed = Math.max(0, summary?.completed || 0)
   const available = Boolean(summary?.available)
-  const done = available && completed >= target
-  const progress = available ? Math.max(0, Math.min(100, summary?.progress_percent || 0)) : 0
   const items = summary?.items || []
   const lastTouch = items.reduce((latest, item) => !latest || item.occurred_at > latest.occurred_at ? item : latest, items[0])
   const lastTouchTime = lastTouch
     ? formatMoscowDateTime(lastTouch.occurred_at, { hour: '2-digit', minute: '2-digit' }) || '—'
     : '—'
-  return <section className={`dc-communication-widget ${done ? 'done' : available ? 'partial' : 'unavailable'}`}>
+  const calls = Math.max(0, summary?.calls || 0)
+  const messages = Math.max(0, summary?.messages || 0)
+  return <section className={`dc-communication-widget ${available ? '' : 'unavailable'}`}>
     <div className="dc-communication-head">
-      <div className="dc-communication-title"><span>↗</span><div><h3>Коммуникации сегодня</h3><p>Отдельно от выполнения чек-листа</p></div></div>
-      <div className="dc-communication-score"><small>{available ? `${completed} касаний` : 'Нет данных'}</small></div>
+      <div className="dc-communication-title"><span>↗</span><div><h3>Коммуникации сегодня</h3></div></div>
+      <div className="dc-communication-score"><small>{available ? `${completed} ${countLabel(completed, 'касание', 'касания', 'касаний')}` : 'Нет данных'}</small></div>
     </div>
-    <div className="dc-communication-progress"><div><span style={{ width: `${progress}%` }} /></div><b>{progress}%</b></div>
     <div className="dc-communication-stats">
-      <span>☎ {summary?.calls || 0} {countLabel(summary?.calls || 0, 'звонок', 'звонка', 'звонков')}</span>
-      <span>✉ {summary?.messages || 0} {countLabel(summary?.messages || 0, 'сообщение', 'сообщения', 'сообщений')}</span>
-      <span>◴ {communicationDuration(summary?.duration_seconds || 0)}</span>
-      <span>Последнее {lastTouchTime}</span>
-      <button type="button" disabled={!items.length} aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть' : 'Детали'} <i>{open ? '⌃' : '⌄'}</i></button>
+      <div><strong>{calls}</strong><small>{countLabel(calls, 'звонок', 'звонка', 'звонков')}</small></div>
+      <div><strong>{messages}</strong><small>{countLabel(messages, 'сообщение', 'сообщения', 'сообщений')}</small></div>
+      <div><strong>{communicationDuration(summary?.duration_seconds || 0)}</strong><small>разговор</small></div>
+      <div><strong>{lastTouchTime}</strong><small>последнее касание</small></div>
     </div>
-    {!available ? <p className="dc-communication-note">Обновите Bitrix, чтобы получить активности за текущий московский день.</p> : null}
+    <div className="dc-communication-actions">
+      {!available ? <p className="dc-communication-note">Обновите Bitrix, чтобы получить активности за текущий московский день.</p> : null}
+      <button type="button" disabled={!items.length} aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть детали' : 'Показать детали'}</button>
+    </div>
     {open && items.length ? <div className="dc-communication-details">
       {items.map((item) => {
         const call = item.channel === 'call'
