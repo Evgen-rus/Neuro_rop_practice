@@ -1813,9 +1813,9 @@ function RopDealScreen({ deal, hasAnalysis, analysisEmptyAction }: {
       <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы сформировать чек-лист и текущий итог.</p></div>
       {analysisEmptyAction}
     </section> : null}
-    <DealChecklistCard deal={deal} editable={false} />
+    {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
-    <RopCurrentSummary deal={deal} />
+    {hasAnalysis ? <RopCurrentSummary deal={deal} /> : null}
   </>
 }
 
