@@ -20,7 +20,7 @@ def metadata(cost: float, raw: str = "{}") -> dict:
             "input_tokens": 10,
             "output_tokens": 5,
             "total_tokens": 15,
-            "input_tokens_details": {"cached_tokens": 1},
+            "input_tokens_details": {"cached_tokens": 1, "cache_write_tokens": 3},
             "output_tokens_details": {"reasoning_tokens": 2},
         },
         "estimated_cost": {"estimated_cost_usd": cost, "estimated_cost_rub": cost * 75},
@@ -57,6 +57,7 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
         self.assertIn("ok must be true", calls[1])
         self.assertEqual(result_metadata["semantic_attempt_count"], 2)
         self.assertEqual(result_metadata["usage"]["total_tokens"], 30)
+        self.assertEqual(result_metadata["usage"]["input_tokens_details"]["cache_write_tokens"], 6)
         self.assertEqual(result_metadata["estimated_cost_rub"], 22.5)
 
     def test_invalid_json_gets_one_correction_attempt(self) -> None:

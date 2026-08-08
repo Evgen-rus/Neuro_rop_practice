@@ -9,18 +9,20 @@ from typing import Any
 
 ANALYSIS_MODEL_PRICES_USD_PER_1M: dict[str, dict[str, float]] = {
     "gpt-5.6-terra": {
-        # OpenAI standard pricing, verified 2026-07-13:
+        # OpenAI standard pricing, verified 2026-08-08:
         # https://developers.openai.com/api/docs/models/gpt-5.6-terra
-        "input": 2.50,
-        "cached_input": 0.25,
-        "output": 15.00,
+        "input": 2.00,
+        "cached_input": 0.20,
+        "cache_write": 2.50,
+        "output": 12.00,
     },
     "gpt-5.6-luna": {
-        # OpenAI standard pricing, verified 2026-07-13:
+        # OpenAI standard pricing, verified 2026-08-08:
         # https://developers.openai.com/api/docs/models/gpt-5.6-luna
-        "input": 1.00,
-        "cached_input": 0.10,
-        "output": 6.00,
+        "input": 0.20,
+        "cached_input": 0.02,
+        "cache_write": 0.25,
+        "output": 1.20,
     },
     "gpt-5.5": {
         "input": 5.00,
@@ -60,6 +62,13 @@ def _cached_input_tokens(usage: dict[str, Any]) -> int:
     return int(_number(usage.get("cached_input_tokens")))
 
 
+def _cache_write_tokens(usage: dict[str, Any]) -> int:
+    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+    if isinstance(details, dict):
+        return int(_number(details.get("cache_write_tokens")))
+    return int(_number(usage.get("cache_write_tokens")))
+
+
 def rub_from_usd(cost_usd: float | None, usd_rub_rate: float) -> float | None:
     if cost_usd is None:
         return None
@@ -74,7 +83,8 @@ def estimate_analysis_cost(
     input_tokens = int(_number(usage.get("input_tokens")))
     output_tokens = int(_number(usage.get("output_tokens")))
     cached_input_tokens = min(_cached_input_tokens(usage), input_tokens)
-    billable_input_tokens = max(input_tokens - cached_input_tokens, 0)
+    cache_write_tokens = min(_cache_write_tokens(usage), max(input_tokens - cached_input_tokens, 0))
+    billable_input_tokens = max(input_tokens - cached_input_tokens - cache_write_tokens, 0)
     prices = ANALYSIS_MODEL_PRICES_USD_PER_1M.get(model)
 
     result: dict[str, Any] = {
@@ -82,7 +92,10 @@ def estimate_analysis_cost(
         "usd_rub_rate": usd_rub_rate,
         "input_tokens": input_tokens,
         "cached_input_tokens": cached_input_tokens,
+        "cache_write_tokens": cache_write_tokens,
         "billable_input_tokens": billable_input_tokens,
+        "cache_hit_ratio": round(cached_input_tokens / input_tokens, 4) if input_tokens else 0.0,
+        "cache_write_ratio": round(cache_write_tokens / input_tokens, 4) if input_tokens else 0.0,
         "output_tokens": output_tokens,
         "estimated_cost_usd": None,
         "estimated_cost_rub": None,
@@ -94,13 +107,16 @@ def estimate_analysis_cost(
 
     input_cost = billable_input_tokens * prices["input"] / 1_000_000
     cached_input_cost = cached_input_tokens * prices["cached_input"] / 1_000_000
+    cache_write_rate = prices.get("cache_write", prices["input"])
+    cache_write_cost = cache_write_tokens * cache_write_rate / 1_000_000
     output_cost = output_tokens * prices["output"] / 1_000_000
-    cost_usd = input_cost + cached_input_cost + output_cost
+    cost_usd = input_cost + cached_input_cost + cache_write_cost + output_cost
 
     result.update(
         {
             "input_usd_per_1m": prices["input"],
             "cached_input_usd_per_1m": prices["cached_input"],
+            "cache_write_usd_per_1m": cache_write_rate,
             "output_usd_per_1m": prices["output"],
             "estimated_cost_usd": round(cost_usd, 4),
             "estimated_cost_rub": rub_from_usd(cost_usd, usd_rub_rate),

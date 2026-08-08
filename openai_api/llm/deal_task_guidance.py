@@ -137,4 +137,6 @@ def generate_deal_task_guidance(
         model=model,
         max_output_tokens=MAX_GUIDANCE_OUTPUT_TOKENS,
         log_title="deal task guidance prompt",
+        call_type="deal_task_guidance",
+        disable_implicit_cache=True,
     )

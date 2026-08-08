@@ -8,6 +8,7 @@ from api import deal_manager_quick_help as quick_help
 from api import deal_manager_situation as situation
 from openai_api.llm.deal_manager_quick_help import (
     build_quick_help_prompt,
+    generate_deal_manager_quick_help,
     quick_help_schema,
     validate_quick_help,
 )
@@ -107,6 +108,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("Понял ситуацию", prompt)
         self.assertIn("Что сказать клиенту", prompt)
         self.assertIn("SITUATION_CONTEXT", prompt)
+        self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
         self.assertEqual(quick_help_schema()["properties"]["crm_checklist"]["maxItems"], 4)
@@ -115,6 +117,24 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             ["calm", "confident", "direct"],
         )
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
+
+    def test_generate_marks_reusable_deal_context_before_dynamic_question(self) -> None:
+        with patch(
+            "openai_api.llm.deal_manager_quick_help.call_structured_output_json",
+            return_value=(ANSWER, {}),
+        ) as call:
+            generate_deal_manager_quick_help(
+                question="Что сказать клиенту?",
+                analysis_projection=CONTEXT["analysis_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                situation_projection=CONTEXT["situation_projection"],
+            )
+        kwargs = call.call_args.kwargs
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v1")
+        self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
+        self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
+        self.assertTrue(call.call_args.args[0].startswith(kwargs["stable_prefix"]))
 
     def test_validation_rejects_missing_tone_variant(self) -> None:
         invalid = {**ANSWER, "client_messages": {"calm": "Текст", "confident": "Текст"}}

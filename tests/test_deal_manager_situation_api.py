@@ -13,6 +13,7 @@ from openai_api.llm.deal_manager_situation import (
     MANAGER_REASONING_EFFORT,
     build_situation_prompt,
     compact_analysis_projection,
+    generate_deal_manager_situation,
     situation_schema,
 )
 from openai_api.llm.llm_client import call_structured_output_json
@@ -102,6 +103,37 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertEqual(MANAGER_MODEL, ANALYSIS_MODEL)
         self.assertEqual(MANAGER_REASONING_EFFORT, ANALYSIS_REASONING_EFFORT)
         self.assertEqual(situation_schema()["properties"]["questions"]["maxItems"], 4)
+
+    def test_generate_caches_confirmed_context_but_not_previous_or_new_context(self) -> None:
+        result = {
+            "current_situation": "Клиент изучает КП",
+            "what_to_check_now": "Уточнить дату решения",
+            "rop_focus": "Зафиксировать следующий шаг",
+            "manager_coaching": "Задать один конкретный вопрос",
+            "known": ["КП отправлено"],
+            "unknowns": ["Дата решения"],
+            "contact_goal": "Получить дату решения",
+            "questions": ["Когда будет принято решение?"],
+            "script": "Подскажите, когда будет принято решение по КП?",
+            "script_variants": [],
+            "crm_checklist": ["Дата решения"],
+            "script_channel": "звонок",
+        }
+        with patch(
+            "openai_api.llm.deal_manager_situation.call_structured_output_json",
+            return_value=(result, {}),
+        ) as call:
+            generate_deal_manager_situation(
+                analysis_projection=compact_analysis_projection(REPORT["report_json"]),
+                deal=DEAL,
+                current_bitrix_task=DEAL["primary_bitrix_task"],
+                previous_manager_projection={"current_situation": "Старая версия"},
+                manager_context="Новый контекст",
+            )
+        prefix = call.call_args.kwargs["stable_prefix"]
+        self.assertIn("CURRENT_BITRIX_TASK", prefix)
+        self.assertNotIn("PREVIOUS_MANAGER_PROJECTION:\n", prefix)
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v1")
 
     def test_confirm_uses_canonical_storage_and_never_calls_llm(self) -> None:
         calls = []

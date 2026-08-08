@@ -26,8 +26,24 @@ class PricingTests(unittest.TestCase):
         usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
         terra = estimate_analysis_cost("gpt-5.6-terra", usage, 1)
         luna = estimate_analysis_cost("gpt-5.6-luna", usage, 1)
-        self.assertEqual(terra["estimated_cost_usd"], 17.5)
-        self.assertEqual(luna["estimated_cost_usd"], 7.0)
+        self.assertEqual(terra["estimated_cost_usd"], 14.0)
+        self.assertEqual(luna["estimated_cost_usd"], 1.4)
+
+    def test_gpt_56_cache_reads_and_writes_use_separate_rates(self) -> None:
+        usage = {
+            "input_tokens": 1_000_000,
+            "output_tokens": 0,
+            "input_tokens_details": {
+                "cached_tokens": 200_000,
+                "cache_write_tokens": 300_000,
+            },
+        }
+        result = estimate_analysis_cost("gpt-5.6-terra", usage, 1)
+        self.assertEqual(result["billable_input_tokens"], 500_000)
+        self.assertEqual(result["cached_input_tokens"], 200_000)
+        self.assertEqual(result["cache_write_tokens"], 300_000)
+        self.assertEqual(result["cache_write_usd_per_1m"], 2.50)
+        self.assertEqual(result["estimated_cost_usd"], 1.79)
 
     def test_unknown_model_is_not_assigned_a_price(self) -> None:
         result = estimate_analysis_cost("unknown", {"input_tokens": 10, "output_tokens": 10}, 75)

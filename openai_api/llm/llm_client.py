@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
+from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Callable
 
 from openai import OpenAI
@@ -20,11 +23,13 @@ from openai_api.config import (
     logger,
 )
 from openai_api.logging_utils import log_model_text_payload
+from openai_api.llm.usage_trace import append_usage_trace
 from openai_api.pricing import estimate_analysis_cost
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry
 
 
 client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0)
+PROMPT_CACHE_TTL = "30m"
 
 
 class ModelJsonParseError(ValueError):
@@ -121,12 +126,107 @@ def parse_json_object(text: str) -> dict[str, Any]:
     return value
 
 
+def prompt_prefix_before(prompt: str, marker: str) -> str:
+    """Return the unchanged prompt prefix before a required dynamic marker."""
+    index = prompt.find(marker)
+    if index <= 0:
+        raise ValueError(f"Prompt cache marker not found: {marker}")
+    return prompt[:index]
+
+
+def _request_fingerprint(prompt: str, stable_prefix: str | None) -> dict[str, Any]:
+    def fingerprint(text: str) -> dict[str, Any]:
+        encoded = text.encode("utf-8")
+        return {
+            "chars": len(text),
+            "bytes_utf8": len(encoded),
+            "sha256_16": hashlib.sha256(encoded).hexdigest()[:16],
+        }
+
+    return {
+        "prompt": fingerprint(prompt),
+        "stable_prefix": fingerprint(stable_prefix) if stable_prefix is not None else None,
+    }
+
+
+def _cache_request(
+    prompt: str,
+    *,
+    model: str,
+    prompt_cache_key: str | None,
+    stable_prefix: str | None,
+    disable_implicit_cache: bool,
+) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    if stable_prefix is not None and disable_implicit_cache:
+        raise ValueError("stable_prefix and disable_implicit_cache are mutually exclusive")
+    if stable_prefix is not None and (not stable_prefix or not prompt.startswith(stable_prefix)):
+        raise ValueError("Stable cache prefix must be a non-empty exact prompt prefix")
+    supports_explicit_cache = model.lower().startswith("gpt-5.6")
+    if (stable_prefix is not None or disable_implicit_cache) and not supports_explicit_cache:
+        request_options = {"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}
+        return prompt, request_options, {
+            "mode": "implicit_legacy",
+            "prompt_cache_key": prompt_cache_key,
+            "breakpoint_count": 0,
+            "ttl": None,
+        }
+    if stable_prefix is not None:
+        suffix = prompt[len(stable_prefix) :]
+        content: list[dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": stable_prefix,
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            }
+        ]
+        if suffix:
+            content.append({"type": "input_text", "text": suffix})
+        request_input: Any = [{"type": "message", "role": "user", "content": content}]
+        request_options: dict[str, Any] = {
+            "extra_body": {"prompt_cache_options": {"mode": "explicit", "ttl": PROMPT_CACHE_TTL}}
+        }
+        if prompt_cache_key:
+            request_options["prompt_cache_key"] = prompt_cache_key
+        return request_input, request_options, {
+            "mode": "explicit",
+            "prompt_cache_key": prompt_cache_key,
+            "breakpoint_count": 1,
+            "ttl": PROMPT_CACHE_TTL,
+        }
+    if disable_implicit_cache:
+        return (
+            prompt,
+            {"extra_body": {"prompt_cache_options": {"mode": "explicit", "ttl": PROMPT_CACHE_TTL}}},
+            {"mode": "explicit", "prompt_cache_key": None, "breakpoint_count": 0, "ttl": PROMPT_CACHE_TTL},
+        )
+    request_options = {"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}
+    return prompt, request_options, {
+        "mode": "implicit",
+        "prompt_cache_key": prompt_cache_key,
+        "breakpoint_count": 0,
+        "ttl": None,
+    }
+
+
 def call_analysis_json(
     prompt: str,
     *,
     model: str = ANALYSIS_MODEL,
     retry_callback: RetryCallback | None = None,
+    call_type: str = "full_analysis",
+    prompt_cache_key: str | None = None,
+    stable_prefix: str | None = None,
+    trace_entity_type: str | None = None,
+    trace_entity_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    request_fingerprint = _request_fingerprint(prompt, stable_prefix)
+    request_input, cache_options, cache_metadata = _cache_request(
+        prompt,
+        model=model,
+        prompt_cache_key=prompt_cache_key,
+        stable_prefix=stable_prefix,
+        disable_implicit_cache=False,
+    )
     log_model_text_payload(
         logger,
         title="deal analysis prompt",
@@ -136,39 +236,70 @@ def call_analysis_json(
             "api": "responses.create",
             "response_format": "json_object",
             "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+            "call_type": call_type,
+            "prompt_cache": cache_metadata,
         },
     )
-
-    response = run_with_retry(
-        lambda: client.responses.create(
-            model=model,
-            input=prompt,
-            max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
-            reasoning={"effort": ANALYSIS_REASONING_EFFORT},
-            text={"format": {"type": "json_object"}},
-            store=False,
-        ),
-        operation_name="openai:responses.create",
-        policy=DEFAULT_TRANSPORT_RETRY,
-        on_event=retry_callback,
-    )
+    requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    started_at = perf_counter()
+    try:
+        response = run_with_retry(
+            lambda: client.responses.create(
+                model=model,
+                input=request_input,
+                max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
+                reasoning={"effort": ANALYSIS_REASONING_EFFORT},
+                text={"format": {"type": "json_object"}},
+                store=False,
+                **cache_options,
+            ),
+            operation_name="openai:responses.create",
+            policy=DEFAULT_TRANSPORT_RETRY,
+            on_event=retry_callback,
+        )
+    except Exception as error:
+        append_usage_trace(
+            {
+                "model": model,
+                "call_type": call_type,
+                "requested_at": requested_at,
+                "latency_seconds": round(perf_counter() - started_at, 4),
+                "prompt_cache": cache_metadata,
+                "request_fingerprint": request_fingerprint,
+                "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+            },
+            status="error",
+            entity_type=trace_entity_type,
+            entity_id=trace_entity_id,
+            error_type=type(error).__name__,
+        )
+        raise
+    latency_seconds = round(perf_counter() - started_at, 4)
 
     text = response_output_text(response)
     usage = usage_to_dict(response)
     estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
     logger.info(
-        "OpenAI analysis response usage: model=%s input_tokens=%s cached_input_tokens=%s output_tokens=%s total_tokens=%s estimated_cost_usd=%s estimated_cost_rub=%s",
+        "OpenAI analysis response usage: call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
+        call_type,
         model,
         usage.get("input_tokens"),
         estimated_cost.get("cached_input_tokens"),
+        estimated_cost.get("cache_write_tokens"),
         usage.get("output_tokens"),
         usage.get("total_tokens"),
+        latency_seconds,
         estimated_cost.get("estimated_cost_usd"),
         estimated_cost.get("estimated_cost_rub"),
     )
 
     metadata = {
         "model": model,
+        "call_type": call_type,
+        "requested_at": requested_at,
+        "latency_seconds": latency_seconds,
+        "prompt_cache": cache_metadata,
+        "request_fingerprint": request_fingerprint,
         "reasoning_effort": ANALYSIS_REASONING_EFFORT,
         "usage": usage,
         "estimated_cost": estimated_cost,
@@ -181,6 +312,13 @@ def call_analysis_json(
     try:
         parsed = parse_json_object(text)
     except (json.JSONDecodeError, ValueError) as error:
+        append_usage_trace(
+            metadata,
+            status="error",
+            entity_type=trace_entity_type,
+            entity_id=trace_entity_id,
+            error_type="ModelJsonParseError",
+        )
         preview = text[:500].replace("\n", "\\n")
         raise ModelJsonParseError(
             f"Model returned invalid JSON: {error}. Raw output preview: {preview}",
@@ -188,6 +326,7 @@ def call_analysis_json(
             metadata=metadata,
         ) from error
 
+    append_usage_trace(metadata, entity_type=trace_entity_type, entity_id=trace_entity_id)
     return parsed, metadata
 
 
@@ -226,6 +365,12 @@ def _aggregate_attempt_metadata(attempts: list[dict[str, Any]], final_metadata: 
     estimated_cost["estimated_cost_usd"] = result["estimated_cost_usd"]
     estimated_cost["estimated_cost_rub"] = result["estimated_cost_rub"]
     result["estimated_cost"] = estimated_cost
+    result["latency_seconds"] = round(
+        sum(float(item.get("latency_seconds") or 0) for item in attempts),
+        4,
+    )
+    if attempts:
+        result["requested_at"] = attempts[0].get("requested_at", result.get("requested_at"))
     usage_rows = [item.get("usage") for item in attempts if isinstance(item.get("usage"), dict)]
     if usage_rows:
         input_details_rows = [
@@ -240,11 +385,19 @@ def _aggregate_attempt_metadata(attempts: list[dict[str, Any]], final_metadata: 
             "total_tokens": sum(int(row.get("total_tokens") or 0) for row in usage_rows),
             "input_tokens_details": {
                 "cached_tokens": sum(int(row.get("cached_tokens") or 0) for row in input_details_rows),
+                "cache_write_tokens": sum(
+                    int(row.get("cache_write_tokens") or 0) for row in input_details_rows
+                ),
             },
             "output_tokens_details": {
                 "reasoning_tokens": sum(int(row.get("reasoning_tokens") or 0) for row in output_details_rows),
             },
         }
+        aggregate_cost = estimate_analysis_cost(str(result.get("model") or ""), result["usage"], USD_RUB_RATE)
+        for key, value in aggregate_cost.items():
+            if key not in {"estimated_cost_usd", "estimated_cost_rub"}:
+                estimated_cost[key] = value
+        result["estimated_cost"] = estimated_cost
     return result
 
 
@@ -258,6 +411,11 @@ def call_validated_analysis_json(
     retry_callback: RetryCallback | None = None,
     semantic_callback: RetryCallback | None = None,
     analysis_caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_analysis_json,
+    call_type: str = "full_analysis",
+    prompt_cache_key: str | None = None,
+    prompt_cache_marker: str | None = None,
+    trace_entity_type: str | None = None,
+    trace_entity_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
     current_prompt = prompt
@@ -280,6 +438,13 @@ def call_validated_analysis_json(
                 current_prompt,
                 model=model,
                 retry_callback=retry_callback,
+                call_type=call_type,
+                prompt_cache_key=prompt_cache_key,
+                stable_prefix=prompt_prefix_before(current_prompt, prompt_cache_marker)
+                if prompt_cache_marker
+                else None,
+                trace_entity_type=trace_entity_type,
+                trace_entity_id=trace_entity_id,
             )
             final_raw = str(metadata.get("raw_output_text") or "")
             final_analysis = analysis
@@ -356,9 +521,24 @@ def call_structured_output_json(
     max_output_tokens: int = ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     retry_callback: RetryCallback | None = None,
     log_title: str = "structured output prompt",
+    call_type: str | None = None,
+    prompt_cache_key: str | None = None,
+    stable_prefix: str | None = None,
+    disable_implicit_cache: bool = False,
+    trace_entity_type: str | None = None,
+    trace_entity_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call Responses structured outputs without changing the legacy JSON client."""
     effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
+    effective_call_type = call_type or schema_name
+    request_fingerprint = _request_fingerprint(prompt, stable_prefix)
+    request_input, cache_options, cache_metadata = _cache_request(
+        prompt,
+        model=model,
+        prompt_cache_key=prompt_cache_key,
+        stable_prefix=stable_prefix,
+        disable_implicit_cache=disable_implicit_cache,
+    )
     log_model_text_payload(
         logger,
         title=log_title,
@@ -369,26 +549,68 @@ def call_structured_output_json(
             "response_format": "json_schema",
             "schema_name": schema_name,
             "reasoning_effort": effective_reasoning_effort,
+            "call_type": effective_call_type,
+            "prompt_cache": cache_metadata,
         },
     )
-    response = run_with_retry(
-        lambda: client.responses.create(
-            model=model,
-            input=prompt,
-            max_output_tokens=max_output_tokens,
-            reasoning={"effort": effective_reasoning_effort},
-            text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
-            store=False,
-        ),
-        operation_name=f"openai:responses.create:{schema_name}",
-        policy=DEFAULT_TRANSPORT_RETRY,
-        on_event=retry_callback,
-    )
+    requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    started_at = perf_counter()
+    try:
+        response = run_with_retry(
+            lambda: client.responses.create(
+                model=model,
+                input=request_input,
+                max_output_tokens=max_output_tokens,
+                reasoning={"effort": effective_reasoning_effort},
+                text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
+                store=False,
+                **cache_options,
+            ),
+            operation_name=f"openai:responses.create:{schema_name}",
+            policy=DEFAULT_TRANSPORT_RETRY,
+            on_event=retry_callback,
+        )
+    except Exception as error:
+        append_usage_trace(
+            {
+                "model": model,
+                "call_type": effective_call_type,
+                "requested_at": requested_at,
+                "latency_seconds": round(perf_counter() - started_at, 4),
+                "prompt_cache": cache_metadata,
+                "request_fingerprint": request_fingerprint,
+                "reasoning_effort": effective_reasoning_effort,
+            },
+            status="error",
+            entity_type=trace_entity_type,
+            entity_id=trace_entity_id,
+            error_type=type(error).__name__,
+        )
+        raise
+    latency_seconds = round(perf_counter() - started_at, 4)
     text = response_output_text(response)
     usage = usage_to_dict(response)
     estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    logger.info(
+        "OpenAI structured response usage: call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
+        effective_call_type,
+        model,
+        usage.get("input_tokens"),
+        estimated_cost.get("cached_input_tokens"),
+        estimated_cost.get("cache_write_tokens"),
+        usage.get("output_tokens"),
+        usage.get("total_tokens"),
+        latency_seconds,
+        estimated_cost.get("estimated_cost_usd"),
+        estimated_cost.get("estimated_cost_rub"),
+    )
     metadata = {
         "model": model,
+        "call_type": effective_call_type,
+        "requested_at": requested_at,
+        "latency_seconds": latency_seconds,
+        "prompt_cache": cache_metadata,
+        "request_fingerprint": request_fingerprint,
         "reasoning_effort": effective_reasoning_effort,
         "usage": usage,
         "estimated_cost": estimated_cost,
@@ -402,6 +624,13 @@ def call_structured_output_json(
         "max_output_tokens": max_output_tokens,
     }
     if metadata["response_status"] == "incomplete":
+        append_usage_trace(
+            metadata,
+            status="incomplete",
+            entity_type=trace_entity_type,
+            entity_id=trace_entity_id,
+            error_type="ModelResponseIncompleteError",
+        )
         reason = metadata["incomplete_reason"] or "unknown"
         raise ModelResponseIncompleteError(
             f"Structured output is incomplete: {reason}",
@@ -411,10 +640,18 @@ def call_structured_output_json(
     try:
         parsed = parse_json_object(text)
     except (json.JSONDecodeError, ValueError) as error:
+        append_usage_trace(
+            metadata,
+            status="error",
+            entity_type=trace_entity_type,
+            entity_id=trace_entity_id,
+            error_type="ModelJsonParseError",
+        )
         preview = text[:500].replace("\n", "\\n")
         raise ModelJsonParseError(
             f"Structured output returned invalid JSON: {error}. Raw output preview: {preview}",
             raw_output_text=text,
             metadata=metadata,
         ) from error
+    append_usage_trace(metadata, entity_type=trace_entity_type, entity_id=trace_entity_id)
     return parsed, metadata

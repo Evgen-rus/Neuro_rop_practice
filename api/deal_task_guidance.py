@@ -74,6 +74,10 @@ def _load_context(db_path: str | Path, task_id: int) -> tuple[dict[str, Any], di
 def _safe_model_meta(metadata: dict[str, Any]) -> dict[str, Any]:
     allowed = (
         "model",
+        "call_type",
+        "requested_at",
+        "latency_seconds",
+        "prompt_cache",
         "reasoning_effort",
         "usage",
         "estimated_cost",

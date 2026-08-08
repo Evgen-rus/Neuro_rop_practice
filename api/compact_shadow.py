@@ -28,7 +28,7 @@ from openai_api.llm.attention_delta import (
 )
 from openai_api.llm.evidence_coverage import validate_evidence_context_coverage
 from openai_api.llm.lead_playbook_resolver import normalize_lead_action_playbook
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -165,6 +165,11 @@ def _execute_run(entity_type: str, entity_id: str, run_id: str) -> dict[str, Any
             schema_name=schema_name,
             model=ANALYSIS_MODEL,
             max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
+            call_type=schema_name,
+            prompt_cache_key=f"neuro-rop:{schema_name}:v1",
+            stable_prefix=prompt_prefix_before(prompt, "## CRM_STAGE_POLICY"),
+            trace_entity_type=entity_type,
+            trace_entity_id=entity_id,
         )
         raw_review_key = "lead_review" if entity_type == "lead" else "deal_review"
         raw_review = delta.get(raw_review_key) if isinstance(delta.get(raw_review_key), dict) else {}

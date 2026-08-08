@@ -68,6 +68,7 @@ def legacy_metrics(baseline: dict[str, Any]) -> dict[str, Any]:
         "model": metadata.get("model"),
         "input_tokens": usage.get("input_tokens"),
         "cached_input_tokens": details.get("cached_tokens", usage.get("cached_input_tokens")),
+        "cache_write_tokens": details.get("cache_write_tokens", usage.get("cache_write_tokens")),
         "output_tokens": usage.get("output_tokens"),
         "total_tokens": usage.get("total_tokens"),
         "estimated_cost_usd": metadata.get("estimated_cost_usd"),

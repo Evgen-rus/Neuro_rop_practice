@@ -45,6 +45,7 @@ from openai_api.llm.llm_client import (
     ModelJsonParseError,
     ModelResponseIncompleteError,
     call_structured_output_json,
+    prompt_prefix_before,
 )
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.pricing import estimate_analysis_cost
@@ -314,6 +315,7 @@ def print_api_confirmation(prepared_cases: list[dict[str, Any]], total_cost_rub:
 def response_metrics(metadata: dict[str, Any], *, max_output_tokens: int) -> dict[str, Any]:
     """Store response-limit telemetry separately from the attention delta."""
     usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
+    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
     output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
     output_tokens = usage.get("output_tokens")
     reasoning_tokens = output_details.get("reasoning_tokens", usage.get("reasoning_tokens"))
@@ -321,12 +323,19 @@ def response_metrics(metadata: dict[str, Any], *, max_output_tokens: int) -> dic
     if isinstance(output_tokens, (int, float)) and max_output_tokens > 0:
         output_limit_usage_ratio = round(float(output_tokens) / max_output_tokens, 4)
     return {
+        "input_tokens": usage.get("input_tokens"),
+        "cached_input_tokens": input_details.get("cached_tokens", usage.get("cached_input_tokens")),
+        "cache_write_tokens": input_details.get("cache_write_tokens", usage.get("cache_write_tokens")),
         "output_tokens": output_tokens,
         "reasoning_tokens": reasoning_tokens,
         "max_output_tokens": max_output_tokens,
         "output_limit_usage_ratio": output_limit_usage_ratio,
         "response_status": metadata.get("response_status"),
         "incomplete_reason": metadata.get("incomplete_reason"),
+        "call_type": metadata.get("call_type"),
+        "requested_at": metadata.get("requested_at"),
+        "latency_seconds": metadata.get("latency_seconds"),
+        "prompt_cache": metadata.get("prompt_cache"),
     }
 
 
@@ -407,6 +416,9 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
             schema_name=schema_name,
             model=model,
             max_output_tokens=ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
+            call_type=schema_name,
+            prompt_cache_key=f"neuro-rop:{schema_name}:v1",
+            stable_prefix=prompt_prefix_before(prompt, "## CRM_STAGE_POLICY"),
         )
     except ModelResponseIncompleteError as error:
         write_prompt_budget(budget_path, attach_response_metadata(budget, error.metadata))

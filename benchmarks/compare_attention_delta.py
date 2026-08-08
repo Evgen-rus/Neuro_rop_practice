@@ -38,7 +38,10 @@ def _legacy_summary(analysis_payload: dict[str, Any]) -> dict[str, Any]:
         "message_to_manager": _first(_nested(analysis, "rop_manager_message_block", "message_to_manager"), _nested(analysis, "rop_action", "message_to_manager")),
         "evidence": _first(_nested(analysis, "rop_manager_message_block", "evidence"), _nested(analysis, "main_risk", "evidence")),
         "input_tokens": usage.get("input_tokens"),
+        "cached_input_tokens": _nested(usage, "input_tokens_details", "cached_tokens"),
+        "cache_write_tokens": _nested(usage, "input_tokens_details", "cache_write_tokens"),
         "output_tokens": usage.get("output_tokens"),
+        "latency_seconds": metadata.get("latency_seconds"),
         "estimated_cost_usd": metadata.get("estimated_cost_usd"),
         "estimated_cost_rub": metadata.get("estimated_cost_rub"),
     }
@@ -55,7 +58,10 @@ def _compact_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "message_to_manager": action.get("message_to_manager"),
         "evidence_ids": action.get("evidence_ids"),
         "input_tokens": usage.get("input_tokens"),
+        "cached_input_tokens": _nested(usage, "input_tokens_details", "cached_tokens"),
+        "cache_write_tokens": _nested(usage, "input_tokens_details", "cache_write_tokens"),
         "output_tokens": usage.get("output_tokens"),
+        "latency_seconds": metadata.get("latency_seconds"),
         "estimated_cost_usd": metadata.get("estimated_cost_usd"),
         "estimated_cost_rub": metadata.get("estimated_cost_rub"),
     }

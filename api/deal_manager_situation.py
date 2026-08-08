@@ -66,6 +66,10 @@ def _now() -> str:
 def _safe_model_meta(metadata: dict[str, Any] | None) -> dict[str, Any]:
     allowed = {
         "model",
+        "call_type",
+        "requested_at",
+        "latency_seconds",
+        "prompt_cache",
         "reasoning_effort",
         "usage",
         "estimated_cost",

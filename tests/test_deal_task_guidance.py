@@ -15,6 +15,7 @@ from openai_api.llm.deal_task_guidance import (
     build_deal_task_guidance_prompt,
     compact_analysis_context,
     deal_task_guidance_schema,
+    generate_deal_task_guidance,
 )
 from storage.rop_db import (
     create_deal_control_task,
@@ -117,6 +118,19 @@ class DealTaskGuidanceTests(unittest.TestCase):
         self.assertEqual(deal_task_guidance_schema()["properties"]["known_facts"]["maxItems"], 4)
         self.assertEqual(set(deal_task_guidance_schema()["required"]), set(GUIDANCE))
         self.assertNotIn("private_extra", compact_analysis_context(report))
+
+    def test_guidance_disables_implicit_cache_for_one_off_request(self):
+        with patch(
+            "openai_api.llm.deal_task_guidance.call_structured_output_json",
+            return_value=(GUIDANCE, {}),
+        ) as call:
+            generate_deal_task_guidance(
+                task={"id": 7, "task_text": "Позвонить клиенту"},
+                deal={"deal_id": "101"},
+                report_json={"deal_state": {"summary": "КП отправлено"}},
+            )
+        self.assertTrue(call.call_args.kwargs["disable_implicit_cache"])
+        self.assertEqual(call.call_args.kwargs["call_type"], "deal_task_guidance")
 
     def test_guidance_becomes_stale_only_when_task_input_or_report_changes(self):
         with tempfile.TemporaryDirectory() as directory:

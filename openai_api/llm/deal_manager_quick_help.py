@@ -12,7 +12,7 @@ from openai_api.llm.deal_manager_situation import (
     project_bitrix_task,
     project_deal,
 )
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
 
 
 MAX_QUICK_HELP_OUTPUT_TOKENS = 3000
@@ -141,11 +141,11 @@ def build_quick_help_prompt(
             "- crm_checklist — только то, что менеджер должен зафиксировать после фактического действия.\n"
             "- Верни только полный объект по JSON-схеме, спокойно, эмпатично, прямо и по-русски.\n"
             "- Этот запрос независим: не используй и не запрашивай историю прошлых quick help.",
-            _section("MANAGER_QUESTION", question),
             _section("SITUATION_CONTEXT", situation_projection),
             _section("ANALYSIS_CONTEXT", analysis_projection),
             _section("DEAL_CONTEXT", project_deal(deal)),
             _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
+            _section("MANAGER_QUESTION", question),
         ]
     )
 
@@ -175,6 +175,9 @@ def generate_deal_manager_quick_help(
         reasoning_effort=reasoning_effort,
         max_output_tokens=MAX_QUICK_HELP_OUTPUT_TOKENS,
         log_title="deal manager quick help prompt",
+        call_type="deal_manager_quick_help",
+        prompt_cache_key="neuro-rop:deal-manager-quick-help:v1",
+        stable_prefix=prompt_prefix_before(prompt, "MANAGER_QUESTION:"),
     )
     return validate_quick_help(result), metadata
 

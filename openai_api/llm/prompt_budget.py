@@ -135,12 +135,16 @@ def attach_response_metadata(budget: dict[str, Any], metadata: dict[str, Any]) -
     result["actual_usage"] = {
         "input_tokens": usage.get("input_tokens"),
         "cached_input_tokens": input_details.get("cached_tokens", usage.get("cached_input_tokens")),
+        "cache_write_tokens": input_details.get("cache_write_tokens", usage.get("cache_write_tokens")),
         "output_tokens": usage.get("output_tokens"),
         "reasoning_tokens": output_details.get("reasoning_tokens", usage.get("reasoning_tokens")),
         "total_tokens": usage.get("total_tokens"),
     }
     result["cost"] = metadata.get("estimated_cost")
     result["model"] = metadata.get("model", result.get("model"))
+    for key in ("call_type", "requested_at", "latency_seconds", "prompt_cache"):
+        if key in metadata:
+            result[key] = metadata[key]
     return result
 
 

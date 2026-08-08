@@ -109,12 +109,17 @@ class PromptBudgetTests(unittest.TestCase):
             budget,
             {
                 "model": "gpt-5.4-mini",
-                "usage": {"input_tokens": 100, "output_tokens": 20, "input_tokens_details": {"cached_tokens": 80}},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "input_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 10},
+                },
                 "estimated_cost": {"estimated_cost_rub": 1.23},
                 "raw_output_text": "sensitive model answer",
             },
         )
         self.assertEqual(result["actual_usage"]["cached_input_tokens"], 80)
+        self.assertEqual(result["actual_usage"]["cache_write_tokens"], 10)
         self.assertEqual(result["cost"]["estimated_cost_rub"], 1.23)
         self.assertNotIn("raw_output_text", json.dumps(result, ensure_ascii=False))
 

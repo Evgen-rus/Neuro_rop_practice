@@ -579,7 +579,7 @@ def render_cost_section(metadata: dict[str, Any] | None) -> str:
     return f"""## Стоимость анализа
 
 - Модель: {cost.get('model', 'не указано')}
-- Токены: input {cost.get('input_tokens', 0)}, cached input {cost.get('cached_input_tokens', 0)}, output {cost.get('output_tokens', 0)}
+- Токены: input {cost.get('input_tokens', 0)}, cached input {cost.get('cached_input_tokens', 0)}, cache write {cost.get('cache_write_tokens', 0)}, output {cost.get('output_tokens', 0)}
 - Стоимость: {format_usd_rub(cost.get('estimated_cost_usd'), cost.get('estimated_cost_rub'))}
 - Курс: 1 USD = {cost.get('usd_rub_rate', 'не указан')} руб."""
 
@@ -1111,6 +1111,11 @@ def main() -> None:
                 "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
             ),
             analysis_caller=call_analysis_json,
+            call_type="full_deal_analysis",
+            prompt_cache_key="neuro-rop:full-deal:v1",
+            prompt_cache_marker="## ИСТОРИЯ СДЕЛКИ",
+            trace_entity_type="deal",
+            trace_entity_id=str(args.deal_id),
         )
     except ValidatedAnalysisFailure as error:
         write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, error.metadata))

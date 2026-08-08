@@ -12,7 +12,7 @@ import os
 from typing import Any
 
 from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
 
 
 MANAGER_MODEL = os.getenv("DEAL_MANAGER_MODEL", ANALYSIS_MODEL).strip() or ANALYSIS_MODEL
@@ -393,5 +393,8 @@ def generate_deal_manager_situation(
         reasoning_effort=reasoning_effort,
         max_output_tokens=MAX_SITUATION_OUTPUT_TOKENS,
         log_title="deal manager situation prompt",
+        call_type="deal_manager_situation",
+        prompt_cache_key="neuro-rop:deal-manager-situation:v1",
+        stable_prefix=prompt_prefix_before(prompt, "PREVIOUS_MANAGER_PROJECTION:"),
     )
     return validate_situation_projection(result), metadata
