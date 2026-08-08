@@ -82,6 +82,9 @@ def dispatcher(*, saved=None, state=None, calls=None):
 class DealManagerSituationTests(unittest.TestCase):
     def setUp(self) -> None:
         situation._SITUATION_JOBS.clear()
+        trace_patch = patch("openai_api.llm.llm_client.append_usage_trace")
+        trace_patch.start()
+        self.addCleanup(trace_patch.stop)
 
     def test_prompt_is_sectioned_and_analysis_is_allow_listed(self) -> None:
         projection = compact_analysis_projection(REPORT["report_json"])

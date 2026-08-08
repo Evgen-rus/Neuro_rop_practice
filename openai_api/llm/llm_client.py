@@ -134,7 +134,11 @@ def prompt_prefix_before(prompt: str, marker: str) -> str:
     return prompt[:index]
 
 
-def _request_fingerprint(prompt: str, stable_prefix: str | None) -> dict[str, Any]:
+def _request_fingerprint(
+    prompt: str,
+    stable_prefix: str | None,
+    cache_prefixes: list[str] | None = None,
+) -> dict[str, Any]:
     def fingerprint(text: str) -> dict[str, Any]:
         encoded = text.encode("utf-8")
         return {
@@ -143,9 +147,11 @@ def _request_fingerprint(prompt: str, stable_prefix: str | None) -> dict[str, An
             "sha256_16": hashlib.sha256(encoded).hexdigest()[:16],
         }
 
+    effective_prefixes = cache_prefixes or ([stable_prefix] if stable_prefix is not None else [])
     return {
         "prompt": fingerprint(prompt),
-        "stable_prefix": fingerprint(stable_prefix) if stable_prefix is not None else None,
+        "stable_prefix": fingerprint(effective_prefixes[-1]) if effective_prefixes else None,
+        "cache_prefixes": [fingerprint(prefix) for prefix in effective_prefixes],
     }
 
 
@@ -156,13 +162,24 @@ def _cache_request(
     prompt_cache_key: str | None,
     stable_prefix: str | None,
     disable_implicit_cache: bool,
+    cache_prefixes: list[str] | None = None,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    if stable_prefix is not None and disable_implicit_cache:
-        raise ValueError("stable_prefix and disable_implicit_cache are mutually exclusive")
-    if stable_prefix is not None and (not stable_prefix or not prompt.startswith(stable_prefix)):
-        raise ValueError("Stable cache prefix must be a non-empty exact prompt prefix")
+    if stable_prefix is not None and cache_prefixes is not None:
+        raise ValueError("stable_prefix and cache_prefixes are mutually exclusive")
+    effective_prefixes = cache_prefixes or ([stable_prefix] if stable_prefix is not None else [])
+    if effective_prefixes and disable_implicit_cache:
+        raise ValueError("cache prefixes and disable_implicit_cache are mutually exclusive")
+    if len(effective_prefixes) > 4:
+        raise ValueError("OpenAI explicit prompt caching supports at most 4 breakpoints per request")
+    previous_length = 0
+    for prefix in effective_prefixes:
+        if not prefix or not prompt.startswith(prefix):
+            raise ValueError("Cache prefixes must be non-empty exact prompt prefixes")
+        if len(prefix) <= previous_length:
+            raise ValueError("Cache prefixes must be unique and ordered from shortest to longest")
+        previous_length = len(prefix)
     supports_explicit_cache = model.lower().startswith("gpt-5.6")
-    if (stable_prefix is not None or disable_implicit_cache) and not supports_explicit_cache:
+    if (effective_prefixes or disable_implicit_cache) and not supports_explicit_cache:
         request_options = {"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}
         return prompt, request_options, {
             "mode": "implicit_legacy",
@@ -170,17 +187,21 @@ def _cache_request(
             "breakpoint_count": 0,
             "ttl": None,
         }
-    if stable_prefix is not None:
-        suffix = prompt[len(stable_prefix) :]
-        content: list[dict[str, Any]] = [
-            {
-                "type": "input_text",
-                "text": stable_prefix,
-                "prompt_cache_breakpoint": {"mode": "explicit"},
-            }
-        ]
-        if suffix:
-            content.append({"type": "input_text", "text": suffix})
+    if effective_prefixes:
+        content: list[dict[str, Any]] = []
+        start = 0
+        for prefix in effective_prefixes:
+            end = len(prefix)
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": prompt[start:end],
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+            )
+            start = end
+        if start < len(prompt):
+            content.append({"type": "input_text", "text": prompt[start:]})
         request_input: Any = [{"type": "message", "role": "user", "content": content}]
         request_options: dict[str, Any] = {
             "extra_body": {"prompt_cache_options": {"mode": "explicit", "ttl": PROMPT_CACHE_TTL}}
@@ -190,7 +211,7 @@ def _cache_request(
         return request_input, request_options, {
             "mode": "explicit",
             "prompt_cache_key": prompt_cache_key,
-            "breakpoint_count": 1,
+            "breakpoint_count": len(effective_prefixes),
             "ttl": PROMPT_CACHE_TTL,
         }
     if disable_implicit_cache:
@@ -216,15 +237,17 @@ def call_analysis_json(
     call_type: str = "full_analysis",
     prompt_cache_key: str | None = None,
     stable_prefix: str | None = None,
+    cache_prefixes: list[str] | None = None,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    request_fingerprint = _request_fingerprint(prompt, stable_prefix)
+    request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
     request_input, cache_options, cache_metadata = _cache_request(
         prompt,
         model=model,
         prompt_cache_key=prompt_cache_key,
         stable_prefix=stable_prefix,
+        cache_prefixes=cache_prefixes,
         disable_implicit_cache=False,
     )
     log_model_text_payload(
@@ -414,6 +437,7 @@ def call_validated_analysis_json(
     call_type: str = "full_analysis",
     prompt_cache_key: str | None = None,
     prompt_cache_marker: str | None = None,
+    prompt_cache_markers: list[str] | None = None,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -434,15 +458,18 @@ def call_validated_analysis_json(
                 }
             )
         try:
+            if prompt_cache_marker is not None and prompt_cache_markers is not None:
+                raise ValueError("prompt_cache_marker and prompt_cache_markers are mutually exclusive")
+            markers = prompt_cache_markers or ([prompt_cache_marker] if prompt_cache_marker else [])
+            cache_prefixes = [prompt_prefix_before(current_prompt, marker) for marker in markers]
+            cache_prefixes = sorted(set(cache_prefixes), key=len)
             analysis, metadata = analysis_caller(
                 current_prompt,
                 model=model,
                 retry_callback=retry_callback,
                 call_type=call_type,
                 prompt_cache_key=prompt_cache_key,
-                stable_prefix=prompt_prefix_before(current_prompt, prompt_cache_marker)
-                if prompt_cache_marker
-                else None,
+                cache_prefixes=cache_prefixes or None,
                 trace_entity_type=trace_entity_type,
                 trace_entity_id=trace_entity_id,
             )

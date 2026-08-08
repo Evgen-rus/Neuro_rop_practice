@@ -597,6 +597,11 @@ class AttentionDeltaShadowRunnerTests(unittest.TestCase):
 
 
 class StructuredOutputClientTests(unittest.TestCase):
+    def setUp(self) -> None:
+        trace_patch = patch("openai_api.llm.llm_client.append_usage_trace")
+        trace_patch.start()
+        self.addCleanup(trace_patch.stop)
+
     def test_uses_responses_strict_json_schema(self) -> None:
         response = SimpleNamespace(
             id="resp_test",

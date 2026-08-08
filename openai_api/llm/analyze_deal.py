@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from bitrix.context_diagnostics import ensure_context_diagnostics
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
+from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, logger
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
@@ -31,6 +33,9 @@ from setup import MSK_TZ
 
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
+DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
+TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
+HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +76,11 @@ def read_text(path: Path) -> str:
 
 def latest_transcript(transcripts_dir: Path) -> Path:
     candidates = sorted(
-        [path for path in transcripts_dir.glob("*.md") if path.is_file()],
+        [
+            path
+            for path in transcripts_dir.glob("*.md")
+            if path.is_file() and AGGREGATE_STEM not in path.stem
+        ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -96,6 +105,25 @@ def resolve_transcript(value: str, deal_dir: Path) -> Path | None:
     if not path.exists():
         raise FileNotFoundError(f"Transcript not found: {path}")
     return path
+
+
+def transcript_text_for_prompt(transcript_path: Path | None, transcript_text: str) -> str:
+    """Keep all-calls transcript text append-only so earlier calls remain cacheable."""
+    if transcript_path is None or AGGREGATE_STEM not in transcript_path.stem:
+        return transcript_text
+    marker = "## Тексты звонков"
+    marker_index = transcript_text.find(marker)
+    return transcript_text[marker_index:] if marker_index >= 0 else transcript_text
+
+
+def deal_prompt_cache_markers(transcript_text: str) -> list[str]:
+    """Return up to three exact boundaries: global, prior calls, and all current calls."""
+    markers = [DEAL_ID_SECTION_MARKER]
+    call_markers = re.findall(r"^### Звонок[^\n]*", transcript_text, flags=re.MULTILINE)
+    if call_markers:
+        markers.append(call_markers[-1])
+    markers.append(HISTORY_SECTION_MARKER)
+    return markers
 
 
 def resolve_history_path(deal_dir: Path, deal_id: str) -> Path:
@@ -345,7 +373,7 @@ def build_prompt(
 
 Нужная JSON-структура:
 {{
-  "deal_id": "{deal_id}",
+  "deal_id": "ID сделки из раздела ID СДЕЛКИ",
   "deal_state": {{
     "summary": "краткое состояние сделки",
     "amount": "сумма, если есть",
@@ -549,13 +577,21 @@ def build_prompt(
   }}
 }}
 
-## ИСТОРИЯ СДЕЛКИ
+## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
 
-{history_text.strip()}
+{okf_text}
 
-## ТРАНСКРИБАЦИЯ / НОВОЕ СОБЫТИЕ
+{DEAL_ID_SECTION_MARKER}
+
+{deal_id}
+
+{TRANSCRIPT_SECTION_MARKER}
 
 {transcript_text.strip()}
+
+{HISTORY_SECTION_MARKER}
+
+{history_text.strip()}
 
 ## ДИАГНОСТИКА ПОЛНОТЫ КОНТЕКСТА
 
@@ -564,10 +600,6 @@ def build_prompt(
 ## CRM_STAGE_POLICY
 
 {stage_policy_text}
-
-## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
-
-{okf_text}
 """
 
 
@@ -1043,7 +1075,7 @@ def main() -> None:
     log_model_file_payload(logger, title="deal history input", model=args.model, path=history_path)
     if transcript_path:
         log_model_file_payload(logger, title="deal transcript input", model=args.model, path=transcript_path)
-        transcript_text = read_text(transcript_path)
+        transcript_text = transcript_text_for_prompt(transcript_path, read_text(transcript_path))
     else:
         transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
 
@@ -1113,7 +1145,7 @@ def main() -> None:
             analysis_caller=call_analysis_json,
             call_type="full_deal_analysis",
             prompt_cache_key="neuro-rop:full-deal:v1",
-            prompt_cache_marker="## ИСТОРИЯ СДЕЛКИ",
+            prompt_cache_markers=deal_prompt_cache_markers(transcript_text),
             trace_entity_type="deal",
             trace_entity_id=str(args.deal_id),
         )

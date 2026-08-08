@@ -24,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
+from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.decision_engine import (
     ERROR,
     FIRST_FULL_ANALYSIS,
@@ -99,7 +100,11 @@ def raw_bundle_path(args: argparse.Namespace) -> Path:
 
 def latest_transcript_or_none(transcripts_dir: Path) -> Path | None:
     candidates = sorted(
-        [path for path in transcripts_dir.glob("*.md") if path.is_file()],
+        [
+            path
+            for path in transcripts_dir.glob("*.md")
+            if path.is_file() and AGGREGATE_STEM not in path.stem
+        ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -320,13 +325,13 @@ def main() -> None:
                 diff=diff,
             )
 
-        save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
-
         if args.dry_run_decision:
             print(json.dumps(decision.as_dict(), ensure_ascii=False, indent=2))
             print(f"Fingerprint: {fingerprint}")
-            print(f"Snapshot saved: {paths['snapshot']}")
+            print("Dry run: snapshot and SQLite state were not changed.")
             return
+
+        save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
 
         if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS}:
             run_existing_analyzer(args, analyzer_transcript_arg)

@@ -26,6 +26,28 @@ def response(payload: dict | None = None) -> SimpleNamespace:
 
 
 class PromptCachingRequestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        trace_patch = patch("openai_api.llm.llm_client.append_usage_trace")
+        trace_patch.start()
+        self.addCleanup(trace_patch.stop)
+
+    def test_multiple_explicit_breakpoints_preserve_exact_prompt_text(self) -> None:
+        prompt = "GLOBAL\nDEAL\nOLD CALLS\nLATEST\nDYNAMIC"
+        prefixes = ["GLOBAL\n", "GLOBAL\nDEAL\nOLD CALLS\n", "GLOBAL\nDEAL\nOLD CALLS\nLATEST\n"]
+        with patch("openai_api.llm.llm_client.client.responses.create", return_value=response()) as create:
+            _, metadata = call_analysis_json(
+                prompt,
+                model="gpt-5.6-terra",
+                prompt_cache_key="neuro-rop:full-deal:v1",
+                cache_prefixes=prefixes,
+            )
+
+        content = create.call_args.kwargs["input"][0]["content"]
+        self.assertEqual("".join(block["text"] for block in content), prompt)
+        self.assertEqual(len([block for block in content if "prompt_cache_breakpoint" in block]), 3)
+        self.assertEqual(metadata["prompt_cache"]["breakpoint_count"], 3)
+        self.assertEqual(metadata["request_fingerprint"]["stable_prefix"]["chars"], len(prefixes[-1]))
+
     def test_full_analysis_explicit_breakpoint_preserves_exact_prompt_text(self) -> None:
         prompt = "STATIC CONTRACT\n\n## HISTORY\nDynamic facts"
         stable_prefix = "STATIC CONTRACT\n\n"
@@ -145,6 +167,17 @@ class PromptCachingRequestTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exact prompt prefix"):
                 call_analysis_json("prompt", stable_prefix="not-prefix")
         create.assert_not_called()
+
+    def test_more_than_four_breakpoints_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at most 4"):
+            _cache_request(
+                "abcdef",
+                model="gpt-5.6-terra",
+                prompt_cache_key=None,
+                stable_prefix=None,
+                disable_implicit_cache=False,
+                cache_prefixes=["a", "ab", "abc", "abcd", "abcde"],
+            )
 
 
 if __name__ == "__main__":

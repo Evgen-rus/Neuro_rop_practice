@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openai_api.llm.usage_trace import append_usage_trace, build_usage_trace_event
+from openai_api.llm.usage_trace import append_usage_trace, build_daily_usage_line, build_usage_trace_event
 
 
 class UsageTraceTests(unittest.TestCase):
@@ -26,6 +26,10 @@ class UsageTraceTests(unittest.TestCase):
             "request_fingerprint": {
                 "prompt": {"chars": 100, "bytes_utf8": 120, "sha256_16": "abc123"},
                 "stable_prefix": {"chars": 40, "bytes_utf8": 45, "sha256_16": "def456"},
+                "cache_prefixes": [
+                    {"chars": 20, "bytes_utf8": 22, "sha256_16": "first"},
+                    {"chars": 40, "bytes_utf8": 45, "sha256_16": "def456"},
+                ],
             },
             "usage": {
                 "input_tokens": 2_000,
@@ -53,6 +57,7 @@ class UsageTraceTests(unittest.TestCase):
         self.assertEqual(event["entity_id"], "123")
         self.assertEqual(event["prompt_sha256_16"], "abc123")
         self.assertEqual(event["stable_prefix_sha256_16"], "def456")
+        self.assertEqual([prefix["chars"] for prefix in event["cache_prefixes"]], [20, 40])
         self.assertNotIn("must not be traced", serialized)
         self.assertNotIn("raw_output_text", event)
         self.assertNotIn("prompt", event)
@@ -60,12 +65,37 @@ class UsageTraceTests(unittest.TestCase):
     def test_append_writes_one_utf8_json_line_to_configured_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "usage.jsonl"
-            with patch.dict(os.environ, {"OPENAI_USAGE_TRACE_PATH": str(path)}):
+            daily_dir = Path(directory) / "daily"
+            with patch.dict(
+                os.environ,
+                {"OPENAI_USAGE_TRACE_PATH": str(path), "OPENAI_USAGE_DAILY_DIR": str(daily_dir)},
+            ):
                 append_usage_trace(self.metadata(), entity_type="deal", entity_id="123")
 
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["call_type"], "full_deal_analysis")
+            daily_lines = (daily_dir / "2026-08-08.log").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(daily_lines), 1)
+            self.assertTrue(daily_lines[0].startswith("2026-08-08 12:00:00 MSK | "))
+
+    def test_daily_usage_is_one_safe_human_readable_line(self) -> None:
+        event = build_usage_trace_event(
+            self.metadata(),
+            status="success",
+            entity_type="deal",
+            entity_id="123\n456",
+        )
+        filename, line = build_daily_usage_line(event)
+
+        self.assertEqual(filename, "2026-08-08.log")
+        self.assertNotIn("\n", line)
+        self.assertIn("entity=deal:123 456", line)
+        self.assertIn("input=2000", line)
+        self.assertIn("cached=1200", line)
+        self.assertIn("cache_write=0", line)
+        self.assertIn("output=300", line)
+        self.assertIn("cost=$0.0100/0.75 ₽", line)
 
     def test_trace_write_failure_does_not_escape(self) -> None:
         with patch("pathlib.Path.open", side_effect=OSError("denied")):
