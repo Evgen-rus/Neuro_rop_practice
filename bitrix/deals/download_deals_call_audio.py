@@ -2,8 +2,8 @@ r"""
 Download Bitrix CRM call audio for deals without duplicating existing files.
 
 This script is read-only for Bitrix24. It reads local raw deal context, downloads
-recordings from CRM activity FILES / disk.file.get / voximplant.statistic.get,
-and writes local audio plus a manifest.
+recordings referenced by CRM activity FILES through disk.file.get, and writes
+local audio plus a manifest.
 
 Default mode is missing-only: successful downloads already present in the
 manifest and still existing on disk are not downloaded again.
@@ -19,7 +19,7 @@ import argparse
 import mimetypes
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, save_json
+from bitrix.customer_history import parse_bitrix_datetime
 from openai_api.audio.short_call import enrich_download_with_duration, enrich_manifest_calls
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, run_with_retry
 from progress_events import emit_progress, retry_progress_callback
@@ -41,6 +42,7 @@ from setup import BASE_DIR, MSK_TZ, get_logger
 DEFAULT_DEAL_IDS = ["18507", "18493"]
 DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEFAULT_AUDIO_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "audio"
+AUDIO_FILE_DISCOVERY_WINDOW = timedelta(days=5)
 
 logger = get_logger(__file__)
 
@@ -115,114 +117,6 @@ def call_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
             )
         )
     return sorted(rows, key=lambda item: (item.get("START_TIME") or item.get("CREATED") or "", int(item.get("ID") or 0)))
-
-
-def timeline_items(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = []
-    for current in [bundle, bundle.get("source_lead") or {}]:
-        for attempt in current.get("timeline_comments", []):
-            if isinstance(attempt, dict):
-                rows.extend(item for item in attempt.get("items", []) if isinstance(item, dict))
-    return rows
-
-
-def add_candidate(candidates: list[str], value: Any) -> None:
-    if value in (None, "", [], {}):
-        return
-    text = str(value).strip()
-    if text and text not in candidates:
-        candidates.append(text)
-
-
-def collect_values_by_key(value: Any, key_pattern: re.Pattern[str]) -> list[Any]:
-    matches = []
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key_pattern.search(str(key)):
-                matches.append(child)
-            matches.extend(collect_values_by_key(child, key_pattern))
-    elif isinstance(value, list):
-        for child in value:
-            matches.extend(collect_values_by_key(child, key_pattern))
-    return matches
-
-
-def call_id_candidates(activity: dict[str, Any], timeline: list[dict[str, Any]]) -> list[str]:
-    candidates: list[str] = []
-    key_pattern = re.compile(r"(CALL|VOX|ORIGIN)", flags=re.I)
-
-    for key in ("CALL_ID", "EXTERNAL_CALL_ID", "ORIGIN_ID", "ASSOCIATED_ENTITY_ID", "ID"):
-        add_candidate(candidates, activity.get(key))
-
-    origin_id = str(activity.get("ORIGIN_ID") or "")
-    if origin_id.startswith("VI_externalCall."):
-        stripped = origin_id.removeprefix("VI_externalCall.")
-        add_candidate(candidates, stripped)
-        for part in stripped.split("."):
-            add_candidate(candidates, part)
-
-    for item in timeline:
-        for found in collect_values_by_key(item, key_pattern):
-            add_candidate(candidates, found)
-        text = " ".join(str(item.get(key) or "") for key in ("COMMENT", "TEXT", "DESCRIPTION"))
-        for match in re.findall(r"(VI_[\w.-]+|VI_externalCall\.[\w.-]+|[a-f0-9]{24,}\.\d{8,})", text, flags=re.I):
-            add_candidate(candidates, match)
-
-    return candidates
-
-
-def first_url_from_stat_row(row: dict[str, Any]) -> str | None:
-    for key in ("RECORD_FILE_URL", "CALL_RECORD_URL", "RECORD_URL", "DOWNLOAD_URL", "CALL_RECORD", "RECORD_FILE"):
-        value = row.get(key)
-        if isinstance(value, str) and value.startswith(("http://", "https://")):
-            return value
-
-    for value in row.values():
-        if isinstance(value, dict):
-            nested = first_url_from_stat_row(value)
-            if nested:
-                return nested
-        elif isinstance(value, list):
-            for item in value:
-                if isinstance(item, dict):
-                    nested = first_url_from_stat_row(item)
-                    if nested:
-                        return nested
-                elif isinstance(item, str) and item.startswith(("http://", "https://")):
-                    return item
-    return None
-
-
-def voximplant_record_urls(
-    client: BitrixReadOnlyClient,
-    candidates: list[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    attempts = []
-    urls = []
-    seen_urls: set[str] = set()
-
-    for candidate in candidates:
-        response = client.safe_call("voximplant.statistic.get", {"FILTER": {"CALL_ID": candidate}})
-        result = response.get("response", {}).get("result") if response.get("ok") else None
-        rows = result if isinstance(result, list) else []
-        attempts.append(
-            {
-                "filter": {"CALL_ID": candidate},
-                "ok": response.get("ok"),
-                "error": response.get("error"),
-                "count": len(rows),
-            }
-        )
-
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            record_url = first_url_from_stat_row(row)
-            if record_url and record_url not in seen_urls:
-                urls.append({"url": record_url, "call_id": candidate, "stat_row": row})
-                seen_urls.add(record_url)
-
-    return urls, attempts
 
 
 def safe_filename(value: str) -> str:
@@ -460,11 +354,20 @@ def mark_existing_downloads(downloads: list[dict[str, Any]]) -> list[dict[str, A
     return rows
 
 
+def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | None = None) -> bool:
+    started_at = parse_bitrix_datetime(activity.get("START_TIME") or activity.get("CREATED"))
+    if started_at is None:
+        return False
+    current = now or datetime.now(MSK_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MSK_TZ)
+    return current.astimezone(MSK_TZ) - started_at.astimezone(MSK_TZ) > AUDIO_FILE_DISCOVERY_WINDOW
+
+
 def process_call(
     client: BitrixReadOnlyClient,
     deal_audio_dir: Path,
     activity: dict[str, Any],
-    timeline: list[dict[str, Any]],
     *,
     existing_downloads: list[dict[str, Any]] | None = None,
     existing_transcription: dict[str, Any] | None = None,
@@ -472,7 +375,6 @@ def process_call(
 ) -> dict[str, Any]:
     activity_id = str(activity.get("ID") or "")
     files = activity.get("FILES") or []
-    candidates = call_id_candidates(activity, timeline)
     row: dict[str, Any] = {
         "activity_id": activity_id,
         "source": activity.get("_source") or "deal",
@@ -486,10 +388,8 @@ def process_call(
         "subject": activity.get("SUBJECT"),
         "start_time": activity.get("START_TIME") or activity.get("CREATED"),
         "origin_id": activity.get("ORIGIN_ID"),
-        "call_id_candidates": candidates,
         "files": files,
         "downloads": [],
-        "voximplant_attempts": [],
     }
 
     if missing_only and existing_transcription:
@@ -502,19 +402,32 @@ def process_call(
         row["status"] = "already_downloaded"
         return row
 
+    if not files:
+        if audio_file_discovery_expired(activity):
+            row["status"] = "no_files_check_expired"
+            row["audio_file_discovery_window_days"] = AUDIO_FILE_DISCOVERY_WINDOW.days
+        else:
+            row["status"] = "no_files_in_crm_activity"
+        return row
+
     any_downloaded = False
     for file_info in files:
+        if not isinstance(file_info, dict):
+            row["downloads"].append({"ok": False, "status": "invalid_crm_activity_file"})
+            continue
         file_id = str(file_info.get("id") or file_info.get("ID") or "")
-        direct_url = file_info.get("url")
         fallback_name = f"activity_{activity_id}_file_{file_id or 'unknown'}"
 
-        disk_url = None
-        disk_response = None
-        if file_id:
-            disk_url, disk_response = file_download_url(client, file_id)
+        if not file_id:
+            row["downloads"].append(
+                {
+                    "ok": False,
+                    "status": "missing_crm_activity_file_id",
+                }
+            )
+            continue
 
-        download_source = "disk.file.get" if disk_url else "crm_activity_file_url"
-        download_url = disk_url or direct_url
+        download_url, disk_response = file_download_url(client, file_id)
         if not download_url:
             row["downloads"].append(
                 {
@@ -532,24 +445,8 @@ def process_call(
             result = {"ok": False, "status": "download_request_error", "error": str(error), "url": download_url}
 
         result["file_id"] = file_id
-        result["source"] = download_source
-        if disk_response is not None and not disk_response.get("ok"):
-            result["disk_file_get_error"] = disk_response.get("error")
+        result["source"] = "disk.file.get"
 
-        any_downloaded = any_downloaded or bool(result.get("ok"))
-        row["downloads"].append(result)
-
-    record_urls, attempts = voximplant_record_urls(client, candidates)
-    row["voximplant_attempts"] = attempts
-    for index, record in enumerate(record_urls, start=1):
-        fallback_name = f"activity_{activity_id}_voximplant_{index}"
-        try:
-            result = try_download_url(record["url"], deal_audio_dir, fallback_name, client.retry_callback)
-        except requests.RequestException as error:
-            result = {"ok": False, "status": "download_request_error", "error": str(error), "url": record["url"]}
-
-        result["source"] = "voximplant.statistic.get"
-        result["call_id"] = record.get("call_id")
         any_downloaded = any_downloaded or bool(result.get("ok"))
         row["downloads"].append(result)
 
@@ -557,8 +454,6 @@ def process_call(
         row["status"] = "already_downloaded"
     elif any_downloaded:
         row["status"] = "downloaded"
-    elif not files and not record_urls:
-        row["status"] = "no_files_in_crm_activity"
     else:
         row["status"] = "not_downloaded"
     return row
@@ -575,7 +470,6 @@ def build_manifest(
 ) -> dict[str, Any]:
     bundle = load_json(raw_path)
     calls = call_activities(bundle)
-    timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
     existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
     processed_calls = []
@@ -593,7 +487,6 @@ def build_manifest(
                 client,
                 deal_audio_dir,
                 activity,
-                timeline,
                 existing_downloads=existing_by_activity.get(str(activity.get("ID") or "")),
                 existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,

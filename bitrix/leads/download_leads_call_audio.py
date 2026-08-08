@@ -1,8 +1,8 @@
 r"""
 Download Bitrix CRM call audio for leads without duplicating existing files.
 
-This is an isolated lead-side audio downloader. It is not wired into the lead
-pipeline yet, so it can be tested separately first.
+The lead pipeline uses this wrapper and the shared deal-side FILES / disk.file.get
+implementation so both entity types follow the same audio retention rules.
 
 ```powershell
 .\venv\Scripts\python.exe .\bitrix\leads\download_leads_call_audio.py --lead-ids 227661
@@ -97,25 +97,6 @@ def call_activities(bundle: dict[str, Any], lead_id: str) -> list[dict[str, Any]
     )
 
 
-def timeline_items_from_customer_history(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = []
-    for attempts in (bundle.get("timeline_comments_by_entity") or {}).values():
-        for attempt in attempts or []:
-            if isinstance(attempt, dict):
-                rows.extend(item for item in attempt.get("items", []) if isinstance(item, dict))
-    return rows
-
-
-def timeline_items(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    if bundle.get("bundle_type") == "customer_history_bundle":
-        return timeline_items_from_customer_history(bundle)
-    rows = []
-    for attempt in bundle.get("timeline_comments", []):
-        if isinstance(attempt, dict):
-            rows.extend(item for item in attempt.get("items", []) if isinstance(item, dict))
-    return rows
-
-
 def context_path(raw_dir: Path, lead_id: str) -> Path:
     full = raw_dir / f"lead_{lead_id}_customer_history_bundle.json"
     if full.exists():
@@ -134,7 +115,6 @@ def build_manifest(
 ) -> dict[str, Any]:
     bundle = load_json(raw_path)
     calls = call_activities(bundle, lead_id)
-    timeline = timeline_items(bundle)
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
     existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
     processed_calls = []
@@ -152,7 +132,6 @@ def build_manifest(
                 client,
                 lead_audio_dir,
                 activity,
-                timeline,
                 existing_downloads=existing_by_activity.get(str(activity.get("ID") or "")),
                 existing_transcription=existing_transcriptions.get(str(activity.get("ID") or "")),
                 missing_only=missing_only,

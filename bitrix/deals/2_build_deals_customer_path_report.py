@@ -363,8 +363,8 @@ def audio_status_by_activity(manifest: dict[str, Any]) -> dict[str, str]:
         local_paths = [item.get("local_path") for item in downloads if item.get("ok") and item.get("local_path")]
         if local_paths:
             rows[activity_id] = ", ".join(local_paths)
-        elif call.get("status") == "no_files_in_crm_activity":
-            rows[activity_id] = "нет файла в CRM-активности"
+        elif call.get("status") in {"no_files_in_crm_activity", "no_files_check_expired"}:
+            rows[activity_id] = audio_status_label(call.get("status"))
         elif downloads:
             statuses = []
             for item in downloads:
@@ -386,10 +386,13 @@ def audio_status_label(status: str) -> str:
         "downloaded": "скачано",
         "not_downloaded": "не скачано",
         "no_files_in_crm_activity": "нет файла в CRM-активности",
+        "no_files_check_expired": "нет файла; пятидневная проверка завершена",
         "download_returned_html_auth_required": "ссылка требует авторизации",
         "download_http_error": "ошибка HTTP при скачивании",
         "download_request_error": "ошибка сетевого запроса",
         "no_download_url": "нет ссылки скачивания",
+        "missing_crm_activity_file_id": "у файла CRM-активности нет ID",
+        "invalid_crm_activity_file": "некорректное описание файла CRM-активности",
     }
     return labels.get(status, status)
 
