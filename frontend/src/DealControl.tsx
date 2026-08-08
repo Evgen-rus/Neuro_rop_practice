@@ -2091,10 +2091,13 @@ function ManagerAssistantModal(props: {
   onCompleteCommunication: (quickHelpId: number) => void
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context'>('answer')
+  const [historyOffset, setHistoryOffset] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   const entries = [...props.workspace.entries].sort((first, second) => first.id - second.id)
-  const latestEntry = entries.length ? entries[entries.length - 1] : null
+  const safeHistoryOffset = Math.min(historyOffset, Math.max(0, entries.length - 1))
+  const visibleEntryIndex = entries.length - 1 - safeHistoryOffset
+  const visibleEntry = visibleEntryIndex >= 0 ? entries[visibleEntryIndex] : null
   const task = primaryBitrixTaskOf(props.deal)
   const onClose = props.onClose
 
@@ -2112,6 +2115,7 @@ function ManagerAssistantModal(props: {
   async function send() {
     if (busy || !props.draft.trim()) return
     setView('answer')
+    setHistoryOffset(0)
     await props.onRequest(props.draft)
   }
 
@@ -2149,14 +2153,14 @@ function ManagerAssistantModal(props: {
         <header><div><h2 id="manager-assistant-title">Быстрая ИИ помощь менеджеру</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
         <div className="dc-manager-assistant-content">
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
-            {latestEntry ? <div className="dc-manager-assistant-turn" key={latestEntry.id}>
-              <div className="dc-manager-assistant-user-message"><small>Ваш запрос</small><p>{latestEntry.question}</p></div>
+            {visibleEntry ? <div className="dc-manager-assistant-turn" key={visibleEntry.id}>
+              <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{entries.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleEntry.question}</p></div>
               <ManagerQuickHelpAnswer
-                entry={latestEntry}
+                entry={visibleEntry}
                 onCopy={props.onCopy}
                 onEdit={props.onEditSituation}
-                onComplete={() => complete(latestEntry)}
-                onBitrix={() => void prepareBitrixComment(latestEntry)}
+                onComplete={() => complete(visibleEntry)}
+                onBitrix={() => void prepareBitrixComment(visibleEntry)}
               />
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Помощник готовит ответ'}</small></div> : null}
