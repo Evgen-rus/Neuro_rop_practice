@@ -16,17 +16,20 @@ from openai_api.llm.llm_client import call_structured_output_json
 
 
 MAX_QUICK_HELP_OUTPUT_TOKENS = 3000
-_LIST_FIELDS = ("action_steps", "facts_to_clarify", "crm_checklist")
+_LIST_FIELDS = ("crm_checklist",)
 _REQUIRED_FIELDS = (
-    "problem_summary",
-    "diagnosis",
-    "recommended_action",
-    "action_steps",
-    "client_message",
-    "call_script",
-    "facts_to_clarify",
+    "situation_summary",
+    "next_action",
+    "expected_result",
+    "client_messages",
+    "recommended_client_tone",
+    "call_scripts",
+    "recommended_call_tone",
     "crm_checklist",
 )
+
+_CLIENT_TONES = ("calm", "confident", "direct")
+_CALL_TONES = ("soft", "business", "direct")
 
 
 def _short_list_schema(max_items: int = 4, max_length: int = 800) -> dict[str, Any]:
@@ -38,15 +41,25 @@ def _short_list_schema(max_items: int = 4, max_length: int = 800) -> dict[str, A
 
 
 def quick_help_schema() -> dict[str, Any]:
+    def tone_variants(tones: tuple[str, ...], max_length: int) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": list(tones),
+            "properties": {
+                tone: {"type": "string", "minLength": 1, "maxLength": max_length}
+                for tone in tones
+            },
+        }
+
     fields = {
-        "problem_summary": {"type": "string", "minLength": 1, "maxLength": 1600},
-        # This is the visible "Что сейчас мешает" block in the manager UI.
-        "diagnosis": {"type": "string", "minLength": 1, "maxLength": 2000},
-        "recommended_action": {"type": "string", "minLength": 1, "maxLength": 1600},
-        "action_steps": _short_list_schema(max_items=4),
-        "client_message": {"type": "string", "minLength": 1, "maxLength": 1600},
-        "call_script": {"type": "string", "minLength": 1, "maxLength": 2000},
-        "facts_to_clarify": _short_list_schema(max_items=4),
+        "situation_summary": {"type": "string", "minLength": 1, "maxLength": 420},
+        "next_action": {"type": "string", "minLength": 1, "maxLength": 420},
+        "expected_result": {"type": "string", "minLength": 1, "maxLength": 320},
+        "client_messages": tone_variants(_CLIENT_TONES, 1200),
+        "recommended_client_tone": {"type": "string", "enum": list(_CLIENT_TONES)},
+        "call_scripts": tone_variants(_CALL_TONES, 1200),
+        "recommended_call_tone": {"type": "string", "enum": list(_CALL_TONES)},
         "crm_checklist": _short_list_schema(max_items=4),
     }
     return {
@@ -63,11 +76,29 @@ def validate_quick_help(value: Any) -> dict[str, Any]:
     if any(field not in value for field in _REQUIRED_FIELDS):
         raise ValueError("В quick help отсутствует обязательное поле")
     normalized: dict[str, Any] = {}
-    for field in ("problem_summary", "diagnosis", "recommended_action", "client_message", "call_script"):
+    text_limits = {"situation_summary": 420, "next_action": 420, "expected_result": 320}
+    for field, max_length in text_limits.items():
         item = value.get(field)
         if not isinstance(item, str) or not item.strip():
             raise ValueError("В quick help есть пустое текстовое поле")
-        normalized[field] = item.strip()[:2000]
+        if "\n" in item:
+            raise ValueError(f"{field} должен быть одной короткой фразой без списка")
+        normalized[field] = item.strip()[:max_length]
+    for field, tones in (("client_messages", _CLIENT_TONES), ("call_scripts", _CALL_TONES)):
+        variants = value.get(field)
+        if not isinstance(variants, dict) or set(variants) != set(tones):
+            raise ValueError(f"{field} должен содержать все допустимые тона")
+        if any(not isinstance(variants[tone], str) or not variants[tone].strip() for tone in tones):
+            raise ValueError(f"{field} должен содержать только непустые тексты")
+        texts = [variants[tone].strip() for tone in tones]
+        if len({text.casefold() for text in texts}) != len(tones):
+            raise ValueError(f"{field} должен содержать разные варианты")
+        normalized[field] = {tone: variants[tone].strip()[:1200] for tone in tones}
+    for field, tones in (("recommended_client_tone", _CLIENT_TONES), ("recommended_call_tone", _CALL_TONES)):
+        tone = value.get(field)
+        if tone not in tones:
+            raise ValueError(f"{field} содержит недопустимый тон")
+        normalized[field] = tone
     for field in _LIST_FIELDS:
         items = value.get(field)
         if not isinstance(items, list) or len(items) > 4:
@@ -99,10 +130,14 @@ def build_quick_help_prompt(
             "- Опирайся только на переданные CONTEXT и не придумывай ответ клиента, факты, даты, суммы или договорённости.\n"
             "- Не называй попытку звонка контактом. CRM-задача — поручение, а не доказательство клиентского результата.\n"
             "- Можно прямо сказать менеджеру, что повторяемое действие не работает, если это следует из контекста.\n"
-            "- Диагноз должен быть видимым блоком «Что сейчас мешает».\n"
-            "- Сформулируй выполнимую рекомендацию; критерий качества — менеджер понял и может сделать задачу.\n"
-            "- Если данных не хватает, перечисли их в facts_to_clarify и не маскируй предположение под факт.\n"
-            "- client_message — готовый короткий текст клиенту без плейсхолдеров; call_script — естественный сценарий звонка.\n"
+            "- Блок «Понял ситуацию» строится строго как: situation_summary → next_action → expected_result.\n"
+            "- Каждый из трёх текстов должен быть одной короткой фразой; вместе они должны помещаться в 2–3 коротких предложения.\n"
+            "- next_action — одно максимально конкретное внешнее действие менеджера. Не давай списков, общих советов, внутренних действий вроде «проверь CRM» и не повторяй видимый контекст.\n"
+            "- expected_result — краткая цель коммуникации: какой ответ или следующий шаг нужно получить от клиента.\n"
+            "- client_messages — три разных готовых сообщения клиенту без плейсхолдеров: calm спокойно, confident уверенно, direct прямо.\n"
+            "- call_scripts — три разные короткие фразы, готовые произнести буквально: soft мягко, business делово, direct прямо. Это не подробный сценарий звонка.\n"
+            "- Выбери один рекомендуемый тон отдельно для сообщения и звонка, исходя из ситуации.\n"
+            "- Если данных недостаточно, не маскируй предположение под факт: сформулируй безопасный вопрос клиенту на уточнение.\n"
             "- crm_checklist — только то, что менеджер должен зафиксировать после фактического действия.\n"
             "- Верни только полный объект по JSON-схеме, спокойно, эмпатично, прямо и по-русски.\n"
             "- Этот запрос независим: не используй и не запрашивай историю прошлых quick help.",

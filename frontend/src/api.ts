@@ -642,13 +642,13 @@ export type ManagerSituationJob = {
 }
 
 export type ManagerQuickHelpContent = {
-  problem_summary: string
-  diagnosis: string
-  recommended_action: string
-  action_steps: string[]
-  client_message: string
-  call_script: string
-  facts_to_clarify: string[]
+  situation_summary: string
+  next_action: string
+  expected_result: string
+  client_messages: Record<'calm' | 'confident' | 'direct', string>
+  recommended_client_tone: 'calm' | 'confident' | 'direct'
+  call_scripts: Record<'soft' | 'business' | 'direct', string>
+  recommended_call_tone: 'soft' | 'business' | 'direct'
   crm_checklist: string[]
 }
 
@@ -852,6 +852,12 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
   if (!content) return null
   const id = Number(record.id ?? record.quick_help_id)
   if (!Number.isFinite(id)) return null
+  const legacyClientMessage = asString(content.client_message)
+  const legacyCallScript = asString(content.call_script)
+  const clientMessages = asRecord(content.client_messages)
+  const callScripts = asRecord(content.call_scripts)
+  const recommendedClientTone = asString(content.recommended_client_tone)
+  const recommendedCallTone = asString(content.recommended_call_tone)
   return {
     id,
     deal_id: asString(record.deal_id),
@@ -859,13 +865,25 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
     situation_review_id: record.situation_review_id == null ? null : Number(record.situation_review_id),
     question: asString(record.question),
     content: {
-      problem_summary: asString(content.problem_summary),
-      diagnosis: asString(content.diagnosis),
-      recommended_action: asString(content.recommended_action),
-      action_steps: asStringList(content.action_steps),
-      client_message: asString(content.client_message),
-      call_script: asString(content.call_script),
-      facts_to_clarify: asStringList(content.facts_to_clarify),
+      situation_summary: asString(content.situation_summary) || asString(content.problem_summary),
+      next_action: asString(content.next_action) || asString(content.recommended_action),
+      expected_result: asString(content.expected_result),
+      client_messages: {
+        calm: asString(clientMessages.calm) || legacyClientMessage,
+        confident: asString(clientMessages.confident) || legacyClientMessage,
+        direct: asString(clientMessages.direct) || legacyClientMessage,
+      },
+      recommended_client_tone: ['calm', 'confident', 'direct'].includes(recommendedClientTone)
+        ? recommendedClientTone as ManagerQuickHelpContent['recommended_client_tone']
+        : 'calm',
+      call_scripts: {
+        soft: asString(callScripts.soft) || legacyCallScript,
+        business: asString(callScripts.business) || legacyCallScript,
+        direct: asString(callScripts.direct) || legacyCallScript,
+      },
+      recommended_call_tone: ['soft', 'business', 'direct'].includes(recommendedCallTone)
+        ? recommendedCallTone as ManagerQuickHelpContent['recommended_call_tone']
+        : 'business',
       crm_checklist: asStringList(content.crm_checklist),
     },
     created_at: asString(record.created_at),
@@ -890,10 +908,16 @@ export async function transcribeManagerVoice(
   })
 }
 
-export function fetchManagerAssistantWorkspace(dealId: string) {
-  return api<ManagerAssistantWorkspace>(
+export async function fetchManagerAssistantWorkspace(dealId: string) {
+  const payload = await api<ManagerAssistantWorkspace>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/assistant-workspace`,
   )
+  return {
+    ...payload,
+    entries: (Array.isArray(payload.entries) ? payload.entries : [])
+      .map(normalizeManagerQuickHelpEntry)
+      .filter((entry): entry is ManagerQuickHelpEntry => Boolean(entry)),
+  }
 }
 
 export function recordManagerCommunicationCompleted(dealId: string, quickHelpId: number) {

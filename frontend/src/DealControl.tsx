@@ -2029,7 +2029,7 @@ function ManagerQuickHelp(props: {
 }) {
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   return <section className="dc-manager-quick-help">
-    <div className="dc-section-head"><div><h3>{props.started ? 'Помощник менеджера' : 'Быстрая ИИ помощь менеджеру'}</h3><p>{props.started ? 'Диалог по сделке уже начат' : 'Помощник уже видит контекст выбранной сделки. Опишите ситуацию или задайте вопрос.'}</p></div><span>AI</span></div>
+    <div className="dc-section-head"><div><h3>{props.started ? 'Помощник менеджера' : 'Быстрая ИИ помощь менеджеру'}</h3>{props.started ? <p>Диалог по сделке уже начат</p> : null}</div><span>AI</span></div>
     {props.started ? <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading} onClick={props.onOpen}>{props.loading ? <><span className="dc-spinner" />Открываем…</> : 'Открыть помощника'}</button> : <>
       <div className="dc-manager-voice-field dc-manager-quick-help-field">
         <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Опишите ситуацию или задайте вопрос..." aria-label="Вопрос помощнику менеджера" />
@@ -2050,14 +2050,27 @@ function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }:
   onBitrix: () => void
 }) {
   const content: ManagerQuickHelpContent = entry.content
+  const [clientTone, setClientTone] = useState<ManagerQuickHelpContent['recommended_client_tone']>(content.recommended_client_tone)
+  const [callTone, setCallTone] = useState<ManagerQuickHelpContent['recommended_call_tone']>(content.recommended_call_tone)
+  const clientTones = [
+    ['calm', 'Спокойно'],
+    ['confident', 'Уверенно'],
+    ['direct', 'Прямо'],
+  ] as const
+  const callTones = [
+    ['soft', 'Мягко'],
+    ['business', 'Деловой'],
+    ['direct', 'Прямой'],
+  ] as const
+  const clientMessage = content.client_messages[clientTone]
+  const callScript = content.call_scripts[callTone]
   return <article className="dc-manager-answer">
     <div className="dc-manager-answer-summary">
-      <span>✓</span><div><h4>Как я понял ситуацию</h4><p>{content.problem_summary || 'Понимание ситуации не сформировано.'}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
+      <span>◎</span><div><h4>Понял ситуацию</h4><p><span>{content.situation_summary || 'Ситуация пока не сформирована.'}</span>{content.next_action ? <> <strong>{content.next_action}</strong></> : null}{content.expected_result ? <> <span> {content.expected_result}</span></> : null}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
     </div>
     <div className="dc-manager-answer-modules">
-      <section className="dc-manager-answer-action"><h4>Что делать сейчас</h4><p>{content.recommended_action || 'Ближайшее действие не сформировано.'}</p>{content.action_steps.length ? <ol>{content.action_steps.slice(0, 4).map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol> : null}</section>
-      <section className="dc-manager-answer-copy"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!content.client_message} onClick={() => void onCopy(content.client_message, 'Сообщение клиенту')}>Скопировать</button></div><pre>{content.client_message || 'Сообщение пока не сформировано.'}</pre></section>
-      <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль для звонка</h4><button className="dc-button" disabled={!content.call_script} onClick={() => void onCopy(content.call_script, 'Речевой модуль')}>Скопировать</button></div><pre>{content.call_script || 'Речевой модуль пока не сформирован.'}</pre></section>
+      <section className="dc-manager-answer-copy message"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон сообщения клиенту">{clientTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={clientTone === tone} className={clientTone === tone ? 'active' : ''} onClick={() => setClientTone(tone)}><span>{label}</span>{content.recommended_client_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section>
+      <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон речевого модуля">{callTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={callTone === tone} className={callTone === tone ? 'active' : ''} onClick={() => setCallTone(tone)}><span>{label}</span>{content.recommended_call_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section>
     </div>
     <div className="dc-manager-answer-actions"><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div>
   </article>
@@ -2081,6 +2094,7 @@ function ManagerAssistantModal(props: {
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   const entries = [...props.workspace.entries].sort((first, second) => first.id - second.id)
+  const latestEntry = entries.length ? entries[entries.length - 1] : null
   const task = primaryBitrixTaskOf(props.deal)
   const onClose = props.onClose
 
@@ -2105,7 +2119,7 @@ function ManagerAssistantModal(props: {
     const checklist = entry.content.crm_checklist.length
       ? `\nЧто зафиксировать:\n${entry.content.crm_checklist.map((item) => `• ${item}`).join('\n')}`
       : ''
-    return `Запрос менеджера: ${entry.question}\nРекомендованное действие: ${entry.content.recommended_action}${checklist}`
+    return `Запрос менеджера: ${entry.question}\nРекомендованное действие: ${entry.content.next_action}${checklist}`
   }
 
   async function prepareBitrixComment(entry: ManagerQuickHelpEntry) {
@@ -2135,16 +2149,16 @@ function ManagerAssistantModal(props: {
         <header><div><h2 id="manager-assistant-title">Быстрая ИИ помощь менеджеру</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
         <div className="dc-manager-assistant-content">
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
-            {entries.map((entry) => <div className="dc-manager-assistant-turn" key={entry.id}>
-              <div className="dc-manager-assistant-user-message"><small>Ваш запрос</small><p>{entry.question}</p></div>
+            {latestEntry ? <div className="dc-manager-assistant-turn" key={latestEntry.id}>
+              <div className="dc-manager-assistant-user-message"><small>Ваш запрос</small><p>{latestEntry.question}</p></div>
               <ManagerQuickHelpAnswer
-                entry={entry}
+                entry={latestEntry}
                 onCopy={props.onCopy}
                 onEdit={props.onEditSituation}
-                onComplete={() => complete(entry)}
-                onBitrix={() => void prepareBitrixComment(entry)}
+                onComplete={() => complete(latestEntry)}
+                onBitrix={() => void prepareBitrixComment(latestEntry)}
               />
-            </div>)}
+            </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Помощник готовит ответ'}</small></div> : null}
           </section> : null}
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}

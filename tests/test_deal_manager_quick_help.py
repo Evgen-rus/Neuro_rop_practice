@@ -40,13 +40,21 @@ CONTEXT = {
     },
 }
 ANSWER = {
-    "problem_summary": "Нет подтверждённого следующего шага.",
-    "diagnosis": "Что сейчас мешает: менеджер возвращается к КП без новой проверяемой причины.",
-    "recommended_action": "Задать один вопрос о критерии и сроке решения.",
-    "action_steps": ["Назвать цель звонка", "Спросить о критерии", "Зафиксировать дату"],
-    "client_message": "Добрый день! Подскажите, какой вопрос по КП сейчас нужно уточнить?",
-    "call_script": "Добрый день! Хочу понять, что нужно уточнить по КП, чтобы согласовать следующий шаг.",
-    "facts_to_clarify": ["Критерий решения", "Дата решения"],
+    "situation_summary": "Клиент получил КП, но следующий шаг ещё не согласован.",
+    "next_action": "Напишите клиенту один короткий вопрос о решении.",
+    "expected_result": "Цель — получить ответ и согласовать дату следующего шага.",
+    "client_messages": {
+        "calm": "Добрый день! Подскажите, пожалуйста, удалось ли посмотреть КП?",
+        "confident": "Добрый день! Давайте согласуем следующий шаг по отправленному КП.",
+        "direct": "Добрый день! Что мешает принять решение по КП сейчас?",
+    },
+    "recommended_client_tone": "calm",
+    "call_scripts": {
+        "soft": "Добрый день! Удобно минуту обсудить, что нужно уточнить по КП?",
+        "business": "Добрый день! Предлагаю согласовать решение и следующий шаг по КП.",
+        "direct": "Добрый день! Что конкретно мешает двигаться дальше по КП?",
+    },
+    "recommended_call_tone": "business",
     "crm_checklist": ["Ответ клиента", "Дата следующего шага"],
 }
 
@@ -96,14 +104,30 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             current_bitrix_task=CONTEXT["current_bitrix_task"],
             situation_projection=CONTEXT["situation_projection"],
         )
-        self.assertIn("Что сейчас мешает", prompt)
+        self.assertIn("Понял ситуацию", prompt)
         self.assertIn("Что сказать клиенту", prompt)
         self.assertIn("SITUATION_CONTEXT", prompt)
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
-        for field in ("action_steps", "facts_to_clarify", "crm_checklist"):
-            self.assertEqual(quick_help_schema()["properties"][field]["maxItems"], 4)
+        self.assertEqual(quick_help_schema()["properties"]["crm_checklist"]["maxItems"], 4)
+        self.assertEqual(
+            quick_help_schema()["properties"]["recommended_client_tone"]["enum"],
+            ["calm", "confident", "direct"],
+        )
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
+
+    def test_validation_rejects_missing_tone_variant(self) -> None:
+        invalid = {**ANSWER, "client_messages": {"calm": "Текст", "confident": "Текст"}}
+        with self.assertRaisesRegex(ValueError, "client_messages"):
+            validate_quick_help(invalid)
+
+    def test_validation_rejects_duplicate_tone_variants_and_summary_list(self) -> None:
+        duplicate = {**ANSWER, "call_scripts": {"soft": "Одна фраза", "business": "Одна фраза", "direct": "Одна фраза"}}
+        with self.assertRaisesRegex(ValueError, "разные варианты"):
+            validate_quick_help(duplicate)
+        listed = {**ANSWER, "next_action": "Сначала напишите.\nПотом позвоните."}
+        with self.assertRaisesRegex(ValueError, "без списка"):
+            validate_quick_help(listed)
 
     def test_quick_help_requires_confirmed_situation_and_saves_safe_answer(self) -> None:
         calls = []
