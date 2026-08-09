@@ -22,7 +22,71 @@ cron-задачи, другие проекты в `/opt` или настройк
 этапов для UI. Эта папка не входит в Git и не должна удаляться при обновлении
 кода.
 
-## Обычное обновление стенда
+## Автоматическое обновление из main
+
+Workflow `.github/workflows/deploy-main.yml` запускается на каждый push в
+`main`, включая merge pull request. Схема выполнения:
+
+```text
+Python unit tests + frontend lint/build
+→ SSH на VPS
+→ preflight checkout и runtime
+→ fast-forward до проверенного commit
+→ ./deploy/temporary-tunnel.sh
+→ health-check и новая Cloudflare-ссылка
+```
+
+Deploy-job зависит от job с проверками. Если тест, lint или build завершился
+ошибкой, SSH-подключение и обновление VPS не выполняются. Одновременные workflow
+сериализуются через GitHub Actions concurrency, а на VPS дополнительно
+используется `runtime/.deploy.lock`.
+
+### GitHub Secrets
+
+До первого push workflow в `main` добавь в настройках репозитория следующие
+GitHub Secrets:
+
+| Secret | Назначение |
+| --- | --- |
+| `VPS_HOST` | DNS-имя или IP VPS |
+| `VPS_PORT` | SSH-порт; если оставить пустым, используется `22` |
+| `VPS_USER` | Пользователь SSH, который владеет checkout и может запускать Docker |
+| `VPS_SSH_PRIVATE_KEY` | Отдельный приватный SSH-ключ только для CI/CD |
+| `VPS_KNOWN_HOSTS` | Заранее проверенная строка host key VPS |
+
+Не добавляй в GitHub Secrets `runtime/.env`, OpenAI API key, Bitrix webhook,
+пароль Basic Auth или CRM-данные: workflow их не использует. Они остаются на VPS.
+
+Для CI/CD используй отдельную пару SSH-ключей, а не личный ключ разработчика.
+Публичную часть добавь в `authorized_keys` пользователя деплоя. Строку
+`VPS_KNOWN_HOSTS` получи по доверенному соединению и сверь fingerprint с VPS
+или панелью провайдера до сохранения в GitHub. Workflow использует
+`StrictHostKeyChecking=yes` и не принимает новый host key автоматически.
+Для нестандартного SSH-порта known_hosts должен содержать запись вида
+`[host]:port`, соответствующую значениям `VPS_HOST` и `VPS_PORT`.
+
+Если GitHub-репозиторий приватный, самому checkout на VPS также нужен отдельный
+read-only deploy key для `git fetch`. Приватный ключ GitHub Actions не должен
+использоваться как Git-ключ сервера.
+
+### Что проверяет deploy-job
+
+Перед изменением checkout workflow требует:
+
+- текущую ветку `main`;
+- полностью чистое рабочее дерево;
+- наличие `.git` и обязательных путей `runtime/`;
+- отсутствие другого активного деплоя;
+- присутствие проверенного GitHub Actions commit в `origin/main`;
+- возможность только fast-forward обновления.
+
+Workflow не использует `git reset`, `git checkout -- .` или `git clean`.
+После запуска он проверяет API health, Nginx и состояние трёх контейнеров. Новая
+Cloudflare-ссылка появляется в логе deploy step и GitHub Actions Summary.
+
+## Ручное обновление стенда
+
+Ручной путь сохраняется для первоначальной настройки и диагностики.
 
 ### 1. Отправить изменения с ноутбука в GitHub
 
@@ -33,7 +97,7 @@ cd D:\My_dev_project\Neuro_rop_practice
 git status --short
 git add <нужные_файлы>
 git commit -m "Краткое описание изменения"
-git push origin feature/context-memory-optimization
+git push origin main
 ```
 
 Перед `git add` проверь список изменений. Не добавляй `.env`, `reports/`,
@@ -52,7 +116,7 @@ git status --short
 Если команда не вывела ничего, рабочая копия чистая. Тогда обнови код:
 
 ```bash
-git pull --ff-only origin feature/context-memory-optimization
+git pull --ff-only origin main
 ```
 
 Если `git status --short` показывает файлы, не выполняй `git reset`,
@@ -74,6 +138,7 @@ git pull --ff-only origin feature/context-memory-optimization
 - перезапускает только `neuro-rop-api`, `neuro-rop-web` и
   `neuro-rop-tunnel`;
 - оставляет `runtime/`, отчёты, SQLite и `.env` на месте;
+- проверяет API health, Nginx и состояние контейнеров;
 - выводит новую HTTPS-ссылку Cloudflare.
 
 Новая ссылка Cloudflare создаётся при каждом перезапуске. Логин — `rop`.
@@ -115,6 +180,13 @@ docker logs neuro-rop-tunnel
 
 Не перезапускай cron и не удаляй Docker-образы других проектов для исправления
 этой проблемы.
+
+Если ошибка появилась сразу после автоматического деплоя, сначала открой
+GitHub Actions Summary и логи deploy-job. Для возврата к предыдущему коду создай
+обычный `git revert` проблемного commit в `main`: новый commit снова пройдёт
+проверки и будет развёрнут тем же workflow. Не откатывай checkout VPS через
+`git reset --hard`; миграции SQLite и совместимость runtime требуют отдельной
+проверки перед возвратом старой версии.
 
 ## Место на диске и старые Docker-образы
 

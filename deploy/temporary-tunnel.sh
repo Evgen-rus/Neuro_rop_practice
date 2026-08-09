@@ -37,6 +37,7 @@ require_file "${PIPELINE_MAP_FILE}"
 
 mkdir -p "${AUTH_DIR}"
 chmod 700 "${RUNTIME_DIR}" "${AUTH_DIR}"
+chmod 600 "${RUNTIME_DIR}/.env"
 
 if [[ ! -s "${ACCESS_FILE}" ]]; then
     umask 077
@@ -71,6 +72,25 @@ docker run --detach \
     --security-opt no-new-privileges \
     "${API_IMAGE}" >/dev/null
 
+api_ready=false
+for _ in $(seq 1 30); do
+    if docker exec "${API_CONTAINER}" python -c \
+        'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=2).read()' \
+        >/dev/null 2>&1; then
+        api_ready=true
+        break
+    fi
+    if [[ "$(docker inspect --format '{{.State.Running}}' "${API_CONTAINER}" 2>/dev/null || true)" != "true" ]]; then
+        break
+    fi
+    sleep 1
+done
+
+if [[ "${api_ready}" != "true" ]]; then
+    echo "API не прошёл health-check. Проверьте: docker logs --tail 100 ${API_CONTAINER}" >&2
+    exit 1
+fi
+
 docker run --detach \
     --name "${WEB_CONTAINER}" \
     --network "${NETWORK}" \
@@ -78,6 +98,11 @@ docker run --detach \
     --volume "${AUTH_FILE}:/etc/nginx/auth/.htpasswd:ro" \
     --security-opt no-new-privileges \
     "${WEB_IMAGE}" >/dev/null
+
+if ! docker exec "${WEB_CONTAINER}" nginx -t >/dev/null 2>&1; then
+    echo "Nginx не прошёл проверку конфигурации. Проверьте: docker logs --tail 100 ${WEB_CONTAINER}" >&2
+    exit 1
+fi
 
 docker run --detach \
     --name "${TUNNEL_CONTAINER}" \
@@ -98,6 +123,13 @@ if [[ -z "${url:-}" ]]; then
     echo "Контейнеры запущены, но ссылка ещё не получена. Проверьте: docker logs ${TUNNEL_CONTAINER}" >&2
     exit 1
 fi
+
+for container in "${API_CONTAINER}" "${WEB_CONTAINER}" "${TUNNEL_CONTAINER}"; do
+    if [[ "$(docker inspect --format '{{.State.Running}}' "${container}" 2>/dev/null || true)" != "true" ]]; then
+        echo "Контейнер ${container} не запущен. Проверьте: docker logs --tail 100 ${container}" >&2
+        exit 1
+    fi
+done
 
 echo
 echo "Временная HTTPS-ссылка: ${url}"

@@ -20,6 +20,21 @@
 в `/opt/Neuro_rop_practice/runtime/access.txt` с правами только для root. Его можно
 сменить, удалив этот файл и повторно запустив скрипт.
 
+После запуска скрипт проверяет `/api/health`, конфигурацию Nginx, состояние всех
+трёх контейнеров и только затем сообщает новую временную HTTPS-ссылку.
+
+## Автоматическое обновление из main
+
+Workflow `.github/workflows/deploy-main.yml` запускается после push или merge в
+`main`. Сначала он выполняет Python unit tests, frontend lint и production build.
+Только после успешных проверок workflow подключается к VPS по SSH, проверяет
+чистоту checkout и наличие runtime-данных, делает fast-forward до проверенного
+commit и запускает этот же `temporary-tunnel.sh`.
+
+Workflow не передаёт на GitHub application-секреты. `.env`, отчёты, SQLite,
+knowledge, карта воронок и пароль Basic Auth остаются только в `runtime/` на VPS.
+Для SSH используются GitHub Secrets; их настройка описана в runbook.
+
 Остановка временного стенда:
 
 ```bash

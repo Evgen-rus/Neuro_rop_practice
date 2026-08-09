@@ -1,0 +1,165 @@
+name: Test and deploy main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neuro-rop-production-main
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Tests and frontend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run Python tests
+        run: python -m unittest discover -s tests
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  deploy:
+    name: Deploy tested commit to VPS
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      VPS_DEPLOY_PATH: /opt/Neuro_rop_practice
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          : "${VPS_HOST:?VPS_HOST secret is required}"
+          : "${VPS_USER:?VPS_USER secret is required}"
+          : "${VPS_SSH_PRIVATE_KEY:?VPS_SSH_PRIVATE_KEY secret is required}"
+          : "${VPS_KNOWN_HOSTS:?VPS_KNOWN_HOSTS secret is required}"
+
+          install -d -m 700 "${HOME}/.ssh"
+          printf '%s\n' "${VPS_SSH_PRIVATE_KEY}" > "${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/deploy_key" "${HOME}/.ssh/known_hosts"
+
+      - name: Fast-forward and restart current Docker stand
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_port="${VPS_PORT:-22}"
+          ssh_options=(
+            -i "${HOME}/.ssh/deploy_key"
+            -p "${ssh_port}"
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="${HOME}/.ssh/known_hosts"
+          )
+
+          ssh "${ssh_options[@]}" -- "${VPS_USER}@${VPS_HOST}" \
+            bash -s -- "${GITHUB_SHA}" "${VPS_DEPLOY_PATH}" <<'REMOTE' | tee deploy-output.log
+          set -Eeuo pipefail
+
+          deploy_sha="$1"
+          project_root="$2"
+
+          fail() {
+            echo "Deploy stopped: $*" >&2
+            exit 1
+          }
+
+          [[ "${deploy_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "invalid commit SHA"
+          [[ "${project_root}" == /* ]] || fail "project path must be absolute"
+          [[ -d "${project_root}/.git" ]] || fail "Git checkout not found: ${project_root}"
+
+          cd "${project_root}"
+
+          [[ "$(git branch --show-current)" == "main" ]] || fail "VPS checkout is not on main"
+          [[ -z "$(git status --porcelain)" ]] || fail "VPS checkout has uncommitted changes"
+
+          for required_path in \
+            runtime/.env \
+            runtime/reports \
+            runtime/knowledge \
+            runtime/crm_pipeline_map.json; do
+            [[ -e "${required_path}" ]] || fail "required runtime path is missing: ${required_path}"
+          done
+
+          exec 9>runtime/.deploy.lock
+          flock -n 9 || fail "another VPS deployment is already running"
+
+          git fetch --prune origin main
+          git merge-base --is-ancestor "${deploy_sha}" origin/main \
+            || fail "tested commit is not contained in origin/main"
+
+          current_sha="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "${current_sha}" "${deploy_sha}" \
+            || fail "VPS checkout cannot be fast-forwarded to the tested commit"
+
+          git merge --ff-only "${deploy_sha}"
+          [[ "$(git rev-parse HEAD)" == "${deploy_sha}" ]] \
+            || fail "VPS HEAD does not match the tested commit"
+
+          ./deploy/temporary-tunnel.sh
+          REMOTE
+
+          deploy_url="$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' deploy-output.log | tail -n 1 || true)"
+          {
+            echo "## VPS deployment"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            if [[ -n "${deploy_url}" ]]; then
+              echo "- Temporary URL: ${deploy_url}"
+            else
+              echo "- Temporary URL: see deploy step output"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: rm -f "${HOME}/.ssh/deploy_key" "${HOME}/.ssh/known_hosts"
