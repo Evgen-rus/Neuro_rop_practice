@@ -43,9 +43,10 @@ class AnalysisBatchResilienceTests(unittest.TestCase):
                 "Обновление контекста сделки после транскрибации",
             ],
         )
-        self.assertTrue(commands[0][0][1].endswith("bitrix\\deals\\3_prepare_deals_workspace.py"))
-        self.assertTrue(commands[1][0][1].endswith("bitrix\\context_diagnostics.py"))
-        self.assertTrue(commands[2][0][1].endswith("bitrix\\deals\\4_build_deals_llm_context.py"))
+        script_paths = [command[1].replace("\\", "/") for command, _ in commands]
+        self.assertTrue(script_paths[0].endswith("bitrix/deals/3_prepare_deals_workspace.py"))
+        self.assertTrue(script_paths[1].endswith("bitrix/context_diagnostics.py"))
+        self.assertTrue(script_paths[2].endswith("bitrix/deals/4_build_deals_llm_context.py"))
         self.assertIn("42", commands[0][0])
         self.assertIn("42", commands[1][0])
         self.assertIn("42", commands[2][0])
