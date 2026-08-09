@@ -16,7 +16,7 @@
 | Фоновые задания и запуск CLI | `api/jobs.py`; для compact — `api/compact_shadow.py` |
 | Кандидаты, профили и daily summary | `api/candidates.py`, `storage/rop_db.py` |
 | Локальное состояние SQLite | `storage/rop_db.py` |
-| Bitrix REST и customer history | `bitrix/client.py`, `bitrix/customer_history.py` |
+| Bitrix REST, privacy-safe usage trace и customer history | `bitrix/client.py`, `bitrix/usage_trace.py`, `bitrix/customer_history.py` |
 | Подготовка lead/deal workspaces | `bitrix/leads/*`, `bitrix/deals/*`, `bitrix/workspace.py`, `bitrix/context_diagnostics.py` |
 | Дополнительный CRM-контекст полного анализа сделки | `bitrix/deals/1_fetch_deals_context.py`, `bitrix/deals/4_build_deals_llm_context.py`, `openai_api/llm/analyze_deal.py` |
 | Транскрибация | `openai_api/audio/*` |
@@ -68,7 +68,7 @@
 
 `bitrix/client.py` централизует REST-вызовы, пагинацию и transient retry. `bitrix/customer_history.py` строит customer-history bundle для корневой сущности и связанных CRM-сущностей, включая нормализованные коммуникации и отдельно внутренний контекст.
 
-Lead и deal preparation scripts получают raw context, подготавливают workspace, диагностику полноты и LLM context. Общий audio downloader получает записи только из `FILES` CRM-активности через `disk.file.get`: старые активности с доступным файлом обрабатываются при первом импорте, а пустой `FILES` проверяется по обновлённому CRM-контексту не дольше пяти суток от звонка. Для сделки `1_fetch_deals_context.py` дополнительно и только на чтение получает историю стадий, детали связанных CRM-задач и чаты выбранных открытых задач. В raw bundle сохраняются до трёх ближайших открытых задач; вложения и ссылки на файлы из их чатов отбрасываются. Любая ошибка отдельного дополнительного источника обрабатывается fail-soft. `bitrix/workspace.py` задаёт layout workspace. Локальные выгрузки, manifest, аудио и diagnostics остаются под `reports/`.
+Lead и deal preparation scripts получают raw context, подготавливают workspace, диагностику полноты и LLM context. Первый CRM snapshot получает активности полностью; следующие запуски запрашивают изменения по `LAST_UPDATED` с пятиминутным перекрытием и сливают их по ID. Автоматической периодической полной сверки нет: full повторяется только при отсутствующем или непригодном snapshot. `crm.activity.list` явно получает `FILES` и `COMMUNICATIONS`, а legacy `activity_details` строится локально без отдельных `crm.activity.get`; уже полученный root context переиспользуется в customer-history. Общий audio downloader получает записи только из `FILES` CRM-активности через `disk.file.get`: старые активности с доступным файлом обрабатываются при первом импорте, а пустой `FILES` проверяется по обновлённому CRM-контексту не дольше пяти суток от звонка. Для сделки `1_fetch_deals_context.py` дополнительно и только на чтение получает историю стадий, детали связанных CRM-задач и чаты выбранных открытых задач. В raw bundle сохраняются до трёх ближайших открытых задач; вложения и ссылки на файлы из их чатов отбрасываются. Любая ошибка отдельного дополнительного источника обрабатывается fail-soft. `bitrix/workspace.py` задаёт layout workspace. Локальные выгрузки, manifest, аудио и diagnostics остаются под `reports/`.
 
 ### 3. Аудио и полный анализ
 
@@ -129,6 +129,7 @@ Compact run доступен только для уже сохранённых f
 ## Интеграционные границы и данные
 
 - Bitrix webhook и `OPENAI_API_KEY` читаются из окружения. Не выводи их значение и не помещай в тестовые фикстуры.
+- Каждая физическая попытка Bitrix REST фиксируется одной privacy-safe JSONL-строкой в `logs/bitrix_usage_daily/YYYY-MM-DD.jsonl`; trace содержит только метод, форму запроса без значений, длительность и технический результат, но не URL/webhook, CRM ID, payload, тексты ошибок или содержимое ответа.
 - `reports/` содержит локальные CRM exports, аудио, transcripts, analysis, Markdown и SQLite; это runtime data, не исходный код.
 - Тексты задач и выбранных сообщений их чатов могут входить в локальный deal context; вложения задач/чатов не скачиваются и не передаются в полный анализ.
 - `crm_pipeline_map.json` также является локальной CRM-выгрузкой и не должен пополняться персональными данными вручную.

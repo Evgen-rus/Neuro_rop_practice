@@ -20,9 +20,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, save_json
+from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
 from progress_events import retry_progress_callback
-from bitrix.customer_history import DEFAULT_HISTORY_DAYS, build_customer_history_bundle, is_real_id
+from bitrix.customer_history import (
+    DEFAULT_HISTORY_DAYS,
+    activity_cursor_value,
+    activity_details_from_list,
+    build_customer_history_bundle,
+    history_period,
+    incremental_since,
+    in_period_by_any_date,
+    is_real_id,
+    merge_items_by_id,
+)
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -72,40 +82,37 @@ def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any
     return client.safe_call(method, {"id": entity_id})
 
 
-def fetch_activities(client: BitrixReadOnlyClient, lead_id: str) -> dict[str, Any]:
+def fetch_activities(client: BitrixReadOnlyClient, lead_id: str, *, updated_after: str | None = None) -> dict[str, Any]:
+    activity_filter: dict[str, Any] = {"OWNER_TYPE_ID": LEAD_OWNER_TYPE_ID, "OWNER_ID": lead_id}
+    if updated_after:
+        activity_filter[">LAST_UPDATED"] = updated_after
     payload = {
         "order": {"START_TIME": "ASC", "DEADLINE": "ASC", "ID": "ASC"},
-        "filter": {"OWNER_TYPE_ID": LEAD_OWNER_TYPE_ID, "OWNER_ID": lead_id},
-        "select": ["*"],
+        "filter": activity_filter,
+        "select": ["*", "FILES", "COMMUNICATIONS"],
     }
     return client.safe_list_all("crm.activity.list", payload)
 
 
 def fetch_activity_details(client: BitrixReadOnlyClient, activities: list[dict[str, Any]]) -> dict[str, Any]:
-    details: dict[str, Any] = {}
-    for activity in activities:
-        activity_id = activity.get("ID") or activity.get("id")
-        if activity_id:
-            details[str(activity_id)] = client.safe_call("crm.activity.get", {"id": activity_id})
-    return details
+    del client
+    return activity_details_from_list(activities)
 
 
-def fetch_timeline_comments(client: BitrixReadOnlyClient, lead_id: str) -> list[dict[str, Any]]:
-    attempts = [
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE": "lead", "ENTITY_ID": lead_id},
-        },
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"OWNER_TYPE_ID": LEAD_OWNER_TYPE_ID, "OWNER_ID": lead_id},
-        },
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE_ID": LEAD_OWNER_TYPE_ID, "ENTITY_ID": lead_id},
-        },
+def fetch_timeline_comments(
+    client: BitrixReadOnlyClient,
+    lead_id: str,
+    *,
+    created_after: str | None = None,
+) -> list[dict[str, Any]]:
+    timeline_filter: dict[str, Any] = {"ENTITY_TYPE": "lead", "ENTITY_ID": lead_id}
+    del created_after
+    return [
+        client.safe_list_all(
+            "crm.timeline.comment.list",
+            {"order": {"CREATED": "ASC", "ID": "ASC"}, "filter": timeline_filter},
+        )
     ]
-    return [client.safe_list_all("crm.timeline.comment.list", payload) for payload in attempts]
 
 
 def extract_refs(value: Any, path: str = "") -> list[dict[str, Any]]:
@@ -124,18 +131,87 @@ def extract_refs(value: Any, path: str = "") -> list[dict[str, Any]]:
     return refs
 
 
-def fetch_lead_bundle(client: BitrixReadOnlyClient, lead_id: str) -> dict[str, Any]:
+def merge_timeline_responses(
+    responses: list[dict[str, Any]],
+    previous_responses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    current_items = [item for response in responses for item in response.get("items") or [] if isinstance(item, dict)]
+    previous_items = [
+        item
+        for response in previous_responses
+        for item in response.get("items") or []
+        if isinstance(item, dict)
+    ]
+    base = dict(responses[0]) if responses else {"ok": False, "items": []}
+    base["items"] = merge_items_by_id(previous_items, current_items)
+    return [base]
+
+
+def root_history_from_bundle(bundle: dict[str, Any], *, history_days: int) -> dict[str, Any]:
+    period = history_period(history_days)
+    activities = [
+        item
+        for item in ((bundle.get("activities") or {}).get("items") or [])
+        if in_period_by_any_date(item, period, ("START_TIME", "DEADLINE", "CREATED", "LAST_UPDATED"))
+    ]
+    timeline_items = [
+        item
+        for response in bundle.get("timeline_comments") or []
+        for item in response.get("items") or []
+        if in_period_by_any_date(item, period, ("CREATED", "DATE_CREATE"))
+    ]
+    timeline_base = dict((bundle.get("timeline_comments") or [{}])[0])
+    timeline_base["items"] = timeline_items
+    activities_container = dict(bundle.get("activities") or {})
+    activities_container["items"] = activities
+    return {
+        "entity_type": "lead",
+        "entity_id": str(bundle.get("lead_id") or ""),
+        "sync_mode": ((bundle.get("sync") or {}).get("mode") or "full"),
+        "updated_after": (bundle.get("sync") or {}).get("updated_after"),
+        "activities": activities_container,
+        "activity_details": activity_details_from_list(activities),
+        "timeline_comments": [timeline_base],
+    }
+
+
+def fetch_lead_bundle(
+    client: BitrixReadOnlyClient,
+    lead_id: str,
+    *,
+    previous_bundle: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     logger.info("Fetching lead context: lead_id=%s", lead_id)
+    sync_started_at = datetime.now(MSK_TZ).isoformat(timespec="seconds")
     lead_response = fetch_entity_by_id(client, "crm.lead.get", lead_id)
     lead = get_result(lead_response) or {}
 
     contact_ids = {str(item).strip() for item in as_list(lead.get("CONTACT_ID")) if is_real_id(item)}
     company_ids = {str(item).strip() for item in as_list(lead.get("COMPANY_ID")) if is_real_id(item)}
 
-    activities = fetch_activities(client, lead_id)
+    updated_after = incremental_since(previous_bundle)
+    incremental = bool(previous_bundle and updated_after)
+    activities = fetch_activities(client, lead_id, updated_after=updated_after if incremental else None)
+    if incremental:
+        merged_items = merge_items_by_id(
+            ((previous_bundle or {}).get("activities") or {}).get("items") or [],
+            activities.get("items") or [],
+        )
+        activities = {**activities, "items": merged_items}
     activity_items = activities.get("items", [])
     activity_details = fetch_activity_details(client, activity_items)
-    timeline_comments = fetch_timeline_comments(client, lead_id)
+    timeline_comments = fetch_timeline_comments(
+        client,
+        lead_id,
+        created_after=updated_after if incremental else None,
+    )
+    if incremental:
+        timeline_comments = merge_timeline_responses(
+            timeline_comments,
+            (previous_bundle or {}).get("timeline_comments") or [],
+        )
+    activity_sync_ok = bool(activities.get("ok"))
+    activity_cursor = sync_started_at if activity_sync_ok else activity_cursor_value(previous_bundle)
 
     contacts = {
         contact_id: fetch_entity_by_id(client, "crm.contact.get", contact_id)
@@ -155,6 +231,13 @@ def fetch_lead_bundle(client: BitrixReadOnlyClient, lead_id: str) -> dict[str, A
         "activities": activities,
         "activity_details": activity_details,
         "timeline_comments": timeline_comments,
+        "sync": {
+            "mode": "incremental" if incremental else "full",
+            "updated_after": updated_after if incremental else None,
+            "activity_cursor": activity_cursor,
+            "activity_sync_ok": activity_sync_ok,
+            "automatic_full_reconciliation": False,
+        },
     }
     bundle["file_and_recording_refs"] = extract_refs(bundle)
     return bundle
@@ -173,11 +256,24 @@ def main() -> None:
         client.retry_callback = retry_progress_callback(
             "lead", str(lead_id), "crm_context", detail="Запрос к Bitrix"
         )
-        bundle = fetch_lead_bundle(client, str(lead_id))
         output_path = output_dir / f"lead_{lead_id}_context.json"
+        try:
+            previous_bundle = load_json(output_path) if output_path.exists() else None
+        except ValueError:
+            previous_bundle = None
+        bundle = fetch_lead_bundle(
+            client,
+            str(lead_id),
+            previous_bundle=previous_bundle if isinstance(previous_bundle, dict) else None,
+        )
         save_json(output_path, bundle)
         customer_history_path = None
         if args.include_related_contact_deals:
+            customer_history_path = output_dir / f"lead_{lead_id}_customer_history_bundle.json"
+            try:
+                previous_customer_history = load_json(customer_history_path) if customer_history_path.exists() else None
+            except ValueError:
+                previous_customer_history = None
             customer_history = build_customer_history_bundle(
                 client,
                 root_type="lead",
@@ -185,8 +281,12 @@ def main() -> None:
                 history_days=args.history_days,
                 include_internal_context=args.include_internal_context,
                 pipeline_map_path=Path(args.pipeline_map),
+                previous_bundle=previous_customer_history if isinstance(previous_customer_history, dict) else None,
+                root_response_override=bundle.get("lead"),
+                root_history_override=root_history_from_bundle(bundle, history_days=args.history_days),
+                preloaded_contacts=bundle.get("contacts") or {},
+                preloaded_companies=bundle.get("companies") or {},
             )
-            customer_history_path = output_dir / f"lead_{lead_id}_customer_history_bundle.json"
             save_json(customer_history_path, customer_history)
             logger.info("Saved customer history bundle: %s", customer_history_path)
         index_items.append(

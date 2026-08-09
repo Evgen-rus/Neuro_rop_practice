@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 import requests
 
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, RetryPolicy, run_with_retry
+from bitrix.usage_trace import append_trace_event, build_trace_event
 
 
 PAGE_SIZE = 50
@@ -33,28 +36,58 @@ class BitrixReadOnlyClient:
         self.timeout = timeout
         self.retry_callback = retry_callback
         self.retry_policy = retry_policy
+        self.trace_run_id = uuid.uuid4().hex
 
     def method_url(self, method: str) -> str:
         return f"{self.webhook_url}/{method}"
 
     def call(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        attempt = 0
+
         def request_once() -> tuple[requests.Response, dict[str, Any]]:
-            response = requests.post(
-                self.method_url(method),
-                json=payload or {},
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout,
-            )
-            if response.status_code in {408, 409, 429} or response.status_code >= 500:
-                response.raise_for_status()
+            nonlocal attempt
+            attempt += 1
+            started_at = time.perf_counter()
+            response: requests.Response | None = None
+            data: dict[str, Any] = {}
+            error_type: str | None = None
             try:
-                data = response.json()
-            except ValueError:
-                data = {}
-            error_code = str(data.get("error") or "").upper()
-            if error_code in {"QUERY_LIMIT_EXCEEDED", "TOO_MANY_REQUESTS", "OPERATION_TIME_LIMIT"}:
-                raise BitrixTransientError(f"{method}: {data.get('error_description') or error_code}")
-            return response, data
+                response = requests.post(
+                    self.method_url(method),
+                    json=payload or {},
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.timeout,
+                )
+                if response.status_code in {408, 409, 429} or response.status_code >= 500:
+                    response.raise_for_status()
+                try:
+                    parsed = response.json()
+                    data = parsed if isinstance(parsed, dict) else {}
+                except ValueError:
+                    data = {}
+                error_code = str(data.get("error") or "").upper()
+                if error_code in {"QUERY_LIMIT_EXCEEDED", "TOO_MANY_REQUESTS", "OPERATION_TIME_LIMIT"}:
+                    raise BitrixTransientError(f"{method}: {data.get('error_description') or error_code}")
+                return response, data
+            except BaseException as error:
+                error_type = type(error).__name__
+                raise
+            finally:
+                http_status = response.status_code if response is not None else None
+                api_error = bool(data.get("error"))
+                append_trace_event(
+                    build_trace_event(
+                        run_id=self.trace_run_id,
+                        method=method,
+                        payload=payload,
+                        attempt=attempt,
+                        duration_ms=(time.perf_counter() - started_at) * 1000,
+                        ok=bool(response is not None and response.ok and not api_error and error_type is None),
+                        http_status=http_status,
+                        data=data,
+                        error_type=error_type,
+                    )
+                )
 
         response, data = run_with_retry(
             request_once,

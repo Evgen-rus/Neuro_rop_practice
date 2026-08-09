@@ -25,6 +25,7 @@ DEAL_OWNER_TYPE_ID = 2
 CONTACT_OWNER_TYPE_ID = 3
 
 DEFAULT_HISTORY_DAYS = 365
+INCREMENTAL_OVERLAP = timedelta(minutes=5)
 
 WAZZUP_CHANNEL_MARKERS = {
     "whatsapp": ("/whatsapp.", "whatsapp"),
@@ -375,22 +376,77 @@ def is_real_id(value: Any) -> bool:
     return True
 
 
-def fetch_activities_for_owner(client: BitrixReadOnlyClient, owner_type_id: int, owner_id: str) -> dict[str, Any]:
+def activity_cursor_value(snapshot: dict[str, Any] | None) -> str | None:
+    if not isinstance(snapshot, dict):
+        return None
+    sync = snapshot.get("sync")
+    if isinstance(sync, dict) and "activity_cursor" in sync:
+        value = sync.get("activity_cursor")
+    else:
+        value = snapshot.get("generated_at")
+    return str(value) if value else None
+
+
+def incremental_since(snapshot: dict[str, Any] | None) -> str | None:
+    cursor_value = activity_cursor_value(snapshot)
+    cursor = parse_bitrix_datetime(cursor_value)
+    if cursor is None:
+        return None
+    return (cursor - INCREMENTAL_OVERLAP).isoformat(timespec="seconds")
+
+
+def merge_items_by_id(previous: list[dict[str, Any]], current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    without_id: list[dict[str, Any]] = []
+    for item in [*previous, *current]:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("ID") or item.get("id") or "").strip()
+        if item_id:
+            rows[item_id] = item
+        else:
+            without_id.append(item)
+    return [*rows.values(), *without_id]
+
+
+def activity_details_from_list(activities: list[dict[str, Any]]) -> dict[str, Any]:
+    """Preserve the legacy detail container without per-activity REST calls."""
+    details: dict[str, Any] = {}
+    for activity in activities:
+        activity_id = str(activity.get("ID") or activity.get("id") or "").strip()
+        if not activity_id:
+            continue
+        details[activity_id] = {
+            "ok": True,
+            "method": "crm.activity.list",
+            "payload": {},
+            "response": {"result": activity},
+            "reused_from_list": True,
+        }
+    return details
+
+
+def fetch_activities_for_owner(
+    client: BitrixReadOnlyClient,
+    owner_type_id: int,
+    owner_id: str,
+    *,
+    updated_after: str | None = None,
+) -> dict[str, Any]:
+    activity_filter: dict[str, Any] = {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": owner_id}
+    if updated_after:
+        activity_filter[">LAST_UPDATED"] = updated_after
     payload = {
         "order": {"START_TIME": "ASC", "DEADLINE": "ASC", "ID": "ASC"},
-        "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": owner_id},
-        "select": ["*"],
+        "filter": activity_filter,
+        "select": ["*", "FILES", "COMMUNICATIONS"],
     }
     return client.safe_list_all("crm.activity.list", payload)
 
 
 def fetch_activity_details(client: BitrixReadOnlyClient, activities: list[dict[str, Any]]) -> dict[str, Any]:
-    details: dict[str, Any] = {}
-    for activity in activities:
-        activity_id = activity.get("ID") or activity.get("id")
-        if activity_id:
-            details[str(activity_id)] = client.safe_call("crm.activity.get", {"id": activity_id})
-    return details
+    del client
+    return activity_details_from_list(activities)
 
 
 def fetch_timeline_comments(
@@ -399,28 +455,16 @@ def fetch_timeline_comments(
     *,
     entity_type: str,
     owner_type_id: int,
+    created_after: str | None = None,
 ) -> list[dict[str, Any]]:
-    attempts = [
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id},
-        },
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": entity_id},
-        },
-        {
-            "order": {"CREATED": "ASC", "ID": "ASC"},
-            "filter": {"ENTITY_TYPE_ID": owner_type_id, "ENTITY_ID": entity_id},
-        },
-    ]
-    responses = []
-    for payload in attempts:
-        response = client.safe_list_all("crm.timeline.comment.list", payload)
-        responses.append(response)
-        if response.get("ok") and response.get("items"):
-            break
-    return responses
+    del owner_type_id
+    timeline_filter: dict[str, Any] = {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id}
+    del created_after
+    payload = {
+        "order": {"CREATED": "ASC", "ID": "ASC"},
+        "filter": timeline_filter,
+    }
+    return [client.safe_list_all("crm.timeline.comment.list", payload)]
 
 
 def contact_ids_from_deal(client: BitrixReadOnlyClient, deal_id: str, deal: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
@@ -783,35 +827,65 @@ def fetch_entity_history(
     entity_type: str,
     entity_id: str,
     period: dict[str, Any],
+    *,
+    previous_history: dict[str, Any] | None = None,
+    updated_after: str | None = None,
 ) -> dict[str, Any]:
     owner_id = owner_type_id(entity_type)
-    activities_response = fetch_activities_for_owner(client, owner_id, entity_id)
+    incremental = bool(previous_history and updated_after)
+    activities_response = fetch_activities_for_owner(
+        client,
+        owner_id,
+        entity_id,
+        updated_after=updated_after if incremental else None,
+    )
+    previous_activities = (
+        result_items((previous_history or {}).get("activities"))
+        if incremental
+        else []
+    )
+    current_activities = result_items(activities_response)
+    merged_activities = merge_items_by_id(previous_activities, current_activities)
     activities = [
         item
-        for item in result_items(activities_response)
+        for item in merged_activities
         if in_period_by_any_date(item, period, ("START_TIME", "DEADLINE", "CREATED", "LAST_UPDATED"))
     ]
     activity_details = fetch_activity_details(client, activities)
-    timeline_comments = fetch_timeline_comments(
+    timeline_response = fetch_timeline_comments(
         client,
         entity_id,
         entity_type=entity_type,
         owner_type_id=owner_id,
+        created_after=updated_after if incremental else None,
     )
-    filtered_timeline = []
-    for attempt in timeline_comments:
-        items = [
+    current_timeline = [item for attempt in timeline_response for item in result_items(attempt)]
+    previous_timeline = (
+        [
             item
+            for attempt in (previous_history or {}).get("timeline_comments") or []
             for item in result_items(attempt)
-            if in_period_by_any_date(item, period, ("CREATED", "DATE_CREATE"))
         ]
-        response = dict(attempt)
-        response["items"] = items
-        filtered_timeline.append(response)
+        if incremental
+        else []
+    )
+    merged_timeline = merge_items_by_id(previous_timeline, current_timeline)
+    timeline_items = [
+        item
+        for item in merged_timeline
+        if in_period_by_any_date(item, period, ("CREATED", "DATE_CREATE"))
+    ]
+    base_timeline_response = dict(timeline_response[0]) if timeline_response else {"ok": False, "items": []}
+    base_timeline_response["items"] = timeline_items
+    filtered_timeline = [base_timeline_response]
+    activities_container = dict(activities_response)
+    activities_container["items"] = activities
     return {
         "entity_type": entity_type,
         "entity_id": str(entity_id),
-        "activities": {**activities_response, "items": activities},
+        "sync_mode": "incremental" if incremental else "full",
+        "updated_after": updated_after if incremental else None,
+        "activities": activities_container,
         "activity_details": activity_details,
         "timeline_comments": filtered_timeline,
     }
@@ -1082,12 +1156,19 @@ def build_customer_history_bundle(
     history_days: int = DEFAULT_HISTORY_DAYS,
     include_internal_context: bool = True,
     pipeline_map_path: Path | None = None,
+    previous_bundle: dict[str, Any] | None = None,
+    root_response_override: dict[str, Any] | None = None,
+    root_history_override: dict[str, Any] | None = None,
+    root_contact_items_override: dict[str, Any] | None = None,
+    preloaded_contacts: dict[str, Any] | None = None,
+    preloaded_companies: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root_type = root_type.lower().strip()
     if root_type not in {"lead", "deal"}:
         raise ValueError("root_type must be 'lead' or 'deal'")
 
     period = history_period(history_days)
+    sync_started_at = datetime.now(MSK_TZ).isoformat(timespec="seconds")
     stage_lookup = build_stage_lookup(pipeline_map_path)
     diagnostics: dict[str, Any] = {
         "missing_contact": False,
@@ -1102,12 +1183,20 @@ def build_customer_history_bundle(
         "warnings": [],
     }
 
-    root_response = root_entity_response(client, root_type, root_id)
+    root_response = root_response_override or root_entity_response(client, root_type, root_id)
     root_item = result_item(root_response)
     contact_items_response: dict[str, Any] | None = None
     related_lead_responses: dict[str, dict[str, Any]] = {}
     if root_type == "deal":
-        contact_ids, contact_items_response = contact_ids_from_deal(client, root_id, root_item)
+        if root_contact_items_override is not None:
+            contact_items_response = root_contact_items_override
+            contact_ids = {str(item).strip() for item in as_list(root_item.get("CONTACT_ID")) if is_real_id(item)}
+            for item in get_result(contact_items_response) or []:
+                if isinstance(item, dict) and is_real_id(item.get("CONTACT_ID")):
+                    contact_ids.add(str(item["CONTACT_ID"]).strip())
+            contact_ids = sorted(contact_ids)
+        else:
+            contact_ids, contact_items_response = contact_ids_from_deal(client, root_id, root_item)
     else:
         contact_ids = contact_ids_from_lead(root_item)
 
@@ -1169,7 +1258,13 @@ def build_customer_history_bundle(
                 "Контакт по CONTACT_ID не найден. Fallback по телефону/email не нашел подтвержденный контакт."
             )
 
-    contacts = fetch_contacts(client, contact_ids)
+    contacts = {
+        contact_id: value
+        for contact_id, value in (preloaded_contacts or {}).items()
+        if contact_id in contact_ids and isinstance(value, dict)
+    }
+    missing_contact_ids = [contact_id for contact_id in contact_ids if contact_id not in contacts]
+    contacts.update(fetch_contacts(client, missing_contact_ids))
     primary_contact_id = contact_ids[0] if contact_ids else None
 
     related_deals_by_id: dict[str, dict[str, Any]] = {}
@@ -1233,21 +1328,56 @@ def build_customer_history_bundle(
     company_ids.update(str(item.get("company_id")).strip() for item in related_leads if is_real_id(item.get("company_id")))
     if root_type == "lead" and is_real_id(root_item.get("COMPANY_ID")):
         company_ids.add(str(root_item["COMPANY_ID"]).strip())
-    companies = {company_id: fetch_company(client, company_id) for company_id in sorted(company_ids)}
+    companies = {
+        company_id: value
+        for company_id, value in (preloaded_companies or {}).items()
+        if company_id in company_ids and isinstance(value, dict)
+    }
+    for company_id in sorted(company_ids):
+        if company_id not in companies:
+            companies[company_id] = fetch_company(client, company_id)
 
     activities_by_entity: dict[str, Any] = {}
+    previous_activities = (previous_bundle or {}).get("activities_by_entity") or {}
+    updated_after = incremental_since(previous_bundle)
     if root_item:
-        activities_by_entity[f"{root_type}:{root_id}"] = fetch_entity_history(client, root_type, root_id, period)
+        root_key = f"{root_type}:{root_id}"
+        activities_by_entity[root_key] = root_history_override or fetch_entity_history(
+            client,
+            root_type,
+            root_id,
+            period,
+            previous_history=previous_activities.get(root_key),
+            updated_after=updated_after,
+        )
     for lead in related_leads:
         lead_id = str(lead.get("id") or "")
-        if lead_id:
-            activities_by_entity[f"lead:{lead_id}"] = fetch_entity_history(client, "lead", lead_id, period)
+        entity_key = f"lead:{lead_id}"
+        if lead_id and entity_key not in activities_by_entity:
+            activities_by_entity[entity_key] = fetch_entity_history(
+                client, "lead", lead_id, period,
+                previous_history=previous_activities.get(entity_key), updated_after=updated_after,
+            )
     for contact_id in contact_ids:
-        activities_by_entity[f"contact:{contact_id}"] = fetch_entity_history(client, "contact", contact_id, period)
+        entity_key = f"contact:{contact_id}"
+        if entity_key not in activities_by_entity:
+            activities_by_entity[entity_key] = fetch_entity_history(
+                client, "contact", contact_id, period,
+                previous_history=previous_activities.get(entity_key), updated_after=updated_after,
+            )
     for deal in related_deals:
         deal_id = str(deal.get("id") or "")
-        if deal_id:
-            activities_by_entity[f"deal:{deal_id}"] = fetch_entity_history(client, "deal", deal_id, period)
+        entity_key = f"deal:{deal_id}"
+        if deal_id and entity_key not in activities_by_entity:
+            activities_by_entity[entity_key] = fetch_entity_history(
+                client, "deal", deal_id, period,
+                previous_history=previous_activities.get(entity_key), updated_after=updated_after,
+            )
+    activity_sync_ok = bool(activities_by_entity) and all(
+        bool((history.get("activities") or {}).get("ok"))
+        for history in activities_by_entity.values()
+    )
+    activity_cursor = sync_started_at if activity_sync_ok else activity_cursor_value(previous_bundle)
 
     bundle: dict[str, Any] = {
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
@@ -1259,6 +1389,13 @@ def build_customer_history_bundle(
             "title": root_item.get("TITLE") or root_item.get("NAME") or root_item.get("COMPANY_TITLE"),
         },
         "history_period": period,
+        "sync": {
+            "mode": "incremental" if updated_after else "full",
+            "updated_after": updated_after,
+            "activity_cursor": activity_cursor,
+            "activity_sync_ok": activity_sync_ok,
+            "automatic_full_reconciliation": False,
+        },
         "include_internal_context": bool(include_internal_context),
         "lead": root_response if root_type == "lead" else None,
         "deal": {"response": root_response, "item": root_item} if root_type == "deal" else None,

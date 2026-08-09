@@ -48,7 +48,10 @@ class ExternalApiRetryTests(unittest.TestCase):
             FakeResponse(503),
             FakeResponse(200, payload={"result": {"ID": "7"}}),
         ]
-        with patch("bitrix.client.requests.post", side_effect=responses) as request:
+        with (
+            patch("bitrix.client.requests.post", side_effect=responses) as request,
+            patch("bitrix.client.append_trace_event"),
+        ):
             client = BitrixReadOnlyClient("https://example.test/hook", retry_policy=ZERO_DELAY_RETRY)
             result = client.call("crm.lead.get", {"id": "7"})
         self.assertEqual(result["result"]["ID"], "7")
