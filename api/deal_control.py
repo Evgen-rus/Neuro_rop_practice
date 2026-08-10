@@ -715,10 +715,23 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             communications_today = _empty_daily_communications(current, available=False)
         deal["communications_today"] = communications_today
         deal_tasks = tasks_by_deal.get(str(deal["deal_id"]), [])
+        deal_tasks.sort(
+            key=lambda task: (
+                -int(task.get("attention_priority") or 0),
+                str(task.get("due_at") or "9999-12-31"),
+                int(task.get("id") or 0),
+            )
+        )
         deal["tasks"] = deal_tasks
-        # Keep legacy local assignments in storage/output for a possible later
-        # reactivation, but do not let them drive the current Bitrix-first UI.
-        deal["current_task"] = None
+        neuro_tasks = [
+            task for task in deal_tasks
+            if task.get("source_kind") == "neuro_rop" and task.get("local_status") == "active"
+        ]
+        deal["current_task"] = max(
+            neuro_tasks,
+            key=lambda task: (int(task.get("source_report_id") or 0), int(task.get("id") or 0)),
+            default=None,
+        )
         bitrix_tasks = []
         for bitrix_task in deal.get("bitrix_tasks") or []:
             projected = dict(bitrix_task)
@@ -758,6 +771,17 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             deal_id=str(deal["deal_id"]),
         )
         items.append(deal)
+    items = [
+        deal for _, deal in sorted(
+            enumerate(items),
+            key=lambda pair: (
+                0 if pair[1].get("current_task") is not None else 1,
+                -int((pair[1].get("current_task") or {}).get("attention_priority") or 0),
+                str(((pair[1].get("current_task") or {}).get("due_at") or "9999-12-31")),
+                pair[0],
+            ),
+        )
+    ]
     task_buckets = [str(task.get("time_bucket") or "unscheduled") for task in projected_primary_tasks]
     overdue = task_buckets.count("overdue")
     today = task_buckets.count("today")

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -419,6 +419,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE TABLE IF NOT EXISTS deal_control_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL DEFAULT 'manual' CHECK(source_kind IN ('manual', 'neuro_rop')),
+                source_report_id INTEGER,
                 task_text TEXT NOT NULL,
                 touch_type TEXT,
                 expected_result TEXT,
@@ -435,11 +437,16 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
-                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id)
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_deal_control_tasks_deal_due
                 ON deal_control_tasks(deal_id, due_at DESC, id DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_tasks_neuro_report
+                ON deal_control_tasks(source_report_id)
+                WHERE source_kind = 'neuro_rop' AND source_report_id IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS deal_control_bitrix_task_state (
                 activity_id TEXT NOT NULL PRIMARY KEY,
@@ -560,6 +567,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "deal_control_tasks", "source_kind", "TEXT NOT NULL DEFAULT 'manual'")
+        _ensure_column(conn, "deal_control_tasks", "source_report_id", "INTEGER")
         _ensure_column(conn, "deal_control_task_reschedules", "source_role", "TEXT")
         _ensure_column(conn, "deal_control_task_crm_facts", "contact_class", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "deal_control_task_crm_facts", "review_status", "TEXT NOT NULL DEFAULT 'candidate'")
@@ -567,6 +576,11 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_crm_facts_key "
             "ON deal_control_task_crm_facts(task_id, fact_key) WHERE fact_key IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_tasks_neuro_report "
+            "ON deal_control_tasks(source_report_id) "
+            "WHERE source_kind = 'neuro_rop' AND source_report_id IS NOT NULL"
         )
 
         migration_id = "2026-07-22-reactivate-lead-no-attention"
@@ -3231,6 +3245,140 @@ def create_deal_control_task(db_path: str | Path, *, deal_id: str, task_text: st
     return result
 
 
+def _recommendation_due_at(deadline: Any) -> str | None:
+    value = str(deadline or "").strip()
+    if not value:
+        return None
+    if len(value) == 10:
+        try:
+            parsed_date = date.fromisoformat(value)
+        except ValueError:
+            return None
+        return datetime.combine(parsed_date, time(18, 0), tzinfo=MSK_TZ).isoformat(timespec="seconds")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(value)
+        except ValueError:
+            return None
+        return datetime.combine(parsed_date, time(18, 0), tzinfo=MSK_TZ).isoformat(timespec="seconds")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MSK_TZ)
+    return parsed.astimezone(MSK_TZ).isoformat(timespec="seconds")
+
+
+def materialize_deal_recommendation_from_report(
+    db_path: str | Path,
+    deal_id: str,
+    source_report_id: int,
+    report_json: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Create one immutable Neuro ROP task for an in-scope deal report."""
+    init_db(db_path)
+    if not isinstance(report_json, dict):
+        return None
+    rop = report_json.get("rop_manager_message_block")
+    manager_action = report_json.get("manager_action_block")
+    if not isinstance(rop, dict) or not isinstance(manager_action, dict):
+        return None
+    task_text = str(rop.get("message_to_manager") or "").strip()
+    expected_result = str(rop.get("success_condition") or "").strip()
+    touch_type = str(manager_action.get("recommended_channel") or "").strip()
+    due_at = _recommendation_due_at(rop.get("deadline"))
+    if not task_text or not expected_result or not touch_type or due_at is None:
+        return None
+    with connect(db_path) as conn:
+        deal = conn.execute(
+            "SELECT * FROM deal_control_deals WHERE deal_id = ? AND is_active = 1",
+            (str(deal_id),),
+        ).fetchone()
+        scope = conn.execute("SELECT * FROM deal_control_scope LIMIT 1").fetchone()
+        if deal is not None and scope is not None:
+            initial_ids = loads_json(scope["initial_deal_ids_json"], [])
+            manager_ids = loads_json(scope["manager_ids_json"], [])
+            in_scope = (
+                str(deal_id) in {str(item) for item in initial_ids}
+                or (
+                    str(deal["pipeline_id"] or "") == str(scope["pipeline_id"] or "")
+                    and str(deal["manager_id"] or "") in {str(item) for item in manager_ids}
+                )
+            )
+            if not in_scope:
+                deal = None
+        report = conn.execute(
+            """
+            SELECT id FROM ui_reports
+            WHERE id = ? AND entity_type = 'deal' AND entity_id = ? AND report_json IS NOT NULL
+            """,
+            (int(source_report_id), str(deal_id)),
+        ).fetchone()
+        if deal is None or report is None:
+            return None
+        existing = conn.execute(
+            """
+            SELECT * FROM deal_control_tasks
+            WHERE source_kind = 'neuro_rop' AND source_report_id = ?
+            """,
+            (int(source_report_id),),
+        ).fetchone()
+        if existing is None:
+            now = utcish_now()
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO deal_control_tasks (
+                        deal_id, source_kind, source_report_id, task_text, touch_type,
+                        expected_result, due_at, created_at, updated_at
+                    ) VALUES (?, 'neuro_rop', ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(deal_id), int(source_report_id), task_text, touch_type,
+                        expected_result, due_at, now, now,
+                    ),
+                )
+                task_id = int(cursor.lastrowid)
+                baseline = {
+                    key: deal[key]
+                    for key in (
+                        "deal_id", "stage_id", "stage_name", "amount", "currency_id",
+                        "manager_id", "modified_at_crm", "last_crm_sync_at",
+                    )
+                }
+                conn.execute(
+                    """
+                    INSERT INTO deal_control_task_baselines (
+                        task_id, deal_snapshot_json, source_report_id, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (task_id, dumps_json(baseline), int(source_report_id), now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO deal_control_task_events (
+                        task_id, event_type, event_key, payload_json, created_at
+                    ) VALUES (?, 'task_created', 'task_created', ?, ?)
+                    """,
+                    (task_id, dumps_json({"due_at": due_at, "expected_result": expected_result}), now),
+                )
+                existing = conn.execute(
+                    "SELECT * FROM deal_control_tasks WHERE id = ?", (task_id,)
+                ).fetchone()
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    """
+                    SELECT * FROM deal_control_tasks
+                    WHERE source_kind = 'neuro_rop' AND source_report_id = ?
+                    """,
+                    (int(source_report_id),),
+                ).fetchone()
+        if existing is None:
+            return None
+        task_id = int(existing["id"])
+    return get_deal_control_task(db_path, task_id=task_id)
+
+
 def record_deal_control_task_event(
     db_path: str | Path,
     *,
@@ -3600,6 +3748,47 @@ def confirm_deal_control_task_crm_match(db_path: str | Path, *, task_id: int) ->
     return result
 
 
+def _task_recommendation_projection(
+    conn: sqlite3.Connection,
+    *,
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    outcome = task.get("latest_outcome")
+    state: str
+    if isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
+        state = "achieved"
+    else:
+        system_outcome = conn.execute(
+            """
+            SELECT payload_json FROM deal_control_task_events
+            WHERE task_id = ? AND event_type = 'system_outcome'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (int(task["id"]),),
+        ).fetchone()
+        system_payload = loads_json(system_outcome["payload_json"], {}) if system_outcome else {}
+        if isinstance(system_payload, dict) and system_payload.get("result_status") == "achieved":
+            state = "achieved"
+        elif isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
+            state = "contacted"
+        elif isinstance(outcome, dict) and outcome.get("contact_status") == "attempt_no_contact":
+            state = "attempted"
+        elif isinstance(outcome, dict):
+            state = "unconfirmed"
+        else:
+            attempt_fact = any(
+                str(fact.get("contact_class") or "") == "attempt"
+                and str(fact.get("fact_kind") or "") not in {"stage_changed", "deal_won"}
+                for fact in task.get("crm_facts") or []
+            )
+            state = "attempted" if attempt_fact else "unconfirmed" if task.get("crm_facts") else "not_done"
+    priority = {"achieved": 0, "contacted": 1, "attempted": 2, "unconfirmed": 3, "not_done": 3}[state]
+    task["recommendation_state"] = state
+    task["attention_priority"] = priority
+    task["needs_follow_up"] = bool(task.get("local_status") == "active" and state != "achieved")
+    return task
+
+
 def list_deal_control_tasks(db_path: str | Path, *, deal_ids: list[str] | None = None,
                             active_only: bool = False) -> list[dict[str, Any]]:
     init_db(db_path)
@@ -3643,6 +3832,7 @@ def list_deal_control_tasks(db_path: str | Path, *, deal_ids: list[str] | None =
                 deal_id=str(task["deal_id"]),
                 task_revision=int(task.get("guidance_revision") or 1),
             )
+            _task_recommendation_projection(conn, task=task)
     return tasks
 
 
@@ -3678,6 +3868,7 @@ def get_deal_control_task(db_path: str | Path, *, task_id: int) -> dict[str, Any
             deal_id=str(task["deal_id"]),
             task_revision=int(task.get("guidance_revision") or 1),
         )
+        _task_recommendation_projection(conn, task=task)
     return task
 
 

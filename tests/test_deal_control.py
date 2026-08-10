@@ -23,9 +23,11 @@ from storage.rop_db import (
     get_deal_control_scope,
     list_deal_control_task_history,
     list_deal_control_tasks,
+    materialize_deal_recommendation_from_report,
     review_deal_control_task_crm_fact,
     save_deal_control_bitrix_tasks,
     save_deal_control_scope,
+    save_deal_control_task_crm_fact,
     save_deal_control_task_outcome,
     save_ui_report,
     set_deal_control_bitrix_task_completion,
@@ -85,6 +87,124 @@ def deal(deal_id: str, *, manager_id: str, closed: str = "N") -> dict:
 
 
 class DealControlTests(unittest.TestCase):
+    def _save_deal(self, db_path: Path) -> None:
+        upsert_deal_control_deal(
+            db_path,
+            deal_id="101",
+            source="initial",
+            title="Сделка 101",
+            manager_id="10",
+            manager_name="Иванов Иван",
+            stage_id="C15:NEW",
+            stage_name="Новая",
+            pipeline_id="15",
+            amount="120000",
+            currency_id="RUB",
+            created_at_crm="2026-07-19T09:00:00+03:00",
+            modified_at_crm="2026-07-20T09:00:00+03:00",
+            is_active=True,
+        )
+
+    @staticmethod
+    def _recommendation(text: str = "Связаться с клиентом") -> dict:
+        return {
+            "rop_manager_message_block": {
+                "message_to_manager": text,
+                "success_condition": "В CRM зафиксирован подтверждённый следующий шаг.",
+                "deadline": "2026-08-10",
+            },
+            "manager_action_block": {"recommended_channel": "phone"},
+        }
+
+    def test_neuro_recommendation_materialization_is_idempotent_and_uses_latest_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            first_report = save_ui_report(
+                db_path, entity_type="deal", entity_id="101", report_json=self._recommendation()
+            )
+            first = materialize_deal_recommendation_from_report(
+                db_path, "101", first_report, self._recommendation()
+            )
+            again = materialize_deal_recommendation_from_report(
+                db_path, "101", first_report, self._recommendation("Другой текст")
+            )
+            self.assertIsNotNone(first)
+            self.assertEqual(first["id"], again["id"])
+            self.assertEqual(first["source_kind"], "neuro_rop")
+            self.assertEqual(first["source_report_id"], first_report)
+            self.assertEqual(first["due_at"], "2026-08-10T18:00:00+03:00")
+            self.assertEqual(first["recommendation_state"], "not_done")
+            with connect(db_path) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_tasks").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_events").fetchone()[0], 1)
+
+            second_report = save_ui_report(
+                db_path, entity_type="deal", entity_id="101", report_json=self._recommendation("Новый шаг")
+            )
+            second = materialize_deal_recommendation_from_report(
+                db_path, "101", second_report, self._recommendation("Новый шаг")
+            )
+            self.assertNotEqual(first["id"], second["id"])
+            dashboard = build_deal_control_dashboard(db_path=db_path)
+            self.assertEqual(dashboard["deals"][0]["current_task"]["id"], second["id"])
+
+    def test_neuro_recommendation_rejects_out_of_scope_and_incomplete_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            report_id = save_ui_report(
+                db_path, entity_type="deal", entity_id="101", report_json=self._recommendation()
+            )
+            save_deal_control_scope(db_path, initial_deal_ids=["999"], manager_ids=["10"], pipeline_id="15")
+            self.assertIsNone(
+                materialize_deal_recommendation_from_report(
+                    db_path, "999", report_id, self._recommendation()
+                )
+            )
+            incomplete = self._recommendation()
+            incomplete["rop_manager_message_block"]["success_condition"] = None
+            self.assertIsNone(
+                materialize_deal_recommendation_from_report(db_path, "101", report_id, incomplete)
+            )
+
+    def test_recommendation_state_respects_evidence_boundaries_and_legacy_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            legacy = create_deal_control_task(
+                db_path, deal_id="101", task_text="Ручная задача", touch_type="phone",
+                expected_result=None, due_at="2026-08-10T12:00:00+03:00",
+            )
+            report_id = save_ui_report(
+                db_path, entity_type="deal", entity_id="101", report_json=self._recommendation()
+            )
+            neuro = materialize_deal_recommendation_from_report(
+                db_path, "101", report_id, self._recommendation()
+            )
+            self.assertEqual(legacy["source_kind"], "manual")
+            self.assertIsNone(legacy["source_report_id"])
+            self.assertEqual(list_deal_control_tasks(db_path)[0]["recommendation_state"], "not_done")
+
+            save_deal_control_task_crm_fact(
+                db_path, task_id=int(neuro["id"]), fact_key="stage:1", activity_id="1",
+                fact_kind="stage_changed", summary="Стадия изменилась", occurred_at=None,
+                contact_class="deal_progress",
+            )
+            self.assertEqual(
+                next(item for item in list_deal_control_tasks(db_path) if item["id"] == neuro["id"])["recommendation_state"],
+                "unconfirmed",
+            )
+            save_deal_control_task_outcome(
+                db_path, task_id=int(neuro["id"]), contact_status="confirmed_contact",
+                result_status="pending", result_note="Клиент ответил", next_step_text="Ждать решение",
+                next_step_at="2026-08-11T12:00:00+03:00", evidence_kind="manager_confirmation",
+                evidence_id=None, source_role="manager",
+            )
+            current = next(item for item in list_deal_control_tasks(db_path) if item["id"] == neuro["id"])
+            self.assertEqual(current["recommendation_state"], "contacted")
+            self.assertTrue(current["needs_follow_up"])
+
     def test_today_communications_counts_completed_calls_and_messages_in_moscow_day(self):
         activities = [
             {
