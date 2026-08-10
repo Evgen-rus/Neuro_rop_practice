@@ -395,6 +395,12 @@ export type DealControlTask = {
   task_text: string
   touch_type?: string | null
   expected_result?: string | null
+  source_kind?: 'manual' | 'neuro_rop' | null
+  source_report_id?: number | null
+  recommendation_state?: DealControlRecommendationState | null
+  attention_priority?: number | null
+  needs_follow_up?: boolean | null
+  recommendation_reason?: string | null
   due_at: string
   local_status: 'active' | 'completed' | 'cancelled'
   crm_execution_status: 'not_reflected' | 'crm_open' | 'crm_closed' | 'match_review'
@@ -416,6 +422,12 @@ export type DealControlTask = {
   } | null
   latest_outcome?: DealControlTaskOutcome | null
   crm_facts?: DealControlCrmFact[]
+}
+
+export type DealControlRecommendationState = 'not_done' | 'attempted' | 'contacted' | 'achieved' | 'unconfirmed'
+
+export function isNeuroRopTask(task?: Pick<DealControlTask, 'source_kind'> | null) {
+  return task?.source_kind === 'neuro_rop'
 }
 
 export type DealControlTaskOutcome = {

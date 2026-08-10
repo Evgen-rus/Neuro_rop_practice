@@ -32,6 +32,7 @@ import {
   type DealControlDeal,
   type DealControlTask,
   type DealControlTaskOutcome,
+  type DealControlRecommendationState,
   type DealTaskGuidanceContent,
   type DealTaskGuidanceJob,
   type JobState,
@@ -41,6 +42,7 @@ import {
   type ManagerAssistantWorkspace,
   type ManagerSituationJob,
   type ManagerSituationState,
+  isNeuroRopTask,
 } from './api'
 import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
 
@@ -66,6 +68,21 @@ const CONTACT_LABELS: Record<DealControlTaskOutcome['contact_status'], string> =
   confirmed_contact: 'Контакт с клиентом состоялся',
   unknown: 'Контакт не подтверждён',
 }
+
+const RECOMMENDATION_LABELS: Record<DealControlRecommendationState, string> = {
+  not_done: 'Не выполнено',
+  attempted: 'Была попытка',
+  contacted: 'Был контакт',
+  achieved: 'Нужный результат',
+  unconfirmed: 'Контакт не подтверждён',
+}
+
+const RECOMMENDATION_STEPS: Array<{ state: Exclude<DealControlRecommendationState, 'unconfirmed'>; label: string }> = [
+  { state: 'not_done', label: 'Не выполнено' },
+  { state: 'attempted', label: 'Была попытка' },
+  { state: 'contacted', label: 'Был контакт' },
+  { state: 'achieved', label: 'Нужный результат' },
+]
 
 const EXECUTION_LABELS: Record<DealControlTask['crm_execution_status'], string> = {
   not_reflected: 'Не отражено в Bitrix',
@@ -239,6 +256,53 @@ function taskTone(task?: DealControlTask | null) {
 function currentTaskOf(deal: DealControlDeal): DealControlTask | null {
   void deal
   return null
+}
+
+function neuroRopTaskOf(deal: DealControlDeal): DealControlTask | null {
+  if (isNeuroRopTask(deal.current_task)) return deal.current_task || null
+  return (deal.tasks || []).find((task) => isNeuroRopTask(task)) || null
+}
+
+function hasUnconfirmedActivityAttempt(task: DealControlTask) {
+  const hasConfirmedContact = task.latest_outcome?.contact_status === 'confirmed_contact'
+    || task.crm_facts?.some((fact) => fact.contact_class === 'confirmed_contact' && fact.review_status !== 'rejected')
+  if (hasConfirmedContact) return false
+  return task.latest_outcome?.contact_status === 'attempt_no_contact'
+    || Boolean(task.crm_facts?.some((fact) => fact.contact_class === 'attempt' && fact.review_status !== 'rejected'))
+}
+
+function recommendationStateOf(task: DealControlTask): DealControlRecommendationState {
+  if (task.latest_outcome?.result_status === 'achieved') return 'achieved'
+  if (!isNeuroRopTask(task)) return 'unconfirmed'
+
+  const backendState = task.recommendation_state
+  if (backendState && backendState !== 'achieved') {
+    // A CRM activity is evidence of an attempt only; it cannot promote a task to contact.
+    if (backendState === 'contacted' && hasUnconfirmedActivityAttempt(task)) return 'attempted'
+    return backendState
+  }
+  if (task.latest_outcome?.contact_status === 'confirmed_contact') return 'contacted'
+  if (task.latest_outcome?.contact_status === 'attempt_no_contact' || hasUnconfirmedActivityAttempt(task)) return 'attempted'
+  return 'unconfirmed'
+}
+
+function recommendationReasonOf(task: DealControlTask, state: DealControlRecommendationState) {
+  const explicitReason = task.recommendation_reason?.trim()
+  if (explicitReason) return explicitReason
+  if (state === 'unconfirmed' && task.recommendation_state === 'achieved' && task.latest_outcome?.result_status !== 'achieved') {
+    return 'Backend передал «achieved», но явный outcome achieved не зафиксирован. Показываем безопасный fallback: контакт не подтверждён.'
+  }
+  if (state === 'unconfirmed') return 'Backend не передал подтверждённое состояние рекомендации. Результат и контакт нужно зафиксировать явно.'
+  if (state === 'attempted') return 'Зафиксирована попытка; активность сама по себе не подтверждает контакт с клиентом.'
+  if (state === 'contacted') return 'Контакт с клиентом подтверждён, но нужный результат ещё не зафиксирован.'
+  if (state === 'achieved') return 'Нужный результат подтверждён явным outcome задачи.'
+  return 'Рекомендация ещё не отмечена выполненной.'
+}
+
+function recommendationRankOf(deal: DealControlDeal) {
+  const task = neuroRopTaskOf(deal)
+  if (!task) return 4
+  return ({ not_done: 0, attempted: 1, contacted: 2, unconfirmed: 2, achieved: 3 } as Record<DealControlRecommendationState, number>)[recommendationStateOf(task)]
 }
 
 function primaryBitrixTaskOf(deal: DealControlDeal) {
@@ -568,10 +632,11 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         return dealMatchesTime(deal, timeView)
       })
       .sort((a, b) => {
+        const recommendationRank = view === 'rop' ? recommendationRankOf(a) - recommendationRankOf(b) : 0
         const rank = timeRank(a) - timeRank(b)
         const firstAt = primaryBitrixTaskOf(a)?.deadline
         const secondAt = primaryBitrixTaskOf(b)?.deadline
-        return rank || String(firstAt || '').localeCompare(String(secondAt || ''))
+        return recommendationRank || rank || String(firstAt || '').localeCompare(String(secondAt || ''))
       })
   }, [filteredDeals, timeView, view])
 
@@ -1578,6 +1643,7 @@ function DealDetail(props: {
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
   const task = currentTaskOf(deal)
+  const aiRecommendation = neuroRopTaskOf(deal)
   const coaching = deal.coaching
   const managerView = props.view === 'manager'
   const hasAnalysis = Boolean(coaching.report_id)
@@ -1626,6 +1692,7 @@ function DealDetail(props: {
 
     {managerView ? <ManagerDealScreen
       deal={deal}
+      aiRecommendation={aiRecommendation}
       situation={managerSituation}
       hasAnalysis={hasAnalysis}
       analysisEmptyAction={analysisButton}
@@ -1655,6 +1722,7 @@ function DealDetail(props: {
       onToggleChecklistItem={props.onToggleChecklistItem}
     /> : props.view === 'rop' ? <RopDealScreen
       deal={deal}
+      aiRecommendation={aiRecommendation}
       hasAnalysis={hasAnalysis}
       analysisEmptyAction={analysisButton}
     /> : <>
@@ -1721,6 +1789,7 @@ function DealDetail(props: {
 
 type ManagerDealScreenProps = {
   deal: DealControlDeal
+  aiRecommendation: DealControlTask | null
   situation: ManagerSituationState
   hasAnalysis: boolean
   analysisEmptyAction: ReactNode
@@ -1769,6 +1838,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onRefine={props.onRefineSituation}
       onTranscribe={props.onTranscribe}
     />
+    <AiRecommendationCard task={props.aiRecommendation} view="manager" />
     {confirmed ? <>
       <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerQuickHelp
@@ -1802,8 +1872,9 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
   </>
 }
 
-function RopDealScreen({ deal, hasAnalysis, analysisEmptyAction }: {
+function RopDealScreen({ deal, aiRecommendation, hasAnalysis, analysisEmptyAction }: {
   deal: DealControlDeal
+  aiRecommendation: DealControlTask | null
   hasAnalysis: boolean
   analysisEmptyAction: ReactNode
 }) {
@@ -1813,10 +1884,44 @@ function RopDealScreen({ deal, hasAnalysis, analysisEmptyAction }: {
       <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы сформировать чек-лист и текущий итог.</p></div>
       {analysisEmptyAction}
     </section> : null}
+    <AiRecommendationCard task={aiRecommendation} view="rop" />
     {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
     {hasAnalysis ? <RopCurrentSummary deal={deal} /> : null}
   </>
+}
+
+function AiRecommendationCard({ task, view }: { task: DealControlTask | null; view: 'rop' | 'manager' }) {
+  if (!task) {
+    return <section className="dc-analysis-section dc-recommendation-card unconfirmed">
+      <div className="dc-section-head"><h3>Текущая AI-рекомендация</h3><span>Neuro ROP</span></div>
+      <p className="dc-boundary-note">AI-рекомендация не передана текущим API. Карточка не восстановлена по одному `source_report_id`.</p>
+    </section>
+  }
+
+  const state = recommendationStateOf(task)
+  const reason = recommendationReasonOf(task, state)
+  return <section className={`dc-analysis-section dc-recommendation-card ${state}`}>
+    <div className="dc-section-head">
+      <div><h3>Текущая AI-рекомендация</h3><span>{view === 'rop' ? 'Для контроля РОПа' : 'Для выполнения менеджером'}</span></div>
+      <strong>{RECOMMENDATION_LABELS[state]}</strong>
+    </div>
+    <div className="dc-task-hero">
+      <span>✦</span>
+      <div>
+        <h4>{compactTaskText(task.task_text)}</h4>
+        <p>{task.expected_result?.trim() || 'Ожидаемый результат не указан'}</p>
+      </div>
+    </div>
+    {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробная рекомендация</summary><p>{task.task_text}</p></details> : null}
+    <ol className="dc-recommendation-ladder" aria-label="Стадия выполнения AI-рекомендации">
+      {RECOMMENDATION_STEPS.map((step) => <li className={step.state === state ? 'active' : ''} key={step.state}>
+        <span>{step.state === state ? '●' : '○'}</span>{step.label}
+      </li>)}
+    </ol>
+    <p className="dc-boundary-note"><strong>Почему такой статус:</strong> {reason}</p>
+    <p className="dc-task-meta">Срок: {dateTime(task.due_at)}{task.needs_follow_up ? ' · Нужен follow-up' : ''}</p>
+  </section>
 }
 
 function DealChecklistCard({ deal, editable, onToggle }: {
