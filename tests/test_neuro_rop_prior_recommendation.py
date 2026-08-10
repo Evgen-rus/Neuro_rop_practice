@@ -1,13 +1,17 @@
 import json
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 from api import jobs
 from api.jobs import JobState
 from openai_api.llm.analyze_deal import build_prompt
-from openai_api.llm.validation import _validate_recommendation_feedback
+from openai_api.llm.validation import (
+    _validate_recommendation_feedback,
+    validate_deal_recommendation_materialization,
+)
 from storage.rop_db import (
     apply_deal_recommendation_feedback,
     connect,
@@ -178,6 +182,48 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             apply_deal_recommendation_feedback(db_path, "101", feedback, new_report_id)
             self.assertEqual(list_deal_control_tasks(db_path)[0]["recommendation_state"], "unconfirmed")
 
+    def test_feedback_same_key_is_idempotent_under_concurrent_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            old_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis())
+            materialize_deal_recommendation_from_report(db_path, "101", old_report_id, self._analysis())
+            new_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis("Новый шаг"))
+            feedback = {
+                "applicable": True, "source_report_id": old_report_id, "status": "contacted",
+                "what_manager_did": "Менеджер получил ответ клиента", "contact_confirmed": True,
+                "target_result_achieved": False, "evidence": ["transcript"],
+                "next_action_required": True, "next_action_text": "Зафиксировать следующий шаг",
+                "next_action_at": "2026-08-11T12:00:00+03:00", "next_action_reason": "Контроль",
+            }
+
+            def apply_once(_index: int) -> dict:
+                result = apply_deal_recommendation_feedback(
+                    db_path, "101", feedback, new_report_id, self._analysis("Fallback")
+                )
+                assert result is not None
+                return result
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(apply_once, (1, 2)))
+            self.assertEqual(results[0]["id"], results[1]["id"])
+            with connect(db_path) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_outcomes WHERE source_role='system'").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_events WHERE event_type='system_outcome'").fetchone()[0], 1)
+
+    def test_deal_recommendation_materialization_contract_requires_canonical_fields(self) -> None:
+        valid = self._analysis()
+        validate_deal_recommendation_materialization(valid)
+        for field, value in (("deadline", None), ("deadline", "завтра")):
+            invalid = self._analysis()
+            invalid["rop_manager_message_block"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                validate_deal_recommendation_materialization(invalid)
+        invalid_channel = self._analysis()
+        invalid_channel["manager_action_block"]["recommended_channel"] = None
+        with self.assertRaises(ValueError):
+            validate_deal_recommendation_materialization(invalid_channel)
+
     def test_feedback_validator_rejects_inconsistent_combinations(self) -> None:
         neutral = {
             "applicable": False, "source_report_id": None, "status": "unconfirmed",
@@ -228,7 +274,7 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
 
             def materialize(*_args, **_kwargs):
                 calls.append("materialize")
-                return None
+                return {"id": 9}
 
             with patch.object(jobs, "analysis_paths", return_value=paths), \
                  patch.object(jobs, "save_ui_report", side_effect=save), \
@@ -236,6 +282,23 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
             self.assertEqual(calls, ["save", "apply", "materialize"])
+
+    def test_collect_results_rejects_invalid_deal_recommendation_before_save(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "deal_101_analysis.json"
+            invalid = self._analysis()
+            invalid["rop_manager_message_block"]["deadline"] = None
+            analysis_path.write_text(json.dumps({"analysis": invalid}, ensure_ascii=False), encoding="utf-8")
+            paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
+            job = JobState(job_id="job")
+            with patch.object(jobs, "analysis_paths", return_value=paths), \
+                 patch.object(jobs, "save_ui_report") as save, \
+                 patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
+                with self.assertRaises(ValueError):
+                    jobs._collect_results(job, "deal", ["101"])
+            save.assert_not_called()
+            materialize.assert_not_called()
 
     def test_collect_results_does_not_materialize_lead_failed_analysis_or_failed_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from bitrix.customer_history import build_normalized_communications
 from openai_api.bitrix_links import bitrix_entity_url
+from openai_api.llm.validation import validate_deal_recommendation_materialization
 from progress_events import PROGRESS_PREFIX, progress_key
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
@@ -677,6 +678,10 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
         summary = extract_summary_fields(analysis or {}, entity_type)
         report_id = None
         if analysis is not None:
+            if entity_type == "deal":
+                # Validate the fields consumed by the canonical task materializer
+                # before the immutable UI report is saved.
+                validate_deal_recommendation_materialization(analysis)
             report_id = save_ui_report(
                 DEFAULT_DB_PATH,
                 entity_type=entity_type,
@@ -701,12 +706,14 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                     report_id,
                     analysis,
                 )
-                materialize_deal_recommendation_from_report(
+                materialized_task = materialize_deal_recommendation_from_report(
                     DEFAULT_DB_PATH,
                     entity_id,
                     report_id,
                     analysis,
                 )
+                if materialized_task is None:
+                    raise RuntimeError("Deal recommendation was saved but could not be materialized")
             job.report_ids.append(report_id)
         job.results.append(
             {

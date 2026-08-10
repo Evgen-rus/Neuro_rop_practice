@@ -259,30 +259,38 @@ function currentTaskOf(deal: DealControlDeal): DealControlTask | null {
 }
 
 function neuroRopTaskOf(deal: DealControlDeal): DealControlTask | null {
-  if (isNeuroRopTask(deal.current_task)) return deal.current_task || null
-  return (deal.tasks || []).find((task) => isNeuroRopTask(task)) || null
+  if (isNeuroRopTask(deal.current_task) && deal.current_task?.local_status === 'active') {
+    return deal.current_task
+  }
+  return (deal.tasks || []).find((task) => isNeuroRopTask(task) && task.local_status === 'active') || null
 }
 
-function hasUnconfirmedActivityAttempt(task: DealControlTask) {
-  const hasConfirmedContact = task.latest_outcome?.contact_status === 'confirmed_contact'
-    || task.crm_facts?.some((fact) => fact.contact_class === 'confirmed_contact' && fact.review_status !== 'rejected')
-  if (hasConfirmedContact) return false
-  return task.latest_outcome?.contact_status === 'attempt_no_contact'
-    || Boolean(task.crm_facts?.some((fact) => fact.contact_class === 'attempt' && fact.review_status !== 'rejected'))
+const allowedLegacyOutcomeEvidence = new Set(['transcript', 'manager_confirmation', 'rop_confirmation'])
+
+function hasAllowedLegacyOutcomeEvidence(task: DealControlTask) {
+  const outcome = task.latest_outcome
+  return Boolean(
+    outcome
+      && allowedLegacyOutcomeEvidence.has(outcome.evidence_kind || '')
+      && outcome.result_note?.trim(),
+  )
 }
 
 function recommendationStateOf(task: DealControlTask): DealControlRecommendationState {
-  if (task.latest_outcome?.result_status === 'achieved') return 'achieved'
-  if (!isNeuroRopTask(task)) return 'unconfirmed'
-
   const backendState = task.recommendation_state
-  if (backendState && backendState !== 'achieved') {
-    // A CRM activity is evidence of an attempt only; it cannot promote a task to contact.
-    if (backendState === 'contacted' && hasUnconfirmedActivityAttempt(task)) return 'attempted'
-    return backendState
+  if (backendState) return backendState
+  if (!isNeuroRopTask(task) || task.local_status !== 'active') return 'unconfirmed'
+
+  // Legacy responses have no backend state. CRM activity can only establish
+  // an attempt; contact/achievement need explicit allowed evidence.
+  const outcome = task.latest_outcome
+  const explicitContact = outcome?.contact_status === 'confirmed_contact' && hasAllowedLegacyOutcomeEvidence(task)
+  if (outcome?.result_status === 'achieved' && explicitContact) return 'achieved'
+  if (explicitContact) return 'contacted'
+  if (outcome?.contact_status === 'attempt_no_contact'
+    || Boolean(task.crm_facts?.some((fact) => fact.contact_class === 'attempt' && fact.review_status !== 'rejected'))) {
+    return 'attempted'
   }
-  if (task.latest_outcome?.contact_status === 'confirmed_contact') return 'contacted'
-  if (task.latest_outcome?.contact_status === 'attempt_no_contact' || hasUnconfirmedActivityAttempt(task)) return 'attempted'
   return 'unconfirmed'
 }
 

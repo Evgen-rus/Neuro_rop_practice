@@ -797,6 +797,29 @@ class DealControlTests(unittest.TestCase):
             )
             self.assertEqual(saved["result_status"], "pending")
 
+            with self.assertRaisesRegex(ValueError, "Confirmed contact or achieved"):
+                save_deal_control_task_outcome(
+                    db_path, task_id=int(task["id"]), contact_status="confirmed_contact",
+                    result_status="pending", result_note="Клиент ответил",
+                    next_step_text="Уточнить срок", next_step_at="2026-07-22T11:00:00+03:00",
+                    evidence_kind="crm_activity", evidence_id="activity-1", source_role="manager",
+                )
+            with self.assertRaisesRegex(ValueError, "attempt_no_contact"):
+                save_deal_control_task_outcome(
+                    db_path, task_id=int(task["id"]), contact_status="attempt_no_contact",
+                    result_status="achieved", result_note="Ответа не было",
+                    next_step_text="Повторить звонок", next_step_at="2026-07-22T11:00:00+03:00",
+                    evidence_kind="transcript", evidence_id=None, source_role="manager",
+                )
+            update_deal_control_task(db_path, task_id=int(task["id"]), local_status="completed")
+            with self.assertRaisesRegex(ValueError, "Closed tasks"):
+                save_deal_control_task_outcome(
+                    db_path, task_id=int(task["id"]), contact_status="confirmed_contact",
+                    result_status="achieved", result_note="Клиент подтвердил результат",
+                    next_step_text="Зафиксировать итог", next_step_at="2026-07-22T11:00:00+03:00",
+                    evidence_kind="manager_confirmation", evidence_id=None, source_role="manager",
+                )
+
     def test_rop_reschedule_requires_reason_and_records_role(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

@@ -3479,6 +3479,9 @@ def apply_deal_recommendation_feedback(
 
     init_db(db_path)
     with connect(db_path) as conn:
+        # Serialize the read/check/insert sequence so concurrent retries cannot
+        # both observe a missing idempotency event.
+        conn.execute("BEGIN IMMEDIATE")
         task = conn.execute(
             """
             SELECT t.* FROM deal_control_tasks t
@@ -3567,9 +3570,16 @@ def _recommendation_state_without_system_outcomes(
 ) -> str:
     if system_feedback_status in {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}:
         return str(system_feedback_status)
-    if isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
+    allowed_evidence = {"transcript", "manager_confirmation", "rop_confirmation"}
+    explicit_contact = (
+        isinstance(outcome, dict)
+        and outcome.get("contact_status") == "confirmed_contact"
+        and outcome.get("evidence_kind") in allowed_evidence
+        and bool(str(outcome.get("result_note") or "").strip())
+    )
+    if isinstance(outcome, dict) and outcome.get("result_status") == "achieved" and explicit_contact:
         return "achieved"
-    if isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
+    if explicit_contact:
         return "contacted"
     if isinstance(outcome, dict) and outcome.get("contact_status") == "attempt_no_contact":
         return "attempted"
@@ -3710,15 +3720,20 @@ def save_deal_control_task_outcome(
 ) -> dict[str, Any]:
     allowed_contacts = {"not_attempted", "attempt_no_contact", "confirmed_contact", "unknown"}
     allowed_results = {"pending", "achieved", "partial", "postponed", "refused", "not_applicable", "needs_rop_review"}
+    manual_evidence_kinds = {"transcript", "manager_confirmation", "rop_confirmation"}
     if contact_status not in allowed_contacts:
         raise ValueError("Неизвестный статус контакта")
     if result_status not in allowed_results:
         raise ValueError("Неизвестный результат задачи")
     if source_role not in {"manager", "rop", "system"}:
         raise ValueError("Неизвестный источник результата")
+    if source_role == "system":
+        raise ValueError("System outcomes must use the specialized recommendation feedback apply")
     note = str(result_note or "").strip() or None
     next_text = str(next_step_text or "").strip() or None
     next_at = str(next_step_at or "").strip() or None
+    if contact_status == "attempt_no_contact" and result_status == "achieved":
+        raise ValueError("attempt_no_contact cannot be paired with achieved")
     if contact_status == "not_attempted":
         raise ValueError("Сначала выполните действие или зафиксируйте попытку контакта")
     if contact_status == "unknown" and not note:
@@ -3727,6 +3742,12 @@ def save_deal_control_task_outcome(
         raise ValueError("Для попытки без ответа укажите, что произошло, следующий шаг и его срок")
     if contact_status == "confirmed_contact" and not note:
         raise ValueError("Кратко зафиксируйте подтверждённый ответ клиента")
+    if (contact_status == "confirmed_contact" or result_status == "achieved") and (
+        evidence_kind not in manual_evidence_kinds or not note
+    ):
+        raise ValueError(
+            "Confirmed contact or achieved requires transcript, manager_confirmation, or rop_confirmation evidence and a meaningful note"
+        )
     if result_status == "pending" and (not next_text or not next_at):
         raise ValueError("Для незавершённой задачи укажите следующий шаг и его срок")
     if result_status in {"achieved", "partial", "postponed"} and (not next_text or not next_at):
@@ -3738,6 +3759,14 @@ def save_deal_control_task_outcome(
     now = utcish_now()
     with connect(db_path) as conn:
         task = conn.execute("SELECT * FROM deal_control_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        if task is not None and (
+            (result_status == "achieved" and str(task["local_status"] or "") == "completed")
+            or (
+                (contact_status == "confirmed_contact" or result_status == "achieved")
+                and str(task["crm_execution_status"] or "") == "crm_closed"
+            )
+        ):
+            raise ValueError("Closed tasks cannot confirm contact or achieved")
         if task is None:
             raise ValueError("Поручение не найдено")
         cursor = conn.execute(

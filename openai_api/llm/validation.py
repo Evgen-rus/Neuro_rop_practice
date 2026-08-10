@@ -1226,7 +1226,47 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
         )
 
 
+def _validate_deal_recommendation_materialization_fields(
+    analysis: dict[str, Any],
+    errors: list[str],
+) -> None:
+    rop = analysis.get("rop_manager_message_block")
+    if not isinstance(rop, dict):
+        errors.append("expected object at rop_manager_message_block for deal materialization")
+        return
+    for field in ("message_to_manager", "success_condition"):
+        _expect_non_empty_string(rop.get(field), f"rop_manager_message_block.{field}", errors)
+    deadline = rop.get("deadline")
+    if not isinstance(deadline, str) or not deadline.strip():
+        errors.append("rop_manager_message_block.deadline must be a non-empty YYYY-MM-DD string for deal materialization")
+    else:
+        try:
+            date.fromisoformat(deadline.strip())
+        except ValueError:
+            errors.append("rop_manager_message_block.deadline must use YYYY-MM-DD format for deal materialization")
+
+    manager_action = analysis.get("manager_action_block")
+    if not isinstance(manager_action, dict):
+        errors.append("expected object at manager_action_block for deal materialization")
+        return
+    recommended_channel = manager_action.get("recommended_channel")
+    _expect_enum(
+        recommended_channel,
+        "manager_action_block.recommended_channel",
+        {"email", "phone", "messenger", "crm_task"},
+        errors,
+    )
+
+
+def validate_deal_recommendation_materialization(analysis: dict[str, Any]) -> None:
+    errors: list[str] = []
+    _validate_deal_recommendation_materialization_fields(analysis, errors)
+    if errors:
+        raise AnalysisValidationError("Invalid deal recommendation materialization: " + "; ".join(errors))
+
+
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
+    _validate_deal_recommendation_materialization_fields(analysis, errors)
     control_brief = _expect_dict(analysis.get("deal_control_brief"), "deal_control_brief", errors)
     if control_brief:
         for field in (
