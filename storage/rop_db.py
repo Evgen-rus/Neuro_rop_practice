@@ -3411,7 +3411,18 @@ def get_latest_neuro_rop_recommendation_projection(
     baseline exist. Raw report, event, CRM payload, manager, and quick-help data
     are intentionally excluded from this projection.
     """
-    init_db(db_path)
+    if not Path(db_path).is_file():
+        return None
+    try:
+        return _read_latest_neuro_rop_recommendation_projection(db_path, deal_id)
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def _read_latest_neuro_rop_recommendation_projection(
+    db_path: str | Path,
+    deal_id: str,
+) -> dict[str, Any] | None:
     with connect(db_path) as conn:
         task_row = conn.execute(
             """

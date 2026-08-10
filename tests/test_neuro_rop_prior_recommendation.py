@@ -108,6 +108,12 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
                 )
             self.assertIsNone(get_latest_neuro_rop_recommendation_projection(db_path, "101"))
 
+    def test_prior_projection_does_not_create_missing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "missing" / "state.sqlite"
+            self.assertIsNone(get_latest_neuro_rop_recommendation_projection(db_path, "101"))
+            self.assertFalse(db_path.exists())
+
     def test_prompt_has_structured_prior_section_without_private_fields(self) -> None:
         prior = {
             "task_id": 7,
