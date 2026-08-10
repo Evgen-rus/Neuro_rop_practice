@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
@@ -21,6 +22,7 @@ from storage.rop_db import (
     dumps_json,
     get_deal_control_metrics,
     get_deal_control_scope,
+    init_db,
     list_deal_control_task_history,
     list_deal_control_tasks,
     materialize_deal_recommendation_from_report,
@@ -87,6 +89,39 @@ def deal(deal_id: str, *, manager_id: str, closed: str = "N") -> dict:
 
 
 class DealControlTests(unittest.TestCase):
+    def test_init_db_migrates_legacy_deal_tasks_before_creating_neuro_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "legacy.sqlite"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE deal_control_tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        deal_id TEXT NOT NULL,
+                        task_text TEXT NOT NULL,
+                        due_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            init_db(db_path)
+            with connect(db_path) as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(deal_control_tasks)")}
+                indexes = {row[1] for row in conn.execute("PRAGMA index_list(deal_control_tasks)")}
+            self.assertIn("source_kind", columns)
+            self.assertIn("source_report_id", columns)
+            self.assertIn("idx_deal_control_tasks_neuro_report", indexes)
+
+            init_db(db_path)
+            with connect(db_path) as conn:
+                self.assertIn(
+                    "idx_deal_control_tasks_neuro_report",
+                    {row[1] for row in conn.execute("PRAGMA index_list(deal_control_tasks)")},
+                )
+
     def _save_deal(self, db_path: Path) -> None:
         upsert_deal_control_deal(
             db_path,

@@ -444,10 +444,6 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_deal_control_tasks_deal_due
                 ON deal_control_tasks(deal_id, due_at DESC, id DESC);
 
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_tasks_neuro_report
-                ON deal_control_tasks(source_report_id)
-                WHERE source_kind = 'neuro_rop' AND source_report_id IS NOT NULL;
-
             CREATE TABLE IF NOT EXISTS deal_control_bitrix_task_state (
                 activity_id TEXT NOT NULL PRIMARY KEY,
                 deal_id TEXT NOT NULL,
