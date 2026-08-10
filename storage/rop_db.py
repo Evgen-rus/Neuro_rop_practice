@@ -3379,6 +3379,95 @@ def materialize_deal_recommendation_from_report(
     return get_deal_control_task(db_path, task_id=task_id)
 
 
+def _compact_recommendation_text(value: Any, *, limit: int = 800) -> str | None:
+    text = str(value or "").strip()
+    return text[:limit] if text else None
+
+
+def _recommendation_state_without_system_outcomes(
+    outcome: dict[str, Any] | None,
+    crm_facts: list[dict[str, Any]],
+) -> str:
+    if isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
+        return "achieved"
+    if isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
+        return "contacted"
+    if isinstance(outcome, dict) and outcome.get("contact_status") == "attempt_no_contact":
+        return "attempted"
+    if isinstance(outcome, dict):
+        return "unconfirmed"
+    if any(str(fact.get("contact_class") or "") == "attempt" for fact in crm_facts):
+        return "attempted"
+    return "unconfirmed" if crm_facts else "not_done"
+
+
+def get_latest_neuro_rop_recommendation_projection(
+    db_path: str | Path,
+    deal_id: str,
+) -> dict[str, Any] | None:
+    """Return the bounded, JSON-safe prior recommendation context for a deal.
+
+    A recommendation is visible to a new analysis only after both its task and
+    baseline exist. Raw report, event, CRM payload, manager, and quick-help data
+    are intentionally excluded from this projection.
+    """
+    init_db(db_path)
+    with connect(db_path) as conn:
+        task_row = conn.execute(
+            """
+            SELECT t.*
+            FROM deal_control_tasks t
+            JOIN deal_control_task_baselines b ON b.task_id = t.id
+            WHERE t.deal_id = ? AND t.source_kind = 'neuro_rop'
+            ORDER BY t.source_report_id DESC, t.id DESC
+            LIMIT 1
+            """,
+            (str(deal_id),),
+        ).fetchone()
+        if task_row is None:
+            return None
+        task = dict(task_row)
+        outcome_row = conn.execute(
+            """
+            SELECT id, contact_status, result_status, result_note, next_step_text,
+                   next_step_at, evidence_kind, evidence_id, source_role, created_at
+            FROM deal_control_task_outcomes
+            WHERE task_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(task["id"]),),
+        ).fetchone()
+        outcome = dict(outcome_row) if outcome_row is not None else None
+        if outcome is not None:
+            for key in ("result_note", "next_step_text"):
+                outcome[key] = _compact_recommendation_text(outcome.get(key))
+        fact_rows = conn.execute(
+            """
+            SELECT id, fact_key, activity_id, fact_kind, summary, occurred_at,
+                   contact_class, review_status, created_at
+            FROM deal_control_task_crm_facts
+            WHERE task_id = ?
+            ORDER BY id DESC
+            LIMIT 5
+            """,
+            (int(task["id"]),),
+        ).fetchall()
+        crm_facts = [dict(row) for row in fact_rows]
+        for fact in crm_facts:
+            fact["summary"] = _compact_recommendation_text(fact.get("summary"))
+        return {
+            "task_id": int(task["id"]),
+            "source_report_id": int(task["source_report_id"]),
+            "task_text": _compact_recommendation_text(task.get("task_text")),
+            "expected_result": _compact_recommendation_text(task.get("expected_result")),
+            "due_at": task.get("due_at"),
+            "recommendation_state": _recommendation_state_without_system_outcomes(outcome, crm_facts),
+            "latest_outcome": outcome,
+            "crm_facts": crm_facts,
+        }
+
+
 def record_deal_control_task_event(
     db_path: str | Path,
     *,

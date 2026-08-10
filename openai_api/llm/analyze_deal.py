@@ -30,6 +30,7 @@ from openai_api.logging_utils import log_model_file_payload, log_model_text_payl
 from openai_api.pricing import format_usd_rub
 from progress_events import emit_progress, retry_progress_callback
 from setup import MSK_TZ
+from storage.rop_db import DEFAULT_DB_PATH, get_latest_neuro_rop_recommendation_projection
 
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
@@ -161,11 +162,17 @@ def build_prompt(
     context_diagnostics_text: str,
     okf_sections: list[tuple[Path, str]],
     stage_policy: dict[str, Any],
+    prior_neuro_rop_recommendation: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
     )
     stage_policy_text = json.dumps(stage_policy, ensure_ascii=False, indent=2)
+    prior_recommendation_text = json.dumps(
+        prior_neuro_rop_recommendation,
+        ensure_ascii=False,
+        indent=2,
+    )
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
 Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
@@ -600,6 +607,10 @@ def build_prompt(
 ## CRM_STAGE_POLICY
 
 {stage_policy_text}
+
+## PRIOR_NEURO_ROP_RECOMMENDATION
+
+{prior_recommendation_text}
 """
 
 
@@ -1066,6 +1077,10 @@ def main() -> None:
             workspace_root=Path(args.deal_root),
         )
     )
+    prior_neuro_rop_recommendation = get_latest_neuro_rop_recommendation_projection(
+        DEFAULT_DB_PATH,
+        str(args.deal_id),
+    )
 
     if not history_path.exists():
         raise FileNotFoundError(f"History file not found: {history_path}")
@@ -1092,6 +1107,7 @@ def main() -> None:
         context_diagnostics_text,
         okf_sections,
         stage_policy,
+        prior_neuro_rop_recommendation,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -1183,6 +1199,7 @@ def main() -> None:
             "knowledge": [str(path) for path, _text in okf_sections],
         },
         "crm_stage_policy": stage_policy,
+        "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
         "model_metadata": {
             key: value for key, value in metadata.items() if key != "raw_output_text"
         },

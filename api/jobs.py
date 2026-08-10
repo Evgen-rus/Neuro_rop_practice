@@ -23,6 +23,7 @@ from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     complete_daily_summary_item,
+    materialize_deal_recommendation_from_report,
     register_daily_summary_job,
     record_daily_summary_actual_cost,
     save_ui_report,
@@ -691,6 +692,13 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 model_context=build_model_context_snapshot(envelope),
                 job_id=job.job_id,
             )
+            if entity_type == "deal":
+                materialize_deal_recommendation_from_report(
+                    DEFAULT_DB_PATH,
+                    entity_id,
+                    report_id,
+                    analysis,
+                )
             job.report_ids.append(report_id)
         job.results.append(
             {
