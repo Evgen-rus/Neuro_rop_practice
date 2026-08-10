@@ -4,7 +4,7 @@ Lightweight validation for model-generated ROP analysis JSON.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 
@@ -142,6 +142,21 @@ def normalize_analysis_for_validation(
         allow_legacy_qualification_assessment=allow_legacy_qualification_assessment,
     )
     if allow_legacy_qualification_assessment:
+        if "deal_state" in analysis and "recommendation_feedback" not in analysis:
+            analysis["recommendation_feedback"] = {
+                "applicable": False,
+                "source_report_id": None,
+                "status": "unconfirmed",
+                "what_manager_did": None,
+                "contact_confirmed": False,
+                "target_result_achieved": False,
+                "evidence": [],
+                "next_action_required": False,
+                "next_action_text": None,
+                "next_action_at": None,
+                "next_action_reason": None,
+            }
+            changes.append({"path": "recommendation_feedback", "action": "added_legacy_fallback"})
         loss = analysis.get("loss_diagnosis")
         if isinstance(loss, dict) and "route_quality" not in loss:
             loss["route_quality"] = "unknown"
@@ -442,6 +457,98 @@ def _validate_no_forbidden_markers(path: str, text: str, errors: list[str]) -> N
 def _expect_bool(value: Any, path: str, errors: list[str]) -> None:
     if not isinstance(value, bool):
         errors.append(f"expected boolean at {path}")
+
+
+def _validate_recommendation_feedback(value: Any, errors: list[str]) -> None:
+    path = "recommendation_feedback"
+    feedback = _expect_dict(value, path, errors)
+    if not feedback:
+        return
+    fields = {
+        "applicable",
+        "source_report_id",
+        "status",
+        "what_manager_did",
+        "contact_confirmed",
+        "target_result_achieved",
+        "evidence",
+        "next_action_required",
+        "next_action_text",
+        "next_action_at",
+        "next_action_reason",
+    }
+    _require_fields(feedback, fields, path, errors)
+    applicable = feedback.get("applicable")
+    _expect_bool(applicable, f"{path}.applicable", errors)
+    source_report_id = feedback.get("source_report_id")
+    if source_report_id is not None and (
+        isinstance(source_report_id, bool)
+        or not isinstance(source_report_id, int)
+        or source_report_id <= 0
+    ):
+        errors.append(f"expected positive integer or null at {path}.source_report_id")
+    status = feedback.get("status")
+    _expect_enum(status, f"{path}.status", {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}, errors)
+    for field in ("contact_confirmed", "target_result_achieved", "next_action_required"):
+        _expect_bool(feedback.get(field), f"{path}.{field}", errors)
+    what_manager_did = feedback.get("what_manager_did")
+    if what_manager_did is not None:
+        _expect_non_empty_string(what_manager_did, f"{path}.what_manager_did", errors)
+    evidence = _validate_short_text_list(feedback.get("evidence"), f"{path}.evidence", 7, errors)
+    for field in ("next_action_text", "next_action_reason"):
+        if feedback.get(field) is not None:
+            _expect_non_empty_string(feedback.get(field), f"{path}.{field}", errors)
+    next_action_at = feedback.get("next_action_at")
+    if next_action_at is not None:
+        if not isinstance(next_action_at, str) or not next_action_at.strip():
+            errors.append(f"expected ISO datetime string or null at {path}.next_action_at")
+        else:
+            normalized = next_action_at[:-1] + "+00:00" if next_action_at.endswith("Z") else next_action_at
+            try:
+                parsed = datetime.fromisoformat(normalized)
+                if parsed.tzinfo is None:
+                    errors.append(f"expected timezone-aware ISO datetime at {path}.next_action_at")
+            except ValueError:
+                errors.append(f"expected ISO datetime string or null at {path}.next_action_at")
+
+    if applicable is False:
+        expected_neutral = {
+            "source_report_id": None,
+            "status": "unconfirmed",
+            "what_manager_did": None,
+            "contact_confirmed": False,
+            "target_result_achieved": False,
+            "evidence": [],
+            "next_action_required": False,
+            "next_action_text": None,
+            "next_action_at": None,
+            "next_action_reason": None,
+        }
+        for field, expected in expected_neutral.items():
+            if feedback.get(field) != expected:
+                errors.append(f"{path} must be neutral when applicable=false: {field}")
+        return
+
+    if source_report_id is None:
+        errors.append(f"{path}.source_report_id is required when applicable=true")
+    if status == "not_done" and (feedback.get("contact_confirmed") or feedback.get("target_result_achieved")):
+        errors.append(f"{path}.not_done cannot confirm contact or result")
+    if status == "attempted" and (feedback.get("contact_confirmed") or feedback.get("target_result_achieved")):
+        errors.append(f"{path}.attempted cannot confirm contact or result")
+    if status == "contacted" and (not feedback.get("contact_confirmed") or feedback.get("target_result_achieved")):
+        errors.append(f"{path}.contacted requires contact_confirmed=true and target_result_achieved=false")
+    if status == "achieved" and (
+        not feedback.get("contact_confirmed") or not feedback.get("target_result_achieved")
+    ):
+        errors.append(f"{path}.achieved requires contact_confirmed=true and target_result_achieved=true")
+    if feedback.get("target_result_achieved") and not feedback.get("contact_confirmed"):
+        errors.append(f"{path}.target_result_achieved requires contact_confirmed=true")
+    if feedback.get("next_action_required"):
+        for field in ("next_action_text", "next_action_at", "next_action_reason"):
+            if feedback.get(field) is None:
+                errors.append(f"{path}.{field} is required when next_action_required=true")
+    elif any(feedback.get(field) is not None for field in ("next_action_text", "next_action_at", "next_action_reason")):
+        errors.append(f"{path} next_action fields must be null when next_action_required=false")
 
 
 def _expect_non_empty_text_without_markers(value: Any, path: str, errors: list[str]) -> None:
@@ -1457,6 +1564,8 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _expect_list(analysis.get("what_changed"), "what_changed", errors)
     _expect_dict(analysis.get("deal_progress"), "deal_progress", errors)
     _validate_qualification_assessment(analysis, errors)
+    if "recommendation_feedback" in analysis:
+        _validate_recommendation_feedback(analysis.get("recommendation_feedback"), errors)
     _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:

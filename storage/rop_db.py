@@ -3379,6 +3379,186 @@ def materialize_deal_recommendation_from_report(
     return get_deal_control_task(db_path, task_id=task_id)
 
 
+def _fallback_next_recommendation(fallback: dict[str, Any] | None) -> tuple[str | None, str | None, str | None]:
+    if not isinstance(fallback, dict):
+        return None, None, None
+    rop = fallback.get("rop_manager_message_block") if isinstance(fallback.get("rop_manager_message_block"), dict) else fallback
+    manager_action = fallback.get("manager_action_block")
+    text = _compact_recommendation_text(
+        fallback.get("next_action_text") or rop.get("message_to_manager") or rop.get("success_condition")
+    )
+    next_at = _recommendation_due_at(fallback.get("next_action_at") or rop.get("deadline"))
+    reason = _compact_recommendation_text(
+        fallback.get("next_action_reason")
+        or rop.get("expected_crm_update")
+        or rop.get("success_condition")
+        or (manager_action.get("channel_reason") if isinstance(manager_action, dict) else None)
+    )
+    return text, next_at, reason
+
+
+def apply_deal_recommendation_feedback(
+    db_path: str | Path,
+    deal_id: str,
+    feedback: dict[str, Any] | None,
+    new_report_id: int,
+    fallback_next_recommendation: dict[str, Any] | None = None,
+    *,
+    fallback_recommendation: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Apply one validated model feedback block to the prior Neuro ROP task.
+
+    The source report is checked against the deal before any append-only rows are
+    written. The keyed system event makes retries safe and keeps the new report
+    materialization separate from the prior task outcome.
+    """
+    if fallback_next_recommendation is None:
+        fallback_next_recommendation = fallback_recommendation
+    if not isinstance(feedback, dict) or not bool(feedback.get("applicable")):
+        return None
+    source_report_id = feedback.get("source_report_id")
+    if isinstance(source_report_id, bool) or not isinstance(source_report_id, int) or source_report_id <= 0:
+        return None
+    status = str(feedback.get("status") or "unconfirmed")
+    if status not in {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}:
+        return None
+    event_key = f"system_recommendation_feedback:{int(new_report_id)}"
+    evidence = feedback.get("evidence") if isinstance(feedback.get("evidence"), list) else []
+    what_manager_did = _compact_recommendation_text(feedback.get("what_manager_did"))
+    next_text = _compact_recommendation_text(feedback.get("next_action_text"))
+    next_at = _recommendation_due_at(feedback.get("next_action_at"))
+    next_reason = _compact_recommendation_text(feedback.get("next_action_reason"))
+    fallback_text, fallback_at, fallback_reason = _fallback_next_recommendation(fallback_next_recommendation)
+
+    # Higher statuses need auditable facts and a usable next step. A current
+    # recommendation may provide the latter, but never supplies missing evidence.
+    effective_status = status
+    if status == "not_done" and (feedback.get("contact_confirmed") or feedback.get("target_result_achieved")):
+        effective_status = "unconfirmed"
+    elif status == "attempted" and (feedback.get("contact_confirmed") or feedback.get("target_result_achieved")):
+        effective_status = "unconfirmed"
+    elif status == "contacted" and (
+        not feedback.get("contact_confirmed") or feedback.get("target_result_achieved")
+    ):
+        effective_status = "unconfirmed"
+    elif status == "achieved" and (
+        not feedback.get("contact_confirmed") or not feedback.get("target_result_achieved")
+    ):
+        effective_status = "unconfirmed"
+    if status in {"attempted", "contacted", "achieved"}:
+        has_contact_evidence = bool(evidence) and bool(what_manager_did)
+        if status in {"contacted", "achieved"}:
+            has_contact_evidence = has_contact_evidence and bool(feedback.get("contact_confirmed"))
+        has_result_evidence = status != "achieved" or (
+            bool(feedback.get("target_result_achieved")) and has_contact_evidence
+        )
+        if not has_contact_evidence or not has_result_evidence:
+            effective_status = "unconfirmed"
+        else:
+            next_text = next_text or fallback_text
+            next_at = next_at or fallback_at
+            next_reason = next_reason or fallback_reason
+            if not (next_text and next_at and next_reason):
+                effective_status = "unconfirmed"
+
+    if effective_status in {"not_done", "unconfirmed"}:
+        contact_status = "unknown"
+        result_status = "needs_rop_review"
+        result_note = what_manager_did or (
+            "Предыдущая рекомендация не подтверждена текущими evidence."
+        )
+        next_text = next_at = None
+    elif effective_status == "attempted":
+        contact_status = "attempt_no_contact"
+        result_status = "pending"
+        result_note = what_manager_did
+    elif effective_status == "contacted":
+        contact_status = "confirmed_contact"
+        result_status = "pending"
+        result_note = what_manager_did
+    else:
+        contact_status = "confirmed_contact"
+        result_status = "achieved"
+        result_note = what_manager_did
+
+    init_db(db_path)
+    with connect(db_path) as conn:
+        task = conn.execute(
+            """
+            SELECT t.* FROM deal_control_tasks t
+            JOIN ui_reports r ON r.id = t.source_report_id
+            WHERE t.deal_id = ? AND t.source_kind = 'neuro_rop'
+              AND t.source_report_id = ? AND r.entity_type = 'deal' AND r.entity_id = ?
+              AND t.source_report_id <> ?
+              AND EXISTS (
+                  SELECT 1 FROM ui_reports nr
+                  WHERE nr.id = ? AND nr.entity_type = 'deal' AND nr.entity_id = ?
+              )
+            ORDER BY t.id DESC LIMIT 1
+            """,
+            (str(deal_id), int(source_report_id), str(deal_id), int(new_report_id), int(new_report_id), str(deal_id)),
+        ).fetchone()
+        if task is None:
+            return None
+        existing_event = conn.execute(
+            "SELECT payload_json FROM deal_control_task_events WHERE task_id = ? AND event_key = ?",
+            (int(task["id"]), event_key),
+        ).fetchone()
+        if existing_event is not None:
+            payload = loads_json(existing_event["payload_json"], {})
+            outcome_id = payload.get("outcome_id") if isinstance(payload, dict) else None
+            row = conn.execute(
+                "SELECT * FROM deal_control_task_outcomes WHERE id = ?",
+                (int(outcome_id),),
+            ).fetchone() if outcome_id else None
+            return dict(row) if row is not None else None
+
+        now = utcish_now()
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_control_task_outcomes (
+                task_id, contact_status, result_status, result_note, next_step_text,
+                next_step_at, evidence_kind, evidence_id, source_role, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'system', ?)
+            """,
+            (
+                int(task["id"]), contact_status, result_status, result_note,
+                next_text, next_at, "neuro_rop_recommendation_feedback", str(new_report_id), now,
+            ),
+        )
+        outcome_id = int(cursor.lastrowid)
+        local_status = "completed" if effective_status == "achieved" else "active"
+        legacy_status = "next_step" if effective_status == "achieved" else "no_result"
+        conn.execute(
+            """
+            UPDATE deal_control_tasks
+            SET local_status = ?, business_result_status = ?, business_result_note = ?,
+                completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (local_status, legacy_status, result_note, now if local_status == "completed" else task["completed_at"], now, int(task["id"])),
+        )
+        conn.execute(
+            """
+            INSERT INTO deal_control_task_events (task_id, event_type, event_key, payload_json, created_at)
+            VALUES (?, 'system_outcome', ?, ?, ?)
+            """,
+            (
+                int(task["id"]), event_key,
+                dumps_json({
+                    "outcome_id": outcome_id,
+                    "feedback_status": effective_status,
+                    "source_report_id": int(source_report_id),
+                    "new_report_id": int(new_report_id),
+                    "evidence_count": min(len(evidence), 7),
+                }),
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM deal_control_task_outcomes WHERE id = ?", (outcome_id,)).fetchone()
+    return dict(row) if row is not None else None
+
+
 def _compact_recommendation_text(value: Any, *, limit: int = 800) -> str | None:
     text = str(value or "").strip()
     return text[:limit] if text else None
@@ -3387,7 +3567,10 @@ def _compact_recommendation_text(value: Any, *, limit: int = 800) -> str | None:
 def _recommendation_state_without_system_outcomes(
     outcome: dict[str, Any] | None,
     crm_facts: list[dict[str, Any]],
+    system_feedback_status: str | None = None,
 ) -> str:
+    if system_feedback_status in {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}:
+        return str(system_feedback_status)
     if isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
         return "achieved"
     if isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
@@ -3467,13 +3650,26 @@ def _read_latest_neuro_rop_recommendation_projection(
         crm_facts = [dict(row) for row in fact_rows]
         for fact in crm_facts:
             fact["summary"] = _compact_recommendation_text(fact.get("summary"))
+        system_event = conn.execute(
+            """
+            SELECT payload_json FROM deal_control_task_events
+            WHERE task_id = ? AND event_type = 'system_outcome'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (int(task["id"]),),
+        ).fetchone()
+        system_payload = loads_json(system_event["payload_json"], {}) if system_event else {}
         return {
             "task_id": int(task["id"]),
             "source_report_id": int(task["source_report_id"]),
             "task_text": _compact_recommendation_text(task.get("task_text")),
             "expected_result": _compact_recommendation_text(task.get("expected_result")),
             "due_at": task.get("due_at"),
-            "recommendation_state": _recommendation_state_without_system_outcomes(outcome, crm_facts),
+            "recommendation_state": _recommendation_state_without_system_outcomes(
+                outcome,
+                crm_facts,
+                str(system_payload.get("feedback_status")) if isinstance(system_payload, dict) else None,
+            ),
             "latest_outcome": outcome,
             "crm_facts": crm_facts,
         }
@@ -3522,7 +3718,7 @@ def save_deal_control_task_outcome(
         raise ValueError("Неизвестный статус контакта")
     if result_status not in allowed_results:
         raise ValueError("Неизвестный результат задачи")
-    if source_role not in {"manager", "rop"}:
+    if source_role not in {"manager", "rop", "system"}:
         raise ValueError("Неизвестный источник результата")
     note = str(result_note or "").strip() or None
     next_text = str(next_step_text or "").strip() or None
@@ -3855,33 +4051,33 @@ def _task_recommendation_projection(
 ) -> dict[str, Any]:
     outcome = task.get("latest_outcome")
     state: str
-    if isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
+    system_outcome = conn.execute(
+        """
+        SELECT payload_json FROM deal_control_task_events
+        WHERE task_id = ? AND event_type = 'system_outcome'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (int(task["id"]),),
+    ).fetchone()
+    system_payload = loads_json(system_outcome["payload_json"], {}) if system_outcome else {}
+    system_status = system_payload.get("feedback_status") if isinstance(system_payload, dict) else None
+    if system_status in {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}:
+        state = str(system_status)
+    elif isinstance(outcome, dict) and outcome.get("result_status") == "achieved":
         state = "achieved"
+    elif isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
+        state = "contacted"
+    elif isinstance(outcome, dict) and outcome.get("contact_status") == "attempt_no_contact":
+        state = "attempted"
+    elif isinstance(outcome, dict):
+        state = "unconfirmed"
     else:
-        system_outcome = conn.execute(
-            """
-            SELECT payload_json FROM deal_control_task_events
-            WHERE task_id = ? AND event_type = 'system_outcome'
-            ORDER BY id DESC LIMIT 1
-            """,
-            (int(task["id"]),),
-        ).fetchone()
-        system_payload = loads_json(system_outcome["payload_json"], {}) if system_outcome else {}
-        if isinstance(system_payload, dict) and system_payload.get("result_status") == "achieved":
-            state = "achieved"
-        elif isinstance(outcome, dict) and outcome.get("contact_status") == "confirmed_contact":
-            state = "contacted"
-        elif isinstance(outcome, dict) and outcome.get("contact_status") == "attempt_no_contact":
-            state = "attempted"
-        elif isinstance(outcome, dict):
-            state = "unconfirmed"
-        else:
-            attempt_fact = any(
-                str(fact.get("contact_class") or "") == "attempt"
-                and str(fact.get("fact_kind") or "") not in {"stage_changed", "deal_won"}
-                for fact in task.get("crm_facts") or []
-            )
-            state = "attempted" if attempt_fact else "unconfirmed" if task.get("crm_facts") else "not_done"
+        attempt_fact = any(
+            str(fact.get("contact_class") or "") == "attempt"
+            and str(fact.get("fact_kind") or "") not in {"stage_changed", "deal_won"}
+            for fact in task.get("crm_facts") or []
+        )
+        state = "attempted" if attempt_fact else "unconfirmed" if task.get("crm_facts") else "not_done"
     priority = {"achieved": 0, "contacted": 1, "attempted": 2, "unconfirmed": 3, "not_done": 3}[state]
     task["recommendation_state"] = state
     task["attention_priority"] = priority

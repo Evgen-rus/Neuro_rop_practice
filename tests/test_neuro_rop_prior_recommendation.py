@@ -7,9 +7,12 @@ from unittest.mock import patch
 from api import jobs
 from api.jobs import JobState
 from openai_api.llm.analyze_deal import build_prompt
+from openai_api.llm.validation import _validate_recommendation_feedback
 from storage.rop_db import (
+    apply_deal_recommendation_feedback,
     connect,
     get_latest_neuro_rop_recommendation_projection,
+    list_deal_control_tasks,
     materialize_deal_recommendation_from_report,
     save_deal_control_scope,
     save_deal_control_task_crm_fact,
@@ -114,6 +117,82 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             self.assertIsNone(get_latest_neuro_rop_recommendation_projection(db_path, "101"))
             self.assertFalse(db_path.exists())
 
+    def test_feedback_no_prior_and_wrong_source_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            new_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis())
+            feedback = {
+                "applicable": True, "source_report_id": 999, "status": "contacted",
+                "what_manager_did": "Клиент ответил", "contact_confirmed": True,
+                "target_result_achieved": False, "evidence": ["transcript"],
+                "next_action_required": True, "next_action_text": "Уточнить срок",
+                "next_action_at": "2026-08-11T12:00:00+03:00", "next_action_reason": "Нужен срок",
+            }
+            self.assertIsNone(apply_deal_recommendation_feedback(db_path, "101", feedback, new_report_id, self._analysis()))
+            self.assertIsNone(apply_deal_recommendation_feedback(db_path, "999", feedback, new_report_id, self._analysis()))
+            with connect(db_path) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_outcomes").fetchone()[0], 0)
+
+    def test_feedback_maps_attempt_contact_and_explicit_achieved_idempotently(self) -> None:
+        for status, expected_state, contact_confirmed, target_achieved in (
+            ("attempted", "attempted", False, False),
+            ("contacted", "contacted", True, False),
+            ("achieved", "achieved", True, True),
+        ):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                db_path = Path(directory) / "state.sqlite"
+                self._save_deal(db_path)
+                old_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis())
+                task = materialize_deal_recommendation_from_report(db_path, "101", old_report_id, self._analysis())
+                new_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis("Новый шаг"))
+                feedback = {
+                    "applicable": True, "source_report_id": old_report_id, "status": status,
+                    "what_manager_did": "Менеджер выполнил шаг", "contact_confirmed": contact_confirmed,
+                    "target_result_achieved": target_achieved, "evidence": ["транскрипт клиента"],
+                    "next_action_required": True, "next_action_text": "Зафиксировать следующий шаг",
+                    "next_action_at": "2026-08-11T12:00:00+03:00", "next_action_reason": "Контроль",
+                }
+                first = apply_deal_recommendation_feedback(db_path, "101", feedback, new_report_id, self._analysis("Fallback"))
+                second = apply_deal_recommendation_feedback(db_path, "101", feedback, new_report_id, self._analysis("Fallback"))
+                self.assertEqual(first["id"], second["id"])
+                self.assertEqual(list_deal_control_tasks(db_path)[0]["recommendation_state"], expected_state)
+                with connect(db_path) as conn:
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_outcomes WHERE source_role='system'").fetchone()[0], 1)
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM deal_control_task_events WHERE event_type='system_outcome'").fetchone()[0], 1)
+
+    def test_feedback_missing_evidence_or_next_step_is_downgraded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            old_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis())
+            task = materialize_deal_recommendation_from_report(db_path, "101", old_report_id, self._analysis())
+            new_report_id = save_ui_report(db_path, entity_type="deal", entity_id="101", report_json=self._analysis("Новый шаг"))
+            feedback = {
+                "applicable": True, "source_report_id": old_report_id, "status": "achieved",
+                "what_manager_did": "Неясно", "contact_confirmed": True,
+                "target_result_achieved": True, "evidence": [],
+                "next_action_required": False, "next_action_text": None,
+                "next_action_at": None, "next_action_reason": None,
+            }
+            apply_deal_recommendation_feedback(db_path, "101", feedback, new_report_id)
+            self.assertEqual(list_deal_control_tasks(db_path)[0]["recommendation_state"], "unconfirmed")
+
+    def test_feedback_validator_rejects_inconsistent_combinations(self) -> None:
+        neutral = {
+            "applicable": False, "source_report_id": None, "status": "unconfirmed",
+            "what_manager_did": None, "contact_confirmed": False, "target_result_achieved": False,
+            "evidence": [], "next_action_required": False, "next_action_text": None,
+            "next_action_at": None, "next_action_reason": None,
+        }
+        errors: list[str] = []
+        _validate_recommendation_feedback(neutral, errors)
+        self.assertEqual(errors, [])
+        invalid = dict(neutral)
+        invalid.update({"applicable": True, "source_report_id": 1, "status": "contacted", "contact_confirmed": True, "target_result_achieved": True})
+        _validate_recommendation_feedback(invalid, errors)
+        self.assertTrue(errors)
+
     def test_prompt_has_structured_prior_section_without_private_fields(self) -> None:
         prior = {
             "task_id": 7,
@@ -127,6 +206,8 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
         }
         prompt = build_prompt("101", "История", "Новое событие", "Диагностика", [], {}, prior)
         self.assertIn("## PRIOR_NEURO_ROP_RECOMMENDATION", prompt)
+        self.assertIn('"recommendation_feedback"', prompt)
+        self.assertIn("<recommendation_feedback_rules>", prompt)
         self.assertIn('"task_id": 7', prompt)
         self.assertNotIn("report_json", prompt)
         self.assertNotIn("quick_help", prompt)
@@ -151,9 +232,10 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
 
             with patch.object(jobs, "analysis_paths", return_value=paths), \
                  patch.object(jobs, "save_ui_report", side_effect=save), \
+                 patch.object(jobs, "apply_deal_recommendation_feedback", side_effect=lambda *_args, **_kwargs: calls.append("apply")), \
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
-            self.assertEqual(calls, ["save", "materialize"])
+            self.assertEqual(calls, ["save", "apply", "materialize"])
 
     def test_collect_results_does_not_materialize_lead_failed_analysis_or_failed_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -22,6 +22,7 @@ from progress_events import PROGRESS_PREFIX, progress_key
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    apply_deal_recommendation_feedback,
     complete_daily_summary_item,
     materialize_deal_recommendation_from_report,
     register_daily_summary_job,
@@ -693,6 +694,13 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 job_id=job.job_id,
             )
             if entity_type == "deal":
+                apply_deal_recommendation_feedback(
+                    DEFAULT_DB_PATH,
+                    entity_id,
+                    analysis.get("recommendation_feedback"),
+                    report_id,
+                    analysis,
+                )
                 materialize_deal_recommendation_from_report(
                     DEFAULT_DB_PATH,
                     entity_id,

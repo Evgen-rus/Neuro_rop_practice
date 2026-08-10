@@ -370,6 +370,13 @@ def build_prompt(
 18. Если сделка закрыта как lost / неверный квал, сначала дай решение для РОПа: проверять возврат или оставить закрытой. Если для этого нужны факты клиента, дай нейтральный текст для одного уточняющего контакта без обещания вернуть сделку в работу.
 
 <verification_loop>
+<recommendation_feedback_rules>
+Заполни recommendation_feedback только по предыдущей рекомендации из PRIOR_NEURO_ROP_RECOMMENDATION и фактам текущей истории/транскрипции сделки.
+Если предыдущей рекомендации нет, верни ровно нейтральный блок: applicable=false, source_report_id=null, status=unconfirmed, false/empty/null во всех остальных полях.
+Для применимого блока source_report_id должен быть ID предыдущей рекомендации. status=attempted допускается только для попытки без подтверждённого контакта; activity/call/закрытая задача дают максимум attempted. status=contacted требует явного клиентского ответа в transcript/client evidence; переход стадии не является контактом или результатом. status=achieved требует явного соответствия expected_result предыдущей рекомендации и клиентского evidence. При недостатке или противоречии evidence используй status=unconfirmed и не ставь target_result_achieved=true.
+what_manager_did и evidence должны быть короткими фактами, evidence — не более 7 пунктов. Если next_action_required=true, заполни все три next_action-поля; иначе оставь их null. Не выдумывай следующий шаг, срок или результат.
+</recommendation_feedback_rules>
+
 Перед финальным JSON проверь:
 1. JSON валиден и соответствует указанной структуре.
 2. Все факты опираются на историю сделки или транскрибацию.
@@ -427,6 +434,19 @@ def build_prompt(
     "evidence": [
       "1-7 самых важных фактов из истории, звонка, комментария, задачи, стадии, CRM или внутреннего чата"
     ]
+  }},
+  "recommendation_feedback": {{
+    "applicable": false,
+    "source_report_id": null,
+    "status": "unconfirmed",
+    "what_manager_did": null,
+    "contact_confirmed": false,
+    "target_result_achieved": false,
+    "evidence": [],
+    "next_action_required": false,
+    "next_action_text": null,
+    "next_action_at": null,
+    "next_action_reason": null
   }},
   "new_event": {{
     "type": "call|missed_call|email|unknown",
