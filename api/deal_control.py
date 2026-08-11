@@ -383,6 +383,11 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     initial_ids = {str(value) for value in scope["initial_deal_ids"]}
     seen_pipeline_ids = {str(row.get("ID") or "") for row in pipeline_rows}
     saved_before = list_deal_control_deals(db_path, active_only=False)
+    previously_active_ids = {
+        str(item["deal_id"])
+        for item in saved_before
+        if item.get("is_active")
+    }
     missing_pipeline_ids = [
         str(item["deal_id"])
         for item in saved_before
@@ -411,35 +416,76 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     for saved in list_deal_control_deals(db_path, active_only=False):
         if saved.get("source") == "pipeline" and str(saved.get("deal_id")) not in seen_pipeline_ids:
             set_deal_control_deal_active(db_path, deal_id=str(saved["deal_id"]), is_active=False)
-    deals = list_deal_control_deals(db_path, active_only=False)
-    activities = fetch_candidate_activities_bulk(crm, [("deal", {"ID": item["deal_id"]}) for item in deals])
+    saved_after = list_deal_control_deals(db_path, active_only=False)
+    deals = [
+        item
+        for item in saved_after
+        if item.get("is_active") or str(item["deal_id"]) in previously_active_ids
+    ]
+    sync_deal_ids = [str(item["deal_id"]) for item in deals]
+    sync_entities = [("deal", {"ID": deal_id}) for deal_id in sync_deal_ids]
+    day_start = current.astimezone(MSK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    open_task_activities = fetch_candidate_activities_bulk(
+        crm,
+        sync_entities,
+        additional_filter={"PROVIDER_ID": "CRM_TASKS_TASK", "COMPLETED": "N"},
+    )
+    completed_today_activities = fetch_candidate_activities_bulk(
+        crm,
+        sync_entities,
+        additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
+    )
     deals_by_id = {str(item["deal_id"]): item for item in deals}
+    sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
+    task_deal_ids = list(dict.fromkeys(str(task["deal_id"]) for task in sync_tasks))
+    task_activities = fetch_candidate_activities_bulk(
+        crm,
+        [("deal", {"ID": deal_id}) for deal_id in task_deal_ids],
+    )
     for deal_item in deals:
         deal_id = str(deal_item["deal_id"])
-        deal_activities, activity_error = activities.get(("deal", deal_id), ([], "activity unavailable"))
-        if activity_error:
-            errors.append(f"Сделка #{deal_id}: {activity_error}")
+        open_items, open_error = open_task_activities.get(("deal", deal_id), ([], "open tasks unavailable"))
+        completed_items, completed_error = completed_today_activities.get(
+            ("deal", deal_id),
+            ([], "completed activities unavailable"),
+        )
+        activity_errors = [str(value) for value in (open_error, completed_error) if value]
+        if activity_errors:
+            errors.append(f"Сделка #{deal_id}: {'; '.join(activity_errors)}")
             save_deal_control_communications_today(
                 db_path,
                 deal_id=deal_id,
                 summary=_empty_daily_communications(current, available=False),
             )
             continue
+        deal_activities = {
+            str(activity.get("ID") or ""): activity
+            for activity in [*open_items, *completed_items]
+            if str(activity.get("ID") or "")
+        }
         save_deal_control_bitrix_tasks(
             db_path,
             deal_id=deal_id,
-            tasks=_open_bitrix_tasks(deal_activities, current),
+            tasks=_open_bitrix_tasks(list(deal_activities.values()), current),
         )
         save_deal_control_communications_today(
             db_path,
             deal_id=deal_id,
-            summary=_today_communications(deal_activities, current),
+            summary=_today_communications(completed_items, current),
         )
-    for task in list_deal_control_tasks(db_path):
-        task_activities, activity_error = activities.get(("deal", str(task["deal_id"])), ([], "activity unavailable"))
+    reported_task_activity_errors: set[str] = set()
+    for task in sync_tasks:
+        task_deal_id = str(task["deal_id"])
+        task_activity_items, activity_error = task_activities.get(
+            ("deal", task_deal_id),
+            ([], "task activity unavailable"),
+        )
         if activity_error:
+            if task_deal_id not in reported_task_activity_errors:
+                errors.append(f"Сделка #{task_deal_id}: {activity_error}")
+                reported_task_activity_errors.add(task_deal_id)
             continue
-        match = _match_task_to_activity(task, task_activities)
+        match = _match_task_to_activity(task, task_activity_items)
         status, activity_id, confidence = _execution_status(task, match, current)
         fact_kind = None
         fact_summary = None
@@ -460,7 +506,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         task_created = parse_bitrix_dt(task.get("created_at"))
         if task_created is not None and task_created.tzinfo is None:
             task_created = task_created.replace(tzinfo=MSK_TZ)
-        for activity in task_activities:
+        for activity in task_activity_items:
             activity_id_value = str(activity.get("ID") or "")
             occurred = _activity_time(activity)
             if not activity_id_value or occurred is None or (task_created is not None and occurred < task_created):

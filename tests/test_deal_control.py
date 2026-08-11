@@ -65,11 +65,22 @@ class FakeBitrixClient:
     def safe_list_all(self, method, payload=None):
         if method != "crm.activity.list":
             raise AssertionError(method)
+        self.calls.append((method, payload or {}))
         owner_ids = ((payload or {}).get("filter") or {}).get("OWNER_ID") or []
         owner_ids = owner_ids if isinstance(owner_ids, list) else [owner_ids]
         result = []
         for owner_id in owner_ids:
             result.extend(self.activities.get(str(owner_id), []))
+        activity_filter = (payload or {}).get("filter") or {}
+        if activity_filter.get("PROVIDER_ID"):
+            result = [item for item in result if item.get("PROVIDER_ID") == activity_filter["PROVIDER_ID"]]
+        if activity_filter.get("COMPLETED"):
+            result = [item for item in result if item.get("COMPLETED") == activity_filter["COMPLETED"]]
+        if activity_filter.get(">LAST_UPDATED"):
+            result = [
+                item for item in result
+                if str(item.get("LAST_UPDATED") or "") > str(activity_filter[">LAST_UPDATED"])
+            ]
         return {"ok": True, "items": result}
 
 
@@ -240,6 +251,47 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(current["recommendation_state"], "contacted")
             self.assertTrue(current["needs_follow_up"])
 
+    def test_distinct_stage_progress_facts_with_no_activity_id_are_saved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            task = create_deal_control_task(
+                db_path,
+                deal_id="101",
+                task_text="Проверить движение сделки",
+                touch_type=None,
+                expected_result=None,
+                due_at="2026-08-11T12:00:00+03:00",
+            )
+
+            first = save_deal_control_task_crm_fact(
+                db_path,
+                task_id=int(task["id"]),
+                fact_key="stage:NEW:PREPARATION:P",
+                activity_id=None,
+                fact_kind="stage_changed",
+                summary="Стадия изменилась: Новая → Подготовка",
+                occurred_at="2026-08-11T09:00:00+03:00",
+                contact_class="deal_progress",
+            )
+            second = save_deal_control_task_crm_fact(
+                db_path,
+                task_id=int(task["id"]),
+                fact_key="stage:PREPARATION:WON:S",
+                activity_id=None,
+                fact_kind="stage_changed",
+                summary="Стадия изменилась: Подготовка → Успешно",
+                occurred_at="2026-08-11T10:00:00+03:00",
+                contact_class="deal_progress",
+            )
+
+            self.assertNotEqual(first["id"], second["id"])
+            history = list_deal_control_task_history(db_path, task_id=int(task["id"]))
+            self.assertEqual(
+                {fact["fact_key"] for fact in history["crm_facts"]},
+                {"stage:NEW:PREPARATION:P", "stage:PREPARATION:WON:S"},
+            )
+
     def test_today_communications_counts_completed_calls_and_messages_in_moscow_day(self):
         activities = [
             {
@@ -396,6 +448,82 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(len(deal_list_calls), 2)
             self.assertEqual(deal_list_calls[0][1]["filter"]["ID"], ["101"])
 
+    def test_sync_fetches_activities_only_for_active_deals_and_includes_reactivated_deals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="999",
+                source="pipeline",
+                title="Неактивная сделка",
+                manager_id="10",
+                manager_name="Иванов Иван",
+                stage_id="C15:LOSE",
+                stage_name="Проиграна",
+                pipeline_id="15",
+                amount="50000",
+                currency_id="RUB",
+                created_at_crm="2026-07-01T09:00:00+03:00",
+                modified_at_crm="2026-07-19T09:00:00+03:00",
+                is_active=False,
+            )
+            inactive_task = create_deal_control_task(
+                db_path,
+                deal_id="999",
+                task_text="Старое поручение",
+                touch_type=None,
+                expected_result=None,
+                due_at="2026-07-20T12:00:00+03:00",
+            )
+            inactive_status_before = inactive_task["crm_execution_status"]
+            client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")})
+
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refresh_deal_control(
+                    db_path=db_path,
+                    client=client,
+                    now=datetime(2026, 7, 20, 10, tzinfo=MSK),
+                )
+
+            activity_calls = [call for call in client.calls if call[0] == "crm.activity.list"]
+            open_task_calls = [
+                call for call in activity_calls
+                if call[1]["filter"].get("PROVIDER_ID") == "CRM_TASKS_TASK"
+            ]
+            self.assertEqual(open_task_calls[-1][1]["filter"]["OWNER_ID"], ["101"])
+            inactive_after_sync = next(
+                item for item in list_deal_control_tasks(db_path) if item["id"] == inactive_task["id"]
+            )
+            self.assertEqual(inactive_after_sync["crm_execution_status"], inactive_status_before)
+
+            client.calls.clear()
+            client.pipeline = [deal("999", manager_id="10")]
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                refreshed = refresh_deal_control(
+                    db_path=db_path,
+                    client=client,
+                    now=datetime(2026, 7, 20, 11, tzinfo=MSK),
+                )
+
+            activity_calls = [call for call in client.calls if call[0] == "crm.activity.list"]
+            open_task_calls = [
+                call for call in activity_calls
+                if call[1]["filter"].get("PROVIDER_ID") == "CRM_TASKS_TASK"
+            ]
+            completed_today_calls = [
+                call for call in activity_calls
+                if call[1]["filter"].get("COMPLETED") == "Y"
+            ]
+            task_history_calls = [
+                call for call in activity_calls
+                if "PROVIDER_ID" not in call[1]["filter"] and "COMPLETED" not in call[1]["filter"]
+            ]
+            self.assertEqual(set(open_task_calls[-1][1]["filter"]["OWNER_ID"]), {"101", "999"})
+            self.assertEqual(set(completed_today_calls[-1][1]["filter"]["OWNER_ID"]), {"101", "999"})
+            self.assertEqual(task_history_calls[-1][1]["filter"]["OWNER_ID"], ["999"])
+            self.assertEqual({item["deal_id"] for item in refreshed["deals"]}, {"101", "999"})
+
     def test_sync_projects_existing_open_bitrix_tasks_and_clears_stale_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
@@ -445,6 +573,30 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(cleared["deals"][0]["bitrix_tasks"], [])
             self.assertIsNone(cleared["deals"][0]["primary_bitrix_task"])
             self.assertEqual(cleared["summary"]["tasks_total"], 0)
+
+    def test_sync_marks_daily_communications_unavailable_when_recent_activity_query_fails(self):
+        class RecentActivityFailureClient(FakeBitrixClient):
+            def safe_list_all(self, method, payload=None):
+                activity_filter = ((payload or {}).get("filter") or {})
+                if activity_filter.get("COMPLETED") == "Y":
+                    self.calls.append((method, payload or {}))
+                    return {"ok": False, "items": [], "error": "temporary timeout"}
+                return super().safe_list_all(method, payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            client = RecentActivityFailureClient(initial={"101": deal("101", manager_id="10")})
+
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                result = refresh_deal_control(
+                    db_path=db_path,
+                    client=client,
+                    now=datetime(2026, 7, 20, 10, tzinfo=MSK),
+                )
+
+            self.assertFalse(result["deals"][0]["communications_today"]["available"])
+            self.assertTrue(result["sync_errors"])
 
     def test_dashboard_reads_legacy_wrapped_bitrix_tasks_json(self):
         """DB may still hold `{tasks, scheduled_activities}` after a format rollback."""

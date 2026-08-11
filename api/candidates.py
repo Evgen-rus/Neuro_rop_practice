@@ -907,6 +907,8 @@ def fetch_candidate_activities(
 def fetch_candidate_activities_bulk(
     client: BitrixReadOnlyClient,
     entities: list[tuple[str, dict[str, Any]]],
+    *,
+    additional_filter: dict[str, Any] | None = None,
 ) -> dict[tuple[str, str], tuple[list[dict[str, Any]], str | None]]:
     """Два paginated read-only запроса вместо N запросов; fallback остаётся точечным."""
     result: dict[tuple[str, str], tuple[list[dict[str, Any]], str | None]] = {}
@@ -923,7 +925,11 @@ def fetch_candidate_activities_bulk(
             "crm.activity.list",
             {
                 "order": {"OWNER_ID": "ASC", "START_TIME": "ASC", "ID": "ASC"},
-                "filter": {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": ids},
+                "filter": {
+                    **dict(additional_filter or {}),
+                    "OWNER_TYPE_ID": owner_type_id,
+                    "OWNER_ID": ids,
+                },
                 "select": select,
             },
         )

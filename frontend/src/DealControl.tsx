@@ -462,8 +462,9 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   const [data, setData] = useState<DealControlDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState('')
   const [error, setError] = useState('')
-  const [, setNotice] = useState('')
+  const [notice, setNotice] = useState('')
   const [view, setView] = useState<DealControlView>('dashboard')
   const [selectedId, setSelectedId] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -553,6 +554,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
           await reload()
         } else if (!terminalHandled && next.status === 'error') {
           terminalHandled = true
+          await reload()
           setError(next.error || `Не удалось завершить анализ сделки #${analyzingDealId}`)
         }
       } catch (reason) {
@@ -712,16 +714,24 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
   async function sync() {
     setSyncing(true)
+    setSyncStatus('Подключаемся к Bitrix…')
     setError('')
     setNotice('')
+    const statusTimers = [
+      window.setTimeout(() => setSyncStatus('Получаем сделки и задачи…'), 2500),
+      window.setTimeout(() => setSyncStatus('Bitrix отвечает медленно — ожидайте…'), 8000),
+    ]
     try {
       const response = await syncDealControl()
       setData(response)
       setSelectedId((current) => current || response.deals[0]?.deal_id || '')
       setNotice(response.sync_message || 'Данные из Bitrix обновлены')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      const message = reason instanceof Error ? reason.message : String(reason)
+      setError(`Bitrix не обновлён: ${message}`)
     } finally {
+      statusTimers.forEach((timer) => window.clearTimeout(timer))
+      setSyncStatus('')
       setSyncing(false)
     }
   }
@@ -1063,7 +1073,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       <header className="dc-header">
         <div><h1>{copyForView.title}</h1></div>
         <div className="dc-refresh">
-          <span>Обновлено {dateTime(data.generated_at)}</span>
+          <span>{syncStatus || `Экран сформирован ${dateTime(data.generated_at)}`}</span>
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
             {syncing ? <><span className="dc-spinner" />Обновляем Bitrix…</> : <><span>⟳</span>Обновить Bitrix</>}
           </button>
@@ -1071,6 +1081,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       </header>
 
       {error ? <div className="dc-alert error">{error}</div> : null}
+      {notice ? <div className="dc-alert success">{notice}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
       <Kpis view={view} summary={filteredSummary} />

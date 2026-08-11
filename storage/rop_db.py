@@ -3994,10 +3994,18 @@ def save_deal_control_task_crm_fact(
         existing = conn.execute(
             """
             SELECT id FROM deal_control_task_crm_facts
-            WHERE task_id = ? AND activity_id IS ? AND fact_kind = ?
+            WHERE task_id = ? AND fact_key = ?
             """,
-            (int(task_id), activity_id, fact_kind),
+            (int(task_id), fact_key),
         ).fetchone()
+        if existing is None and activity_id is not None:
+            existing = conn.execute(
+                """
+                SELECT id FROM deal_control_task_crm_facts
+                WHERE task_id = ? AND activity_id = ? AND fact_kind = ?
+                """,
+                (int(task_id), activity_id, fact_kind),
+            ).fetchone()
         if existing is not None:
             conn.execute(
                 """

@@ -927,16 +927,18 @@ function MainApp() {
       void fetchJob(jobId)
         .then((next) => {
           setJob(next)
-          if (next.status === 'done') {
+          if (next.status === 'done' || next.status === 'error') {
             void fetchReports(50)
               .then((data) => {
                 setHistory(data.items)
-                const result = next.results?.[0]
-                const reportId = result?.report_id || next.report_ids?.[0]
-                if (reportId) void openHistoryReport(Number(reportId))
+                if (next.status === 'done') {
+                  const result = next.results?.[0]
+                  const reportId = result?.report_id || next.report_ids?.[0]
+                  if (reportId) void openHistoryReport(Number(reportId))
+                }
               })
               .catch((error) => setHistoryError(error instanceof Error ? error.message : String(error)))
-            toast('Анализ завершён', setToastMessage)
+            if (next.status === 'done') toast('Анализ завершён', setToastMessage)
           }
         })
         .catch((error) => setJobError(error instanceof Error ? error.message : String(error)))
@@ -1209,7 +1211,14 @@ function MainApp() {
     if (!dailyRunId || dailyRunStatus !== 'analyzing') return
     const timer = window.setInterval(() => {
       void fetchDailySummary(dailyRunId)
-        .then((value) => setDailyRun(value))
+        .then((value) => {
+          setDailyRun(value)
+          if (['done', 'completed_with_errors', 'error'].includes(value.status)) {
+            void fetchReports(50)
+              .then((data) => setHistory(data.items))
+              .catch((error) => setHistoryError(error instanceof Error ? error.message : String(error)))
+          }
+        })
         .catch((error) => setDailyError(error instanceof Error ? error.message : String(error)))
     }, 2000)
     return () => window.clearInterval(timer)
@@ -1230,7 +1239,10 @@ function MainApp() {
       : []
 
   if (tab === 'deals') {
-    return <DealControl onExit={() => setTab('summary')} />
+    return <DealControl onExit={() => {
+      setTab('summary')
+      void loadHistory()
+    }} />
   }
 
   return (
