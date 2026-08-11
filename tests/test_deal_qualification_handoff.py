@@ -41,6 +41,36 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertEqual(old_all_calls_prefix, new_prior_calls_prefix)
         self.assertEqual(len(deal_prompt_cache_markers(new_text)), 3)
 
+    def test_dynamic_daily_checklist_is_after_cache_boundaries(self) -> None:
+        first = build_prompt(
+            "7",
+            "same history",
+            "same transcript",
+            "same diagnostics",
+            [(Path("okf.md"), "rules")],
+            {},
+            None,
+            {"business_date": "2026-08-11", "revision": 1, "items": []},
+        )
+        second = build_prompt(
+            "7",
+            "same history",
+            "same transcript",
+            "same diagnostics",
+            [(Path("okf.md"), "rules")],
+            {},
+            None,
+            {"business_date": "2026-08-11", "revision": 9, "items": [{"id": "1"}]},
+        )
+
+        self.assertEqual(
+            prompt_prefix_before(first, HISTORY_SECTION_MARKER),
+            prompt_prefix_before(second, HISTORY_SECTION_MARKER),
+        )
+        self.assertEqual(deal_prompt_cache_markers("same transcript"), [DEAL_ID_SECTION_MARKER, HISTORY_SECTION_MARKER])
+        self.assertIn("## CURRENT_DAILY_MANAGER_CHECKLIST", first)
+        self.assertNotEqual(first, second)
+
     def test_deal_prompt_requires_qualification_assessment(self) -> None:
         prompt = build_prompt(
             "18683",

@@ -551,6 +551,42 @@ def _validate_recommendation_feedback(value: Any, errors: list[str]) -> None:
         errors.append(f"{path} next_action fields must be null when next_action_required=false")
 
 
+def _validate_daily_checklist_update(value: Any, errors: list[str]) -> None:
+    path = "daily_checklist_update"
+    update = _expect_dict(value, path, errors)
+    if not update:
+        return
+    _require_fields(update, {"business_date", "base_revision", "add", "retire", "reopen"}, path, errors)
+    business_date = update.get("business_date")
+    if not isinstance(business_date, str):
+        errors.append(f"expected ISO date string at {path}.business_date")
+    else:
+        try:
+            datetime.strptime(business_date, "%Y-%m-%d")
+        except ValueError:
+            errors.append(f"expected ISO date string at {path}.business_date")
+    base_revision = update.get("base_revision")
+    if isinstance(base_revision, bool) or not isinstance(base_revision, int) or base_revision < 0:
+        errors.append(f"expected non-negative integer at {path}.base_revision")
+
+    for field in ("add", "retire", "reopen"):
+        actions = _expect_max_list_length(update.get(field), f"{path}.{field}", 5, errors)
+        for index, action in enumerate(actions):
+            action_path = f"{path}.{field}[{index}]"
+            item = _expect_dict(action, action_path, errors)
+            if not item:
+                continue
+            required = {"text", "reason"} if field == "add" else {"item_id", "reason"}
+            _require_fields(item, required, action_path, errors)
+            if field == "add":
+                _expect_non_empty_string(item.get("text"), f"{action_path}.text", errors)
+            else:
+                item_id = item.get("item_id")
+                if isinstance(item_id, bool) or not isinstance(item_id, (str, int)) or not str(item_id).strip():
+                    errors.append(f"expected string or integer item id at {action_path}.item_id")
+            _expect_non_empty_string(item.get("reason"), f"{action_path}.reason", errors)
+
+
 def _expect_non_empty_text_without_markers(value: Any, path: str, errors: list[str]) -> None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"expected non-empty string at {path}")
@@ -1606,6 +1642,8 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _validate_qualification_assessment(analysis, errors)
     if "recommendation_feedback" in analysis:
         _validate_recommendation_feedback(analysis.get("recommendation_feedback"), errors)
+    if "daily_checklist_update" in analysis:
+        _validate_daily_checklist_update(analysis.get("daily_checklist_update"), errors)
     _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:

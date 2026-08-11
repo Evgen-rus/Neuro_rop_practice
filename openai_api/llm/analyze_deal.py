@@ -30,7 +30,11 @@ from openai_api.logging_utils import log_model_file_payload, log_model_text_payl
 from openai_api.pricing import format_usd_rub
 from progress_events import emit_progress, retry_progress_callback
 from setup import MSK_TZ
-from storage.rop_db import DEFAULT_DB_PATH, get_latest_neuro_rop_recommendation_projection
+from storage.rop_db import (
+    DEFAULT_DB_PATH,
+    get_deal_daily_checklist_analysis_projection,
+    get_latest_neuro_rop_recommendation_projection,
+)
 
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
@@ -163,6 +167,7 @@ def build_prompt(
     okf_sections: list[tuple[Path, str]],
     stage_policy: dict[str, Any],
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
+    daily_checklist_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -170,6 +175,11 @@ def build_prompt(
     stage_policy_text = json.dumps(stage_policy, ensure_ascii=False, indent=2)
     prior_recommendation_text = json.dumps(
         prior_neuro_rop_recommendation,
+        ensure_ascii=False,
+        indent=2,
+    )
+    daily_checklist_text = json.dumps(
+        daily_checklist_context,
         ensure_ascii=False,
         indent=2,
     )
@@ -377,6 +387,21 @@ def build_prompt(
 what_manager_did и evidence должны быть короткими фактами, evidence — не более 7 пунктов. Если next_action_required=true, заполни все три next_action-поля; иначе оставь их null. Не выдумывай следующий шаг, срок или результат.
 </recommendation_feedback_rules>
 
+<daily_checklist_rules>
+CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной список менеджера, а не доказательство фактов клиента.
+Отметка completed=true означает только самоотчёт менеджера о выполненном действии. Не используй её как evidence контакта, согласия клиента, результата рекомендации или движения сделки.
+Верни в daily_checklist_update только дельту относительно переданного списка:
+- base_revision и business_date скопируй из CURRENT_DAILY_MANAGER_CHECKLIST;
+- add — только действительно новый актуальный пункт, которого нет в списке даже под другой формулировкой;
+- retire — только открытый пункт, который по новым фактам стал неактуален;
+- reopen — только выполненный пункт, который снова стал нужен из-за нового явно подтверждённого обстоятельства; обязательно укажи конкретную причину;
+- неизменившиеся пункты не перечисляй ни в одном массиве;
+- не переформулируй существующий пункт через add и не создавай смысловые дубли;
+- если изменений нет, верни пустые add, retire и reopen;
+- после применения изменений видимых пунктов должно быть не больше 5.
+Если tracked=false или items пуст, сформируй начальный дневной список через add. Пункты должны быть короткими конкретными действиями менеджера на сегодня, а не текстами для РОПа и не общими советами.
+</daily_checklist_rules>
+
 Перед финальным JSON проверь:
 1. JSON валиден и соответствует указанной структуре.
 2. Все факты опираются на историю сделки или транскрибацию.
@@ -447,6 +472,19 @@ what_manager_did и evidence должны быть короткими факта
     "next_action_text": null,
     "next_action_at": null,
     "next_action_reason": null
+  }},
+  "daily_checklist_update": {{
+    "business_date": "YYYY-MM-DD из CURRENT_DAILY_MANAGER_CHECKLIST",
+    "base_revision": 0,
+    "add": [
+      {{"text": "новое короткое действие менеджера на сегодня", "reason": "почему пункт нужен по текущим фактам"}}
+    ],
+    "retire": [
+      {{"item_id": "ID открытого пункта", "reason": "почему пункт больше не актуален"}}
+    ],
+    "reopen": [
+      {{"item_id": "ID выполненного пункта", "reason": "какое новое подтверждённое обстоятельство снова требует действия"}}
+    ]
   }},
   "new_event": {{
     "type": "call|missed_call|email|unknown",
@@ -631,6 +669,10 @@ what_manager_did и evidence должны быть короткими факта
 ## PRIOR_NEURO_ROP_RECOMMENDATION
 
 {prior_recommendation_text}
+
+## CURRENT_DAILY_MANAGER_CHECKLIST
+
+{daily_checklist_text}
 """
 
 
@@ -1101,6 +1143,10 @@ def main() -> None:
         DEFAULT_DB_PATH,
         str(args.deal_id),
     )
+    daily_checklist_context = get_deal_daily_checklist_analysis_projection(
+        DEFAULT_DB_PATH,
+        str(args.deal_id),
+    )
 
     if not history_path.exists():
         raise FileNotFoundError(f"History file not found: {history_path}")
@@ -1128,6 +1174,7 @@ def main() -> None:
         okf_sections,
         stage_policy,
         prior_neuro_rop_recommendation,
+        daily_checklist_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -1220,6 +1267,7 @@ def main() -> None:
         },
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
+        "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist_context,
         "model_metadata": {
             key: value for key, value in metadata.items() if key != "raw_output_text"
         },

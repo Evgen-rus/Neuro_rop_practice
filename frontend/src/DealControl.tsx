@@ -1942,10 +1942,17 @@ function DealChecklistCard({ deal, editable, onToggle }: {
   onToggle?: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
 }) {
   const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
+  const changeLabel = (kind?: string) => kind === 'carried'
+    ? 'Перенесено'
+    : kind === 'reopened'
+      ? 'Возобновлено'
+      : kind === 'new'
+        ? 'Новое'
+        : ''
   return <section className="dc-deal-checklist">
     <header>
       <span className="dc-deal-checklist-icon">✓</span>
-      <div><h3>Чек-лист дожима</h3><p>Что ещё нужно закрыть, чтобы приблизить сделку к решению</p></div>
+      <div><h3>Чек-лист на сегодня</h3><p>Короткий план действий по этой сделке на текущий день</p></div>
       <strong>{checklist.completed} из {checklist.total}</strong>
     </header>
     <div className="dc-deal-checklist-body">
@@ -1957,7 +1964,7 @@ function DealChecklistCard({ deal, editable, onToggle }: {
           aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
           onClick={() => onToggle ? void onToggle(deal, item.id, !item.completed) : undefined}
         >{item.completed ? '✓' : ''}</button>
-        <span>{item.text}</span>
+        <span>{item.text}{changeLabel(item.change_kind) ? <small className={`dc-checklist-origin ${item.change_kind}`}>{changeLabel(item.change_kind)}</small> : null}</span>
         <em>{item.completed ? 'Выполнено' : 'Не выполнено'}</em>
       </li>)}</ul> : <p className="dc-deal-checklist-empty">Чек-лист появится после успешного анализа сделки.</p>}
     </div>

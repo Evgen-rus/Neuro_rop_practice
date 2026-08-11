@@ -9,6 +9,7 @@ the change-detection layer needs.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 from datetime import date, datetime, time
@@ -359,6 +360,61 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS deal_daily_checklists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                business_date TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0,
+                source_report_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(deal_id, business_date),
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_daily_checklists_latest
+                ON deal_daily_checklists(deal_id, business_date DESC);
+
+            CREATE TABLE IF NOT EXISTS deal_daily_checklist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                checklist_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('open', 'completed', 'retired')),
+                origin_report_id INTEGER,
+                carried_from_item_id INTEGER,
+                last_change_type TEXT NOT NULL DEFAULT 'new',
+                completed_at TEXT,
+                completed_by TEXT,
+                status_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(checklist_id) REFERENCES deal_daily_checklists(id),
+                FOREIGN KEY(carried_from_item_id) REFERENCES deal_daily_checklist_items(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_daily_checklist_items_current
+                ON deal_daily_checklist_items(checklist_id, status, id);
+
+            CREATE TABLE IF NOT EXISTS deal_daily_checklist_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                checklist_id INTEGER NOT NULL,
+                item_id INTEGER,
+                event_key TEXT UNIQUE,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                source_report_id INTEGER,
+                reason TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(checklist_id) REFERENCES deal_daily_checklists(id),
+                FOREIGN KEY(item_id) REFERENCES deal_daily_checklist_items(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_daily_checklist_events_history
+                ON deal_daily_checklist_events(checklist_id, id);
 
             CREATE TABLE IF NOT EXISTS deal_manager_situation_reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3088,6 +3144,611 @@ def save_deal_control_checklist_item_state(
             (dumps_json(state), now, str(deal_id)),
         )
     return state
+
+
+DAILY_CHECKLIST_LIMIT = 5
+
+
+def _daily_checklist_business_date(value: date | datetime | str | None = None) -> str:
+    if isinstance(value, str):
+        return date.fromisoformat(value).isoformat()
+    if isinstance(value, datetime):
+        current = value if value.tzinfo else value.replace(tzinfo=MSK_TZ)
+        return current.astimezone(MSK_TZ).date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return datetime.now(MSK_TZ).date().isoformat()
+
+
+def _normalize_daily_checklist_text(value: Any) -> str:
+    return re.sub(r"\W+", " ", str(value or "").lower(), flags=re.UNICODE).strip()
+
+
+def _daily_checklist_event(
+    conn: sqlite3.Connection,
+    *,
+    checklist_id: int,
+    event_type: str,
+    actor: str,
+    item_id: int | None = None,
+    event_key: str | None = None,
+    source_report_id: int | None = None,
+    reason: str | None = None,
+    payload: dict[str, Any] | None = None,
+    created_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO deal_daily_checklist_events (
+            checklist_id, item_id, event_key, event_type, actor,
+            source_report_id, reason, payload_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            checklist_id,
+            item_id,
+            event_key,
+            event_type,
+            actor,
+            source_report_id,
+            reason,
+            dumps_json(payload) if payload is not None else None,
+            created_at,
+        ),
+    )
+
+
+def _insert_daily_checklist_item(
+    conn: sqlite3.Connection,
+    *,
+    checklist_id: int,
+    text: str,
+    source: str,
+    origin_report_id: int | None,
+    carried_from_item_id: int | None,
+    last_change_type: str,
+    now: str,
+) -> int | None:
+    clean_text = re.sub(r"\s+", " ", str(text or "")).strip()
+    normalized = _normalize_daily_checklist_text(clean_text)
+    if not normalized:
+        return None
+    existing = conn.execute(
+        """
+        SELECT id FROM deal_daily_checklist_items
+        WHERE checklist_id = ? AND normalized_text = ? AND status != 'retired'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (checklist_id, normalized),
+    ).fetchone()
+    if existing is not None:
+        return None
+    cursor = conn.execute(
+        """
+        INSERT INTO deal_daily_checklist_items (
+            checklist_id, text, normalized_text, source, status,
+            origin_report_id, carried_from_item_id, last_change_type,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+        """,
+        (
+            checklist_id,
+            clean_text,
+            normalized,
+            str(source or "ai"),
+            origin_report_id,
+            carried_from_item_id,
+            last_change_type,
+            now,
+            now,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _ensure_daily_checklist(
+    conn: sqlite3.Connection,
+    *,
+    deal_id: str,
+    business_date: str,
+    seed_items: list[dict[str, Any]] | None,
+    source_report_id: int | None,
+    now: str,
+) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM deal_daily_checklists WHERE deal_id = ? AND business_date = ?",
+        (deal_id, business_date),
+    ).fetchone()
+    if row is not None:
+        return row
+    if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (deal_id,)).fetchone() is None:
+        raise ValueError("Сделка ещё не добавлена в контур контроля")
+    cursor = conn.execute(
+        """
+        INSERT INTO deal_daily_checklists (
+            deal_id, business_date, revision, source_report_id, created_at, updated_at
+        ) VALUES (?, ?, 0, ?, ?, ?)
+        """,
+        (deal_id, business_date, source_report_id, now, now),
+    )
+    checklist_id = int(cursor.lastrowid)
+    _daily_checklist_event(
+        conn,
+        checklist_id=checklist_id,
+        event_type="created",
+        actor="system",
+        source_report_id=source_report_id,
+        created_at=now,
+    )
+    previous = conn.execute(
+        """
+        SELECT * FROM deal_daily_checklists
+        WHERE deal_id = ? AND business_date < ?
+        ORDER BY business_date DESC LIMIT 1
+        """,
+        (deal_id, business_date),
+    ).fetchone()
+    inserted = 0
+    if previous is not None:
+        previous_items = conn.execute(
+            """
+            SELECT * FROM deal_daily_checklist_items
+            WHERE checklist_id = ? AND status = 'open'
+            ORDER BY id
+            """,
+            (int(previous["id"]),),
+        ).fetchall()
+        for previous_item in previous_items[:DAILY_CHECKLIST_LIMIT]:
+            item_id = _insert_daily_checklist_item(
+                conn,
+                checklist_id=checklist_id,
+                text=str(previous_item["text"]),
+                source=str(previous_item["source"]),
+                origin_report_id=previous_item["origin_report_id"],
+                carried_from_item_id=int(previous_item["id"]),
+                last_change_type="carried",
+                now=now,
+            )
+            if item_id is None:
+                continue
+            inserted += 1
+            _daily_checklist_event(
+                conn,
+                checklist_id=checklist_id,
+                item_id=item_id,
+                event_type="carried",
+                actor="system",
+                source_report_id=source_report_id,
+                payload={"from_business_date": str(previous["business_date"]), "from_item_id": int(previous_item["id"])},
+                created_at=now,
+            )
+    if previous is None:
+        for candidate in (seed_items or [])[:DAILY_CHECKLIST_LIMIT]:
+            item_id = _insert_daily_checklist_item(
+                conn,
+                checklist_id=checklist_id,
+                text=str(candidate.get("text") or ""),
+                source=str(candidate.get("source") or "ai"),
+                origin_report_id=source_report_id,
+                carried_from_item_id=None,
+                last_change_type="new",
+                now=now,
+            )
+            if item_id is None:
+                continue
+            inserted += 1
+            if bool(candidate.get("completed")):
+                conn.execute(
+                    """
+                    UPDATE deal_daily_checklist_items
+                    SET status = 'completed', completed_at = ?, completed_by = ?,
+                        last_change_type = 'completed', updated_at = ? WHERE id = ?
+                    """,
+                    (
+                        candidate.get("completed_at") or now,
+                        candidate.get("completed_by") or "manager",
+                        now,
+                        item_id,
+                    ),
+                )
+            _daily_checklist_event(
+                conn,
+                checklist_id=checklist_id,
+                item_id=item_id,
+                event_type="added",
+                actor="system",
+                source_report_id=source_report_id,
+                created_at=now,
+            )
+            if bool(candidate.get("completed")):
+                _daily_checklist_event(
+                    conn,
+                    checklist_id=checklist_id,
+                    item_id=item_id,
+                    event_type="migrated_completed",
+                    actor="system",
+                    source_report_id=source_report_id,
+                    created_at=now,
+                )
+    if inserted:
+        conn.execute(
+            "UPDATE deal_daily_checklists SET revision = 1, updated_at = ? WHERE id = ?",
+            (now, checklist_id),
+        )
+    return conn.execute("SELECT * FROM deal_daily_checklists WHERE id = ?", (checklist_id,)).fetchone()
+
+
+def _daily_checklist_projection(conn: sqlite3.Connection, checklist: sqlite3.Row) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT * FROM deal_daily_checklist_items
+        WHERE checklist_id = ? AND status != 'retired'
+        ORDER BY id
+        """,
+        (int(checklist["id"]),),
+    ).fetchall()
+    items = [
+        {
+            "id": str(row["id"]),
+            "text": str(row["text"]),
+            "completed": str(row["status"]) == "completed",
+            "completed_at": row["completed_at"],
+            "completed_by": row["completed_by"],
+            "source": str(row["source"]),
+            "change_kind": str(row["last_change_type"]),
+        }
+        for row in rows
+    ]
+    completed = sum(1 for item in items if item["completed"])
+    return {
+        "business_date": str(checklist["business_date"]),
+        "revision": int(checklist["revision"]),
+        "source_report_id": int(checklist["source_report_id"]) if checklist["source_report_id"] is not None else None,
+        "items": items,
+        "completed": completed,
+        "total": len(items),
+        "progress_percent": round(completed * 100 / len(items)) if items else 0,
+    }
+
+
+def get_or_create_deal_daily_checklist(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    business_date: date | datetime | str | None = None,
+    seed_items: list[dict[str, Any]] | None = None,
+    source_report_id: int | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    normalized_date = _daily_checklist_business_date(business_date)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        checklist = _ensure_daily_checklist(
+            conn,
+            deal_id=str(deal_id),
+            business_date=normalized_date,
+            seed_items=seed_items,
+            source_report_id=source_report_id,
+            now=now,
+        )
+        return _daily_checklist_projection(conn, checklist)
+
+
+def get_deal_daily_checklist_analysis_projection(
+    db_path: str | Path,
+    deal_id: str,
+    *,
+    business_date: date | datetime | str | None = None,
+) -> dict[str, Any]:
+    """Return bounded dynamic checklist context; manager marks are explicitly self-reported."""
+    init_db(db_path)
+    normalized_date = _daily_checklist_business_date(business_date)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            return {
+                "tracked": False,
+                "business_date": normalized_date,
+                "revision": 0,
+                "items": [],
+                "previous_day": None,
+                "manager_marks_are_client_evidence": False,
+            }
+        checklist = _ensure_daily_checklist(
+            conn,
+            deal_id=str(deal_id),
+            business_date=normalized_date,
+            seed_items=None,
+            source_report_id=None,
+            now=now,
+        )
+        current = _daily_checklist_projection(conn, checklist)
+        previous = conn.execute(
+            """
+            SELECT * FROM deal_daily_checklists
+            WHERE deal_id = ? AND business_date < ?
+            ORDER BY business_date DESC LIMIT 1
+            """,
+            (str(deal_id), normalized_date),
+        ).fetchone()
+        previous_summary = None
+        if previous is not None:
+            statuses = conn.execute(
+                """
+                SELECT status, COUNT(*) AS count FROM deal_daily_checklist_items
+                WHERE checklist_id = ? GROUP BY status
+                """,
+                (int(previous["id"]),),
+            ).fetchall()
+            counts = {str(row["status"]): int(row["count"]) for row in statuses}
+            previous_summary = {
+                "business_date": str(previous["business_date"]),
+                "completed": counts.get("completed", 0),
+                "unfinished": counts.get("open", 0),
+                "retired": counts.get("retired", 0),
+            }
+        return {
+            "tracked": True,
+            "business_date": current["business_date"],
+            "revision": current["revision"],
+            "items": [
+                {
+                    "id": item["id"],
+                    "text": item["text"],
+                    "completed": item["completed"],
+                    "change_kind": item["change_kind"],
+                }
+                for item in current["items"]
+            ],
+            "previous_day": previous_summary,
+            "manager_marks_are_client_evidence": False,
+        }
+
+
+def save_deal_daily_checklist_item_completion(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    item_id: str,
+    completed: bool,
+    business_date: date | datetime | str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    normalized_date = _daily_checklist_business_date(business_date)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        checklist = _ensure_daily_checklist(
+            conn,
+            deal_id=str(deal_id),
+            business_date=normalized_date,
+            seed_items=None,
+            source_report_id=None,
+            now=now,
+        )
+        item = conn.execute(
+            """
+            SELECT * FROM deal_daily_checklist_items
+            WHERE id = ? AND checklist_id = ? AND status != 'retired'
+            """,
+            (str(item_id), int(checklist["id"])),
+        ).fetchone()
+        if item is None:
+            raise ValueError("Пункт не найден в актуальном чек-листе")
+        next_status = "completed" if completed else "open"
+        if str(item["status"]) != next_status:
+            conn.execute(
+                """
+                UPDATE deal_daily_checklist_items
+                SET status = ?, completed_at = ?, completed_by = ?,
+                    last_change_type = ?, status_reason = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_status,
+                    now if completed else None,
+                    "manager" if completed else None,
+                    "completed" if completed else "returned",
+                    now,
+                    int(item["id"]),
+                ),
+            )
+            conn.execute(
+                "UPDATE deal_daily_checklists SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                (now, int(checklist["id"])),
+            )
+            _daily_checklist_event(
+                conn,
+                checklist_id=int(checklist["id"]),
+                item_id=int(item["id"]),
+                event_type="completed" if completed else "returned",
+                actor="manager",
+                created_at=now,
+            )
+        current = conn.execute("SELECT * FROM deal_daily_checklists WHERE id = ?", (int(checklist["id"]),)).fetchone()
+        return _daily_checklist_projection(conn, current)
+
+
+def apply_deal_daily_checklist_update(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    update: dict[str, Any] | None,
+    fallback_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Merge one validated AI delta without replacing concurrent manager state."""
+    init_db(db_path)
+    now = utcish_now()
+    payload = update if isinstance(update, dict) else {}
+    normalized_date = _daily_checklist_business_date(payload.get("business_date"))
+    event_key = f"daily-checklist-analysis:{deal_id}:{int(source_report_id)}"
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            return None
+        existing_event = conn.execute(
+            "SELECT checklist_id FROM deal_daily_checklist_events WHERE event_key = ?",
+            (event_key,),
+        ).fetchone()
+        if existing_event is not None:
+            checklist = conn.execute(
+                "SELECT * FROM deal_daily_checklists WHERE id = ?",
+                (int(existing_event["checklist_id"]),),
+            ).fetchone()
+            return _daily_checklist_projection(conn, checklist)
+        checklist = _ensure_daily_checklist(
+            conn,
+            deal_id=str(deal_id),
+            business_date=normalized_date,
+            seed_items=None,
+            source_report_id=int(source_report_id),
+            now=now,
+        )
+        checklist_id = int(checklist["id"])
+        base_revision = int(payload.get("base_revision") or 0)
+        stale_revision = base_revision != int(checklist["revision"])
+        applied: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+
+        for action in payload.get("retire") or []:
+            item = conn.execute(
+                "SELECT * FROM deal_daily_checklist_items WHERE id = ? AND checklist_id = ?",
+                (str(action.get("item_id") or ""), checklist_id),
+            ).fetchone()
+            reason = str(action.get("reason") or "").strip()
+            if stale_revision or item is None or str(item["status"]) != "open":
+                skipped.append({"action": "retire", "item_id": str(action.get("item_id") or ""), "reason": "stale_or_not_open"})
+                continue
+            conn.execute(
+                """
+                UPDATE deal_daily_checklist_items
+                SET status = 'retired', last_change_type = 'retired', status_reason = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (reason, now, int(item["id"])),
+            )
+            applied.append({"action": "retire", "item_id": str(item["id"])})
+            _daily_checklist_event(
+                conn, checklist_id=checklist_id, item_id=int(item["id"]), event_type="retired",
+                actor="ai", source_report_id=int(source_report_id), reason=reason, created_at=now,
+            )
+
+        for action in payload.get("reopen") or []:
+            item = conn.execute(
+                "SELECT * FROM deal_daily_checklist_items WHERE id = ? AND checklist_id = ?",
+                (str(action.get("item_id") or ""), checklist_id),
+            ).fetchone()
+            reason = str(action.get("reason") or "").strip()
+            if stale_revision or item is None or str(item["status"]) != "completed" or not reason:
+                skipped.append({"action": "reopen", "item_id": str(action.get("item_id") or ""), "reason": "stale_or_not_completed"})
+                continue
+            conn.execute(
+                """
+                UPDATE deal_daily_checklist_items
+                SET status = 'open', completed_at = NULL, completed_by = NULL,
+                    last_change_type = 'reopened', status_reason = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (reason, now, int(item["id"])),
+            )
+            applied.append({"action": "reopen", "item_id": str(item["id"])})
+            _daily_checklist_event(
+                conn, checklist_id=checklist_id, item_id=int(item["id"]), event_type="reopened",
+                actor="ai", source_report_id=int(source_report_id), reason=reason, created_at=now,
+            )
+
+        additions = list(payload.get("add") or [])
+        if not additions and not payload.get("retire") and not payload.get("reopen"):
+            visible_count = conn.execute(
+                "SELECT COUNT(*) FROM deal_daily_checklist_items WHERE checklist_id = ? AND status != 'retired'",
+                (checklist_id,),
+            ).fetchone()[0]
+            if not visible_count:
+                additions = list(fallback_items or [])
+        for action in additions:
+            visible_count = int(conn.execute(
+                "SELECT COUNT(*) FROM deal_daily_checklist_items WHERE checklist_id = ? AND status != 'retired'",
+                (checklist_id,),
+            ).fetchone()[0])
+            if visible_count >= DAILY_CHECKLIST_LIMIT:
+                skipped.append({"action": "add", "text": str(action.get("text") or ""), "reason": "limit"})
+                continue
+            text = str(action.get("text") or "").strip()
+            normalized = _normalize_daily_checklist_text(text)
+            duplicate = conn.execute(
+                """
+                SELECT * FROM deal_daily_checklist_items
+                WHERE checklist_id = ? AND normalized_text = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (checklist_id, normalized),
+            ).fetchone()
+            if duplicate is not None and str(duplicate["status"]) == "retired":
+                conn.execute(
+                    """
+                    UPDATE deal_daily_checklist_items
+                    SET status = 'open', last_change_type = 'reopened', status_reason = ?,
+                        origin_report_id = ?, updated_at = ? WHERE id = ?
+                    """,
+                    (str(action.get("reason") or "").strip() or None, int(source_report_id), now, int(duplicate["id"])),
+                )
+                item_id = int(duplicate["id"])
+                event_type = "reopened"
+            else:
+                item_id = _insert_daily_checklist_item(
+                    conn,
+                    checklist_id=checklist_id,
+                    text=text,
+                    source="ai",
+                    origin_report_id=int(source_report_id),
+                    carried_from_item_id=None,
+                    last_change_type="new",
+                    now=now,
+                )
+                event_type = "added"
+            if item_id is None:
+                skipped.append({"action": "add", "text": text, "reason": "duplicate_or_empty"})
+                continue
+            applied.append({"action": "add", "item_id": str(item_id)})
+            _daily_checklist_event(
+                conn, checklist_id=checklist_id, item_id=item_id, event_type=event_type,
+                actor="ai", source_report_id=int(source_report_id),
+                reason=str(action.get("reason") or "").strip() or None, created_at=now,
+            )
+
+        if applied:
+            conn.execute(
+                """
+                UPDATE deal_daily_checklists
+                SET revision = revision + 1, source_report_id = ?, updated_at = ? WHERE id = ?
+                """,
+                (int(source_report_id), now, checklist_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE deal_daily_checklists SET source_report_id = ? WHERE id = ?",
+                (int(source_report_id), checklist_id),
+            )
+        _daily_checklist_event(
+            conn,
+            checklist_id=checklist_id,
+            event_type="analysis_applied",
+            actor="ai",
+            event_key=event_key,
+            source_report_id=int(source_report_id),
+            payload={
+                "base_revision": base_revision,
+                "stale_revision": stale_revision,
+                "applied": applied,
+                "skipped": skipped,
+            },
+            created_at=now,
+        )
+        current = conn.execute("SELECT * FROM deal_daily_checklists WHERE id = ?", (checklist_id,)).fetchone()
+        return _daily_checklist_projection(conn, current)
 
 
 def set_deal_control_bitrix_task_completion(

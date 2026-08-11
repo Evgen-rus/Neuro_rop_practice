@@ -5513,6 +5513,28 @@ ul.facts.bad li:before {
   font-weight: 800;
 }
 
+.dc-checklist-origin {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #1768f2;
+  background: #edf4ff;
+  font-size: 7px;
+  font-weight: 900;
+  vertical-align: 1px;
+}
+
+.dc-checklist-origin.carried {
+  color: #6d5b15;
+  background: #fff8d8;
+}
+
+.dc-checklist-origin.reopened {
+  color: #9b4b16;
+  background: #fff0e5;
+}
+
 .dc-deal-checklist li > em {
   padding: 4px 7px;
   border-radius: 999px;

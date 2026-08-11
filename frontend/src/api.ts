@@ -553,9 +553,12 @@ export type DealControlChecklistItem = {
   completed_at?: string | null
   completed_by?: 'manager' | null
   source: 'missing' | 'focus' | 'crm' | string
+  change_kind?: 'new' | 'carried' | 'reopened' | 'completed' | 'returned' | string
 }
 
 export type DealControlChecklist = {
+  business_date?: string | null
+  revision?: number
   source_report_id?: number | null
   items: DealControlChecklistItem[]
   completed: number
