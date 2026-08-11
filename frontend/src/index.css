@@ -1197,6 +1197,133 @@ textarea {
   white-space: nowrap;
 }
 
+.dc-recommendation-summary {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dc-rop-recommendation {
+  border-top: 1px solid #dce5ef;
+  background: #fbfdff;
+}
+
+.dc-recommendation-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dc-recommendation-summary > strong {
+  color: #243b59;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dc-recommendation-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #9a4d3e;
+  background: #fff0ed;
+  font-size: 8px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.dc-rop-recommendation.attempted .dc-recommendation-status {
+  color: #8b6418;
+  background: #fff5d8;
+}
+
+.dc-rop-recommendation.contacted .dc-recommendation-status {
+  color: #245eae;
+  background: #eaf3ff;
+}
+
+.dc-rop-recommendation.achieved .dc-recommendation-status {
+  color: #247044;
+  background: #e8f7ee;
+}
+
+.dc-recommendation-chevron {
+  color: #55708f;
+  font-size: 14px;
+  text-align: center;
+  transition: transform .18s ease;
+}
+
+.dc-rop-recommendation[open] .dc-recommendation-chevron {
+  transform: rotate(180deg);
+}
+
+.dc-recommendation-content {
+  padding: 12px;
+  border-top: 1px solid #d9e5f2;
+  background: #fff;
+}
+
+.dc-recommendation-main h4 {
+  margin: 0;
+  color: #173253;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dc-recommendation-main p {
+  margin: 4px 0 0;
+  color: #64758c;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.dc-recommendation-ladder {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0;
+  margin: 11px 0;
+  list-style: none;
+}
+
+.dc-recommendation-ladder li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 7px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  color: #6d7d91;
+  background: #fbfdff;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.dc-recommendation-ladder li.active {
+  border-color: #a9c8f2;
+  color: #245eae;
+  background: #eef5ff;
+}
+
+.dc-recommendation-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 9px;
+  border-top: 1px solid #e4ebf2;
+}
+
+.dc-recommendation-meta p {
+  margin: 0;
+  color: #748399;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .dc-insight-card > p,
 .dc-text-section > p,
 .dc-current-task > p,
@@ -6392,6 +6519,14 @@ ul.facts.bad li:before {
 .dc-communication-details article > b { color: #243b59; font-size: 9px; white-space: nowrap; }
 
 @media (max-width: 720px) {
+  .dc-recommendation-ladder {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dc-recommendation-meta {
+    display: grid;
+  }
+
   .dc-communication-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dc-bitrix-task-btn { flex: 1 1 160px; }
   .dc-manager-answer-grid,

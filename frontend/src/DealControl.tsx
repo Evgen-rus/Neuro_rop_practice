@@ -1700,7 +1700,6 @@ function DealDetail(props: {
 
     {managerView ? <ManagerDealScreen
       deal={deal}
-      aiRecommendation={aiRecommendation}
       situation={managerSituation}
       hasAnalysis={hasAnalysis}
       analysisEmptyAction={analysisButton}
@@ -1797,7 +1796,6 @@ function DealDetail(props: {
 
 type ManagerDealScreenProps = {
   deal: DealControlDeal
-  aiRecommendation: DealControlTask | null
   situation: ManagerSituationState
   hasAnalysis: boolean
   analysisEmptyAction: ReactNode
@@ -1846,7 +1844,6 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onRefine={props.onRefineSituation}
       onTranscribe={props.onTranscribe}
     />
-    <AiRecommendationCard task={props.aiRecommendation} view="manager" />
     {confirmed ? <>
       <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerQuickHelp
@@ -1892,44 +1889,40 @@ function RopDealScreen({ deal, aiRecommendation, hasAnalysis, analysisEmptyActio
       <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы сформировать чек-лист и текущий итог.</p></div>
       {analysisEmptyAction}
     </section> : null}
-    <AiRecommendationCard task={aiRecommendation} view="rop" />
     {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
-    {hasAnalysis ? <RopCurrentSummary deal={deal} /> : null}
+    {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
   </>
 }
 
-function AiRecommendationCard({ task, view }: { task: DealControlTask | null; view: 'rop' | 'manager' }) {
-  if (!task) {
-    return <section className="dc-analysis-section dc-recommendation-card unconfirmed">
-      <div className="dc-section-head"><h3>Текущая AI-рекомендация</h3><span>Neuro ROP</span></div>
-      <p className="dc-boundary-note">AI-рекомендация не передана текущим API. Карточка не восстановлена по одному `source_report_id`.</p>
-    </section>
-  }
-
-  const state = recommendationStateOf(task)
-  const reason = recommendationReasonOf(task, state)
-  return <section className={`dc-analysis-section dc-recommendation-card ${state}`}>
-    <div className="dc-section-head">
-      <div><h3>Текущая AI-рекомендация</h3><span>{view === 'rop' ? 'Для контроля РОПа' : 'Для выполнения менеджером'}</span></div>
-      <strong>{RECOMMENDATION_LABELS[state]}</strong>
+function AiRecommendationCard({ task }: { task: DealControlTask | null }) {
+  const state = task ? recommendationStateOf(task) : 'unconfirmed'
+  const reason = task ? recommendationReasonOf(task, state) : ''
+  return <details className={`dc-rop-recommendation ${state}`}>
+    <summary className="dc-recommendation-summary">
+      <strong>Текущая AI-рекомендация</strong>
+      <span className="dc-recommendation-status">{task ? RECOMMENDATION_LABELS[state] : 'Нет рекомендации'}</span>
+      <span className="dc-recommendation-chevron" aria-hidden="true">⌄</span>
+    </summary>
+    <div className="dc-recommendation-content">
+      {!task ? <p className="dc-boundary-note">AI-рекомендация не передана текущим API. Карточка не восстановлена по одному `source_report_id`.</p> : <>
+        <div className="dc-recommendation-main">
+          <h4>{compactTaskText(task.task_text)}</h4>
+          <p>{task.expected_result?.trim() || 'Ожидаемый результат не указан'}</p>
+        </div>
+        {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробная рекомендация</summary><p>{task.task_text}</p></details> : null}
+        <ol className="dc-recommendation-ladder" aria-label="Стадия выполнения AI-рекомендации">
+          {RECOMMENDATION_STEPS.map((step) => <li className={step.state === state ? 'active' : ''} key={step.state}>
+            <span>{step.state === state ? '●' : '○'}</span>{step.label}
+          </li>)}
+        </ol>
+        <div className="dc-recommendation-meta">
+          <p><strong>Статус:</strong> {reason}</p>
+          <p><strong>Срок:</strong> {dateTime(task.due_at)}{task.needs_follow_up ? ' · Нужен follow-up' : ''}</p>
+        </div>
+      </>}
     </div>
-    <div className="dc-task-hero">
-      <span>✦</span>
-      <div>
-        <h4>{compactTaskText(task.task_text)}</h4>
-        <p>{task.expected_result?.trim() || 'Ожидаемый результат не указан'}</p>
-      </div>
-    </div>
-    {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробная рекомендация</summary><p>{task.task_text}</p></details> : null}
-    <ol className="dc-recommendation-ladder" aria-label="Стадия выполнения AI-рекомендации">
-      {RECOMMENDATION_STEPS.map((step) => <li className={step.state === state ? 'active' : ''} key={step.state}>
-        <span>{step.state === state ? '●' : '○'}</span>{step.label}
-      </li>)}
-    </ol>
-    <p className="dc-boundary-note"><strong>Почему такой статус:</strong> {reason}</p>
-    <p className="dc-task-meta">Срок: {dateTime(task.due_at)}{task.needs_follow_up ? ' · Нужен follow-up' : ''}</p>
-  </section>
+  </details>
 }
 
 function DealChecklistCard({ deal, editable, onToggle }: {
@@ -1960,7 +1953,7 @@ function DealChecklistCard({ deal, editable, onToggle }: {
   </section>
 }
 
-function RopCurrentSummary({ deal }: { deal: DealControlDeal }) {
+function RopCurrentSummary({ deal, aiRecommendation }: { deal: DealControlDeal; aiRecommendation: DealControlTask | null }) {
   const checklist = deal.checklist
   const remaining = checklist?.items.filter((item) => !item.completed).map((item) => item.text) || []
   const completed = checklist?.items.filter((item) => item.completed).map((item) => item.text) || []
@@ -1979,6 +1972,7 @@ function RopCurrentSummary({ deal }: { deal: DealControlDeal }) {
       {remaining.length ? <p><b>Осталось:</b> {remaining.join(' ')}</p> : null}
       <aside><b>Вывод для РОПа</b><span>{deal.coaching.rop_focus || deal.coaching.what_to_check_now || 'Управленческий вывод появится после анализа сделки.'}</span></aside>
     </div>
+    <AiRecommendationCard task={aiRecommendation} />
   </section>
 }
 
