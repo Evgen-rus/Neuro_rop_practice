@@ -93,15 +93,15 @@ const EXECUTION_LABELS: Record<DealControlTask['crm_execution_status'], string> 
 
 const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = {
   dashboard: {
-    title: 'Дашборд сделок',
+    title: 'Дашборд',
     subtitle: 'Быстрый обзор всех сделок, их состояния и ключевых метрик',
   },
   rop: {
-    title: 'Контроль сделок РОПа',
+    title: 'Контроль РОП',
     subtitle: 'Что просрочено, что на сегодня и как помочь менеджеру довести сделку',
   },
   manager: {
-    title: 'Мои задачи по сделкам',
+    title: 'Мои задачи',
     subtitle: 'Все касания в одном месте: что сделать, что выяснить и как провести разговор',
   },
 }
@@ -1073,7 +1073,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       <header className="dc-header">
         <div><h1>{copyForView.title}</h1></div>
         <div className="dc-refresh">
-          <span>{syncStatus || `Экран сформирован ${dateTime(data.generated_at)}`}</span>
+          <span>{syncStatus || `Обновлено ${dateTime(data.generated_at)}`}</span>
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
             {syncing ? <><span className="dc-spinner" />Обновляем Bitrix…</> : <><span>⟳</span>Обновить Bitrix</>}
           </button>
@@ -1122,7 +1122,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
             countForPlan={(bucket) => timeCounts[bucket as keyof typeof timeCounts] || 0}
           />
           <div className="dc-board-title">
-            <div><h2>{view === 'dashboard' ? 'Обзор портфеля сделок' : taskPlanTitle(timeView)}</h2></div>
+            <div><h2>{view === 'dashboard' ? 'Обзор портфеля' : taskPlanTitle(timeView)}</h2></div>
             <span>{view === 'dashboard' ? 'Сначала критичные ›' : 'Фокус дня ›'}</span>
           </div>
           {view === 'dashboard'
