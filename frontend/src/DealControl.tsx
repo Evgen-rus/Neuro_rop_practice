@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import {
   confirmDealControlTaskCrmMatch,
@@ -1680,40 +1680,58 @@ function DealDetail(props: {
     >
       {analysisRunning
         ? <><span className="dc-spinner" />Анализируем…</>
-        : <><span>✦</span>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
+        : <>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
     </button>
   )
   const analysisReady = (
     <div className="dc-analysis-ready">
-      <div><span>✓</span><strong>AI-анализ проведён</strong></div>
-      {coaching.analysis_created_at ? <small>{dateTime(coaching.analysis_created_at)}</small> : null}
+      <div>
+        <span>✓</span>
+        <div>
+          <strong>AI-анализ проведён</strong>
+          {coaching.analysis_created_at ? <small>{dateTime(coaching.analysis_created_at)}</small> : null}
+        </div>
+      </div>
       <button className="dc-button" disabled={analysisBusy} onClick={() => void props.onAnalyze(deal)}>
         {analysisRunning ? <><span className="dc-spinner" />Обновляем…</> : 'Обновить'}
       </button>
     </div>
   )
+  const analysisMissing = (
+    <div className="dc-analysis-ready dc-analysis-missing">
+      <div>
+        <span>✦</span>
+        <div>
+          <strong>AI-анализ не проведён</strong>
+        </div>
+      </div>
+      {analysisButton}
+    </div>
+  )
 
   return <aside className="dc-detail">
-    <header>
-      <div><div className="dc-deal-title-row"><h2>Сделка #{deal.deal_id}</h2><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a></div><p>{deal.title}</p></div>
-      {hasAnalysis ? analysisReady : null}
+    <header className="dc-detail-top">
+      <div className="dc-detail-heading">
+        <div className="dc-deal-title-row"><h2>Сделка #{deal.deal_id}</h2><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a></div>
+        <p>{deal.title}</p>
+        {hasAnalysis ? analysisReady : analysisMissing}
+      </div>
+      <section className="dc-detail-stats">
+        <div><small>Этап</small><strong>{deal.stage_name || '—'}</strong></div>
+        <div><small>Вероятность</small><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
+        <div><small>Менеджер</small><strong>{deal.manager_name || '—'}</strong></div>
+        <div><small>Сумма</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
+      </section>
     </header>
     {!managerView && analysisRunning && props.analysisJob
       ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} />
       : null}
-    <section className="dc-detail-stats">
-      <div><small>Этап</small><strong>{deal.stage_name || '—'}</strong></div>
-      <div><small>Вероятность</small><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
-      <div><small>Менеджер</small><strong>{deal.manager_name || '—'}</strong></div>
-      <div><small>Сумма</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
-    </section>
     {managerView && analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
 
     {managerView ? <ManagerDealScreen
       deal={deal}
       situation={managerSituation}
       hasAnalysis={hasAnalysis}
-      analysisEmptyAction={analysisButton}
       situationModalOpen={situationModalOpen}
       situationContext={situationContext}
       situationError={situationError}
@@ -1742,13 +1760,8 @@ function DealDetail(props: {
       deal={deal}
       aiRecommendation={aiRecommendation}
       hasAnalysis={hasAnalysis}
-      analysisEmptyAction={analysisButton}
     /> : <>
-    {hasAnalysis ? <DealSituationCard deal={deal} /> : <section className="dc-analysis-empty">
-      <span>✦</span>
-      <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы увидеть текущую ситуацию, риски и рекомендации по сделке.</p></div>
-      {analysisButton}
-    </section>}
+    {hasAnalysis ? <DealSituationCard deal={deal} /> : null}
 
     {hasAnalysis ? <CurrentTask
       view={props.view}
@@ -1809,7 +1822,6 @@ type ManagerDealScreenProps = {
   deal: DealControlDeal
   situation: ManagerSituationState
   hasAnalysis: boolean
-  analysisEmptyAction: ReactNode
   situationModalOpen: boolean
   situationContext: string
   situationError: string
@@ -1839,11 +1851,9 @@ type ManagerDealScreenProps = {
 function ManagerDealScreen(props: ManagerDealScreenProps) {
   const confirmed = managerSituationIsConfirmed(props.situation)
   return <>
-    <ManagerSituationActions
+    {props.hasAnalysis ? <ManagerSituationActions
       deal={props.deal}
       situation={props.situation}
-      hasAnalysis={props.hasAnalysis}
-      analysisEmptyAction={props.analysisEmptyAction}
       modalOpen={props.situationModalOpen}
       context={props.situationContext}
       error={props.situationError}
@@ -1854,7 +1864,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onConfirm={props.onConfirmSituation}
       onRefine={props.onRefineSituation}
       onTranscribe={props.onTranscribe}
-    />
+    /> : null}
     {confirmed ? <>
       <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerQuickHelp
@@ -1889,18 +1899,12 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
   </>
 }
 
-function RopDealScreen({ deal, aiRecommendation, hasAnalysis, analysisEmptyAction }: {
+function RopDealScreen({ deal, aiRecommendation, hasAnalysis }: {
   deal: DealControlDeal
   aiRecommendation: DealControlTask | null
   hasAnalysis: boolean
-  analysisEmptyAction: ReactNode
 }) {
   return <>
-    {!hasAnalysis ? <section className="dc-analysis-empty">
-      <span>✦</span>
-      <div><h3>Анализ не проведён</h3><p>Проведите анализ, чтобы сформировать чек-лист и текущий итог.</p></div>
-      {analysisEmptyAction}
-    </section> : null}
     {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
     {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
@@ -2054,8 +2058,6 @@ function DealSituationCard({ deal }: { deal: DealControlDeal }) {
 function ManagerSituationActions(props: {
   deal: DealControlDeal
   situation: ManagerSituationState
-  hasAnalysis: boolean
-  analysisEmptyAction: ReactNode
   modalOpen: boolean
   context: string
   error: string
@@ -2089,25 +2091,19 @@ function ManagerSituationActions(props: {
       </header>
 
       <div className="dc-manager-situation-body">
-        {props.hasAnalysis
-          ? <>
-            <p className="dc-manager-situation-copy">{props.deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
-          </>
-          : <div className="dc-analysis-empty dc-manager-analysis-empty">
-            <span>✦</span><div><h3>Анализ не проведён</h3><p>Проведи полный анализ сделки, чтобы получить текущую ситуацию.</p></div>{props.analysisEmptyAction}
-          </div>}
+        <p className="dc-manager-situation-copy">{props.deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
         {props.job ? <ManagerJobProgress job={props.job} label="Пересборка ситуации" /> : null}
         {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
       </div>
 
-      {props.hasAnalysis ? <footer className="dc-manager-situation-actions">
+      <footer className="dc-manager-situation-actions">
         <button className="dc-button primary" disabled={busy || confirmed} onClick={props.onConfirm}>
           {confirmed ? '✓ Ситуация подтверждена' : 'Подтвердить ситуацию'}
         </button>
         <button className="dc-button" disabled={busy} onClick={props.onOpenModal}>
           {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}
         </button>
-      </footer> : null}
+      </footer>
     </section>
     {props.modalOpen ? createPortal(<div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
       <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">

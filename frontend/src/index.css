@@ -954,11 +954,19 @@ textarea {
   scrollbar-gutter: stable;
 }
 
-.dc-detail > header {
-  display: flex;
+.dc-detail > header,
+.dc-detail-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(220px, .95fr);
   align-items: start;
-  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 11px;
+}
+
+.dc-detail-heading {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
 .dc-detail h2,
@@ -968,12 +976,14 @@ textarea {
   margin-top: 0;
 }
 
-.dc-detail > header h2 {
+.dc-detail > header h2,
+.dc-detail-top h2 {
   margin-bottom: 2px;
   font-size: 21px;
 }
 
-.dc-detail > header p {
+.dc-detail > header p,
+.dc-detail-heading > p {
   margin-bottom: 0;
   color: #2e4667;
   font-size: 11px;
@@ -1146,19 +1156,20 @@ textarea {
 
 .dc-detail-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
-  margin-bottom: 11px;
+  margin: 0;
+  min-width: 0;
 }
 
 .dc-detail-stats div {
   display: grid;
-  min-height: 58px;
+  min-height: 52px;
   align-content: center;
   padding: 8px 9px;
   border: 1px solid var(--dc-line);
   border-radius: 10px;
-  background: #fbfdff;
+  background: #fff;
 }
 
 .dc-detail-stats small {
@@ -2596,16 +2607,19 @@ textarea {
   padding: 19px;
 }
 
-.dc-detail > header {
-  gap: 12px;
+.dc-detail > header,
+.dc-detail-top {
+  gap: 14px;
   margin-bottom: 15px;
 }
 
-.dc-detail > header h2 {
+.dc-detail > header h2,
+.dc-detail-top h2 {
   font-size: 21px;
 }
 
-.dc-detail > header p {
+.dc-detail > header p,
+.dc-detail-heading > p {
   font-size: 13px;
 }
 
@@ -2617,6 +2631,7 @@ textarea {
 
 .dc-deal-title-row .dc-bitrix-detail-link {
   min-height: 28px;
+  margin-top: 0;
   padding: 5px 9px;
   font-size: 10px;
 }
@@ -2629,14 +2644,15 @@ textarea {
 }
 
 .dc-detail-stats {
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 9px;
-  margin-bottom: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
 }
 
 .dc-detail-stats div {
-  min-height: 72px;
+  min-height: 58px;
   padding: 10px 11px;
+  background: #fff;
 }
 
 .dc-detail-stats small {
@@ -2732,10 +2748,11 @@ textarea {
 }
 
 .dc-analysis-ready {
-  display: grid;
-  min-width: 148px;
-  gap: 3px;
-  padding: 7px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid #a9dec0;
   border-radius: 10px;
   background: #f2fbf6;
@@ -2744,38 +2761,72 @@ textarea {
 .dc-analysis-ready > div {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: #147441;
+  min-width: 0;
 }
 
 .dc-analysis-ready > div > span {
   display: grid;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
   color: #fff;
   background: #199957;
-  font-size: 9px;
-}
-
-.dc-analysis-ready > div strong {
   font-size: 10px;
 }
 
-.dc-analysis-ready > small {
+.dc-analysis-ready > div > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.dc-analysis-ready > div strong {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dc-analysis-ready > div small {
   color: #58706a;
-  font-size: 8px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .dc-analysis-ready > .dc-button {
-  min-height: 28px;
-  padding: 5px 8px;
+  min-height: 30px;
+  margin-left: auto;
+  padding: 5px 10px;
   border-color: #a9c8ba;
   color: #17643e;
   background: #fff;
-  font-size: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.dc-analysis-missing {
+  border-color: #b9d4ff;
+  background: #f3f8ff;
+}
+
+.dc-analysis-missing > div {
+  color: #1556b3;
+}
+
+.dc-analysis-missing > div > span {
+  color: var(--dc-blue);
+  background: var(--dc-blue-weak);
+}
+
+.dc-analysis-missing > div small {
+  color: #52719f;
+}
+
+.dc-analysis-missing > .dc-analyze-button {
+  margin-left: auto;
 }
 
 .dc-analysis-confirm {
@@ -2977,10 +3028,11 @@ textarea {
     grid-template-columns: 1fr 1fr;
   }
 
-  .dc-detail > header {
+  .dc-detail > header,
+  .dc-detail-top {
+    grid-template-columns: 1fr;
     align-items: stretch;
-    flex-direction: column;
-    gap: 9px;
+    gap: 10px;
   }
 
   .dc-analyze-button {
