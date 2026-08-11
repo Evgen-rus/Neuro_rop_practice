@@ -1883,6 +1883,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onCopy={props.onCopy}
         onTranscribe={props.onTranscribe}
         onCompleteCommunication={props.onCompleteCommunication}
+        onToggleChecklistItem={props.onToggleChecklistItem}
       /> : null}
     </> : null}
   </>
@@ -2201,6 +2202,64 @@ function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }:
   </article>
 }
 
+function ManagerAssistantChecklist({ deal, onToggle }: {
+  deal: DealControlDeal
+  onToggle: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+}) {
+  const [pendingItemId, setPendingItemId] = useState<string | null>(null)
+  const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
+  const nextItem = checklist.items.find((item) => !item.completed)
+  const preview = nextItem?.text
+    || (checklist.total ? 'Все пункты на сегодня выполнены' : 'Пункты появятся после анализа сделки')
+  const changeLabel = (kind?: string) => kind === 'carried'
+    ? 'Перенесено'
+    : kind === 'reopened'
+      ? 'Возобновлено'
+      : kind === 'new'
+        ? 'Новое'
+        : ''
+
+  async function toggle(itemId: string, completed: boolean) {
+    if (pendingItemId) return
+    setPendingItemId(itemId)
+    try {
+      await onToggle(deal, itemId, completed)
+    } finally {
+      setPendingItemId(null)
+    }
+  }
+
+  return <details className="dc-manager-assistant-checklist">
+    <summary>
+      <span className="dc-manager-assistant-checklist-icon">✓</span>
+      <span className="dc-manager-assistant-checklist-heading">
+        <strong>Чек-лист на сегодня</strong>
+        <small>{preview}</small>
+      </span>
+      <b>{checklist.completed} из {checklist.total}</b>
+      <i aria-hidden="true">⌄</i>
+      <span className="dc-manager-assistant-checklist-progress">
+        <span style={{ width: `${checklist.progress_percent}%` }} />
+      </span>
+    </summary>
+    <div className="dc-manager-assistant-checklist-body">
+      {checklist.items.length ? <ul>{checklist.items.map((item) => {
+        const label = changeLabel(item.change_kind)
+        return <li className={item.completed ? 'done' : ''} key={item.id}>
+          <button
+            type="button"
+            disabled={Boolean(pendingItemId)}
+            aria-busy={pendingItemId === item.id}
+            aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
+            onClick={() => void toggle(item.id, !item.completed)}
+          >{pendingItemId === item.id ? '…' : item.completed ? '✓' : ''}</button>
+          <span>{item.text}{label ? <small className={`dc-checklist-origin ${item.change_kind}`}>{label}</small> : null}</span>
+        </li>
+      })}</ul> : <p>Чек-лист появится после успешного анализа сделки.</p>}
+    </div>
+  </details>
+}
+
 function ManagerAssistantModal(props: {
   deal: DealControlDeal
   workspace: ManagerAssistantWorkspace
@@ -2214,6 +2273,7 @@ function ManagerAssistantModal(props: {
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
   onCompleteCommunication: (quickHelpId: number) => void
+  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context'>('answer')
   const [historyOffset, setHistoryOffset] = useState(0)
@@ -2272,11 +2332,15 @@ function ManagerAssistantModal(props: {
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
           <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
         </nav>
+        <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
       </aside>
       <main className="dc-manager-assistant-main">
         <header><div><h2 id="manager-assistant-title">Быстрая ИИ помощь менеджеру</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
         <div className="dc-manager-assistant-content">
+          <div className="dc-manager-assistant-checklist-mobile">
+            <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
+          </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
             {visibleEntry ? <div className="dc-manager-assistant-turn" key={visibleEntry.id}>
               <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{entries.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleEntry.question}</p></div>
