@@ -27,7 +27,24 @@ DEAL = {
 }
 CONTEXT = {
     "deal": DEAL,
-    "analysis_projection": {"deal_state": {"summary": "КП отправлено"}},
+    "analysis_projection": {
+        "deal_state": {"summary": "КП отправлено"},
+        "client_communication_profile": {
+            "status": "tentative",
+            "primary_style": "C",
+            "secondary_style": None,
+            "role_separation_confidence": "medium",
+            "profile_confidence": "low",
+            "evidence": ["Клиент просит точные критерии сравнения."],
+            "insufficient_reason": None,
+            "recommended_communication": {
+                "tone": "Спокойно и предметно.",
+                "structure": "Факты, критерии и следующий шаг.",
+                "emphasize": ["Критерии"],
+                "avoid": ["Общие обещания"],
+            },
+        },
+    },
     "current_bitrix_task": DEAL["primary_bitrix_task"],
     "source_report_id": 17,
     "situation_id": 21,
@@ -108,6 +125,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("Понял ситуацию", prompt)
         self.assertIn("Что сказать клиенту", prompt)
         self.assertIn("SITUATION_CONTEXT", prompt)
+        self.assertIn("client_communication_profile", prompt)
+        self.assertIn("адаптируй тон и структуру", prompt)
         self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
@@ -131,7 +150,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 situation_projection=CONTEXT["situation_projection"],
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v1")
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v2")
         self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
         self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
         self.assertTrue(call.call_args.args[0].startswith(kwargs["stable_prefix"]))

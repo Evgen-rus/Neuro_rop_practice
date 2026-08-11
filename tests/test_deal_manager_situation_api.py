@@ -29,6 +29,21 @@ REPORT = {
             "missing_facts": ["Дата решения не подтверждена"],
         },
         "main_risk": {"description": "Нет подтверждённого следующего шага"},
+        "client_communication_profile": {
+            "status": "tentative",
+            "primary_style": "C",
+            "secondary_style": None,
+            "role_separation_confidence": "medium",
+            "profile_confidence": "low",
+            "evidence": ["Клиент просит точные критерии сравнения."],
+            "insufficient_reason": None,
+            "recommended_communication": {
+                "tone": "Спокойно и предметно.",
+                "structure": "Факты, критерии и следующий шаг.",
+                "emphasize": ["Критерии"],
+                "avoid": ["Общие обещания"],
+            },
+        },
         "private_extra": {"secret": "не передавать"},
     },
 }
@@ -101,6 +116,8 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertIn("NEW_MANAGER_CONTEXT", prompt)
         self.assertIn("Менеджер уточнил", prompt)
         self.assertIn("КП отправлено", prompt)
+        self.assertIn("client_communication_profile", prompt)
+        self.assertIn("адаптируй тон и структуру", prompt)
         self.assertNotIn("private_extra", prompt)
         self.assertNotIn("не передавать", prompt)
         self.assertEqual(MANAGER_MODEL, ANALYSIS_MODEL)
@@ -136,7 +153,7 @@ class DealManagerSituationTests(unittest.TestCase):
         prefix = call.call_args.kwargs["stable_prefix"]
         self.assertIn("CURRENT_BITRIX_TASK", prefix)
         self.assertNotIn("PREVIOUS_MANAGER_PROJECTION:\n", prefix)
-        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v1")
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v2")
 
     def test_confirm_uses_canonical_storage_and_never_calls_llm(self) -> None:
         calls = []

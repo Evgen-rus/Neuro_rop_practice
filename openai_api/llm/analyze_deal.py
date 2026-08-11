@@ -39,6 +39,7 @@ from storage.rop_db import (
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
+DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v2"
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
 
@@ -281,6 +282,29 @@ def build_prompt(
 - Не повторяй одну и ту же мысль в нескольких полях.
 </length_limits>
 
+<client_communication_profile_rules>
+Определи не психологический диагноз, а только предполагаемый коммуникационный стиль клиента по DISC для адаптации подачи.
+Работай в два этапа:
+1. Сначала отдели реплики и сообщения клиента от речи менеджера. Используй смысл диалога: клиент описывает свою потребность, ограничения, критерии, сомнения и решение; менеджер задаёт вопросы, презентует, уточняет и предлагает следующий шаг.
+2. Только после этого оцени устойчивые клиентские сигналы D, I, S или C. Разрешён смешанный профиль с разными primary_style и secondary_style.
+
+Ограничения evidence:
+- Используй только реплики, которые с достаточной уверенностью принадлежат клиенту, и явно атрибутированные клиентские сообщения.
+- Не используй речь менеджера, CRM-стадию, задачи, комментарии, внутренние чаты, правила OKF или готовые тексты AI как evidence DISC.
+- Не делай профиль по одной короткой фразе, одному возражению, факту цены или паузе клиента.
+- Если роли нельзя уверенно разделить или клиентской речи недостаточно, верни status="insufficient_evidence", оба стиля null и не адаптируй под DISC.
+- tentative допустим только при хотя бы одном устойчивом наблюдении; supported требует минимум двух согласующихся наблюдений и role_separation_confidence не ниже medium.
+- Evidence формулируй краткими наблюдениями без длинных цитат и без приписывания клиенту скрытых мотивов.
+
+Практическое использование:
+- D: короче, результат, срок и конкретный выбор.
+- I: живее, возможности, образ результата и диалог.
+- S: спокойно, последовательно, без давления, с безопасным следующим шагом.
+- C: точные факты, критерии, сравнение, документы и риски.
+- Профиль меняет только тон, структуру и объём деталей. Он не меняет факты, цель контакта, коммерческую стратегию или обязательный следующий шаг.
+- Если status tentative или supported, согласованно адаптируй manager_coaching, call_script, call_opening_variants и клиентские тексты. Не называй DISC клиенту или менеджеру внутри готового текста.
+</client_communication_profile_rules>
+
 <management_blocks_rules>
 Правила единого действия менеджера:
 - deal_control_brief — компактная проекция именно для рабочих экранов контроля сделки. Не повторяй общий отчёт:
@@ -435,6 +459,21 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
       "альтернативное короткое начало того же звонка — вариант 1",
       "альтернативное короткое начало того же звонка — вариант 2"
     ]
+  }},
+  "client_communication_profile": {{
+    "status": "supported|tentative|insufficient_evidence",
+    "primary_style": "D|I|S|C|null",
+    "secondary_style": "D|I|S|C|null",
+    "role_separation_confidence": "low|medium|high",
+    "profile_confidence": "low|medium|high",
+    "evidence": ["до 5 кратких наблюдений только по речи или сообщениям клиента"],
+    "insufficient_reason": "причина недостаточности evidence или null",
+    "recommended_communication": {{
+      "tone": "рекомендуемый тон или null при insufficient_evidence",
+      "structure": "рекомендуемая структура подачи или null при insufficient_evidence",
+      "emphasize": ["до 4 элементов, на чём сделать акцент"],
+      "avoid": ["до 4 элементов, чего избегать в подаче"]
+    }}
   }},
   "qualification_assessment": {{
     "bant": {{
@@ -1227,7 +1266,7 @@ def main() -> None:
             ),
             analysis_caller=call_analysis_json,
             call_type="full_deal_analysis",
-            prompt_cache_key="neuro-rop:full-deal:v1",
+            prompt_cache_key=DEAL_PROMPT_CACHE_KEY,
             prompt_cache_markers=deal_prompt_cache_markers(transcript_text),
             trace_entity_type="deal",
             trace_entity_id=str(args.deal_id),

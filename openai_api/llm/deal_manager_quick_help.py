@@ -137,6 +137,7 @@ def build_quick_help_prompt(
             "- client_messages — три разных готовых сообщения клиенту без плейсхолдеров: calm спокойно, confident уверенно, direct прямо.\n"
             "- call_scripts — три разные короткие фразы, готовые произнести буквально: soft мягко, business делово, direct прямо. Это не подробный сценарий звонка.\n"
             "- Выбери один рекомендуемый тон отдельно для сообщения и звонка, исходя из ситуации.\n"
+            "- Если ANALYSIS_CONTEXT содержит client_communication_profile со status tentative или supported, адаптируй тон и структуру к нему, не меняя факты, цель и следующий шаг. При insufficient_evidence не угадывай DISC.\n"
             "- Если данных недостаточно, не маскируй предположение под факт: сформулируй безопасный вопрос клиенту на уточнение.\n"
             "- crm_checklist — только то, что менеджер должен зафиксировать после фактического действия.\n"
             "- Верни только полный объект по JSON-схеме, спокойно, эмпатично, прямо и по-русски.\n"
@@ -176,7 +177,7 @@ def generate_deal_manager_quick_help(
         max_output_tokens=MAX_QUICK_HELP_OUTPUT_TOKENS,
         log_title="deal manager quick help prompt",
         call_type="deal_manager_quick_help",
-        prompt_cache_key="neuro-rop:deal-manager-quick-help:v1",
+        prompt_cache_key="neuro-rop:deal-manager-quick-help:v2",
         stable_prefix=prompt_prefix_before(prompt, "MANAGER_QUESTION:"),
     )
     return validate_quick_help(result), metadata

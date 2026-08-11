@@ -1302,6 +1302,100 @@ def validate_deal_recommendation_materialization(analysis: dict[str, Any]) -> No
         raise AnalysisValidationError("Invalid deal recommendation materialization: " + "; ".join(errors))
 
 
+def _validate_client_communication_profile(value: Any, errors: list[str]) -> None:
+    path = "client_communication_profile"
+    profile = _expect_dict(value, path, errors)
+    if not profile:
+        return
+    _require_fields(
+        profile,
+        {
+            "status",
+            "primary_style",
+            "secondary_style",
+            "role_separation_confidence",
+            "profile_confidence",
+            "evidence",
+            "insufficient_reason",
+            "recommended_communication",
+        },
+        path,
+        errors,
+    )
+    status = profile.get("status")
+    primary = profile.get("primary_style")
+    secondary = profile.get("secondary_style")
+    role_confidence = profile.get("role_separation_confidence")
+    profile_confidence = profile.get("profile_confidence")
+    _expect_enum(status, f"{path}.status", {"supported", "tentative", "insufficient_evidence"}, errors)
+    _expect_enum(primary, f"{path}.primary_style", {"D", "I", "S", "C", None}, errors)
+    _expect_enum(secondary, f"{path}.secondary_style", {"D", "I", "S", "C", None}, errors)
+    _expect_enum(role_confidence, f"{path}.role_separation_confidence", {"low", "medium", "high"}, errors)
+    _expect_enum(profile_confidence, f"{path}.profile_confidence", {"low", "medium", "high"}, errors)
+    evidence = _validate_short_text_list(profile.get("evidence"), f"{path}.evidence", 5, errors)
+    insufficient_reason = profile.get("insufficient_reason")
+    if insufficient_reason is not None and (
+        not isinstance(insufficient_reason, str) or not insufficient_reason.strip()
+    ):
+        errors.append(f"expected {path}.insufficient_reason to be non-empty string or null")
+    if primary is not None and primary == secondary:
+        errors.append(f"{path}.secondary_style must differ from primary_style")
+
+    guidance = _expect_dict(profile.get("recommended_communication"), f"{path}.recommended_communication", errors)
+    if guidance:
+        _require_fields(guidance, {"tone", "structure", "emphasize", "avoid"}, f"{path}.recommended_communication", errors)
+        tone = guidance.get("tone")
+        structure = guidance.get("structure")
+        for field, item in (("tone", tone), ("structure", structure)):
+            if item is not None and (not isinstance(item, str) or not item.strip()):
+                errors.append(
+                    f"expected {path}.recommended_communication.{field} to be non-empty string or null"
+                )
+        emphasize = _validate_short_text_list(
+            guidance.get("emphasize"), f"{path}.recommended_communication.emphasize", 4, errors
+        )
+        avoid = _validate_short_text_list(
+            guidance.get("avoid"), f"{path}.recommended_communication.avoid", 4, errors
+        )
+    else:
+        tone = structure = None
+        emphasize = avoid = []
+
+    if status == "insufficient_evidence":
+        if primary is not None or secondary is not None:
+            errors.append(f"{path} styles must be null when evidence is insufficient")
+        if profile_confidence != "low":
+            errors.append(f"{path}.profile_confidence must be 'low' when evidence is insufficient")
+        if not isinstance(insufficient_reason, str) or not insufficient_reason.strip():
+            errors.append(f"{path}.insufficient_reason is required when evidence is insufficient")
+        if evidence:
+            errors.append(f"{path}.evidence must be empty when evidence is insufficient")
+        if tone is not None or structure is not None or emphasize or avoid:
+            errors.append(f"{path}.recommended_communication must be empty when evidence is insufficient")
+    elif status in {"tentative", "supported"}:
+        if primary is None:
+            errors.append(f"{path}.primary_style is required when status is {status!r}")
+        if insufficient_reason is not None:
+            errors.append(f"{path}.insufficient_reason must be null when status is {status!r}")
+        minimum_evidence = 2 if status == "supported" else 1
+        if len(evidence) < minimum_evidence:
+            errors.append(f"{path}.evidence must contain at least {minimum_evidence} item(s) when status is {status!r}")
+        if not isinstance(tone, str) or not tone.strip() or not isinstance(structure, str) or not structure.strip():
+            errors.append(f"{path}.recommended_communication tone and structure are required when status is {status!r}")
+        if status == "supported":
+            if role_confidence == "low":
+                errors.append(f"{path}.role_separation_confidence cannot be 'low' when status is 'supported'")
+            if profile_confidence not in {"medium", "high"}:
+                errors.append(f"{path}.profile_confidence must be medium or high when status is 'supported'")
+
+
+def validate_client_communication_profile(value: Any) -> None:
+    errors: list[str] = []
+    _validate_client_communication_profile(value, errors)
+    if errors:
+        raise AnalysisValidationError("Invalid client communication profile: " + "; ".join(errors))
+
+
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
     _validate_deal_recommendation_materialization_fields(analysis, errors)
     _validate_client_communication_profile(analysis.get("client_communication_profile"), errors)

@@ -26,6 +26,7 @@ MAX_SITUATION_OUTPUT_TOKENS = 2400
 _ANALYSIS_FIELDS = (
     "deal_state",
     "deal_control_brief",
+    "client_communication_profile",
     "qualification_assessment",
     "deal_mode",
     "main_risk",
@@ -357,6 +358,7 @@ def build_situation_prompt(
             "- Bitrix-задача показывает рабочее поручение и не доказывает контакт с клиентом.\n"
             "- Если контекст менеджера расходится с анализом, явно отрази неопределённость и вынеси вопрос в facts_to_clarify.\n"
             "- Не объявляй звонок контактом и не утверждай, что сделка продвинулась без подтверждённого клиентского факта.\n"
+            "- client_communication_profile используй только когда status tentative или supported: адаптируй тон и структуру, но не меняй факты, цель контакта или следующий шаг. При insufficient_evidence не угадывай DISC.\n"
             "- Не повторяй уже известные факты как вопросы. Основной текст и сценарии пиши без плейсхолдеров.\n"
             "- Верни только полный объект по JSON-схеме. Пиши спокойно, прямо и по-русски.",
             _section("CONFIRMED_ANALYSIS_CONTEXT", analysis_projection),
@@ -394,7 +396,7 @@ def generate_deal_manager_situation(
         max_output_tokens=MAX_SITUATION_OUTPUT_TOKENS,
         log_title="deal manager situation prompt",
         call_type="deal_manager_situation",
-        prompt_cache_key="neuro-rop:deal-manager-situation:v1",
+        prompt_cache_key="neuro-rop:deal-manager-situation:v2",
         stable_prefix=prompt_prefix_before(prompt, "PREVIOUS_MANAGER_PROJECTION:"),
     )
     return validate_situation_projection(result), metadata
