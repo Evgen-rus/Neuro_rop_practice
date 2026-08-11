@@ -6623,6 +6623,8 @@ ul.facts.bad li:before {
 .dc-manager-tone-tabs button:last-child { border-right: 0; }
 .dc-manager-tone-tabs button.active { color: #08713f; background: #eaf8f0; }
 .dc-manager-tone-tabs button small { padding: 2px 4px; border-radius: 99px; color: #fff; background: #16a05d; font-size: 7px; font-weight: 800; white-space: nowrap; }
+.dc-manager-answer-fallback { display: flex; gap: 8px; align-items: baseline; margin: 0 10px 10px; padding: 9px 11px; border: 1px solid #ead9b9; border-radius: 9px; color: #4b5666; background: #fffaf0; font-size: 12px; line-height: 1.45; }
+.dc-manager-answer-fallback strong { flex: 0 0 auto; color: #805d1e; }
 .dc-manager-answer-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 10px 10px; }
 .dc-manager-answer-actions .dc-button {
   max-width: 100%;

@@ -17,7 +17,7 @@ import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,9 @@ from setup import MSK_TZ
 
 
 MAX_QUESTION_CHARS = 4000
+COMMUNICATION_WINDOW_DAYS = 30
+COMMUNICATION_HISTORY_DAYS = 60
+MAX_COMMUNICATION_EVENTS = 10
 
 
 def _now() -> str:
@@ -91,6 +94,9 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
         situation_id = context["situation_id"] or job.situation_id
         if situation_id is None:
             raise ValueError("У текущей ситуации отсутствует идентификатор")
+        communication_pattern_context = build_communication_pattern_context(
+            _load_local_communications(job.deal_id)
+        )
         _touch(job, stage="llm", detail="AI разбирает вопрос менеджера", percent=55)
         answer, metadata = generate_deal_manager_quick_help(
             question=job.question,
@@ -98,6 +104,7 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
             deal=context["deal"],
             current_bitrix_task=context["current_bitrix_task"],
             situation_projection=context["situation_projection"],
+            communication_pattern_context=communication_pattern_context,
         )
         _touch(job, stage="saving", detail="Сохраняем полный проверенный ответ", percent=88)
         saved = _storage_call(
@@ -217,6 +224,99 @@ def _load_local_communications(deal_id: str) -> list[dict[str, Any]]:
         if isinstance(item, dict)
         and str(item.get("contact_class") or "") != "internal_information"
     ]
+
+
+def _communication_datetime(item: dict[str, Any]) -> datetime | None:
+    raw_value = str(item.get("occurred_at") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        value = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=MSK_TZ)
+    return value.astimezone(MSK_TZ)
+
+
+def _project_communication(item: dict[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {
+        "occurred_at": str(item.get("occurred_at") or ""),
+        "channel": str(item.get("channel") or "unknown"),
+        "direction": str(item.get("direction") or "unknown"),
+        "contact_class": str(item.get("contact_class") or "unknown"),
+    }
+    duration = item.get("duration_seconds")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+        projected["duration_seconds"] = int(duration)
+    return projected
+
+
+def build_communication_pattern_context(
+    events: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Build a bounded fact-only context without message bodies or transcripts."""
+    current = now or datetime.now(MSK_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MSK_TZ)
+    current = current.astimezone(MSK_TZ)
+    dated = [
+        (occurred_at, item)
+        for item in events
+        if isinstance(item, dict)
+        and str(item.get("contact_class") or "") != "internal_information"
+        and (occurred_at := _communication_datetime(item)) is not None
+        and occurred_at <= current
+    ]
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    recent_cutoff = current - timedelta(days=COMMUNICATION_WINDOW_DAYS)
+    history_cutoff = current - timedelta(days=COMMUNICATION_HISTORY_DAYS)
+    recent = [(occurred_at, item) for occurred_at, item in dated if occurred_at >= recent_cutoff]
+    attempts = [
+        item for _, item in recent
+        if str(item.get("direction") or "") == "outgoing"
+        and str(item.get("contact_class") or "") == "attempt"
+    ]
+    confirmed = [
+        item for _, item in recent
+        if str(item.get("contact_class") or "") == "confirmed_contact"
+    ]
+    attempts_by_channel: dict[str, int] = {}
+    for item in attempts:
+        channel = str(item.get("channel") or "unknown")
+        attempts_by_channel[channel] = attempts_by_channel.get(channel, 0) + 1
+    attempts_since_contact = 0
+    for _, item in recent:
+        if str(item.get("contact_class") or "") == "confirmed_contact":
+            break
+        if (
+            str(item.get("direction") or "") == "outgoing"
+            and str(item.get("contact_class") or "") == "attempt"
+        ):
+            attempts_since_contact += 1
+    last_confirmed = next(
+        (
+            item for occurred_at, item in dated
+            if occurred_at >= history_cutoff
+            and str(item.get("contact_class") or "") == "confirmed_contact"
+        ),
+        None,
+    )
+    return {
+        "window_days": COMMUNICATION_WINDOW_DAYS,
+        "max_recent_events": MAX_COMMUNICATION_EVENTS,
+        "total_attempts": len(attempts),
+        "confirmed_contacts": len(confirmed),
+        "attempts_by_channel": dict(sorted(attempts_by_channel.items())),
+        "consecutive_attempts_without_contact": attempts_since_contact,
+        "last_confirmed_contact": _project_communication(last_confirmed) if last_confirmed else None,
+        "recent_events": [
+            _project_communication(item)
+            for _, item in recent[:MAX_COMMUNICATION_EVENTS]
+        ],
+    }
 
 
 def _communication_text(item: dict[str, Any]) -> str:

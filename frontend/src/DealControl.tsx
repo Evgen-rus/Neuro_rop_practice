@@ -39,6 +39,9 @@ import {
   type ManagerQuickHelpContent,
   type ManagerQuickHelpEntry,
   type ManagerQuickHelpJob,
+  type ManagerQuickHelpLegacyContent,
+  type ManagerQuickHelpStrategy,
+  type ManagerQuickHelpStrategyContent,
   type ManagerAssistantWorkspace,
   type ManagerSituationJob,
   type ManagerSituationState,
@@ -2172,8 +2175,31 @@ function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }:
   onBitrix: () => void
 }) {
   const content: ManagerQuickHelpContent = entry.content
-  const [clientTone, setClientTone] = useState<ManagerQuickHelpContent['recommended_client_tone']>(content.recommended_client_tone)
-  const [callTone, setCallTone] = useState<ManagerQuickHelpContent['recommended_call_tone']>(content.recommended_call_tone)
+  return <article className="dc-manager-answer">
+    <div className="dc-manager-answer-summary">
+      <span>◎</span><div><h4>Понял ситуацию</h4><p><span>{content.situation_summary || 'Ситуация пока не сформирована.'}</span>{content.next_action ? <> <strong>{content.next_action}</strong></> : null}{content.expected_result ? <> <span> {content.expected_result}</span></> : null}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
+    </div>
+    <ManagerQuickHelpVariants content={content} onCopy={onCopy} />
+    {content.answer_contract === 'strategy_v1' && content.fallback_action ? <div className="dc-manager-answer-fallback"><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
+    <div className="dc-manager-answer-actions"><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div>
+  </article>
+}
+
+function ManagerQuickHelpVariants({ content, onCopy }: {
+  content: ManagerQuickHelpContent
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  return content.answer_contract === 'strategy_v1'
+    ? <ManagerStrategyQuickHelpVariants content={content} onCopy={onCopy} />
+    : <ManagerLegacyQuickHelpVariants content={content} onCopy={onCopy} />
+}
+
+function ManagerLegacyQuickHelpVariants({ content, onCopy }: {
+  content: ManagerQuickHelpLegacyContent
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  const [clientTone, setClientTone] = useState<ManagerQuickHelpLegacyContent['recommended_client_tone']>(content.recommended_client_tone)
+  const [callTone, setCallTone] = useState<ManagerQuickHelpLegacyContent['recommended_call_tone']>(content.recommended_call_tone)
   const clientTones = [
     ['calm', 'Спокойно'],
     ['confident', 'Уверенно'],
@@ -2186,16 +2212,31 @@ function ManagerQuickHelpAnswer({ entry, onCopy, onEdit, onComplete, onBitrix }:
   ] as const
   const clientMessage = content.client_messages[clientTone]
   const callScript = content.call_scripts[callTone]
-  return <article className="dc-manager-answer">
-    <div className="dc-manager-answer-summary">
-      <span>◎</span><div><h4>Понял ситуацию</h4><p><span>{content.situation_summary || 'Ситуация пока не сформирована.'}</span>{content.next_action ? <> <strong>{content.next_action}</strong></> : null}{content.expected_result ? <> <span> {content.expected_result}</span></> : null}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
-    </div>
-    <div className="dc-manager-answer-modules">
+  return <div className="dc-manager-answer-modules">
       <section className="dc-manager-answer-copy message"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон сообщения клиенту">{clientTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={clientTone === tone} className={clientTone === tone ? 'active' : ''} onClick={() => setClientTone(tone)}><span>{label}</span>{content.recommended_client_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section>
       <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон речевого модуля">{callTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={callTone === tone} className={callTone === tone ? 'active' : ''} onClick={() => setCallTone(tone)}><span>{label}</span>{content.recommended_call_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section>
     </div>
-    <div className="dc-manager-answer-actions"><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div>
-  </article>
+}
+
+function ManagerStrategyQuickHelpVariants({ content, onCopy }: {
+  content: ManagerQuickHelpStrategyContent
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  const initialMessage = content.recommended_channel === 'message' ? content.recommended_strategy : 'primary'
+  const initialCall = content.recommended_channel === 'call' ? content.recommended_strategy : 'primary'
+  const [messageStrategy, setMessageStrategy] = useState<ManagerQuickHelpStrategy>(initialMessage)
+  const [callStrategy, setCallStrategy] = useState<ManagerQuickHelpStrategy>(initialCall)
+  const strategies = [
+    ['primary', 'Лучший ход'],
+    ['alternative', 'Другой заход'],
+    ['pattern_break', 'Смена хода'],
+  ] as const
+  const clientMessage = content.client_messages[messageStrategy]
+  const callScript = content.call_scripts[callStrategy]
+  return <div className="dc-manager-answer-modules">
+    <section className="dc-manager-answer-copy message"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия сообщения клиенту">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={messageStrategy === strategy} className={messageStrategy === strategy ? 'active' : ''} onClick={() => setMessageStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'message' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section>
+    <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия речевого модуля">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={callStrategy === strategy} className={callStrategy === strategy ? 'active' : ''} onClick={() => setCallStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'call' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section>
+  </div>
 }
 
 function ManagerAssistantChecklist({ deal, onToggle }: {

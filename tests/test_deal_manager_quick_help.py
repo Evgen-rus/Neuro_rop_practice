@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,22 +59,34 @@ CONTEXT = {
     },
 }
 ANSWER = {
+    "answer_contract": "strategy_v1",
     "situation_summary": "Клиент получил КП, но следующий шаг ещё не согласован.",
     "next_action": "Напишите клиенту один короткий вопрос о решении.",
     "expected_result": "Цель — получить ответ и согласовать дату следующего шага.",
     "client_messages": {
-        "calm": "Добрый день! Подскажите, пожалуйста, удалось ли посмотреть КП?",
-        "confident": "Добрый день! Давайте согласуем следующий шаг по отправленному КП.",
-        "direct": "Добрый день! Что мешает принять решение по КП сейчас?",
+        "primary": "Добрый день! Подскажите, какой следующий шаг по КП вам удобнее согласовать?",
+        "alternative": "Добрый день! Какой вопрос по КП сейчас мешает определить дату решения?",
+        "pattern_break": "Добрый день! Ответьте, пожалуйста, одним словом: обсуждаем, переносим или закрываем?",
     },
-    "recommended_client_tone": "calm",
     "call_scripts": {
-        "soft": "Добрый день! Удобно минуту обсудить, что нужно уточнить по КП?",
-        "business": "Добрый день! Предлагаю согласовать решение и следующий шаг по КП.",
-        "direct": "Добрый день! Что конкретно мешает двигаться дальше по КП?",
+        "primary": "Добрый день! Предлагаю за минуту согласовать следующий шаг по КП.",
+        "alternative": "Добрый день! Какой критерий по КП нужно уточнить, чтобы определить дату решения?",
+        "pattern_break": "Добрый день! Давайте коротко выберем: продолжаем, переносим или закрываем вопрос?",
     },
-    "recommended_call_tone": "business",
+    "recommended_strategy": "pattern_break",
+    "recommended_channel": "message",
+    "fallback_action": "Если ответа не будет, зафиксируйте паузу и следующий допустимый момент возврата.",
     "crm_checklist": ["Ответ клиента", "Дата следующего шага"],
+}
+COMMUNICATION_CONTEXT = {
+    "window_days": 30,
+    "max_recent_events": 10,
+    "total_attempts": 5,
+    "confirmed_contacts": 0,
+    "attempts_by_channel": {"call": 3, "message": 2},
+    "consecutive_attempts_without_contact": 5,
+    "last_confirmed_contact": None,
+    "recent_events": [],
 }
 
 
@@ -121,19 +134,26 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             deal=DEAL,
             current_bitrix_task=CONTEXT["current_bitrix_task"],
             situation_projection=CONTEXT["situation_projection"],
+            communication_pattern_context=COMMUNICATION_CONTEXT,
         )
         self.assertIn("Понял ситуацию", prompt)
         self.assertIn("Что сказать клиенту", prompt)
         self.assertIn("SITUATION_CONTEXT", prompt)
         self.assertIn("client_communication_profile", prompt)
-        self.assertIn("адаптируй тон и структуру", prompt)
+        self.assertIn("COMMUNICATION_PATTERN_CONTEXT", prompt)
+        self.assertIn("primary_style", prompt)
+        self.assertIn("одна главная ближайшая micro-conversion", prompt)
+        self.assertIn("не делай fallback сложнее основного касания", prompt)
+        self.assertIn("при активном техническом обсуждении", prompt)
+        self.assertIn("зачем клиенту отвечать", prompt)
+        self.assertIn("Не придумывай выгоду", prompt)
         self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
         self.assertEqual(quick_help_schema()["properties"]["crm_checklist"]["maxItems"], 4)
         self.assertEqual(
-            quick_help_schema()["properties"]["recommended_client_tone"]["enum"],
-            ["calm", "confident", "direct"],
+            quick_help_schema()["properties"]["recommended_strategy"]["enum"],
+            ["primary", "alternative", "pattern_break"],
         )
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
 
@@ -148,25 +168,62 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 deal=DEAL,
                 current_bitrix_task=CONTEXT["current_bitrix_task"],
                 situation_projection=CONTEXT["situation_projection"],
+                communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v2")
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v3")
         self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
+        self.assertIn("COMMUNICATION_PATTERN_CONTEXT", kwargs["stable_prefix"])
         self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
         self.assertTrue(call.call_args.args[0].startswith(kwargs["stable_prefix"]))
 
-    def test_validation_rejects_missing_tone_variant(self) -> None:
-        invalid = {**ANSWER, "client_messages": {"calm": "Текст", "confident": "Текст"}}
+    def test_validation_rejects_missing_strategy_variant(self) -> None:
+        invalid = {**ANSWER, "client_messages": {"primary": "Текст", "alternative": "Другой текст"}}
         with self.assertRaisesRegex(ValueError, "client_messages"):
             validate_quick_help(invalid)
 
-    def test_validation_rejects_duplicate_tone_variants_and_summary_list(self) -> None:
-        duplicate = {**ANSWER, "call_scripts": {"soft": "Одна фраза", "business": "Одна фраза", "direct": "Одна фраза"}}
+    def test_validation_rejects_duplicate_strategy_variants_and_summary_list(self) -> None:
+        duplicate = {**ANSWER, "call_scripts": {"primary": "Одна фраза", "alternative": "Одна фраза", "pattern_break": "Одна фраза"}}
         with self.assertRaisesRegex(ValueError, "разные варианты"):
             validate_quick_help(duplicate)
         listed = {**ANSWER, "next_action": "Сначала напишите.\nПотом позвоните."}
         with self.assertRaisesRegex(ValueError, "без списка"):
             validate_quick_help(listed)
+
+    def test_communication_pattern_context_is_bounded_and_fact_only(self) -> None:
+        events = [
+            {
+                "occurred_at": f"2026-08-{day:02d}T10:00:00+03:00",
+                "channel": "call" if day % 2 else "message",
+                "direction": "outgoing",
+                "contact_class": "attempt",
+                "preview": "Чувствительный текст не должен попасть в prompt",
+            }
+            for day in range(1, 12)
+        ]
+        events.extend([
+            {
+                "occurred_at": "2026-07-10T10:00:00+03:00",
+                "channel": "call",
+                "direction": "incoming",
+                "contact_class": "confirmed_contact",
+            },
+            {
+                "occurred_at": "2026-08-10T12:00:00+03:00",
+                "channel": "message",
+                "direction": "outgoing",
+                "contact_class": "internal_information",
+            },
+        ])
+        result = quick_help.build_communication_pattern_context(
+            events,
+            now=datetime.fromisoformat("2026-08-11T18:00:00+03:00"),
+        )
+        self.assertEqual(result["total_attempts"], 11)
+        self.assertEqual(result["consecutive_attempts_without_contact"], 11)
+        self.assertEqual(len(result["recent_events"]), 10)
+        self.assertEqual(result["last_confirmed_contact"]["occurred_at"], "2026-07-10T10:00:00+03:00")
+        self.assertNotIn("preview", str(result))
 
     def test_quick_help_requires_confirmed_situation_and_saves_safe_answer(self) -> None:
         calls = []
@@ -178,7 +235,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             raise AssertionError(name)
 
         with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
-             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {"model": "gpt-5.6-luna", "raw_output_text": "secret"})), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {"model": "gpt-5.6-luna", "raw_output_text": "secret"})) as generate, \
              patch.object(quick_help, "_storage_call", side_effect=save_call), \
              patch.object(quick_help.threading, "Thread", ImmediateThread):
             started = quick_help.start_quick_help_job(
@@ -198,6 +256,9 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(kwargs["answer_json"], ANSWER)
         self.assertEqual(kwargs["situation_review_id"], 21)
         self.assertNotIn("raw_output_text", kwargs["model_meta"])
+        communication_context = generate.call_args.kwargs["communication_pattern_context"]
+        self.assertEqual(communication_context["window_days"], 30)
+        self.assertEqual(communication_context["recent_events"], [])
 
     def test_history_has_limit_cursor_and_does_not_bypass_situation_gate(self) -> None:
         calls = []

@@ -656,16 +656,33 @@ export type ManagerSituationJob = {
   error?: string | null
 }
 
-export type ManagerQuickHelpContent = {
+type ManagerQuickHelpCommonContent = {
   situation_summary: string
   next_action: string
   expected_result: string
+  crm_checklist: string[]
+}
+
+export type ManagerQuickHelpLegacyContent = ManagerQuickHelpCommonContent & {
+  answer_contract: 'legacy'
   client_messages: Record<'calm' | 'confident' | 'direct', string>
   recommended_client_tone: 'calm' | 'confident' | 'direct'
   call_scripts: Record<'soft' | 'business' | 'direct', string>
   recommended_call_tone: 'soft' | 'business' | 'direct'
-  crm_checklist: string[]
 }
+
+export type ManagerQuickHelpStrategy = 'primary' | 'alternative' | 'pattern_break'
+
+export type ManagerQuickHelpStrategyContent = ManagerQuickHelpCommonContent & {
+  answer_contract: 'strategy_v1'
+  client_messages: Record<ManagerQuickHelpStrategy, string>
+  call_scripts: Record<ManagerQuickHelpStrategy, string>
+  recommended_strategy: ManagerQuickHelpStrategy
+  recommended_channel: 'message' | 'call'
+  fallback_action: string
+}
+
+export type ManagerQuickHelpContent = ManagerQuickHelpLegacyContent | ManagerQuickHelpStrategyContent
 
 export type ManagerQuickHelpEntry = {
   id: number
@@ -873,34 +890,62 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
   const callScripts = asRecord(content.call_scripts)
   const recommendedClientTone = asString(content.recommended_client_tone)
   const recommendedCallTone = asString(content.recommended_call_tone)
+  const answerContract = asString(content.answer_contract)
+  const recommendedStrategy = asString(content.recommended_strategy)
+  const recommendedChannel = asString(content.recommended_channel)
+  const commonContent = {
+    situation_summary: asString(content.situation_summary) || asString(content.problem_summary),
+    next_action: asString(content.next_action) || asString(content.recommended_action),
+    expected_result: asString(content.expected_result),
+    crm_checklist: asStringList(content.crm_checklist),
+  }
+  const normalizedContent: ManagerQuickHelpContent = answerContract === 'strategy_v1'
+    ? {
+        ...commonContent,
+        answer_contract: 'strategy_v1',
+        client_messages: {
+          primary: asString(clientMessages.primary),
+          alternative: asString(clientMessages.alternative),
+          pattern_break: asString(clientMessages.pattern_break),
+        },
+        call_scripts: {
+          primary: asString(callScripts.primary),
+          alternative: asString(callScripts.alternative),
+          pattern_break: asString(callScripts.pattern_break),
+        },
+        recommended_strategy: ['primary', 'alternative', 'pattern_break'].includes(recommendedStrategy)
+          ? recommendedStrategy as ManagerQuickHelpStrategy
+          : 'primary',
+        recommended_channel: recommendedChannel === 'call' ? 'call' : 'message',
+        fallback_action: asString(content.fallback_action),
+      }
+    : {
+        ...commonContent,
+        answer_contract: 'legacy',
+        client_messages: {
+          calm: asString(clientMessages.calm) || legacyClientMessage,
+          confident: asString(clientMessages.confident) || legacyClientMessage,
+          direct: asString(clientMessages.direct) || legacyClientMessage,
+        },
+        recommended_client_tone: ['calm', 'confident', 'direct'].includes(recommendedClientTone)
+          ? recommendedClientTone as ManagerQuickHelpLegacyContent['recommended_client_tone']
+          : 'calm',
+        call_scripts: {
+          soft: asString(callScripts.soft) || legacyCallScript,
+          business: asString(callScripts.business) || legacyCallScript,
+          direct: asString(callScripts.direct) || legacyCallScript,
+        },
+        recommended_call_tone: ['soft', 'business', 'direct'].includes(recommendedCallTone)
+          ? recommendedCallTone as ManagerQuickHelpLegacyContent['recommended_call_tone']
+          : 'business',
+      }
   return {
     id,
     deal_id: asString(record.deal_id),
     source_report_id: record.source_report_id == null ? null : Number(record.source_report_id),
     situation_review_id: record.situation_review_id == null ? null : Number(record.situation_review_id),
     question: asString(record.question),
-    content: {
-      situation_summary: asString(content.situation_summary) || asString(content.problem_summary),
-      next_action: asString(content.next_action) || asString(content.recommended_action),
-      expected_result: asString(content.expected_result),
-      client_messages: {
-        calm: asString(clientMessages.calm) || legacyClientMessage,
-        confident: asString(clientMessages.confident) || legacyClientMessage,
-        direct: asString(clientMessages.direct) || legacyClientMessage,
-      },
-      recommended_client_tone: ['calm', 'confident', 'direct'].includes(recommendedClientTone)
-        ? recommendedClientTone as ManagerQuickHelpContent['recommended_client_tone']
-        : 'calm',
-      call_scripts: {
-        soft: asString(callScripts.soft) || legacyCallScript,
-        business: asString(callScripts.business) || legacyCallScript,
-        direct: asString(callScripts.direct) || legacyCallScript,
-      },
-      recommended_call_tone: ['soft', 'business', 'direct'].includes(recommendedCallTone)
-        ? recommendedCallTone as ManagerQuickHelpContent['recommended_call_tone']
-        : 'business',
-      crm_checklist: asStringList(content.crm_checklist),
-    },
+    content: normalizedContent,
     created_at: asString(record.created_at),
     model_meta: asRecord(record.model_meta),
   }
