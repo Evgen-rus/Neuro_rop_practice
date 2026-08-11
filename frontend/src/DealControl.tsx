@@ -1071,7 +1071,8 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
     <section className="dc-content">
       <header className="dc-header">
-        <div><h1>{copyForView.title}</h1></div>
+        <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
+        <Kpis view={view} summary={filteredSummary} />
         <div className="dc-refresh">
           <span>{syncStatus || `Обновлено ${dateTime(data.generated_at)}`}</span>
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
@@ -1084,7 +1085,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       {notice ? <div className="dc-alert success">{notice}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
-      <Kpis view={view} summary={filteredSummary} />
       <Filters
         view={view}
         managers={managers}

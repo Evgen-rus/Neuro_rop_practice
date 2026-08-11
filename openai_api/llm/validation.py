@@ -38,6 +38,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_id",
     "deal_state",
     "deal_control_brief",
+    "client_communication_profile",
     "deal_mode",
     "closed_deal_review",
     "new_event",
@@ -1303,6 +1304,7 @@ def validate_deal_recommendation_materialization(analysis: dict[str, Any]) -> No
 
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
     _validate_deal_recommendation_materialization_fields(analysis, errors)
+    _validate_client_communication_profile(analysis.get("client_communication_profile"), errors)
     control_brief = _expect_dict(analysis.get("deal_control_brief"), "deal_control_brief", errors)
     if control_brief:
         for field in (

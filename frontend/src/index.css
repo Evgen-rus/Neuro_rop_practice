@@ -213,15 +213,21 @@ textarea {
   min-height: 45px;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 16px;
   margin-bottom: 14px;
 }
 
+.dc-header-title {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .dc-header h1 {
-  margin: 0 0 3px;
+  margin: 0;
   font-size: clamp(26px, 2vw, 34px);
   line-height: 1.15;
   letter-spacing: -.03em;
+  white-space: nowrap;
 }
 
 .dc-header p,
@@ -233,10 +239,12 @@ textarea {
 
 .dc-refresh {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 12px;
   color: var(--dc-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .dc-button {
@@ -342,32 +350,35 @@ textarea {
 
 .dc-kpis {
   display: grid;
-  grid-template-columns: repeat(5, minmax(130px, 1fr));
-  gap: 12px;
-  margin-bottom: 14px;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
 }
 
 .dc-kpis article {
   display: flex;
-  min-height: 90px;
+  min-height: 0;
+  min-width: 0;
   align-items: center;
-  gap: 13px;
-  padding: 15px 17px;
+  gap: 10px;
+  padding: 8px 12px;
   border: 1px solid var(--dc-line);
-  border-radius: 16px;
+  border-radius: 12px;
   background: #fff;
 }
 
 .dc-kpis article > span {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 9px;
   color: var(--dc-blue);
   background: var(--dc-blue-weak);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 900;
 }
 
@@ -383,14 +394,15 @@ textarea {
 .dc-kpis small {
   overflow: hidden;
   color: var(--dc-muted);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dc-kpis strong {
   overflow: hidden;
-  font-size: clamp(19px, 1.45vw, 25px);
+  font-size: clamp(16px, 1.2vw, 22px);
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2166,7 +2178,7 @@ textarea {
 }
 
 .dc-header h1 {
-  font-size: clamp(31px, 2.5vw, 39px);
+  font-size: clamp(28px, 2.2vw, 36px);
 }
 
 .dc-header p {
@@ -2178,27 +2190,26 @@ textarea {
 }
 
 .dc-kpis article {
-  min-height: 104px;
-  gap: 15px;
-  padding: 18px 20px;
+  gap: 10px;
+  padding: 9px 12px;
 }
 
 .dc-kpis article > span {
-  width: 48px;
-  height: 48px;
-  font-size: 22px;
+  width: 34px;
+  height: 34px;
+  font-size: 16px;
 }
 
 .dc-kpis small {
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .dc-kpis strong {
-  font-size: clamp(24px, 1.8vw, 31px);
+  font-size: clamp(17px, 1.35vw, 23px);
 }
 
 .dc-kpis article:nth-child(2) strong {
-  font-size: clamp(19px, 1.45vw, 25px);
+  font-size: clamp(15px, 1.2vw, 20px);
 }
 
 .dc-filters {
@@ -2841,13 +2852,23 @@ textarea {
     padding-left: 24px;
   }
 
+  .dc-header {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .dc-kpis {
+    order: 3;
+    flex: 1 1 100%;
+  }
+
   .dc-kpis article {
-    padding: 15px;
+    padding: 10px 12px;
   }
 
   .dc-kpis article > span {
-    width: 42px;
-    height: 42px;
+    width: 32px;
+    height: 32px;
   }
 
   .dc-filters > span {
@@ -2925,6 +2946,8 @@ textarea {
 
   .dc-header {
     display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .dc-refresh {
@@ -2932,11 +2955,12 @@ textarea {
   }
 
   .dc-kpis {
+    order: 0;
     grid-template-columns: 1fr 1fr;
   }
 
   .dc-kpis article {
-    min-height: 76px;
+    min-height: 64px;
   }
 
   .dc-filters {
@@ -2993,32 +3017,32 @@ textarea {
 }
 
 .dc-kpis article {
-  min-height: 78px;
-  gap: 12px;
-  padding: 12px 16px;
+  min-height: 0;
+  gap: 10px;
+  padding: 8px 12px;
 }
 
 .dc-kpis article > span {
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  font-size: 19px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 15px;
 }
 
 .dc-kpis small {
-  font-size: 12px;
+  font-size: 10px;
 }
 
 .dc-kpis strong,
 .dc-kpis article:nth-child(2) strong {
-  font-size: clamp(19px, 1.45vw, 25px);
+  font-size: clamp(16px, 1.2vw, 22px);
 }
 
 .dc-kpis.tasks small {
-  overflow: visible;
-  line-height: 1.25;
-  text-overflow: clip;
-  white-space: normal;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dc-analysis-empty {
