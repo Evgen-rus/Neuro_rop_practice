@@ -512,6 +512,7 @@ function AuthenticatedApp() {
   const [loading, setLoading] = useState(true)
   const [loginValue, setLoginValue] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -564,17 +565,43 @@ function AuthenticatedApp() {
     }
   }
 
-  if (loading) return <main className="dc-shell dc-loading"><span className="dc-spinner" />Проверяем сессию…</main>
+  if (loading) return <main className="auth-page auth-loading"><span className="auth-spinner" /><span>Проверяем сессию…</span></main>
   if (!user) {
-    return <main className="review-page">
-      <form className="shared-review-card" onSubmit={submitLogin}>
-        <h1>Вход в Neuro ROP</h1>
-        <p>Введите личный логин и пароль.</p>
-        <label>Логин<input autoComplete="username" value={loginValue} onChange={(event) => setLoginValue(event.target.value)} required /></label>
-        <label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-        {error ? <div className="alert error">{error}</div> : null}
-        <button className="btn primary" type="submit" disabled={submitting}>{submitting ? 'Входим…' : 'Войти'}</button>
-      </form>
+    return <main className="auth-page">
+      <section className="auth-layout">
+        <div className="auth-brand" aria-hidden="true">
+          <div className="auth-brand-mark">Р</div>
+          <div><b>Neuro ROP</b><span>Практик-М</span></div>
+        </div>
+        <form className="auth-card" onSubmit={submitLogin}>
+          <div className="auth-card-heading">
+            <span className="auth-kicker">Личный кабинет</span>
+            <h1>Добро пожаловать</h1>
+            <p>Войдите, чтобы продолжить работу с продажами.</p>
+          </div>
+          <div className="auth-fields">
+            <label htmlFor="auth-login">Логин</label>
+            <div className="auth-input-wrap">
+              <span className="auth-field-icon" aria-hidden="true">@</span>
+              <input id="auth-login" autoComplete="username" autoFocus value={loginValue} onChange={(event) => setLoginValue(event.target.value)} placeholder="Ваш логин" required disabled={submitting} />
+            </div>
+            <label htmlFor="auth-password">Пароль</label>
+            <div className="auth-input-wrap">
+              <span className="auth-field-icon auth-lock" aria-hidden="true">●</span>
+              <input id="auth-password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Введите пароль" required disabled={submitting} />
+              <button className="auth-password-toggle" type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'} aria-pressed={showPassword}>
+                {showPassword ? 'Скрыть' : 'Показать'}
+              </button>
+            </div>
+          </div>
+          {error ? <div className="auth-error" role="alert"><span aria-hidden="true">!</span>{error}</div> : null}
+          <button className="auth-submit" type="submit" disabled={submitting}>
+            {submitting ? <><span className="auth-spinner small" />Входим…</> : <>Войти <span aria-hidden="true">→</span></>}
+          </button>
+          <p className="auth-help">Доступ выдаёт администратор системы</p>
+        </form>
+        <p className="auth-security"><span aria-hidden="true">✓</span> Защищённый доступ · Bitrix только для чтения</p>
+      </section>
     </main>
   }
   return <MainApp user={user} onLogout={signOut} />
