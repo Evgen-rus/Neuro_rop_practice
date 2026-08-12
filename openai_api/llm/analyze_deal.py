@@ -22,7 +22,7 @@ from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
-from openai_api.config import ANALYSIS_MODEL, logger
+from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
@@ -184,6 +184,39 @@ def build_prompt(
         ensure_ascii=False,
         indent=2,
     )
+    communication_audit_rules = """
+<communication_quality_audit_rules>
+Сформируй один текущий аудит качества ведения сделки для РОПа по всей доступной клиентской коммуникации, а не отдельный отчёт на каждый звонок или сообщение.
+- Учитывай историю сделки и все доступные новые касания на момент анализа: содержательные звонки с транскриптом, письма и клиентскую переписку.
+- Недозвон, короткий звонок без содержательной расшифровки и пустая CRM-активность — только попытка связи. Не выдавай их за разговор, договорённость или слова клиента.
+- CRM-задачи, комментарии менеджера и внутренние чаты не являются клиентской коммуникацией и не могут быть цитатой-доказательством.
+- История нужна, чтобы понять, какие договорённости и данные менеджер должен был актуализировать. Оценки и цитаты подтверждай только фактической клиентской коммуникацией.
+- status="assessed" ставь, если есть хотя бы одно содержательное касание. Тогда каждый criterion.score — строго 0 или 1.
+- next_action=1 только если менеджер сам зафиксировал конкретный следующий шаг с точной датой и временем; иначе 0.
+- value_development=1 только если касание имело конкретный информационный повод, добавляло ценность или уточняло производство, сроки либо бюджет; пустое «не надумали?» — 0.
+- data_collection=1 только если менеджер, опираясь на историю, собрал или актуализировал необходимые технические, логистические, реквизитные данные либо сведения о ЛПР; игнорирование существенного пробела — 0.
+- Для каждого критерия с 0 добавь отдельный zero_reason: criterion, короткая ошибка и короткая дословная цитата из звонка/переписки. Для критериев с 1 zero_reason не добавляй.
+- Если содержательной коммуникации нет, верни status="insufficient_evidence", все score=null, zero_reasons=[], summary_for_rop=null и объясни insufficient_reason. Не оценивай недозвон как разговор.
+- summary_for_rop при assessed — 1-2 предложения: реальный статус клиента и конкретный следующий шаг менеджера для продвижения сделки.
+- scope_summary кратко перечисляет, какие виды коммуникаций реально учтены, без выдуманных количеств и дат.
+</communication_quality_audit_rules>
+""" if COMMUNICATION_QUALITY_AUDIT_ENABLED else ""
+    communication_audit_shape = """
+  "communication_quality_audit": {
+    "status": "assessed|insufficient_evidence",
+    "scope_summary": "какие содержательные коммуникации и попытки учтены",
+    "criteria": {
+      "next_action": {"score": "0|1|null"},
+      "value_development": {"score": "0|1|null"},
+      "data_collection": {"score": "0|1|null"}
+    },
+    "zero_reasons": [
+      {"criterion": "next_action|value_development|data_collection", "explanation": "где менеджер ошибся", "quote": "короткая цитата из клиентской коммуникации"}
+    ],
+    "summary_for_rop": "1-2 предложения о статусе клиента и следующем шаге менеджера или null",
+    "insufficient_reason": "причина недостаточности коммуникации или null"
+  },
+""" if COMMUNICATION_QUALITY_AUDIT_ENABLED else ""
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
 Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
@@ -382,6 +415,7 @@ def build_prompt(
 - Каждое возражение должно помогать менеджеру в следующем контакте: мягко ответить, задать следующий вопрос и получить движение к договору, счету, правке КП, оплате, дате решения или честной дисквалификации.
 - Не предлагай скидку первым действием. Не спорь с клиентом, не обесценивай конкурента/Китай и не выдумывай факты о бюджете, ЛПР, конкуренте или сроках.
 </management_blocks_rules>
+{communication_audit_rules}
 
 Правила:
 1. Не выдумывай факты.
@@ -460,6 +494,7 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
       "альтернативное короткое начало того же звонка — вариант 2"
     ]
   }},
+{communication_audit_shape}
   "client_communication_profile": {{
     "status": "supported|tentative|insufficient_evidence",
     "primary_style": "D|I|S|C|null",
@@ -825,6 +860,7 @@ def render_report(
     manager = analysis.get("manager_action_block", {}) or {}
     primary = manager.get("primary_text", {}) or {}
     rop = analysis.get("rop_action", {}) or {}
+    communication_audit = analysis.get("communication_quality_audit", {}) or {}
 
     def bullet_list(values: Any) -> str:
         if not values:
@@ -892,6 +928,42 @@ def render_report(
 {bullet_list(commercial.get('evidence'))}"""
 
     qualification_section = render_qualification_assessment(qualification_assessment)
+
+    def render_communication_quality_audit(value: Any) -> str:
+        if not isinstance(value, dict) or not value:
+            return ""
+        if value.get("status") == "insufficient_evidence":
+            return f"""## Контроль качества ведения сделки
+
+- Основание: {value.get('scope_summary', 'не указано')}
+- Статус: недостаточно содержательной коммуникации для оценки
+- Причина: {value.get('insufficient_reason', 'не указано')}"""
+        criteria = value.get("criteria") if isinstance(value.get("criteria"), dict) else {}
+        def score(name: str) -> str:
+            item = criteria.get(name) if isinstance(criteria.get(name), dict) else {}
+            return human_value(item.get("score"))
+        reasons = value.get("zero_reasons") if isinstance(value.get("zero_reasons"), list) else []
+        reasons_md = "\n".join(
+            f"- {item.get('explanation', 'Ошибка не описана')} Цитата: «{item.get('quote', 'не указано')}»"
+            for item in reasons if isinstance(item, dict)
+        ) or "- Ошибок не выявлено"
+        return f"""## Контроль качества ведения сделки
+
+- Основание: {value.get('scope_summary', 'не указано')}
+- Критерий 1 — Next Action: {score('next_action')}
+- Критерий 2 — ценность касаний: {score('value_development')}
+- Критерий 3 — сбор данных: {score('data_collection')}
+
+### Ошибки по критериям с оценкой 0
+
+{reasons_md}
+
+### Резюме для РОПа
+
+{value.get('summary_for_rop', 'не указано')}"""
+
+    communication_audit_md = render_communication_quality_audit(communication_audit)
+    communication_audit_section = f"\n\n{communication_audit_md}\n" if communication_audit_md else ""
 
     backup_texts = manager.get("backup_texts") or []
     backup_md = "\n\n".join(
@@ -1048,6 +1120,7 @@ def render_report(
 
 - Продвинулась: {human_value(progress.get('progressed'))}
 - Причина: {progress.get('reason', 'не указано')}
+{communication_audit_section}
 
 {qualification_section}
 

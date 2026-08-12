@@ -31,6 +31,7 @@ ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500")
 # both visible JSON and reasoning tokens, so it leaves quality headroom while
 # remaining below the legacy analysis budget.
 ATTENTION_DELTA_MAX_OUTPUT_TOKENS = int(os.getenv("ATTENTION_DELTA_MAX_OUTPUT_TOKENS", "1600") or "1600")
+COMMUNICATION_QUALITY_AUDIT_ENABLED = read_bool_env("COMMUNICATION_QUALITY_AUDIT_ENABLED", True)
 USD_RUB_RATE = float(os.getenv("USD_RUB_RATE", "75") or "75")
 OPENAI_LOG_PREVIEW_LINES = int(os.getenv("OPENAI_LOG_PREVIEW_LINES", "25") or "25")
 OPENAI_LOG_PREVIEW_CHARS = int(os.getenv("OPENAI_LOG_PREVIEW_CHARS", "4000") or "4000")

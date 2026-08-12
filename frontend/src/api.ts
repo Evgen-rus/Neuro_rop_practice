@@ -600,6 +600,27 @@ export type DealControlChecklist = {
   progress_percent: number
 }
 
+export type CommunicationQualityAuditCriterion = {
+  score: 0 | 1 | null
+}
+
+export type CommunicationQualityAudit = {
+  status: 'assessed' | 'insufficient_evidence'
+  scope_summary: string
+  criteria: {
+    next_action: CommunicationQualityAuditCriterion
+    value_development: CommunicationQualityAuditCriterion
+    data_collection: CommunicationQualityAuditCriterion
+  }
+  zero_reasons: Array<{
+    criterion: 'next_action' | 'value_development' | 'data_collection'
+    explanation: string
+    quote: string
+  }>
+  summary_for_rop?: string | null
+  insufficient_reason?: string | null
+}
+
 export type DealControlDeal = {
   deal_id: string
   source: 'initial' | 'pipeline'
@@ -648,6 +669,7 @@ export type DealControlDeal = {
     script_channel?: string
     rop_task_hint?: string
     expected_crm_update?: string
+    communication_quality_audit?: CommunicationQualityAudit | null
     manager_situation?: ManagerSituationState | null
   }
 }

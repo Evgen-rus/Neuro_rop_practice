@@ -353,6 +353,18 @@ class DealControlTests(unittest.TestCase):
                     "manager_action_block": {
                         "manager_checklist": ["Позиция клиента", "Дата следующего шага"],
                     },
+                    "communication_quality_audit": {
+                        "status": "insufficient_evidence",
+                        "scope_summary": "Есть только попытка дозвона.",
+                        "criteria": {
+                            "next_action": {"score": None},
+                            "value_development": {"score": None},
+                            "data_collection": {"score": None},
+                        },
+                        "zero_reasons": [],
+                        "summary_for_rop": None,
+                        "insufficient_reason": "Нет содержательной коммуникации.",
+                    },
                 },
             )
 
@@ -361,6 +373,7 @@ class DealControlTests(unittest.TestCase):
             self.assertTrue(coaching["manager_coaching"].startswith("Красавчик"))
             self.assertEqual(len(coaching["script_variants"]), 2)
             self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
+            self.assertEqual(coaching["communication_quality_audit"]["status"], "insufficient_evidence")
             self.assertTrue(coaching["analysis_created_at"])
 
     def test_shared_deal_checklist_projects_actions_and_persists_manager_completion(self):

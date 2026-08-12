@@ -11,6 +11,7 @@ from typing import Any
 from api.candidates import fetch_candidate_activities_bulk, load_pipeline_stage_names, make_client, parse_bitrix_dt
 from api.jobs import unwrap_analysis_payload
 from bitrix.customer_history import activity_type, build_normalized_communications
+from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -560,6 +561,11 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
     mode = analysis.get("deal_mode") if isinstance(analysis.get("deal_mode"), dict) else {}
     risk = analysis.get("main_risk") if isinstance(analysis.get("main_risk"), dict) else {}
     quality = analysis.get("manager_quality") if isinstance(analysis.get("manager_quality"), dict) else {}
+    communication_audit = (
+        analysis.get("communication_quality_audit")
+        if COMMUNICATION_QUALITY_AUDIT_ENABLED and isinstance(analysis.get("communication_quality_audit"), dict)
+        else None
+    )
     shaker = analysis.get("shaker_question") if isinstance(analysis.get("shaker_question"), dict) else {}
     primary = manager.get("primary_text") if isinstance(manager.get("primary_text"), dict) else {}
     backups = manager.get("backup_texts") if isinstance(manager.get("backup_texts"), list) else []
@@ -630,6 +636,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "script_channel": str(manager.get("recommended_channel") or ""),
         "rop_task_hint": str(rop.get("message_to_manager") or rop.get("check_for_rop") or ""),
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),
+        "communication_quality_audit": communication_audit,
     }
     if report is None or report.get("id") is None:
         return coaching

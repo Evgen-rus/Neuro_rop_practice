@@ -7,6 +7,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
+
 
 class AnalysisValidationError(ValueError):
     """Raised when the model output is valid JSON but not valid analysis data."""
@@ -1399,6 +1401,62 @@ def validate_client_communication_profile(value: Any) -> None:
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
     _validate_deal_recommendation_materialization_fields(analysis, errors)
     _validate_client_communication_profile(analysis.get("client_communication_profile"), errors)
+    audit = analysis.get("communication_quality_audit")
+    if COMMUNICATION_QUALITY_AUDIT_ENABLED or audit is not None:
+        path = "communication_quality_audit"
+        audit = _expect_dict(audit, path, errors)
+        if audit:
+            status = audit.get("status")
+            _expect_enum(
+                status,
+                f"{path}.status",
+                {"assessed", "insufficient_evidence"},
+                errors,
+            )
+            _expect_non_empty_string(audit.get("scope_summary"), f"{path}.scope_summary", errors)
+            criteria = _expect_dict(audit.get("criteria"), f"{path}.criteria", errors)
+            scores: dict[str, Any] = {}
+            for name in ("next_action", "value_development", "data_collection"):
+                item = _expect_dict(criteria.get(name), f"{path}.criteria.{name}", errors) if criteria else {}
+                score = item.get("score") if item else None
+                scores[name] = score
+                if status == "assessed" and (not isinstance(score, int) or isinstance(score, bool) or score not in {0, 1}):
+                    errors.append(f"{path}.criteria.{name}.score must be 0 or 1 when status is 'assessed'")
+                if status == "insufficient_evidence" and score is not None:
+                    errors.append(f"{path}.criteria.{name}.score must be null when evidence is insufficient")
+            reasons = _expect_list(audit.get("zero_reasons"), f"{path}.zero_reasons", errors)
+            reason_criteria: set[str] = set()
+            for index, reason in enumerate(reasons):
+                reason_path = f"{path}.zero_reasons[{index}]"
+                reason = _expect_dict(reason, reason_path, errors)
+                if not reason:
+                    continue
+                criterion = reason.get("criterion")
+                _expect_enum(
+                    criterion,
+                    f"{reason_path}.criterion",
+                    {"next_action", "value_development", "data_collection"},
+                    errors,
+                )
+                _expect_non_empty_string(reason.get("explanation"), f"{reason_path}.explanation", errors)
+                _expect_non_empty_string(reason.get("quote"), f"{reason_path}.quote", errors)
+                if criterion:
+                    if criterion in reason_criteria:
+                        errors.append(f"{path}.zero_reasons contains duplicate criterion {criterion!r}")
+                    reason_criteria.add(criterion)
+            expected_reasons = {name for name, score in scores.items() if score == 0}
+            if status == "assessed":
+                if reason_criteria != expected_reasons:
+                    errors.append(f"{path}.zero_reasons must cover exactly the criteria scored 0")
+                _expect_non_empty_string(audit.get("summary_for_rop"), f"{path}.summary_for_rop", errors)
+                if audit.get("insufficient_reason") is not None:
+                    errors.append(f"{path}.insufficient_reason must be null when status is 'assessed'")
+            elif status == "insufficient_evidence":
+                if reasons:
+                    errors.append(f"{path}.zero_reasons must be empty when evidence is insufficient")
+                if audit.get("summary_for_rop") is not None:
+                    errors.append(f"{path}.summary_for_rop must be null when evidence is insufficient")
+                _expect_non_empty_string(audit.get("insufficient_reason"), f"{path}.insufficient_reason", errors)
     control_brief = _expect_dict(analysis.get("deal_control_brief"), "deal_control_brief", errors)
     if control_brief:
         for field in (

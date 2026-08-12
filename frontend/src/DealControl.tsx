@@ -1950,7 +1950,46 @@ function RopDealScreen({ deal, aiRecommendation, hasAnalysis }: {
     {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
     {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
+    {hasAnalysis && deal.coaching.communication_quality_audit ? <CommunicationQualityAuditCard deal={deal} /> : null}
   </>
+}
+
+const AUDIT_CRITERION_LABELS = {
+  next_action: 'Next Action',
+  value_development: 'Ценность касаний',
+  data_collection: 'Сбор данных',
+} as const
+
+function CommunicationQualityAuditCard({ deal }: { deal: DealControlDeal }) {
+  const audit = deal.coaching.communication_quality_audit
+  if (!audit) return null
+  const criteria = Object.entries(AUDIT_CRITERION_LABELS) as Array<[keyof typeof AUDIT_CRITERION_LABELS, string]>
+  return <details className="dc-communication-audit">
+    <summary>
+      <span>QC</span>
+      <div><h3>Контроль качества ведения сделки</h3><p>{audit.scope_summary}</p></div>
+      <strong>{audit.status === 'assessed' ? 'Аудит готов' : 'Недостаточно данных'}</strong>
+      <i aria-hidden="true">⌄</i>
+    </summary>
+    <div className="dc-communication-audit-body">
+      {audit.status === 'insufficient_evidence' ? <p className="dc-communication-audit-empty">{audit.insufficient_reason}</p> : <>
+        <div className="dc-communication-audit-scores">
+          {criteria.map(([key, label], index) => <div key={key}>
+            <span>Критерий {index + 1}</span><b>{label}</b><strong className={`score-${audit.criteria[key].score}`}>{audit.criteria[key].score}</strong>
+          </div>)}
+        </div>
+        <section>
+          <h4>Аргументация по оценкам 0</h4>
+          {audit.zero_reasons.length ? <ul>{audit.zero_reasons.map((reason) => <li key={reason.criterion}>
+            <b>{AUDIT_CRITERION_LABELS[reason.criterion]}</b>
+            <span>{reason.explanation}</span>
+            <q>{reason.quote}</q>
+          </li>)}</ul> : <p>Ошибок не выявлено.</p>}
+        </section>
+        <aside><b>Резюме для РОПа</b><span>{audit.summary_for_rop}</span></aside>
+      </>}
+    </div>
+  </details>
 }
 
 function AiRecommendationCard({ task }: { task: DealControlTask | null }) {
