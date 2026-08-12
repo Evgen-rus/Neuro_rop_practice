@@ -9,9 +9,10 @@ import sqlite3
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,30 @@ from api.candidates import (
     profile_period_bounds,
     profile_candidates_preview,
     search_candidates,
+)
+from api.access import (
+    actor_source_role,
+    can_view_job,
+    deal_access,
+    get_deal,
+    require_deal,
+    require_report,
+    require_task,
+    scoped_deal_metrics,
+    scoped_dashboard,
+)
+from api.auth import (
+    ALLOWED_ROLES,
+    AUTH_COOKIE_NAME,
+    AuthStorageUnavailable,
+    authenticate_request,
+    begin_request_context,
+    current_user as auth_current_user,
+    end_request_context,
+    hash_password,
+    login_user,
+    public_user,
+    session_logout,
 )
 from api.jobs import (
     AnalyzeOptions,
@@ -39,7 +64,6 @@ from api.compact_shadow import get_compact_job, get_evidence, review_payload, st
 from api.deal_control import add_task as add_deal_control_task
 from api.deal_control import build_deal_control_dashboard, edit_task as edit_deal_control_task
 from api.deal_control import confirm_task_crm_match as confirm_deal_control_task_crm_match
-from api.deal_control import deal_control_metrics
 from api.deal_control import record_task_outcome as record_deal_control_task_outcome
 from api.deal_control import record_task_event as record_deal_control_task_event
 from api.deal_control import (
@@ -68,6 +92,7 @@ from api.deal_manager_situation import (
 from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
+from storage import rop_db as storage
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     attach_job_to_daily_summary,
@@ -211,13 +236,11 @@ class DealControlTaskUpdateRequest(BaseModel):
     business_result_status: Literal["no_result", "client_fact", "next_step", "needs_rop_review"] | None = None
     business_result_note: str | None = Field(default=None, max_length=4000)
     reschedule_reason: str | None = Field(default=None, max_length=1000)
-    source_role: Literal["manager", "rop"] | None = None
 
 
 class DealControlBitrixTaskCompletionRequest(BaseModel):
     deal_id: str = Field(min_length=1, max_length=80)
     completed: bool
-    source_role: Literal["manager", "rop"]
 
 
 class DealControlChecklistItemCompletionRequest(BaseModel):
@@ -250,7 +273,6 @@ class DealControlTaskOutcomeRequest(BaseModel):
     next_step_at: str | None = Field(default=None, max_length=40)
     evidence_kind: Literal["crm_activity", "transcript", "manager_confirmation", "rop_confirmation"] | None = None
     evidence_id: str | None = Field(default=None, max_length=120)
-    source_role: Literal["manager", "rop"]
 
 
 class DealControlCrmFactReviewRequest(BaseModel):
@@ -313,6 +335,336 @@ class DailySummaryStartRequest(BaseModel):
     confirm_paid: bool = False
 
 
+class AuthLoginRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthUserCreateRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=1024)
+    role: Literal["admin", "rop", "manager"]
+    manager_id: str | None = Field(default=None, max_length=80)
+    is_active: bool = True
+
+
+class AuthUserUpdateRequest(BaseModel):
+    role: Literal["admin", "rop", "manager"] | None = None
+    manager_id: str | None = Field(default=None, max_length=80)
+    is_active: bool | None = None
+
+
+class AuthPasswordRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+_PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/logout"}
+_SAFE_ORIGINS = {
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+}
+
+
+def _is_public_path(path: str) -> bool:
+    return path in _PUBLIC_PATHS or path.startswith("/api/review/")
+
+
+def _origin_allowed(origin: str | None, request_host: str | None) -> bool:
+    if not origin or origin.casefold() in {value.casefold() for value in _SAFE_ORIGINS}:
+        return True
+    # The external Nginx/quick-tunnel entrypoint is same-origin from the
+    # browser's perspective.  Compare the parsed host rather than trusting a
+    # forwarded header supplied by the client.
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or not parsed.hostname
+    ):
+        return False
+    try:
+        request = urlsplit(f"//{str(request_host or '')}")
+        origin_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        request_port = request.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return False
+    return (
+        bool(request.hostname)
+        and parsed.hostname.casefold() == request.hostname.casefold()
+        and origin_port == request_port
+    )
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Authenticate every API request except health/login/logout/review links."""
+
+    origin = request.headers.get("origin")
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not _origin_allowed(
+        origin,
+        request.headers.get("host"),
+    ):
+        return Response(content='{"detail":"Origin not allowed"}', status_code=403, media_type="application/json")
+    if _is_public_path(request.url.path) or request.method.upper() == "OPTIONS":
+        tokens = begin_request_context(None)
+        try:
+            return await call_next(request)
+        finally:
+            end_request_context(tokens)
+    try:
+        user = authenticate_request(request)
+    except AuthStorageUnavailable:
+        return Response(content='{"detail":"Authentication storage unavailable"}', status_code=503, media_type="application/json")
+    if user is None:
+        return Response(content='{"detail":"Authentication required"}', status_code=401, media_type="application/json")
+    tokens = begin_request_context(user)
+    try:
+        return await call_next(request)
+    finally:
+        end_request_context(tokens)
+
+
+def _raise_storage_error(error: ValueError) -> None:
+    message = str(error)
+    lowered = message.casefold()
+    status = 409 if any(
+        marker in lowered
+        for marker in ("unique", "already", "duplicate", "последн", "last active", "manager_id занят", "занят")
+    ) else 400
+    raise HTTPException(status_code=status, detail=message) from error
+
+
+def _require_admin() -> dict[str, Any]:
+    return _require_roles("admin")
+
+
+def _require_roles(*roles: str) -> dict[str, Any]:
+    user = auth_current_user()
+    if str(user.get("role") or "") not in set(roles):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return user
+
+
+def _require_admin_or_rop() -> dict[str, Any]:
+    return _require_roles("admin", "rop")
+
+
+def _require_lead_access() -> dict[str, Any]:
+    """Lead ownership is not available in the auth contract yet."""
+
+    return _require_admin_or_rop()
+
+
+def _require_entity_access(
+    entity_type: str,
+    entity_id: str,
+    *,
+    action: str = "open",
+    allow_lead_roles: tuple[str, ...] = ("admin", "rop"),
+) -> dict[str, Any]:
+    user = auth_current_user()
+    if entity_type == "deal":
+        require_deal(entity_id, user=user, action=action)
+        return user
+    if entity_type == "lead" and str(user.get("role")) in allow_lead_roles:
+        if action == "paid_ai" and str(user.get("role")) != "admin":
+            raise HTTPException(status_code=403, detail="Paid AI is not available for this role")
+        return user
+    raise HTTPException(status_code=403, detail="Entity access forbidden")
+
+
+def _job_is_visible(job: dict[str, Any], user: dict[str, Any]) -> bool:
+    return can_view_job(job, user)
+
+
+def _require_admin_paid() -> dict[str, Any]:
+    return _require_roles("admin")
+
+
+def _require_checklist_edit(deal_id: str) -> dict[str, Any]:
+    user = auth_current_user()
+    if str(user.get("role")) == "admin":
+        return user
+    require_deal(deal_id, user=user, action="edit")
+    if str(user.get("role")) != "manager":
+        raise HTTPException(status_code=403, detail="Only the manager can edit the daily checklist")
+    return user
+
+
+def _require_analyze_scope(entity_type: str, ids: list[str], *, paid: bool) -> dict[str, Any]:
+    user = auth_current_user()
+    role = str(user.get("role") or "")
+    if role == "admin":
+        return user
+    if role == "rop":
+        if paid:
+            raise HTTPException(status_code=403, detail="Paid analysis is not available for this role")
+        if entity_type != "deal":
+            raise HTTPException(status_code=403, detail="ROP analysis is limited to team deals")
+        for entity_id in ids:
+            require_deal(entity_id, user=user, action="open")
+        return user
+    if entity_type not in {"deal", "auto"}:
+        raise HTTPException(status_code=403, detail="Managers can analyze deals only")
+    if entity_type == "auto":
+        raise HTTPException(status_code=403, detail="Managers must specify a deal")
+    for entity_id in ids:
+        access = require_deal(entity_id, user=user, action="paid_ai" if paid else "open")
+        if not access.is_own:
+            raise HTTPException(status_code=403, detail="Deal access forbidden")
+    return user
+
+
+@app.post("/api/auth/login")
+def auth_login(body: AuthLoginRequest, request: Request, response: Response) -> dict[str, Any]:
+    try:
+        return login_user(login=body.login, password=body.password, request=request, response=response)
+    except AuthStorageUnavailable as error:
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable") from error
+
+
+@app.post("/api/auth/logout", status_code=204)
+def auth_logout(request: Request, response: Response) -> Response:
+    try:
+        session_logout(request, response)
+    except AuthStorageUnavailable:
+        # Logout remains idempotent even while the backing store is unavailable;
+        # deleting the browser cookie still prevents accidental reuse.
+        response.delete_cookie(AUTH_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
+    response.status_code = 204
+    return response
+
+
+@app.get("/api/auth/me")
+def auth_me() -> dict[str, Any]:
+    user = auth_current_user()
+    return {"authenticated": True, "user": public_user(user)}
+
+
+@app.get("/api/auth/users")
+def auth_users() -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "list_auth_users", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    return {"items": [user for item in function(DEFAULT_DB_PATH) if (user := public_user(item)) is not None]}
+
+
+@app.post("/api/auth/users", status_code=201)
+def auth_user_create(body: AuthUserCreateRequest) -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "create_auth_user", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    try:
+        user = function(
+            DEFAULT_DB_PATH,
+            login=body.login,
+            password=body.password,
+            role=body.role,
+            manager_id=body.manager_id,
+            is_active=body.is_active,
+        )
+    except ValueError as error:
+        _raise_storage_error(error)
+    return {"user": public_user(user)}
+
+
+@app.patch("/api/auth/users/{user_id}")
+def auth_user_update(user_id: int, body: AuthUserUpdateRequest) -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "update_auth_user", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    # `manager_id=None` is meaningful: it explicitly clears an old manager
+    # assignment when changing a user to a non-manager role.  Preserve the
+    # storage contract's `_UNSET` behavior for fields omitted by the client.
+    kwargs: dict[str, Any] = {"user_id": user_id, **body.model_dump(exclude_unset=True)}
+    try:
+        user = function(DEFAULT_DB_PATH, **kwargs)
+    except ValueError as error:
+        if "not found" in str(error).casefold() or "не найден" in str(error).casefold():
+            raise HTTPException(status_code=404, detail="User not found") from error
+        _raise_storage_error(error)
+    return {"user": public_user(user)}
+
+
+@app.post("/api/auth/users/{user_id}/password")
+def auth_user_password(user_id: int, body: AuthPasswordRequest) -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "set_auth_user_password", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    try:
+        user = function(
+            DEFAULT_DB_PATH,
+            user_id=user_id,
+            password_hash=hash_password(body.password),
+        )
+    except ValueError as error:
+        if "not found" in str(error).casefold() or "не найден" in str(error).casefold():
+            raise HTTPException(status_code=404, detail="User not found") from error
+        _raise_storage_error(error)
+    return {"user": public_user(user)}
+
+
+@app.post("/api/auth/me/password")
+def auth_self_password(body: AuthPasswordRequest) -> dict[str, Any]:
+    user = auth_current_user()
+    function = getattr(storage, "set_auth_user_password", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    try:
+        updated = function(
+            DEFAULT_DB_PATH,
+            user_id=int(user["id"]),
+            password_hash=hash_password(body.password),
+        )
+    except ValueError as error:
+        _raise_storage_error(error)
+    return {"user": public_user(updated)}
+
+
+@app.post("/api/auth/users/{user_id}/deactivate")
+def auth_user_deactivate(user_id: int) -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "deactivate_auth_user", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    try:
+        user = function(DEFAULT_DB_PATH, user_id=user_id)
+    except ValueError as error:
+        if "not found" in str(error).casefold() or "не найден" in str(error).casefold():
+            raise HTTPException(status_code=404, detail="User not found") from error
+        _raise_storage_error(error)
+    return {"user": public_user(user)}
+
+
+@app.post("/api/auth/users/{user_id}/activate")
+def auth_user_activate(user_id: int) -> dict[str, Any]:
+    _require_admin()
+    function = getattr(storage, "activate_auth_user", None)
+    if not callable(function):
+        raise HTTPException(status_code=503, detail="Authentication storage unavailable")
+    try:
+        user = function(DEFAULT_DB_PATH, user_id=user_id)
+    except ValueError as error:
+        if "not found" in str(error).casefold() or "не найден" in str(error).casefold():
+            raise HTTPException(status_code=404, detail="User not found") from error
+        _raise_storage_error(error)
+    return {"user": public_user(user)}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {
@@ -324,11 +676,13 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/deal-control")
 def deal_control_dashboard() -> dict[str, Any]:
-    return build_deal_control_dashboard(db_path=DEFAULT_DB_PATH)
+    user = auth_current_user()
+    return scoped_dashboard(build_deal_control_dashboard(db_path=DEFAULT_DB_PATH), user)
 
 
 @app.put("/api/deal-control/scope")
 def deal_control_scope_put(body: DealControlScopeRequest) -> dict[str, Any]:
+    _require_roles("admin")
     try:
         scope = save_deal_control_scope(
             db_path=DEFAULT_DB_PATH,
@@ -343,8 +697,10 @@ def deal_control_scope_put(body: DealControlScopeRequest) -> dict[str, Any]:
 
 @app.post("/api/deal-control/sync")
 def deal_control_sync() -> dict[str, Any]:
+    _require_roles("admin", "rop")
     try:
-        return refresh_deal_control(db_path=DEFAULT_DB_PATH)
+        dashboard = refresh_deal_control(db_path=DEFAULT_DB_PATH)
+        return scoped_dashboard(dashboard, auth_current_user())
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001 - surface a read-only CRM problem in the local UI
@@ -353,6 +709,7 @@ def deal_control_sync() -> dict[str, Any]:
 
 @app.put("/api/deal-control/deals/{deal_id}")
 def deal_control_deal_update(deal_id: str, body: DealControlFieldsRequest) -> dict[str, Any]:
+    require_deal(deal_id, action="edit")
     try:
         return save_deal_fields(
             db_path=DEFAULT_DB_PATH, deal_id=deal_id, probability=body.probability,
@@ -364,6 +721,7 @@ def deal_control_deal_update(deal_id: str, body: DealControlFieldsRequest) -> di
 
 @app.post("/api/deal-control/deals/{deal_id}/tasks")
 def deal_control_task_create(deal_id: str, body: DealControlTaskRequest) -> dict[str, Any]:
+    require_deal(deal_id, action="edit")
     try:
         return add_deal_control_task(
             db_path=DEFAULT_DB_PATH, deal_id=deal_id, task_text=body.task_text,
@@ -375,12 +733,13 @@ def deal_control_task_create(deal_id: str, body: DealControlTaskRequest) -> dict
 
 @app.put("/api/deal-control/tasks/{task_id}")
 def deal_control_task_update(task_id: int, body: DealControlTaskUpdateRequest) -> dict[str, Any]:
+    access, _task = require_task(task_id, action="edit")
     try:
         return edit_deal_control_task(
             db_path=DEFAULT_DB_PATH, task_id=task_id, task_text=body.task_text, touch_type=body.touch_type,
             expected_result=body.expected_result, due_at=body.due_at, local_status=body.local_status,
             business_result_status=body.business_result_status, business_result_note=body.business_result_note,
-            reschedule_reason=body.reschedule_reason, source_role=body.source_role,
+            reschedule_reason=body.reschedule_reason, source_role=actor_source_role(access.user),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -391,13 +750,14 @@ def deal_control_bitrix_task_completion(
     activity_id: str,
     body: DealControlBitrixTaskCompletionRequest,
 ) -> dict[str, Any]:
+    access = require_deal(body.deal_id, action="edit")
     try:
         state = save_bitrix_task_completion(
             db_path=DEFAULT_DB_PATH,
             deal_id=body.deal_id,
             activity_id=activity_id,
             completed=body.completed,
-            source_role=body.source_role,
+            source_role=actor_source_role(access.user),
         )
         return {"ok": True, "state": state}
     except ValueError as error:
@@ -406,6 +766,7 @@ def deal_control_bitrix_task_completion(
 
 @app.post("/api/deal-control/tasks/{task_id}/confirm-crm-match")
 def deal_control_task_confirm_crm_match(task_id: int) -> dict[str, Any]:
+    require_task(task_id, action="edit")
     try:
         return confirm_deal_control_task_crm_match(db_path=DEFAULT_DB_PATH, task_id=task_id)
     except ValueError as error:
@@ -414,11 +775,13 @@ def deal_control_task_confirm_crm_match(task_id: int) -> dict[str, Any]:
 
 @app.get("/api/deal-control/tasks/{task_id}/history")
 def deal_control_task_history_get(task_id: int) -> dict[str, Any]:
+    require_task(task_id, action="open")
     return deal_control_task_history(db_path=DEFAULT_DB_PATH, task_id=task_id)
 
 
 @app.post("/api/deal-control/tasks/{task_id}/outcomes")
 def deal_control_task_outcome_create(task_id: int, body: DealControlTaskOutcomeRequest) -> dict[str, Any]:
+    access, _task = require_task(task_id, action="edit")
     try:
         return record_deal_control_task_outcome(
             db_path=DEFAULT_DB_PATH,
@@ -430,7 +793,7 @@ def deal_control_task_outcome_create(task_id: int, body: DealControlTaskOutcomeR
             next_step_at=body.next_step_at,
             evidence_kind=body.evidence_kind,
             evidence_id=body.evidence_id,
-            source_role=body.source_role,
+            source_role=actor_source_role(access.user),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -442,6 +805,7 @@ def deal_control_task_crm_fact_review(
     fact_id: int,
     body: DealControlCrmFactReviewRequest,
 ) -> dict[str, Any]:
+    require_task(task_id, action="edit")
     try:
         return review_deal_control_task_crm_fact(
             db_path=DEFAULT_DB_PATH,
@@ -456,11 +820,12 @@ def deal_control_task_crm_fact_review(
 
 @app.get("/api/deal-control/metrics")
 def deal_control_metrics_get(manager_id: str | None = None) -> dict[str, Any]:
-    return deal_control_metrics(db_path=DEFAULT_DB_PATH, manager_id=manager_id)
+    return scoped_deal_metrics(auth_current_user(), manager_id)
 
 
 @app.post("/api/deal-control/tasks/{task_id}/events")
 def deal_control_task_event_create(task_id: int, body: DealControlTaskEventRequest) -> dict[str, bool]:
+    require_task(task_id, action="open")
     try:
         return record_deal_control_task_event(
             db_path=DEFAULT_DB_PATH,
@@ -474,6 +839,9 @@ def deal_control_task_event_create(task_id: int, body: DealControlTaskEventReque
 
 @app.post("/api/deal-control/tasks/{task_id}/guidance")
 def deal_control_task_guidance_start(task_id: int, body: DealTaskGuidanceRequest) -> dict[str, Any]:
+    access, _task = require_task(task_id, action="paid_ai")
+    if not access.can_run_paid_ai:
+        raise HTTPException(status_code=403, detail="Paid AI is not available for this role or deal")
     try:
         return start_task_guidance_job(
             db_path=DEFAULT_DB_PATH,
@@ -489,11 +857,13 @@ def deal_control_task_guidance_job_get(job_id: str) -> dict[str, Any]:
     job = get_task_guidance_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Задание подготовки менеджера не найдено")
+    require_task(int(job["task_id"]), action="open")
     return job
 
 
 @app.post("/api/deal-control/deals/{deal_id}/situation/confirm")
 def deal_manager_situation_confirm(deal_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="edit")
     try:
         return confirm_deal_manager_situation(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
     except StorageContractUnavailable as error:
@@ -507,6 +877,7 @@ def deal_manager_situation_refine(
     deal_id: str,
     body: DealManagerSituationRefineRequest,
 ) -> dict[str, Any]:
+    require_deal(deal_id, action="paid_ai")
     try:
         return start_situation_refine_job(
             db_path=DEFAULT_DB_PATH,
@@ -525,6 +896,7 @@ def deal_manager_situation_job_get(job_id: str) -> dict[str, Any]:
     job = get_situation_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Задание уточнения ситуации не найдено")
+    require_deal(str(job["deal_id"]), action="open")
     return job
 
 
@@ -533,6 +905,7 @@ def deal_manager_quick_help_start(
     deal_id: str,
     body: DealManagerQuickHelpRequest,
 ) -> dict[str, Any]:
+    require_deal(deal_id, action="paid_ai")
     try:
         return start_quick_help_job(
             db_path=DEFAULT_DB_PATH,
@@ -551,6 +924,7 @@ def deal_manager_quick_help_job_get(job_id: str) -> dict[str, Any]:
     job = get_quick_help_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Задание quick help не найдено")
+    require_deal(str(job["deal_id"]), action="open")
     return job
 
 
@@ -560,6 +934,7 @@ def deal_manager_quick_help_history_get(
     limit: int = Query(default=20, ge=1, le=100),
     before_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
     try:
         return list_quick_help_history(
             db_path=DEFAULT_DB_PATH,
@@ -579,6 +954,7 @@ def deal_control_checklist_item_completion(
     item_id: str,
     body: DealControlChecklistItemCompletionRequest,
 ) -> dict[str, Any]:
+    _require_checklist_edit(deal_id)
     try:
         checklist = save_checklist_item_completion(
             db_path=DEFAULT_DB_PATH,
@@ -593,6 +969,7 @@ def deal_control_checklist_item_completion(
 
 @app.get("/api/deal-control/deals/{deal_id}/assistant-workspace")
 def deal_manager_assistant_workspace_get(deal_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
     try:
         return get_manager_assistant_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
     except StorageContractUnavailable as error:
@@ -606,6 +983,7 @@ def deal_manager_assistant_communication_completed(
     deal_id: str,
     body: DealManagerCommunicationCompletedRequest,
 ) -> dict[str, Any]:
+    require_deal(deal_id, action="edit")
     try:
         event = record_manager_communication_completed(
             db_path=DEFAULT_DB_PATH,
@@ -629,6 +1007,7 @@ async def deal_manager_voice_transcribe(
         if audio is None or not hasattr(audio, "read"):
             raise AudioTranscriptionRequestError("Аудио не передано")
         deal_id = str(form.get("deal_id") or "").strip()
+        require_deal(deal_id, action="paid_ai")
         confirm_paid = str(form.get("confirm_paid") or "").strip().lower() == "true"
         language = str(form.get("language") or "ru")
         return await transcribe_manager_voice(
@@ -639,22 +1018,27 @@ async def deal_manager_voice_transcribe(
         )
     except AudioTranscriptionRequestError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except HTTPException:
+        raise
     except Exception as error:  # noqa: BLE001 - provider details stay out of HTTP/log output
         raise HTTPException(status_code=502, detail="Транскрибация не выполнена") from error
 
 
 @app.get("/api/pipelines")
 def pipelines() -> dict[str, Any]:
+    _require_roles("admin", "rop")
     return list_crm_pipelines()
 
 
 @app.get("/api/candidate-filters")
 def candidate_filters_get() -> dict[str, Any]:
+    _require_roles("admin", "rop")
     return {"filter": get_candidate_filter(DEFAULT_DB_PATH)}
 
 
 @app.put("/api/candidate-filters")
 def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
+    _require_roles("admin", "rop")
     saved = save_candidate_filter(
         DEFAULT_DB_PATH,
         {
@@ -675,6 +1059,7 @@ def candidate_filters_put(body: CandidateFilterSaveRequest) -> dict[str, Any]:
 
 @app.get("/api/analysis-profiles")
 def analysis_profiles() -> dict[str, Any]:
+    _require_admin()
     return {
         "items": list_analysis_profiles(DEFAULT_DB_PATH),
         "selected": get_last_analysis_profile(DEFAULT_DB_PATH),
@@ -683,6 +1068,7 @@ def analysis_profiles() -> dict[str, Any]:
 
 @app.post("/api/analysis-profiles")
 def analysis_profile_create(body: AnalysisProfileRequest) -> dict[str, Any]:
+    _require_admin()
     try:
         profile = create_analysis_profile(
             DEFAULT_DB_PATH,
@@ -697,6 +1083,7 @@ def analysis_profile_create(body: AnalysisProfileRequest) -> dict[str, Any]:
 
 @app.put("/api/analysis-profiles/{profile_id}")
 def analysis_profile_update(profile_id: int, body: AnalysisProfileRequest) -> dict[str, Any]:
+    _require_admin()
     if not get_analysis_profile(DEFAULT_DB_PATH, profile_id):
         raise HTTPException(status_code=404, detail="Профиль не найден")
     try:
@@ -713,6 +1100,7 @@ def analysis_profile_update(profile_id: int, body: AnalysisProfileRequest) -> di
 
 @app.delete("/api/analysis-profiles/{profile_id}")
 def analysis_profile_delete(profile_id: int) -> dict[str, Any]:
+    _require_admin()
     if not get_analysis_profile(DEFAULT_DB_PATH, profile_id):
         raise HTTPException(status_code=404, detail="Профиль не найден")
     try:
@@ -728,6 +1116,7 @@ def analysis_profile_delete(profile_id: int) -> dict[str, Any]:
 
 @app.put("/api/analysis-profiles/{profile_id}/selected")
 def analysis_profile_select(profile_id: int) -> dict[str, Any]:
+    _require_admin()
     try:
         profile = set_last_analysis_profile(DEFAULT_DB_PATH, profile_id)
     except KeyError as error:
@@ -737,6 +1126,7 @@ def analysis_profile_select(profile_id: int) -> dict[str, Any]:
 
 @app.post("/api/analysis-profiles/{profile_id}/preview")
 def analysis_profile_preview(profile_id: int, body: AnalysisProfilePreviewRequest | None = None) -> dict[str, Any]:
+    _require_admin()
     profile = get_analysis_profile(DEFAULT_DB_PATH, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Профиль не найден")
@@ -759,6 +1149,7 @@ def analysis_profile_preview(profile_id: int, body: AnalysisProfilePreviewReques
 
 @app.post("/api/daily-summaries")
 def daily_summary_create(body: DailySummaryCreateRequest) -> dict[str, Any]:
+    _require_admin()
     profile = get_analysis_profile(DEFAULT_DB_PATH, body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Профиль не найден")
@@ -787,6 +1178,7 @@ def daily_summary_create(body: DailySummaryCreateRequest) -> dict[str, Any]:
 
 @app.get("/api/daily-summaries")
 def daily_summaries(limit: int = Query(default=30, ge=1, le=100)) -> dict[str, Any]:
+    _require_admin()
     items = list_daily_summary_runs(DEFAULT_DB_PATH, limit=limit)
     for item in items:
         if item.get("status") != "analyzing":
@@ -804,6 +1196,7 @@ def daily_summaries(limit: int = Query(default=30, ge=1, le=100)) -> dict[str, A
 
 @app.get("/api/daily-summaries/{run_id}")
 def daily_summary(run_id: int) -> dict[str, Any]:
+    _require_admin()
     value = get_daily_summary_run(DEFAULT_DB_PATH, run_id)
     if not value:
         raise HTTPException(status_code=404, detail="Сводка не найдена")
@@ -868,6 +1261,7 @@ def daily_summary(run_id: int) -> dict[str, Any]:
 
 @app.post("/api/daily-summaries/{run_id}/start")
 def daily_summary_start(run_id: int, body: DailySummaryStartRequest) -> dict[str, Any]:
+    _require_admin()
     run = get_daily_summary_run(DEFAULT_DB_PATH, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Сводка не найдена")
@@ -983,6 +1377,7 @@ def candidates(
     lead_categories: list[Literal["A", "B", "C", "D", "E", "unknown"]] = Query(default=[]),
     bant_filter: Literal["", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"] = "",
 ) -> dict[str, Any]:
+    _require_admin_or_rop()
     try:
         return search_candidates(
             entity_type=entity_type,
@@ -1003,6 +1398,7 @@ def candidates(
 
 @app.post("/api/candidates/search")
 def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
+    _require_admin_or_rop()
     try:
         if body.save:
             save_candidate_filter(
@@ -1044,6 +1440,8 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Укажите хотя бы один ID")
     if body.force_llm and not body.confirm_paid:
         raise HTTPException(status_code=409, detail="Для принудительного LLM-анализа подтвердите платный запуск")
+    paid = bool(body.force_llm or (body.analyze and body.confirm_paid) or (body.transcribe_audio and body.confirm_paid))
+    _require_analyze_scope(body.entity_type, ids, paid=paid)
     options = AnalyzeOptions(
         entity_type=body.entity_type,
         ids=ids,
@@ -1062,7 +1460,15 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
 
 @app.get("/api/jobs")
 def jobs(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
-    return {"items": list_jobs(limit)}
+    user = auth_current_user()
+    if str(user.get("role")) == "admin":
+        items = list_jobs(limit)
+    else:
+        # Fetch enough of the in-memory queue to apply entity-level ownership
+        # before truncating the response.  A foreign deal must not displace an
+        # actor's own visible job merely because it was created later.
+        items = [item for item in list_jobs(10000) if _job_is_visible(item, user)]
+    return {"items": items[:limit]}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1070,6 +1476,9 @@ def job_status(job_id: str) -> dict[str, Any]:
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    user = auth_current_user()
+    if not _job_is_visible(job, user):
+        raise HTTPException(status_code=403, detail="Job access forbidden")
     return job
 
 
@@ -1261,6 +1670,7 @@ def _lead_workflow_payload(lead_id: str, report: dict[str, Any] | None = None) -
 
 @app.get("/api/leads/{lead_id}/workflow")
 def lead_workflow(lead_id: str, report_id: int | None = None) -> dict[str, Any]:
+    _require_lead_access()
     report = get_ui_report(DEFAULT_DB_PATH, report_id) if report_id is not None else get_latest_ui_report(
         DEFAULT_DB_PATH, entity_type="lead", entity_id=str(lead_id)
     )
@@ -1271,6 +1681,7 @@ def lead_workflow(lead_id: str, report_id: int | None = None) -> dict[str, Any]:
 
 @app.put("/api/leads/{lead_id}/workflow")
 def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any]:
+    _require_lead_access()
     lead_id = str(lead_id)
     changes = body.model_dump(exclude_unset=True)
     existing = get_lead_workflow_state(DEFAULT_DB_PATH, lead_id)
@@ -1341,10 +1752,19 @@ def save_lead_workflow(lead_id: str, body: LeadWorkflowRequest) -> dict[str, Any
 
 @app.get("/api/reports")
 def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+    user = auth_current_user()
     items = list_ui_reports(DEFAULT_DB_PATH, limit=limit)
     # Keep list payload light: drop full analysis JSON.
     light = []
     for item in items:
+        entity_type = str(item.get("entity_type") or "")
+        entity_id = str(item.get("entity_id") or "")
+        if entity_type == "deal":
+            deal = get_deal(entity_id)
+            if deal is None or not deal_access(user, deal).can_open:
+                continue
+        elif str(user.get("role")) == "manager":
+            continue
         row = _enrich_report_row(item)
         row.pop("report_json", None)
         row.pop("report_meta", None)
@@ -1356,9 +1776,7 @@ def reports(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
 
 @app.get("/api/reports/{report_id}")
 def report_detail(report_id: int, include_markdown: bool = False) -> dict[str, Any]:
-    report = get_ui_report(DEFAULT_DB_PATH, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = require_report(report_id)
     report["share_token"] = get_or_create_ui_report_share_token(DEFAULT_DB_PATH, report_id)
     payload = _enrich_report_row(report)
     if str(report.get("entity_type") or "") == "lead":
@@ -1438,9 +1856,7 @@ def review_report(share_token: str) -> dict[str, Any]:
 
 @app.get("/api/reports/{report_id}/markdown")
 def report_markdown(report_id: int) -> dict[str, Any]:
-    report = get_ui_report(DEFAULT_DB_PATH, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = require_report(report_id)
     md_path = _report_markdown_path(report)
     if not md_path.exists():
         raise HTTPException(status_code=404, detail="Markdown report not found")
@@ -1453,9 +1869,8 @@ def report_markdown(report_id: int) -> dict[str, Any]:
 
 @app.post("/api/reports/{report_id}/rop-decision")
 def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
-    report = get_ui_report(DEFAULT_DB_PATH, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    _require_admin_or_rop()
+    report = require_report(report_id, action="edit")
     decision_id = save_rop_decision(
         DEFAULT_DB_PATH,
         report_id=report_id,
@@ -1506,8 +1921,8 @@ def report_decision(report_id: int, body: DecisionRequest) -> dict[str, Any]:
 
 @app.post("/api/reports/{report_id}/outcome")
 def report_outcome(report_id: int, body: OutcomeRequest) -> dict[str, Any]:
-    if not get_ui_report(DEFAULT_DB_PATH, report_id):
-        raise HTTPException(status_code=404, detail="Report not found")
+    _require_admin_or_rop()
+    require_report(report_id, action="edit")
     outcome_id = save_outcome(
         DEFAULT_DB_PATH,
         report_id=report_id,
@@ -1522,9 +1937,8 @@ def report_outcome(report_id: int, body: OutcomeRequest) -> dict[str, Any]:
 
 @app.post("/api/reports/{report_id}/qualification-review")
 def report_qualification_review(report_id: int, body: QualificationReviewRequest) -> dict[str, Any]:
-    report = get_ui_report(DEFAULT_DB_PATH, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    _require_admin_or_rop()
+    report = require_report(report_id, action="edit")
     if str(report.get("entity_type") or "") != "lead":
         raise HTTPException(status_code=400, detail="Qualification review is available only for leads")
     if body.is_correct and (body.issue_fields or body.corrected_statuses or body.corrected_category or body.comment):
@@ -1556,6 +1970,7 @@ def report_qualification_review(report_id: int, body: QualificationReviewRequest
 
 @app.get("/api/entity/{entity_type}/{entity_id}/analysis")
 def entity_analysis(entity_type: Literal["lead", "deal"], entity_id: str) -> dict[str, Any]:
+    _require_entity_access(entity_type, entity_id, action="open")
     path = workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_analysis.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Analysis JSON not found")
@@ -1579,11 +1994,13 @@ def compact_review(
     entity_type: Literal["lead", "deal"], entity_id: str, run_id: str | None = None
 ) -> dict[str, Any]:
     """Read only: load a saved full report and separate Compact runs."""
+    _require_entity_access(entity_type, entity_id, action="open")
     return review_payload(entity_type, entity_id, selected_run_id=run_id)
 
 
 @app.post("/api/entity/{entity_type}/{entity_id}/compact-runs")
 def compact_run(entity_type: Literal["lead", "deal"], entity_id: str) -> dict[str, Any]:
+    _require_entity_access(entity_type, entity_id, action="paid_ai")
     try:
         return start_compact_job(entity_type, entity_id)
     except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as error:
@@ -1599,6 +2016,7 @@ def compact_job_status(job_id: str) -> dict[str, Any]:
     job = get_compact_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Compact job not found")
+    _require_entity_access(str(job.get("entity_type") or ""), str(job.get("entity_id") or ""), action="open")
     return job
 
 
@@ -1606,6 +2024,7 @@ def compact_job_status(job_id: str) -> dict[str, Any]:
 def compact_evidence(
     entity_type: Literal["lead", "deal"], entity_id: str, evidence_id: str
 ) -> dict[str, Any]:
+    _require_entity_access(entity_type, entity_id, action="open")
     try:
         source = get_evidence(entity_type, entity_id, evidence_id)
     except (FileNotFoundError, ValueError, OSError, json.JSONDecodeError) as error:
@@ -1619,6 +2038,7 @@ def compact_evidence(
 def compact_feedback(
     entity_type: Literal["lead", "deal"], entity_id: str, run_id: str, body: CompactFeedbackRequest
 ) -> dict[str, Any]:
+    _require_entity_access(entity_type, entity_id, action="edit")
     run = get_compact_shadow_run(DEFAULT_DB_PATH, run_id)
     if not run or run.get("entity_type") != entity_type or str(run.get("entity_id")) != str(entity_id):
         raise HTTPException(status_code=404, detail="Compact run not found")
