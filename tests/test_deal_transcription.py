@@ -145,7 +145,19 @@ class DealTranscriptionRouteTests(unittest.TestCase):
         with patch(
             "api.app.transcribe_manager_voice",
             new=AsyncMock(return_value={"text": "текст из голоса"}),
-        ) as transcribe:
+        ) as transcribe, patch(
+            "api.app.authenticate_request",
+            return_value={
+                "id": 1,
+                "login": "admin",
+                "role": "admin",
+                "manager_id": None,
+                "is_active": True,
+            },
+        ), patch(
+            "api.app.require_deal",
+            return_value=(None, {"deal_id": "101", "manager_id": "10"}),
+        ):
             response = TestClient(app).post(
                 "/api/deal-control/voice/transcribe",
                 data={"deal_id": "101", "confirm_paid": "true", "language": "ru"},

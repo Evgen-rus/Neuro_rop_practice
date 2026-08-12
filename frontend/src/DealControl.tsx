@@ -35,7 +35,6 @@ import {
   type DealControlRecommendationState,
   type DealTaskGuidanceContent,
   type DealTaskGuidanceJob,
-  type AuthRole,
   type AuthUser,
   type JobState,
   type ManagerQuickHelpContent,
@@ -1042,6 +1041,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }
 
   if (!data?.scope.configured) {
+    if (user.role !== 'admin') {
+      return <main className="dc-setup"><section><h1>Контроль сделок пока не настроен</h1><p>Попросите администратора настроить рабочую выборку.</p>{onLogout ? <button className="dc-button" onClick={() => void onLogout()}>Выйти</button> : null}</section></main>
+    }
     return <main className="dc-setup">
       <section>
         <span className="dc-eyebrow">Первичная настройка</span>
@@ -1092,6 +1094,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         </button>
       </nav>
       {onExit ? <button className="dc-exit" onClick={onExit}><span>←</span><b>К основному интерфейсу</b></button> : null}
+      {onLogout ? <button className="dc-exit" onClick={() => void onLogout()}><span>⇥</span><b>Выйти</b></button> : null}
     </aside>
 
     <section className="dc-content">

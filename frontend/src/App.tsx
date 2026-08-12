@@ -504,7 +504,80 @@ function historyDateLabel(value: string): string {
 
 export default function App() {
   const shareToken = reviewTokenFromPath()
-  return shareToken ? <ReviewPage shareToken={shareToken} /> : <MainApp />
+  return shareToken ? <ReviewPage shareToken={shareToken} /> : <AuthenticatedApp />
+}
+
+function AuthenticatedApp() {
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loginValue, setLoginValue] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setUnauthorizedHandler(() => setUser(null))
+    void fetchCurrentUser()
+      .then((response) => {
+        if (!cancelled) setUser(response.user)
+      })
+      .catch((reason) => {
+        if (!cancelled && !(reason instanceof ApiError && reason.status === 401)) {
+          setError(reason instanceof Error ? reason.message : String(reason))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+      setUnauthorizedHandler(null)
+    }
+  }, [])
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSubmitting(true)
+    setError('')
+    try {
+      const response = await login(loginValue, password)
+      setPassword('')
+      setUser(response.user)
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 429) {
+        setError('Слишком много попыток входа. Подождите и попробуйте снова.')
+      } else {
+        setError(reason instanceof Error ? reason.message : String(reason))
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function signOut() {
+    try {
+      await logout()
+    } finally {
+      setUser(null)
+      setPassword('')
+    }
+  }
+
+  if (loading) return <main className="dc-shell dc-loading"><span className="dc-spinner" />Проверяем сессию…</main>
+  if (!user) {
+    return <main className="review-page">
+      <form className="shared-review-card" onSubmit={submitLogin}>
+        <h1>Вход в Neuro ROP</h1>
+        <p>Введите личный логин и пароль.</p>
+        <label>Логин<input autoComplete="username" value={loginValue} onChange={(event) => setLoginValue(event.target.value)} required /></label>
+        <label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+        {error ? <div className="alert error">{error}</div> : null}
+        <button className="btn primary" type="submit" disabled={submitting}>{submitting ? 'Входим…' : 'Войти'}</button>
+      </form>
+    </main>
+  }
+  return <MainApp user={user} onLogout={signOut} />
 }
 
 function ReviewPage({ shareToken }: { shareToken: string }) {
@@ -570,7 +643,7 @@ function SharedReportCard({ report }: { report: UiReportDetail }) {
   )
 }
 
-function MainApp() {
+function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<void> }) {
   const [tab, setTab] = useState<Tab>('deals')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
@@ -1245,10 +1318,10 @@ function MainApp() {
       : []
 
   if (tab === 'deals') {
-    return <DealControl onExit={() => {
+    return <DealControl user={user} onLogout={onLogout} onExit={user.role === 'admin' ? () => {
       setTab('summary')
       void loadHistory()
-    }} />
+    } : undefined} />
   }
 
   return (

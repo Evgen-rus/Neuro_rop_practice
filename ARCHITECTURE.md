@@ -2,7 +2,7 @@
 
 ## Назначение и статус
 
-Локальный ROP Assistant помогает руководителю продаж разбирать лиды и сделки Bitrix24: собирает доступный CRM-контекст, при необходимости локально транскрибирует записи, строит валидированный LLM-анализ и показывает его в локальном UI. Это MVP без авторизации и многопользовательского режима; FastAPI и UI предназначены для `localhost`.
+ROP Assistant помогает руководителю продаж разбирать лиды и сделки Bitrix24: собирает доступный CRM-контекст, при необходимости локально транскрибирует записи, строит валидированный LLM-анализ и показывает его в UI. Пилот поддерживает пользователей `admin`/`rop`/`manager`, серверные SQLite-сессии и ограничение сделок по роли; временная VPS-публикация дополнительно остаётся за Nginx Basic Auth.
 
 Документ — рабочая карта для агента, а не runbook и не API-справочник. Перед изменением прочитай разделы **Source of Truth**, **Critical Invariants** и соответствующую строку в **Where to change code**. Если документ расходится с кодом или конфигурацией, верен код; исправь карту только при изменении архитектурного факта.
 
@@ -16,6 +16,7 @@
 | Фоновые задания и запуск CLI | `api/jobs.py`; для compact — `api/compact_shadow.py` |
 | Кандидаты, профили и daily summary | `api/candidates.py`, `storage/rop_db.py` |
 | Локальное состояние SQLite | `storage/rop_db.py` |
+| Пользователи, сессии и HTTP-авторизация | `storage/rop_db.py`, `api/auth.py`, `api/access.py`, `api/app.py` |
 | Bitrix REST, privacy-safe usage trace и customer history | `bitrix/client.py`, `bitrix/usage_trace.py`, `bitrix/customer_history.py` |
 | Подготовка lead/deal workspaces | `bitrix/leads/*`, `bitrix/deals/*`, `bitrix/workspace.py`, `bitrix/context_diagnostics.py` |
 | Дополнительный CRM-контекст полного анализа сделки | `bitrix/deals/1_fetch_deals_context.py`, `bitrix/deals/4_build_deals_llm_context.py`, `openai_api/llm/analyze_deal.py` |
@@ -36,6 +37,7 @@
 - Код и конфигурация важнее документации. Не придумывай отсутствующие интеграции, таблицы, гарантии или тесты.
 - Bitrix-контур только читает CRM. `BitrixReadOnlyClient` допускает HTTP POST как транспорт REST-вызова, но не должен получать CRM write-методы.
 - `.env`, webhook, API-ключи, персональные CRM-данные, аудио, транскрипты и содержимое `reports/` — чувствительные локальные данные. Их нельзя печатать, коммитить или публиковать.
+- HTTP-идентичность берётся только из серверной сессии; `role`, `manager_id` и `source_role` из тела или query-параметров не являются полномочиями. Токен сессии хранится только в виде digest, cookie — `HttpOnly`, `Secure`, `SameSite=Lax`; чужая строка менеджера остаётся облегчённой и не открывается.
 - Все сохраняемые тексты — UTF-8; JSON с кириллицей сохраняется с `ensure_ascii=False`. ASCII-safe допустим только для строки transport-progress до её разбора.
 - Lead и deal — разные контракты: у них отдельные context builders, prompts, validators и renderers. Общая механика не разрешает смешивать поля или переиспользовать renderer одного контура в другом.
 - Все бизнес-даты и сроки рассчитываются и отображаются в `Europe/Moscow`; локальная временная зона браузера или машины не должна менять день, срок или сортировку.
@@ -119,6 +121,7 @@ Compact run доступен только для уже сохранённых f
 | Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py` | progress events и tests retry/validation |
 | Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
+| Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, auth tests |
 | Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
 | Чек-лист дожима, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации и AI-подсказка | `api/deal_control.py`, `api/deal_task_guidance.py`, `bitrix/customer_history.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx` |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
@@ -138,7 +141,7 @@ Compact run доступен только для уже сохранённых f
 
 ## Known gaps and pitfalls
 
-- API CORS настроен для localhost; authentication и multi-user tenancy нет.
+- Для пилота есть role-based auth и manager scope, но нет frontend-админки пользователей: учётные записи управляются через `scripts/manage_user.py`.
 - Неполные или недоступные Bitrix источники фиксируются в diagnostics. `Access denied` на конкретном REST-методе обычно отражает права webhook/user, а не renderer failure.
 - `latest` transcript выбирается по времени файла. При нескольких записях предпочитай явно заданный режим/список transcript, если задача требует определённого звонка.
 - `not_confirmed`, `unknown` и `negative` — разные состояния. Не превращай недостаток evidence в отказ клиента.
