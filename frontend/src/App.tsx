@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import './index.css'
 import { DealControl } from './DealControl'
@@ -31,12 +31,15 @@ import {
   fetchCompactEvidence,
   fetchCompactJob,
   fetchCompactReview,
+  fetchCurrentUser,
   fetchJob,
   fetchPipelines,
   fetchReport,
   fetchReviewReport,
   fetchReportMarkdown,
   fetchReports,
+  login,
+  logout,
   previewAnalysisProfile,
   saveDecision,
   saveLeadWorkflow,
@@ -48,7 +51,10 @@ import {
   startDailySummary,
   startAnalyze,
   startCompactRun,
+  setUnauthorizedHandler,
   updateAnalysisProfile,
+  ApiError,
+  type AuthUser,
   type CompactReview,
 } from './api'
 

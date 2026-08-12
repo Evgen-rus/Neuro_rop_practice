@@ -35,6 +35,8 @@ import {
   type DealControlRecommendationState,
   type DealTaskGuidanceContent,
   type DealTaskGuidanceJob,
+  type AuthRole,
+  type AuthUser,
   type JobState,
   type ManagerQuickHelpContent,
   type ManagerQuickHelpEntry,
@@ -461,14 +463,15 @@ function appendVoiceText(current: string, transcript: string) {
   return `${current.trim()}\n${next}`
 }
 
-export function DealControl({ onExit }: { onExit?: () => void }) {
+export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; onLogout?: () => Promise<void>; user: AuthUser }) {
+  const defaultView: DealControlView = user.role === 'manager' ? 'dashboard' : user.role === 'rop' ? 'rop' : 'dashboard'
   const [data, setData] = useState<DealControlDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [view, setView] = useState<DealControlView>('dashboard')
+  const [view, setView] = useState<DealControlView>(defaultView)
   const [selectedId, setSelectedId] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [managerFilter, setManagerFilter] = useState('')
@@ -510,7 +513,10 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
       setInitialIds(response.scope.initial_deal_ids.join('\n'))
       setManagerIds(response.scope.manager_ids.join('\n'))
       setPipelineId(response.scope.pipeline_id || '15')
-      setSelectedId((current) => current || response.deals[0]?.deal_id || '')
+      setSelectedId((current) => {
+        if (current && response.deals.some((deal) => deal.deal_id === current && deal.can_open)) return current
+        return response.deals.find((deal) => deal.can_open)?.deal_id || ''
+      })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -700,7 +706,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
 
   useEffect(() => {
     const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))
-    if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals[0]?.deal_id || '')
+    if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals.find((deal) => deal.can_open)?.deal_id || '')
   }, [selectedId, visibleDeals])
 
   useEffect(() => {
@@ -727,7 +733,10 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     try {
       const response = await syncDealControl()
       setData(response)
-      setSelectedId((current) => current || response.deals[0]?.deal_id || '')
+      setSelectedId((current) => {
+        if (current && response.deals.some((deal) => deal.deal_id === current && deal.can_open)) return current
+        return response.deals.find((deal) => deal.can_open)?.deal_id || ''
+      })
       setNotice(response.sync_message || 'Данные из Bitrix обновлены')
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason)
@@ -740,6 +749,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function saveScope() {
+    if (user.role !== 'admin') return
     setError('')
     try {
       await saveDealControlScope({
@@ -758,6 +768,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     deal: DealControlDeal,
     patch: Partial<Pick<DealControlDeal, 'probability' | 'expected_payment_period' | 'next_control_at'>>,
   ) {
+    if (!deal.can_edit) return
     setError('')
     try {
       await updateDealControlDeal(deal.deal_id, {
@@ -774,7 +785,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function addTask() {
-    if (!selected) return
+    if (!selected?.can_edit) return
     setError('')
     try {
       await createDealControlTask(selected.deal_id, {
@@ -794,6 +805,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function adoptBitrixTask(deal: DealControlDeal, bitrixTask: DealControlBitrixTask) {
+    if (!deal.can_edit) return
     const expected = 'Зафиксировать подтверждённый результат и следующий шаг'
     if (!bitrixTask.deadline) {
       setSelectedId(deal.deal_id)
@@ -820,6 +832,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function patchTask(task: DealControlTask, patch: Parameters<typeof updateDealControlTask>[1]) {
+    if (!selected?.can_edit) return
     setError('')
     try {
       await updateDealControlTask(task.id, patch)
@@ -830,6 +843,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function toggleBitrixCompletion(deal: DealControlDeal, task: DealControlBitrixTask) {
+    if (!deal.can_edit) return
     setError('')
     try {
       const completed = task.completion_state !== 'local'
@@ -837,7 +851,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         deal.deal_id,
         task.activity_id,
         completed,
-        view === 'manager' ? 'manager' : 'rop',
       )
       setNotice(completed ? 'Задача отмечена выполненной в приложении.' : 'Задача возвращена в работу.')
       await reload()
@@ -847,6 +860,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function toggleChecklistItem(deal: DealControlDeal, itemId: string, completed: boolean) {
+    if (!deal.can_edit) return
     setError('')
     try {
       await updateDealControlChecklistItemCompletion(deal.deal_id, itemId, completed)
@@ -858,6 +872,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function confirmMatch(task: DealControlTask) {
+    if (!selected?.can_edit) return
     try {
       await confirmDealControlTaskCrmMatch(task.id)
       setNotice('Совпадение с задачей Bitrix подтверждено. Бизнес-результат по-прежнему отмечается отдельно.')
@@ -868,6 +883,7 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function reviewCrmFact(task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') {
+    if (!selected?.can_edit) return
     setError('')
     try {
       await reviewDealControlCrmFact(task.id, factId, { review_status: reviewStatus })
@@ -904,6 +920,10 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function runAnalyzeDeal(deal: DealControlDeal, confirmPaid = false) {
+    if (!deal.can_run_paid_ai) {
+      setError('AI-действие недоступно для этой роли.')
+      return
+    }
     if (analysisJob && ['queued', 'running'].includes(analysisJob.status)) return
     setError('')
     setNotice('')
@@ -939,6 +959,10 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
   }
 
   async function prepareManager(task: DealControlTask) {
+    if (!selected?.can_run_paid_ai) {
+      setError('AI-действие недоступно для этой роли.')
+      return
+    }
     if (guidanceJob && ['queued', 'running'].includes(guidanceJob.status)) return
     setError('')
     setNotice('')
@@ -963,7 +987,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
     await patchTask(rescheduleTask, {
       due_at: rescheduleAt,
       reschedule_reason: rescheduleReason.trim() || null,
-      source_role: view === 'manager' ? 'manager' : 'rop',
     })
     setRescheduleTask(null)
     setRescheduleAt('')
@@ -1005,7 +1028,6 @@ export function DealControl({ onExit }: { onExit?: () => void }) {
         evidence_kind: outcomeContact === 'confirmed_contact'
           ? view === 'manager' ? 'manager_confirmation' : 'rop_confirmation'
           : null,
-        source_role: view === 'manager' ? 'manager' : 'rop',
       })
       setOutcomeTask(null)
       setNotice('Результат сохранён отдельно от отметки Bitrix. РОП увидит контакт, итог и следующий шаг.')

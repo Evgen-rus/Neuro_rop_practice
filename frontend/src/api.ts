@@ -1,5 +1,39 @@
 export type Priority = 'high' | 'medium' | 'low'
 
+export type AuthRole = 'admin' | 'rop' | 'manager'
+
+export type AuthUser = {
+  id: number
+  login: string
+  role: AuthRole
+  manager_id: string | null
+  is_active: true
+}
+
+export type AuthMeResponse = {
+  authenticated: true
+  user: AuthUser
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  readonly retryAfter: string | null
+
+  constructor(message: string, status: number, retryAfter: string | null = null) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.retryAfter = retryAfter
+  }
+}
+
+type AuthEventHandler = () => void
+let unauthorizedHandler: AuthEventHandler | null = null
+
+export function setUnauthorizedHandler(handler: AuthEventHandler | null) {
+  unauthorizedHandler = handler
+}
+
 export type LeadQualificationSummary = {
   category: 'A' | 'B' | 'C' | 'D' | 'E' | 'unknown'
   overall_status: string
@@ -572,6 +606,12 @@ export type DealControlDeal = {
   title?: string | null
   manager_id?: string | null
   manager_name?: string | null
+  ownership: 'own' | 'foreign' | 'unassigned'
+  is_own: boolean
+  read_only: boolean
+  can_open: boolean
+  can_edit: boolean
+  can_run_paid_ai: boolean
   stage_id?: string | null
   stage_name?: string | null
   pipeline_id?: string | null
@@ -739,26 +779,103 @@ type ManagerSituationResponse = {
   situation?: ManagerSituationState
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+type ApiOptions = {
+  suppressUnauthorizedEvent?: boolean
+}
+
+async function api<T>(path: string, init?: RequestInit, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(init?.headers)
   if (!(init?.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   const response = await fetch(path, {
     ...init,
+    credentials: 'include',
     headers,
   })
   if (!response.ok) {
     let detail = response.statusText
     try {
       const payload = await response.json()
-      detail = payload.detail || JSON.stringify(payload)
+      detail = typeof payload.detail === 'string' ? payload.detail : response.statusText
     } catch {
       // ignore
     }
-    throw new Error(detail)
+    if (response.status === 401 && !options.suppressUnauthorizedEvent) unauthorizedHandler?.()
+    const message = response.status === 403
+      ? 'Недостаточно прав для этого действия'
+      : detail || 'Request failed'
+    throw new ApiError(message, response.status, response.headers.get('Retry-After'))
   }
-  return response.json() as Promise<T>
+  if (response.status === 204) return undefined as T
+  const body = await response.text()
+  return (body ? JSON.parse(body) : undefined) as T
+}
+
+export function fetchCurrentUser() {
+  return api<AuthMeResponse>('/api/auth/me')
+}
+
+export function login(loginValue: string, password: string) {
+  return api<AuthMeResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ login: loginValue, password }),
+  }, { suppressUnauthorizedEvent: true })
+}
+
+export function logout() {
+  return api<void>('/api/auth/logout', { method: 'POST' }, { suppressUnauthorizedEvent: true })
+}
+
+function normalizeDealControlDashboard(payload: DealControlDashboard): DealControlDashboard {
+  const emptyCommunications: DealControlCommunicationsToday = {
+    date: '',
+    available: false,
+    target: 0,
+    completed: 0,
+    progress_percent: 0,
+    calls: 0,
+    messages: 0,
+    duration_seconds: 0,
+    items: [],
+  }
+  const emptyChecklist: DealControlChecklist = {
+    items: [],
+    completed: 0,
+    total: 0,
+    progress_percent: 0,
+  }
+  const emptyCoaching: DealControlDeal['coaching'] = {
+    strengths: [],
+    weaknesses: [],
+    known: [],
+    unknowns: [],
+    questions: [],
+    script_variants: [],
+    crm_checklist: [],
+  }
+  const deals = (Array.isArray(payload.deals) ? payload.deals : []).map((deal) => {
+    const foreignProjection = deal.read_only === true && deal.can_open !== true
+    return {
+      ...deal,
+      ownership: deal.ownership === 'own' || deal.ownership === 'foreign' || deal.ownership === 'unassigned'
+        ? deal.ownership
+        : 'unassigned',
+      is_own: deal.is_own === true,
+      read_only: deal.read_only === true,
+      can_open: deal.can_open === true,
+      can_edit: deal.can_edit === true,
+      can_run_paid_ai: deal.can_run_paid_ai === true,
+      bitrix_tasks: foreignProjection ? [] : (Array.isArray(deal.bitrix_tasks) ? deal.bitrix_tasks : []),
+      communications_today: foreignProjection ? emptyCommunications : (deal.communications_today || emptyCommunications),
+      tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
+      current_task: foreignProjection ? null : (deal.current_task || null),
+      manager_situation: foreignProjection ? null : (deal.manager_situation || null),
+      checklist: foreignProjection ? emptyChecklist : (deal.checklist || emptyChecklist),
+      coaching: foreignProjection ? emptyCoaching : (deal.coaching || emptyCoaching),
+    }
+  })
+  return { ...payload, deals }
 }
 
 export function fetchPipelines() {
@@ -815,7 +932,7 @@ export function previewAnalysisProfile(
 }
 
 export function fetchDealControl() {
-  return api<DealControlDashboard>('/api/deal-control')
+  return api<DealControlDashboard>('/api/deal-control').then(normalizeDealControlDashboard)
 }
 
 export function confirmManagerSituation(dealId: string) {
@@ -988,7 +1105,7 @@ export function recordManagerCommunicationCompleted(dealId: string, quickHelpId:
 }
 
 export function syncDealControl() {
-  return api<DealControlDashboard>('/api/deal-control/sync', { method: 'POST' })
+  return api<DealControlDashboard>('/api/deal-control/sync', { method: 'POST' }).then(normalizeDealControlDashboard)
 }
 
 export function saveDealControlScope(body: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string }) {
@@ -1020,7 +1137,7 @@ export function createDealControlTask(dealId: string, body: {
 
 export function updateDealControlTask(taskId: number, body: Partial<Pick<DealControlTask,
   'task_text' | 'touch_type' | 'expected_result' | 'due_at' | 'local_status' | 'business_result_status' | 'business_result_note'
->> & { reschedule_reason?: string | null; source_role?: 'manager' | 'rop' | null }) {
+>> & { reschedule_reason?: string | null }) {
   return api<DealControlTask>(`/api/deal-control/tasks/${taskId}`, {
     method: 'PUT', body: JSON.stringify(body),
   })
@@ -1030,7 +1147,6 @@ export function updateDealControlBitrixTaskCompletion(
   dealId: string,
   activityId: string,
   completed: boolean,
-  sourceRole: 'manager' | 'rop',
 ) {
   return api<{ ok: boolean; state: {
     activity_id: string
@@ -1040,7 +1156,7 @@ export function updateDealControlBitrixTaskCompletion(
     local_completed_by?: 'manager' | 'rop' | null
   } }>(`/api/deal-control/bitrix-tasks/${encodeURIComponent(activityId)}/completion`, {
     method: 'PUT',
-    body: JSON.stringify({ deal_id: dealId, completed, source_role: sourceRole }),
+    body: JSON.stringify({ deal_id: dealId, completed }),
   })
 }
 
@@ -1055,9 +1171,8 @@ export function updateDealControlChecklistItemCompletion(
   )
 }
 
-export function fetchDealControlMetrics(managerId?: string) {
-  const query = managerId ? `?manager_id=${encodeURIComponent(managerId)}` : ''
-  return api<DealControlMetrics>(`/api/deal-control/metrics${query}`)
+export function fetchDealControlMetrics() {
+  return api<DealControlMetrics>('/api/deal-control/metrics')
 }
 
 export function confirmDealControlTaskCrmMatch(taskId: number) {
@@ -1072,7 +1187,6 @@ export function saveDealControlTaskOutcome(taskId: number, body: {
   next_step_at?: string | null
   evidence_kind?: DealControlTaskOutcome['evidence_kind']
   evidence_id?: string | null
-  source_role: DealControlTaskOutcome['source_role']
 }) {
   return api<DealControlTaskOutcome>(`/api/deal-control/tasks/${taskId}/outcomes`, {
     method: 'POST', body: JSON.stringify(body),
