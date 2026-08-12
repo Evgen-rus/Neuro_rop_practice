@@ -7,6 +7,9 @@ from openai_api.llm.analyze_deal import (
     DEAL_ID_SECTION_MARKER,
     DEAL_PROMPT_CACHE_KEY,
     build_prompt,
+    render_client_communication_profile_section,
+    render_cost_section,
+    render_report,
 )
 from openai_api.llm.llm_client import prompt_prefix_before
 from openai_api.llm.validation import (
@@ -108,6 +111,34 @@ class DealClientCommunicationProfileTests(unittest.TestCase):
         self.assertNotIn("История первой сделки", first_prefix)
         self.assertNotIn("Транскрипт первой сделки", first_prefix)
         self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v2")
+
+    def test_markdown_renders_disc_section_before_cost(self) -> None:
+        supported = render_client_communication_profile_section(supported_profile())
+        self.assertIn("## Коммуникационный профиль клиента (DISC)", supported)
+        self.assertIn("Основной стиль: D", supported)
+        self.assertIn("Вторичный стиль: C", supported)
+        self.assertIn("Коротко и по-деловому.", supported)
+
+        insufficient = render_client_communication_profile_section(insufficient_profile())
+        self.assertIn("insufficient_evidence", insufficient)
+        self.assertIn("Недостаточно уверенно отделена речь клиента.", insufficient)
+        self.assertIn("Основной стиль: не определено", insufficient)
+
+        missing = render_client_communication_profile_section(None)
+        self.assertIn("профиль отсутствует в анализе", missing)
+
+        report = render_report(
+            {
+                "deal_id": "101",
+                "client_communication_profile": supported_profile(),
+            },
+            metadata={"estimated_cost": {"model": "test", "estimated_cost_usd": 0.1}},
+        )
+        disc_pos = report.index("## Коммуникационный профиль клиента (DISC)")
+        cost_pos = report.index("## Стоимость анализа")
+        self.assertLess(disc_pos, cost_pos)
+        self.assertIn("Основной стиль: D", report)
+        self.assertIn(render_cost_section({"estimated_cost": {"model": "test"}}).splitlines()[0], report)
 
 
 if __name__ == "__main__":

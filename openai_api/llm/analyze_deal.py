@@ -715,6 +715,62 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
 """
 
 
+def render_client_communication_profile_section(profile: Any) -> str:
+    """Compact DISC block for the Markdown report; always shown before cost."""
+
+    def human_value(value: Any) -> str:
+        if value is True:
+            return "да"
+        if value is False:
+            return "нет"
+        if value is None or value == "":
+            return "не определено"
+        return str(value)
+
+    def bullet_list(values: Any) -> str:
+        if not isinstance(values, list) or not values:
+            return "- Нет данных"
+        return "\n".join(f"- {item}" for item in values)
+
+    if not isinstance(profile, dict) or not profile:
+        return """## Коммуникационный профиль клиента (DISC)
+
+- Статус: недостаточно данных
+- Основной стиль: не определено
+- Вторичный стиль: не определено
+- Причина: профиль отсутствует в анализе"""
+
+    guidance = profile.get("recommended_communication")
+    if not isinstance(guidance, dict):
+        guidance = {}
+    insufficient_reason = profile.get("insufficient_reason")
+    reason_line = (
+        f"\n- Причина недостаточности: {insufficient_reason}"
+        if isinstance(insufficient_reason, str) and insufficient_reason.strip()
+        else ""
+    )
+    return f"""## Коммуникационный профиль клиента (DISC)
+
+- Статус: {human_value(profile.get('status'))}
+- Основной стиль: {human_value(profile.get('primary_style'))}
+- Вторичный стиль: {human_value(profile.get('secondary_style'))}
+- Уверенность профиля: {human_value(profile.get('profile_confidence'))}
+- Уверенность разделения ролей: {human_value(profile.get('role_separation_confidence'))}{reason_line}
+
+Наблюдения:
+
+{bullet_list(profile.get('evidence'))}
+
+Как адаптировать подачу:
+
+- Тон: {human_value(guidance.get('tone'))}
+- Структура: {human_value(guidance.get('structure'))}
+- Акцент:
+{bullet_list(guidance.get('emphasize'))}
+- Избегать:
+{bullet_list(guidance.get('avoid'))}"""
+
+
 def render_cost_section(metadata: dict[str, Any] | None) -> str:
     cost = (metadata or {}).get("estimated_cost") or {}
     if not cost:
@@ -1126,6 +1182,8 @@ def render_report(
 
 - Требуется: {human_value(rop.get('required'))}
 - Что проконтролировать: {rop.get('text', 'не указано')}
+
+{render_client_communication_profile_section(analysis.get('client_communication_profile'))}
 
 {render_cost_section(metadata)}
 """
