@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import api.app as api_app
+import api.access as api_access
 import api.jobs as jobs
 from storage.rop_db import (
     connect,
@@ -83,7 +84,9 @@ class LeadWorkflowApiTests(unittest.TestCase):
                 technical_log={"internal": "not for review"},
                 model_context={"history_text": "not for review"},
             )
-            with patch.object(api_app, "DEFAULT_DB_PATH", db_path):
+            with patch.object(api_app, "DEFAULT_DB_PATH", db_path), patch.object(
+                api_access.storage, "DEFAULT_DB_PATH", db_path
+            ), patch.object(api_access, "require_deal"):
                 full = api_app.report_detail(report_id)
                 share_token = full["share_token"]
                 review = api_app.review_report(share_token)
