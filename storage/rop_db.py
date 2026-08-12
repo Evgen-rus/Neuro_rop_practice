@@ -8,11 +8,13 @@ the change-detection layer needs.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
 import sqlite3
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,10 @@ from setup import BASE_DIR, MSK_TZ
 
 
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
+
+AUTH_ROLES = frozenset({"admin", "rop", "manager"})
+_UNSET = object()
+AUTH_UNSET = _UNSET
 
 
 class RopConnection(sqlite3.Connection):
@@ -210,6 +216,58 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 migration_id TEXT NOT NULL PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS auth_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                login TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('admin', 'rop', 'manager')),
+                manager_id TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK(
+                    role = 'manager'
+                    OR manager_id IS NULL
+                ),
+                CHECK(
+                    role != 'manager'
+                    OR is_active = 0
+                    OR (manager_id IS NOT NULL AND length(trim(manager_id)) > 0)
+                )
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_active_manager
+                ON auth_users(manager_id)
+                WHERE role = 'manager'
+                  AND is_active = 1
+                  AND manager_id IS NOT NULL
+                  AND length(trim(manager_id)) > 0;
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_digest TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES auth_users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
+                ON auth_sessions(user_id, revoked_at, expires_at);
+
+            CREATE TABLE IF NOT EXISTS auth_login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                login TEXT NOT NULL,
+                client_key TEXT,
+                attempted_at TEXT NOT NULL,
+                succeeded INTEGER NOT NULL CHECK(succeeded IN (0, 1))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_auth_login_attempts_lookup
+                ON auth_login_attempts(login, client_key, attempted_at DESC);
 
             CREATE TABLE IF NOT EXISTS ui_candidate_filters (
                 profile_key TEXT NOT NULL PRIMARY KEY,
@@ -656,6 +714,695 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             conn.execute(
                 "INSERT INTO local_migrations (migration_id, applied_at) VALUES (?, ?)",
                 (migration_id, utcish_now()),
+            )
+
+        auth_migration_id = "2026-08-12-auth-core"
+        if conn.execute(
+            "SELECT 1 FROM local_migrations WHERE migration_id = ?",
+            (auth_migration_id,),
+        ).fetchone() is None:
+            conn.execute(
+                "INSERT INTO local_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (auth_migration_id, utcish_now()),
+            )
+
+
+def _auth_password_hasher() -> Any:
+    """Load the Argon2-backed password helper only when auth is used."""
+
+    from pwdlib import PasswordHash
+
+    return PasswordHash.recommended()
+
+
+@lru_cache(maxsize=1)
+def _cached_auth_password_hasher() -> Any:
+    return _auth_password_hasher()
+
+
+def hash_auth_password(password: str) -> str:
+    """Hash a raw password with pwdlib's recommended Argon2 configuration."""
+
+    if not isinstance(password, str) or not password:
+        raise ValueError("Пароль должен быть непустой строкой")
+    return str(_cached_auth_password_hasher().hash(password))
+
+
+def verify_auth_password(password: str, password_hash: str) -> bool:
+    """Verify a raw password without exposing or persisting it."""
+
+    if not isinstance(password, str) or not isinstance(password_hash, str):
+        return False
+    if not password or not password_hash:
+        return False
+    try:
+        return bool(_cached_auth_password_hasher().verify(password, password_hash))
+    except Exception:
+        # A malformed persisted hash must fail closed, not break login handling.
+        return False
+
+
+def digest_auth_token(token: str) -> str:
+    """Return the digest stored for an opaque session token."""
+
+    if not isinstance(token, str) or not token:
+        raise ValueError("Токен сессии должен быть непустой строкой")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _normalize_auth_login(login: str) -> str:
+    value = str(login or "").strip().casefold()
+    if not value:
+        raise ValueError("Логин не может быть пустым")
+    if len(value) > 254:
+        raise ValueError("Логин слишком длинный")
+    return value
+
+
+def _normalize_auth_manager_id(manager_id: object) -> str | None:
+    if manager_id is None:
+        return None
+    value = str(manager_id).strip()
+    return value or None
+
+
+def _normalize_auth_client_key(client_key: object) -> str | None:
+    if client_key is None:
+        return None
+    value = str(client_key).strip()
+    return value or None
+
+
+def _validate_auth_role(role: str) -> str:
+    value = str(role or "").strip().casefold()
+    if value not in AUTH_ROLES:
+        raise ValueError("Недопустимая роль пользователя")
+    return value
+
+
+def _resolve_auth_password_hash(
+    *,
+    password_hash: str | None,
+    password: str | None,
+) -> str:
+    if password_hash is not None and password is not None:
+        raise ValueError("Передайте password или password_hash, но не оба")
+    if password_hash is None:
+        if password is None:
+            raise ValueError("Не задан пароль или его хэш")
+        password_hash = hash_auth_password(password)
+    value = str(password_hash)
+    if not value:
+        raise ValueError("Хэш пароля не может быть пустым")
+    return value
+
+
+def _parse_auth_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Некорректная дата auth") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=MSK_TZ)
+    return parsed
+
+
+def _auth_now(now: str | None = None) -> str:
+    return now if now is not None else utcish_now()
+
+
+def _begin_auth_write(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+
+
+def _active_admin_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM auth_users WHERE role = 'admin' AND is_active = 1"
+    ).fetchone()
+    return int(row["count"] if row is not None else 0)
+
+
+def _validate_auth_user_state(*, role: str, manager_id: str | None, is_active: bool) -> None:
+    if role != "manager" and manager_id is not None:
+        raise ValueError("manager_id допустим только для роли manager")
+    if role == "manager" and is_active and not manager_id:
+        raise ValueError("Активному manager нужен непустой manager_id")
+
+
+def _auth_user_row(
+    row: sqlite3.Row | None,
+    *,
+    include_password_hash: bool = False,
+) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["is_active"] = bool(value.get("is_active"))
+    if not include_password_hash:
+        value.pop("password_hash", None)
+    return value
+
+
+def _get_auth_user_row(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int | None = None,
+    login: str | None = None,
+) -> sqlite3.Row | None:
+    if (user_id is None) == (login is None):
+        raise ValueError("Укажите ровно один идентификатор пользователя")
+    if user_id is not None:
+        return conn.execute(
+            "SELECT * FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM auth_users WHERE login = ?",
+        (_normalize_auth_login(str(login)),),
+    ).fetchone()
+
+
+def _translate_auth_integrity_error(exc: sqlite3.IntegrityError) -> ValueError:
+    message = str(exc).lower()
+    if "auth_users.login" in message:
+        return ValueError("Логин уже занят")
+    if "idx_auth_users_active_manager" in message or "auth_users.manager_id" in message:
+        return ValueError("Этот manager_id уже связан с активным пользователем")
+    if "auth_users" in message and "check constraint" in message:
+        return ValueError("Нарушено ограничение пользователя")
+    return ValueError("Не удалось сохранить auth-пользователя")
+
+
+def create_auth_user(
+    db_path: str | Path,
+    *,
+    login: str,
+    role: str,
+    password: str | None = None,
+    password_hash: str | None = None,
+    manager_id: str | None = None,
+    is_active: bool = True,
+) -> dict[str, Any]:
+    """Create a user and enforce auth invariants in one SQLite transaction.
+
+    The backend normally passes ``password_hash`` or uses the compatibility
+    ``password`` argument through the CLI.  A raw password is never inserted
+    into SQLite; it is immediately converted to an Argon2id hash.
+    """
+
+    normalized_login = _normalize_auth_login(login)
+    normalized_role = _validate_auth_role(role)
+    normalized_manager_id = _normalize_auth_manager_id(manager_id)
+    active = bool(is_active)
+    _validate_auth_user_state(
+        role=normalized_role,
+        manager_id=normalized_manager_id,
+        is_active=active,
+    )
+    resolved_hash = _resolve_auth_password_hash(
+        password_hash=password_hash,
+        password=password,
+    )
+    now = utcish_now()
+    init_db(db_path)
+    try:
+        with connect(db_path) as conn:
+            _begin_auth_write(conn)
+            if _active_admin_count(conn) == 0 and not (
+                normalized_role == "admin" and active
+            ):
+                raise ValueError("Сначала создайте активного администратора")
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO auth_users (
+                        login, password_hash, role, manager_id, is_active, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        normalized_login,
+                        resolved_hash,
+                        normalized_role,
+                        normalized_manager_id,
+                        int(active),
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise _translate_auth_integrity_error(exc) from exc
+            row = conn.execute(
+                "SELECT * FROM auth_users WHERE id = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+    except sqlite3.IntegrityError as exc:
+        raise _translate_auth_integrity_error(exc) from exc
+    result = _auth_user_row(row, include_password_hash=True)
+    if result is None:
+        raise ValueError("Не удалось создать пользователя")
+    return result
+
+
+def get_auth_user(
+    db_path: str | Path,
+    *,
+    user_id: int | None = None,
+    login: str | None = None,
+    include_password_hash: bool = False,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = _get_auth_user_row(conn, user_id=user_id, login=login)
+    return _auth_user_row(row, include_password_hash=include_password_hash)
+
+
+def list_auth_users(db_path: str | Path) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute("SELECT * FROM auth_users ORDER BY id").fetchall()
+    return [item for row in rows if (item := _auth_user_row(row)) is not None]
+
+
+def update_auth_user(
+    db_path: str | Path,
+    *,
+    user_id: int,
+    role: str | None = None,
+    manager_id: object = _UNSET,
+    is_active: bool | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        current = _get_auth_user_row(conn, user_id=int(user_id))
+        if current is None:
+            raise ValueError("Пользователь не найден")
+
+        current_role = str(current["role"])
+        next_role = _validate_auth_role(role) if role is not None else current_role
+        if manager_id is _UNSET:
+            next_manager_id = (
+                _normalize_auth_manager_id(current["manager_id"])
+                if next_role == "manager"
+                else None
+            )
+        else:
+            next_manager_id = _normalize_auth_manager_id(manager_id)
+        next_active = bool(current["is_active"]) if is_active is None else bool(is_active)
+        _validate_auth_user_state(
+            role=next_role,
+            manager_id=next_manager_id,
+            is_active=next_active,
+        )
+
+        current_is_last_admin = (
+            current_role == "admin"
+            and bool(current["is_active"])
+            and _active_admin_count(conn) == 1
+        )
+        if current_is_last_admin and not (next_role == "admin" and next_active):
+            raise ValueError(
+                "Нельзя деактивировать или изменить последнего активного администратора"
+            )
+        if _active_admin_count(conn) == 0 and not (next_role == "admin" and next_active):
+            raise ValueError("Нельзя оставить систему без активного администратора")
+
+        try:
+            conn.execute(
+                """
+                UPDATE auth_users
+                SET role = ?, manager_id = ?, is_active = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_role,
+                    next_manager_id,
+                    int(next_active),
+                    utcish_now(),
+                    int(user_id),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise _translate_auth_integrity_error(exc) from exc
+
+        if not next_active or current_role != next_role:
+            conn.execute(
+                "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?",
+                (utcish_now(), int(user_id)),
+            )
+        row = conn.execute(
+            "SELECT * FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    result = _auth_user_row(row, include_password_hash=True)
+    if result is None:
+        raise ValueError("Пользователь не найден")
+    return result
+
+
+def set_auth_user_password(
+    db_path: str | Path,
+    *,
+    user_id: int,
+    password_hash: str | None = None,
+    password: str | None = None,
+) -> dict[str, Any]:
+    resolved_hash = _resolve_auth_password_hash(
+        password_hash=password_hash,
+        password=password,
+    )
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        row = conn.execute(
+            "SELECT * FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Пользователь не найден")
+        now = utcish_now()
+        conn.execute(
+            "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (resolved_hash, now, int(user_id)),
+        )
+        conn.execute(
+            "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?",
+            (now, int(user_id)),
+        )
+        updated = conn.execute(
+            "SELECT * FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    result = _auth_user_row(updated, include_password_hash=True)
+    if result is None:
+        raise ValueError("Пользователь не найден")
+    return result
+
+
+def deactivate_auth_user(db_path: str | Path, *, user_id: int) -> dict[str, Any]:
+    return update_auth_user(db_path, user_id=int(user_id), is_active=False)
+
+
+def activate_auth_user(db_path: str | Path, *, user_id: int) -> dict[str, Any]:
+    return update_auth_user(db_path, user_id=int(user_id), is_active=True)
+
+
+def revoke_auth_user_sessions(db_path: str | Path, *, user_id: int) -> int:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        if conn.execute(
+            "SELECT 1 FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone() is None:
+            raise ValueError("Пользователь не найден")
+        cursor = conn.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = COALESCE(revoked_at, ?)
+            WHERE user_id = ? AND revoked_at IS NULL
+            """,
+            (utcish_now(), int(user_id)),
+        )
+        return int(cursor.rowcount)
+
+
+def _auth_session_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    if "user_is_active" in value:
+        value["user_is_active"] = bool(value["user_is_active"])
+    return value
+
+
+def create_auth_session(
+    db_path: str | Path,
+    *,
+    user_id: int,
+    token_digest: str,
+    expires_at: str,
+    created_at: str | None = None,
+    last_seen_at: str | None = None,
+) -> dict[str, Any]:
+    digest = str(token_digest or "").strip()
+    if not digest:
+        raise ValueError("Хэш токена сессии не может быть пустым")
+    _parse_auth_datetime(expires_at)
+    created = created_at or utcish_now()
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        user = conn.execute(
+            "SELECT id, is_active FROM auth_users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if user is None:
+            raise ValueError("Пользователь не найден")
+        if not bool(user["is_active"]):
+            raise ValueError("Нельзя создать сессию неактивного пользователя")
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO auth_sessions (
+                    user_id, token_digest, expires_at, revoked_at, created_at, last_seen_at
+                ) VALUES (?, ?, ?, NULL, ?, ?)
+                """,
+                (int(user_id), digest, expires_at, created, last_seen_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Сессия с таким токеном уже существует") from exc
+        row = conn.execute(
+            "SELECT * FROM auth_sessions WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    result = _auth_session_row(row)
+    if result is None:
+        raise ValueError("Не удалось создать сессию")
+    return result
+
+
+def get_auth_session(
+    db_path: str | Path,
+    *,
+    token_digest: str,
+    now: str | None = None,
+) -> dict[str, Any] | None:
+    digest = str(token_digest or "").strip()
+    if not digest:
+        return None
+    current_time = _auth_now(now)
+    current_dt = _parse_auth_datetime(current_time)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT s.*, u.login AS user_login, u.role AS user_role,
+                   u.manager_id AS user_manager_id, u.is_active AS user_is_active
+            FROM auth_sessions AS s
+            JOIN auth_users AS u ON u.id = s.user_id
+            WHERE s.token_digest = ?
+            """,
+            (digest,),
+        ).fetchone()
+        if row is None or row["revoked_at"] is not None or not bool(row["user_is_active"]):
+            return None
+        if _parse_auth_datetime(str(row["expires_at"])) <= current_dt:
+            return None
+        conn.execute(
+            "UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?",
+            (current_time, int(row["id"])),
+        )
+        updated = conn.execute(
+            """
+            SELECT s.*, u.login AS user_login, u.role AS user_role,
+                   u.manager_id AS user_manager_id, u.is_active AS user_is_active
+            FROM auth_sessions AS s
+            JOIN auth_users AS u ON u.id = s.user_id
+            WHERE s.id = ?
+            """,
+            (int(row["id"]),),
+        ).fetchone()
+    return _auth_session_row(updated)
+
+
+def revoke_auth_session(db_path: str | Path, *, token_digest: str) -> bool:
+    digest = str(token_digest or "").strip()
+    if not digest:
+        return False
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        cursor = conn.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = COALESCE(revoked_at, ?)
+            WHERE token_digest = ? AND revoked_at IS NULL
+            """,
+            (utcish_now(), digest),
+        )
+        return int(cursor.rowcount) > 0
+
+
+def _resolve_auth_client_key(
+    *,
+    client_ip: object = None,
+    client_key: object = None,
+) -> str | None:
+    if (
+        client_ip is not None
+        and client_key is not None
+        and str(client_ip).strip() != str(client_key).strip()
+    ):
+        raise ValueError("Передайте client_ip или client_key, но не оба")
+    return _normalize_auth_client_key(
+        client_ip if client_ip is not None else client_key
+    )
+
+
+def record_auth_login_attempt(
+    db_path: str | Path,
+    *,
+    login: str,
+    client_key: str | None = None,
+    attempted_at: str | None = None,
+    succeeded: bool = False,
+    client_ip: str | None = None,
+) -> dict[str, Any]:
+    normalized_login = _normalize_auth_login(login)
+    normalized_client_key = _resolve_auth_client_key(
+        client_ip=client_ip,
+        client_key=client_key,
+    )
+    attempted = attempted_at or utcish_now()
+    _parse_auth_datetime(attempted)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        cursor = conn.execute(
+            """
+            INSERT INTO auth_login_attempts (login, client_key, attempted_at, succeeded)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                normalized_login,
+                normalized_client_key,
+                attempted,
+                int(bool(succeeded)),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM auth_login_attempts WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    result = dict(row) if row is not None else None
+    if result is None:
+        raise ValueError("Не удалось записать попытку входа")
+    result["succeeded"] = bool(result["succeeded"])
+    result["client_ip"] = result["client_key"]
+    return result
+
+
+def get_auth_login_throttle(
+    db_path: str | Path,
+    *,
+    login: str,
+    client_key: str | None = None,
+    now: str | None = None,
+    client_ip: str | None = None,
+    window_seconds: int = 900,
+    max_attempts: int = 5,
+) -> dict[str, Any] | None:
+    if window_seconds <= 0 or max_attempts <= 0:
+        raise ValueError("Параметры throttling должны быть положительными")
+    normalized_login = _normalize_auth_login(login)
+    normalized_client_key = _resolve_auth_client_key(
+        client_ip=client_ip,
+        client_key=client_key,
+    )
+    current_time = _auth_now(now)
+    current_dt = _parse_auth_datetime(current_time)
+    window_start = current_dt - timedelta(seconds=int(window_seconds))
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if normalized_client_key is None:
+            rows = conn.execute(
+                """
+                SELECT * FROM auth_login_attempts
+                WHERE login = ? AND client_key IS NULL
+                ORDER BY id ASC
+                """,
+                (normalized_login,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM auth_login_attempts
+                WHERE login = ? AND client_key = ?
+                ORDER BY id ASC
+                """,
+                (normalized_login, normalized_client_key),
+            ).fetchall()
+
+    latest_success: datetime | None = None
+    failures: list[tuple[datetime, str]] = []
+    for row in rows:
+        attempted_dt = _parse_auth_datetime(str(row["attempted_at"]))
+        if bool(row["succeeded"]):
+            if latest_success is None or attempted_dt > latest_success:
+                latest_success = attempted_dt
+            continue
+        if window_start <= attempted_dt <= current_dt:
+            failures.append((attempted_dt, str(row["attempted_at"])))
+    if latest_success is not None:
+        failures = [item for item in failures if item[0] > latest_success]
+    if not failures:
+        return None
+
+    first_failed_at = min(failures, key=lambda item: item[0])[1]
+    last_failed_at = max(failures, key=lambda item: item[0])[1]
+    locked_until_dt = max(item[0] for item in failures) + timedelta(
+        seconds=int(window_seconds)
+    )
+    locked_until = locked_until_dt.isoformat(timespec="seconds")
+    return {
+        "login": normalized_login,
+        "client_key": normalized_client_key,
+        "client_ip": normalized_client_key,
+        "failure_count": len(failures),
+        "first_failed_at": first_failed_at,
+        "last_failed_at": last_failed_at,
+        "locked_until": locked_until if len(failures) >= max_attempts else None,
+        "is_locked": len(failures) >= max_attempts and current_dt < locked_until_dt,
+        "window_seconds": int(window_seconds),
+        "max_attempts": int(max_attempts),
+    }
+
+
+def clear_auth_login_attempts(
+    db_path: str | Path,
+    *,
+    login: str,
+    client_key: str | None = None,
+    client_ip: str | None = None,
+) -> None:
+    normalized_login = _normalize_auth_login(login)
+    normalized_client_key = _resolve_auth_client_key(
+        client_ip=client_ip,
+        client_key=client_key,
+    )
+    init_db(db_path)
+    with connect(db_path) as conn:
+        _begin_auth_write(conn)
+        if normalized_client_key is None:
+            conn.execute(
+                "DELETE FROM auth_login_attempts WHERE login = ?",
+                (normalized_login,),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM auth_login_attempts WHERE login = ? AND client_key = ?",
+                (normalized_login, normalized_client_key),
             )
 
 
