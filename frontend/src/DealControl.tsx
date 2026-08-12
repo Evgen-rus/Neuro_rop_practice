@@ -1127,7 +1127,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
       <Filters
         view={view}
-        showManagerFilter={user.role !== 'manager'}
+        showManagerFilter={view !== 'manager' || user.role !== 'manager'}
         managers={managers}
         stages={stages}
         managerFilter={managerFilter}
