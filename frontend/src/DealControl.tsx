@@ -502,6 +502,28 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [outcomeNote, setOutcomeNote] = useState('')
   const [outcomeNextStep, setOutcomeNextStep] = useState('')
   const [outcomeNextAt, setOutcomeNextAt] = useState('')
+  const canOpenRopView = user.role === 'admin' || user.role === 'rop'
+  const canOpenManagerView = user.role === 'admin' || user.role === 'manager'
+
+  function openDashboard() {
+    setView('dashboard')
+    setManagerFilter('')
+    setTimeView('all')
+  }
+
+  function openRopView() {
+    setView('rop')
+    setManagerFilter('')
+    setTimeView('today')
+  }
+
+  function openManagerView() {
+    setView('manager')
+    setManagerFilter(user.role === 'manager'
+      ? user.manager_id || ''
+      : selected?.manager_id || managers[0]?.[0] || '')
+    setTimeView('today')
+  }
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -1073,25 +1095,15 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <span>☰</span><b>Меню</b>
       </button>
       <nav>
-        <button className={view === 'dashboard' ? 'active' : ''} onClick={() => {
-          setView('dashboard')
-          setTimeView('all')
-        }} title="Дашборд">
+        <button className={view === 'dashboard' ? 'active' : ''} onClick={openDashboard} title="Дашборд">
           <span>▦</span><b>Дашборд</b><small>Общий контроль сделок</small>
         </button>
-        <button className={view === 'rop' ? 'active' : ''} onClick={() => {
-          setView('rop')
-          setTimeView('today')
-        }} title="Контроль РОПа">
+        {canOpenRopView ? <button className={view === 'rop' ? 'active' : ''} onClick={openRopView} title="Контроль РОПа">
           <span>◎</span><b>Контроль РОПа</b><small>План и просрочки команды</small>
-        </button>
-        <button className={view === 'manager' ? 'active' : ''} onClick={() => {
-          setView('manager')
-          setManagerFilter(selected?.manager_id || managers[0]?.[0] || '')
-          setTimeView('today')
-        }} title="Задачи менеджера">
+        </button> : null}
+        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
           <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
-        </button>
+        </button> : null}
       </nav>
       {onExit ? <button className="dc-exit" onClick={onExit}><span>←</span><b>К основному интерфейсу</b></button> : null}
       {onLogout ? <button className="dc-exit" onClick={() => void onLogout()}><span>⇥</span><b>Выйти</b></button> : null}
@@ -1115,6 +1127,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
       <Filters
         view={view}
+        showManagerFilter={user.role !== 'manager'}
         managers={managers}
         stages={stages}
         managerFilter={managerFilter}
@@ -1254,6 +1267,7 @@ function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDa
 
 function Filters(props: {
   view: DealControlView
+  showManagerFilter: boolean
   managers: Array<[string, string]>
   stages: string[]
   managerFilter: string
@@ -1266,10 +1280,10 @@ function Filters(props: {
   onSearch: (value: string) => void
 }) {
   return <section className="dc-filters">
-    <select value={props.managerFilter} onChange={(event) => props.onManager(event.target.value)}>
+    {props.showManagerFilter ? <select aria-label="Менеджер" value={props.managerFilter} onChange={(event) => props.onManager(event.target.value)}>
       <option value="">{props.view === 'manager' ? 'Выберите менеджера' : 'Все менеджеры'}</option>
       {props.managers.map(([id, name]) => <option value={id} key={id}>{name}</option>)}
-    </select>
+    </select> : null}
     {props.view === 'dashboard' ? <select value={props.stageFilter} onChange={(event) => props.onStage(event.target.value)}>
       <option value="">Все этапы</option>{props.stages.map((stage) => <option value={stage} key={stage}>{stage}</option>)}
     </select> : null}
