@@ -188,6 +188,11 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertNotIn("crm_checklist", quick_help_schema()["properties"])
         self.assertEqual(quick_help_schema()["properties"]["lifehacks"]["maxItems"], 3)
         self.assertIn("MT-CONTACT-001", prompt)
+        self.assertIn("MT-OBJECTION-001", prompt)
+        self.assertIn("MT-CLOSE-001", prompt)
+        self.assertIn("MT-TRUST-001", prompt)
+        self.assertIn("сделай blocker конкретным", prompt)
+        self.assertIn("главным препятствием", prompt)
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
         self.assertEqual(validate_quick_help(ANSWER_V2), ANSWER_V2)
 
@@ -205,7 +210,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v5")
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v6")
         self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
         self.assertIn("COMMUNICATION_PATTERN_CONTEXT", kwargs["stable_prefix"])
         self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
@@ -400,6 +405,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("линзу только из подтверждаемых фактов", prompt)
         self.assertIn("один экспертный аргумент через выбранный рычаг", prompt)
         self.assertIn("один закрывающий шаг", prompt)
+        self.assertIn("сделай blocker конкретным", prompt)
+        self.assertIn("главным препятствием", prompt)
+        self.assertIn("MT-OBJECTION-001", prompt)
+        self.assertIn("MT-TRUST-001", prompt)
         self.assertNotIn("мягкий режим восстановления контакта", prompt)
         self.assertEqual(validate_quick_help(PUSH_ANSWER, expected_mode="push"), PUSH_ANSWER)
         with self.assertRaisesRegex(ValueError, "mode не соответствует"):
@@ -417,7 +426,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
                 mode="push",
             )
-        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-push:v2")
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-push:v3")
         self.assertNotIn("MANAGER_QUESTION", call.call_args.kwargs["stable_prefix"])
 
     def test_ensure_reuses_current_modes_and_does_not_call_llm(self) -> None:
