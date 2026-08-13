@@ -96,6 +96,11 @@ textarea {
 .dc-manager-full-script-phrases { display: grid; gap: 5px; }
 .dc-manager-full-script-phrases blockquote { margin: 0; padding: 8px 10px; border-left: 3px solid #54a276; border-radius: 0 7px 7px 0; color: #25483a; background: #f1faf5; font-size: 12px; line-height: 1.45; }
 .dc-manager-full-script-listen, .dc-manager-full-script-grid ol footer { margin-top: 7px; color: #52677e; font-size: 10.5px; line-height: 1.4; }
+.dc-manager-block-objections { display: grid; gap: 6px; margin-top: 8px; padding: 8px; border: 1px solid #eadfce; border-radius: 8px; background: #fffaf3; }
+.dc-manager-block-objections > strong { color: #6f4c20; font-size: 10px; text-transform: uppercase; }
+.dc-manager-block-objections > div { display: grid; gap: 3px; }
+.dc-manager-block-objections b { color: #563d1d; font-size: 11px; }
+.dc-manager-block-objections span, .dc-manager-block-objections small { color: #526172; font-size: 10.5px; line-height: 1.4; }
 .dc-manager-full-script-grid ol footer { padding-top: 7px; border-top: 1px solid #edf1f5; }
 .dc-manager-full-script-close { border-color: #b9dec8; background: #f1faf5; }
 .dc-manager-full-script-objections { margin: 0 12px 12px; border: 1px solid #e2d5c2; border-radius: 10px; background: #fff; }

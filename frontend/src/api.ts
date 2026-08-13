@@ -798,6 +798,7 @@ export type ManagerFullScriptBlock = {
   suggested_phrases: string[]
   listen_for: string[]
   transition: string
+  relevant_objection_ids: string[]
 }
 
 export type ManagerFullScriptContent = {
@@ -836,6 +837,7 @@ export type ManagerFullScriptJob = {
 
 export type ManagerObjectionHandling = {
   items: Array<{
+    objection_id: string
     objection: string
     manager_reply: string
     follow_up_question: string

@@ -20,7 +20,7 @@ def full_script_schema() -> dict[str, Any]:
     block = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["block_id", "title", "objective", "suggested_phrases", "listen_for", "transition"],
+        "required": ["block_id", "title", "objective", "suggested_phrases", "listen_for", "transition", "relevant_objection_ids"],
         "properties": {
             "block_id": {"type": "string", "minLength": 1, "maxLength": 80},
             "title": {"type": "string", "minLength": 1, "maxLength": 160},
@@ -28,6 +28,7 @@ def full_script_schema() -> dict[str, Any]:
             "suggested_phrases": short_list,
             "listen_for": short_list,
             "transition": {"type": "string", "minLength": 1, "maxLength": 420},
+            "relevant_objection_ids": {"type": "array", "maxItems": 2, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
         },
     }
     return {
@@ -45,7 +46,7 @@ def full_script_schema() -> dict[str, Any]:
     }
 
 
-def validate_full_script(value: Any, *, selected_strategy: str, allowed_tactic_ids: set[str] | None = None) -> dict[str, Any]:
+def validate_full_script(value: Any, *, selected_strategy: str, allowed_tactic_ids: set[str] | None = None, allowed_objection_ids: set[str] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("script_contract") != SCRIPT_CONTRACT:
         raise ValueError("Полный скрипт имеет неподдерживаемый контракт")
     if selected_strategy not in STRATEGIES or value.get("selected_strategy") != selected_strategy:
@@ -69,17 +70,26 @@ def validate_full_script(value: Any, *, selected_strategy: str, allowed_tactic_i
         transition = str(item.get("transition") or "").strip()
         phrases = item.get("suggested_phrases")
         listen_for = item.get("listen_for")
+        objection_ids = item.get("relevant_objection_ids")
         if not block_id or block_id in seen_ids or not title or not objective or not transition:
             raise ValueError("Блок полного скрипта заполнен некорректно")
         if not isinstance(phrases, list) or not 1 <= len(phrases) <= 3 or not isinstance(listen_for, list) or len(listen_for) > 3:
             raise ValueError("Фразы или ориентиры блока заполнены некорректно")
         if any(not isinstance(text, str) or not text.strip() for text in [*phrases, *listen_for]):
             raise ValueError("Фразы блока должны быть непустыми строками")
+        if not isinstance(objection_ids, list) or len(objection_ids) > 2 or any(not isinstance(text, str) or not text.strip() for text in objection_ids):
+            raise ValueError("Связь блока с возражениями заполнена некорректно")
+        normalized_objection_ids = [text.strip()[:80] for text in objection_ids]
+        if len(set(normalized_objection_ids)) != len(normalized_objection_ids):
+            raise ValueError("Блок содержит повторяющееся возражение")
+        if allowed_objection_ids is not None and any(text not in allowed_objection_ids for text in normalized_objection_ids):
+            raise ValueError("Блок ссылается на неизвестное возражение")
         seen_ids.add(block_id)
         normalized_blocks.append({
             "block_id": block_id[:80], "title": title[:160], "objective": objective[:420],
             "suggested_phrases": [text.strip()[:500] for text in phrases],
             "listen_for": [text.strip()[:500] for text in listen_for], "transition": transition[:420],
+            "relevant_objection_ids": normalized_objection_ids,
         })
     if not isinstance(tactic_ids, list) or len(tactic_ids) > 3 or any(not isinstance(item, str) or not item.strip() for item in tactic_ids):
         raise ValueError("relevant_tactic_ids заполнен некорректно")
@@ -99,7 +109,7 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
-def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, checklist: dict[str, Any], communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]], script_mode: str = "message") -> str:
+def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, checklist: dict[str, Any], communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]], script_mode: str = "message", objection_handling: dict[str, Any] | None = None) -> str:
     if script_mode not in SCRIPT_MODES:
         raise ValueError("Неизвестный режим сценария")
     mode_rules = (
@@ -107,6 +117,8 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         "Начни с короткого устного входа, проведи менеджера через вопросы и аргументацию и закончи конкретной договорённостью, двигающей сделку к деньгам.\n"
         "- QUICK_HELP — это уже сделанный заход к клиенту. Не дублируй его текст: используй выбранную стратегию как основание звонка и продолжай с текущей точки.\n"
         "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй устную речь под primary_style, secondary_style, profile_confidence и recommended_communication: темп, прямоту, длину фраз, порядок аргументов и способ задавать вопросы. Не объясняй DISC менеджеру и не меняй факты. При insufficient_evidence используй нейтральный деловой стиль.\n"
+        "- Перед финальной договорённостью проверь один главный скрытый стоп-фактор, который реально может остановить ближайший денежный шаг. Не собирай все риски подряд.\n"
+        "- OBJECTION_HANDLING содержит готовые возражения из полного анализа. Не придумывай и не переписывай их: укажи в relevant_objection_ids блока не более двух существующих objection_id, только если они уместны в этой точке разговора.\n"
     ) if script_mode == "call" else (
         "- Это сценарий продолжения переписки. Давай короткие готовые сообщения и ветки ответа; не превращай его в телефонный разговор.\n"
         "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй длину, прямоту и структуру сообщений под сохранённый профиль. При insufficient_evidence используй нейтральный деловой стиль.\n"
@@ -120,13 +132,13 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         "- В каждом блоке укажи цель, 1–3 естественные фразы, что услышать в ответе и переход дальше.\n"
         "- Незакрытые пункты CURRENT_DAILY_CHECKLIST помоги получить естественно, но не создавай новый checklist и не объявляй отметки менеджера фактами клиента.\n"
         "- RELEVANT_TACTICS — допустимые условные приёмы. Не обещай их доступность и не превращай в факт без подтверждения контекстом.\n"
-        "- Не выполняй новый анализ возражений и не включай objection handling: UI покажет готовую проекцию полного анализа отдельно.\n"
+        "- Не выполняй новый анализ возражений и не генерируй новые ответы: UI покажет готовую проекцию полного анализа отдельно.\n"
         "- Не придумывай даты, суммы, наличие оборудования, специалистов, рассрочки, повышение цен, договорённости или слова клиента.\n"
         "- Заверши разговор одной конкретной проверяемой договорённостью. Верни только JSON по схеме на русском языке.",
         _section("ANALYSIS_CONTEXT", analysis_projection), _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)), _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("CURRENT_DAILY_CHECKLIST", checklist), _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("RELEVANT_TACTICS", relevant_tactics),
+        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("RELEVANT_TACTICS", relevant_tactics), _section("OBJECTION_HANDLING", objection_handling or {"items": []}),
     ])
 
 
@@ -136,10 +148,15 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
     if script_mode not in SCRIPT_MODES:
         raise ValueError("Неизвестный режим сценария")
     relevant_tactics = kwargs.get("relevant_tactics")
+    objection_handling = kwargs.get("objection_handling")
     allowed_tactic_ids = {
         str(item.get("tactic_id") or "").strip()
         for item in relevant_tactics if isinstance(item, dict)
     } if isinstance(relevant_tactics, list) else set()
+    allowed_objection_ids = {
+        str(item.get("objection_id") or "").strip()
+        for item in objection_handling.get("items", []) if isinstance(item, dict)
+    } if isinstance(objection_handling, dict) else set()
     prompt = build_full_script_prompt(**kwargs)
     result, metadata = call_structured_output_json(
         prompt, schema=full_script_schema(), schema_name="deal_manager_full_script", model=MANAGER_MODEL,
@@ -148,4 +165,7 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:v2",
         stable_prefix=prompt_prefix_before(prompt, "QUICK_HELP:"),
     )
-    return validate_full_script(result, selected_strategy=selected_strategy, allowed_tactic_ids=allowed_tactic_ids), metadata
+    return validate_full_script(
+        result, selected_strategy=selected_strategy, allowed_tactic_ids=allowed_tactic_ids,
+        allowed_objection_ids=allowed_objection_ids,
+    ), metadata

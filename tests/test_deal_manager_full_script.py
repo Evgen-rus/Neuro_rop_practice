@@ -34,6 +34,7 @@ SCRIPT = {
             "suggested_phrases": ["Добрый день! Удобно две минуты по нашему КП?"],
             "listen_for": ["Готовность говорить"],
             "transition": "Коротко обозначить цель контакта.",
+            "relevant_objection_ids": [],
         },
         {
             "block_id": "blocker",
@@ -42,6 +43,7 @@ SCRIPT = {
             "suggested_phrases": ["Какой вопрос сейчас мешает определить следующий шаг?"],
             "listen_for": ["Конкретный вопрос или участник согласования"],
             "transition": "Предложить действие только под названный blocker.",
+            "relevant_objection_ids": ["technical_doubt"],
         },
         {
             "block_id": "agreement",
@@ -50,6 +52,7 @@ SCRIPT = {
             "suggested_phrases": ["Какой следующий шаг и дату можем сейчас зафиксировать?"],
             "listen_for": ["Действие и дата"],
             "transition": "Повторить договорённость и завершить разговор.",
+            "relevant_objection_ids": [],
         },
     ],
     "closing_agreement": "Повторить согласованные действие, ответственного и дату.",
@@ -72,13 +75,16 @@ class DealManagerFullScriptTests(unittest.TestCase):
             quick_help=ANSWER,
             selected_strategy="alternative",
             relevant_tactics=ANSWER["lifehacks"],
+            objection_handling={"items": [{"objection_id": "technical_doubt", "objection": "Нужно проверить", "manager_reply": "Проверим", "follow_up_question": "Что критично?", "next_step_goal": "Зафиксировать", "what_not_to_do": "Не обещать"}]},
         )
         self.assertIn("CURRENT_DAILY_CHECKLIST", prompt)
         self.assertIn("не создавай новый checklist", prompt)
-        self.assertIn("не включай objection handling", prompt)
+        self.assertIn("не генерируй новые ответы", prompt)
         self.assertNotIn("checklist", full_script_schema()["properties"])
         self.assertNotIn("objection_handling", full_script_schema()["properties"])
-        self.assertEqual(validate_full_script(SCRIPT, selected_strategy="alternative"), SCRIPT)
+        self.assertEqual(validate_full_script(
+            SCRIPT, selected_strategy="alternative", allowed_objection_ids={"technical_doubt"},
+        ), SCRIPT)
 
         call_prompt = build_full_script_prompt(
             analysis_projection=CONTEXT["analysis_projection"],
@@ -86,10 +92,12 @@ class DealManagerFullScriptTests(unittest.TestCase):
             current_bitrix_task=CONTEXT["current_bitrix_task"], checklist={"items": []},
             communication_pattern_context={"total_attempts": 2}, quick_help=ANSWER,
             selected_strategy="alternative", relevant_tactics=ANSWER["lifehacks"], script_mode="call",
+            objection_handling={"items": [{"objection_id": "technical_doubt"}]},
         )
         self.assertIn("SCRIPT_MODE:\n\"call\"", call_prompt)
         self.assertIn("client_communication_profile", call_prompt)
         self.assertIn("телефонного звонка", call_prompt)
+        self.assertIn("technical_doubt", call_prompt)
 
     def test_storage_is_idempotent_and_exact_context_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -234,6 +242,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["objection"], "Это дорого")
         self.assertNotIn("objection_type", result["items"][0])
         self.assertNotIn("evidence", result["items"][0])
+        self.assertEqual(result["items"][0]["objection_id"], "price")
 
 
 if __name__ == "__main__":

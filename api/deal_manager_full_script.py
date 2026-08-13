@@ -48,10 +48,15 @@ def _public_objections(analysis_projection: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(handling, dict) or handling.get("applicable") is not True:
         return None
     items: list[dict[str, str]] = []
-    for raw in handling.get("likely_objections") or []:
+    used_ids: set[str] = set()
+    for index, raw in enumerate(handling.get("likely_objections") or [], start=1):
         if not isinstance(raw, dict):
             continue
+        base_id = str(raw.get("objection_type") or f"objection_{index}").strip().lower()
+        objection_id = base_id if base_id not in used_ids else f"{base_id}_{index}"
+        used_ids.add(objection_id)
         item = {
+            "objection_id": objection_id,
             "objection": str(raw.get("client_phrase") or "").strip(),
             "manager_reply": str(raw.get("manager_reply") or "").strip(),
             "follow_up_question": str(raw.get("follow_up_question") or "").strip(),
@@ -135,6 +140,7 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             deal=context["deal"], current_bitrix_task=context["current_bitrix_task"], checklist=checklist,
             communication_pattern_context=communication_context, quick_help=inputs["quick_help_content"],
             selected_strategy=job.selected_strategy, relevant_tactics=relevant_tactics, script_mode=job.script_mode,
+            objection_handling=_public_objections(context["analysis_projection"]),
         )
         _touch(job, stage="saving", detail="Сохраняем проверенный сценарий", percent=88)
         saved = _storage_call(
