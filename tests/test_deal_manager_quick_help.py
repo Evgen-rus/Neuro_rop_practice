@@ -396,10 +396,28 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         )
         self.assertIn("режиме Дожим", prompt)
         self.assertIn("один приоритетный рычаг", prompt)
+        self.assertIn("линзу только из подтверждаемых фактов", prompt)
+        self.assertIn("один экспертный аргумент через выбранный рычаг", prompt)
+        self.assertIn("один закрывающий шаг", prompt)
         self.assertNotIn("мягкий режим восстановления контакта", prompt)
         self.assertEqual(validate_quick_help(PUSH_ANSWER, expected_mode="push"), PUSH_ANSWER)
         with self.assertRaisesRegex(ValueError, "mode не соответствует"):
             validate_quick_help(PUSH_ANSWER, expected_mode="reanimator")
+        with patch(
+            "openai_api.llm.deal_manager_quick_help.call_structured_output_json",
+            return_value=(PUSH_ANSWER, {}),
+        ) as call:
+            generate_deal_manager_quick_help(
+                question="",
+                analysis_projection=CONTEXT["analysis_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                situation_projection=CONTEXT["situation_projection"],
+                communication_pattern_context=COMMUNICATION_CONTEXT,
+                mode="push",
+            )
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-push:v2")
+        self.assertNotIn("MANAGER_QUESTION", call.call_args.kwargs["stable_prefix"])
 
     def test_ensure_reuses_current_modes_and_does_not_call_llm(self) -> None:
         calls: list[str] = []
