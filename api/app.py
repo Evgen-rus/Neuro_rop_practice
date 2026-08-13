@@ -269,6 +269,7 @@ class DealManagerQuickHelpRequest(BaseModel):
 class DealManagerFullScriptRequest(BaseModel):
     quick_help_id: int = Field(ge=1)
     selected_strategy: Literal["primary", "alternative", "pattern_break"] = "primary"
+    script_mode: Literal["message", "call"] = "message"
     confirm_paid: bool = False
 
 
@@ -965,7 +966,7 @@ def deal_manager_full_script_start(deal_id: str, body: DealManagerFullScriptRequ
     try:
         return start_full_script_job(
             db_path=DEFAULT_DB_PATH, deal_id=deal_id, quick_help_id=body.quick_help_id,
-            selected_strategy=body.selected_strategy, confirm_paid=body.confirm_paid,
+            selected_strategy=body.selected_strategy, script_mode=body.script_mode, confirm_paid=body.confirm_paid,
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур полного скрипта ещё не подключён") from error
@@ -987,12 +988,13 @@ def deal_manager_full_script_get(
     deal_id: str,
     quick_help_id: int = Query(ge=1),
     selected_strategy: Literal["primary", "alternative", "pattern_break"] = Query(default="primary"),
+    script_mode: Literal["message", "call"] = Query(default="message"),
 ) -> dict[str, Any]:
     require_deal(deal_id, action="open")
     try:
         return get_full_script_workspace(
             db_path=DEFAULT_DB_PATH, deal_id=deal_id, quick_help_id=quick_help_id,
-            selected_strategy=selected_strategy,
+            selected_strategy=selected_strategy, script_mode=script_mode,
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур полного скрипта ещё не подключён") from error

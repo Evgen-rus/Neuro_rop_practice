@@ -809,6 +809,8 @@ export type ManagerFullScriptContent = {
   relevant_tactic_ids: string[]
 }
 
+export type ManagerFullScriptMode = 'message' | 'call'
+
 export type ManagerFullScriptRecord = {
   id: number
   quick_help_id: number
@@ -822,6 +824,7 @@ export type ManagerFullScriptJob = {
   deal_id: string
   quick_help_id: number
   selected_strategy: ManagerQuickHelpStrategy
+  script_mode: ManagerFullScriptMode
   status: 'queued' | 'running' | 'done' | 'error'
   stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
   detail: string
@@ -843,6 +846,12 @@ export type ManagerObjectionHandling = {
 
 export type ManagerFullScriptWorkspace = {
   script: ManagerFullScriptRecord | null
+  script_mode: ManagerFullScriptMode
+  disc_profile: {
+    primary_style: 'D' | 'I' | 'S' | 'C'
+    secondary_style?: 'D' | 'I' | 'S' | 'C' | null
+    profile_confidence: 'low' | 'medium' | 'high'
+  } | null
   checklist: Record<string, unknown>
   objection_handling: ManagerObjectionHandling | null
 }
@@ -1187,11 +1196,12 @@ export function startManagerFullScript(
   dealId: string,
   quickHelpId: number,
   selectedStrategy: ManagerQuickHelpStrategy,
+  scriptMode: ManagerFullScriptMode,
   confirmPaid = true,
 ) {
   return api<ManagerFullScriptJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/full-script`, {
     method: 'POST',
-    body: JSON.stringify({ quick_help_id: quickHelpId, selected_strategy: selectedStrategy, confirm_paid: confirmPaid }),
+    body: JSON.stringify({ quick_help_id: quickHelpId, selected_strategy: selectedStrategy, script_mode: scriptMode, confirm_paid: confirmPaid }),
   })
 }
 
@@ -1203,8 +1213,9 @@ export function fetchManagerFullScript(
   dealId: string,
   quickHelpId: number,
   selectedStrategy: ManagerQuickHelpStrategy,
+  scriptMode: ManagerFullScriptMode,
 ) {
-  const query = new URLSearchParams({ quick_help_id: String(quickHelpId), selected_strategy: selectedStrategy })
+  const query = new URLSearchParams({ quick_help_id: String(quickHelpId), selected_strategy: selectedStrategy, script_mode: scriptMode })
   return api<ManagerFullScriptWorkspace>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/full-script?${query.toString()}`,
   )

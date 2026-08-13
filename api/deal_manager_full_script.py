@@ -18,7 +18,7 @@ from api.deal_manager_situation import (
     _storage_call,
     load_manager_screen_context,
 )
-from openai_api.llm.deal_manager_full_script import STRATEGIES, generate_deal_manager_full_script
+from openai_api.llm.deal_manager_full_script import SCRIPT_MODES, STRATEGIES, generate_deal_manager_full_script
 
 
 @dataclass
@@ -27,6 +27,7 @@ class DealManagerFullScriptJob:
     deal_id: str
     quick_help_id: int
     selected_strategy: str
+    script_mode: str = "message"
     status: str = "queued"
     stage: str = "queued"
     detail: str = "Подготавливаем рабочий сценарий"
@@ -83,10 +84,10 @@ def _current_inputs(db_path: str | Path, deal_id: str, quick_help_id: int, selec
     return {"context": context, "quick_help": quick_help, "quick_help_content": content, "situation_id": int(situation_id)}
 
 
-def _cached_script(db_path: str | Path, inputs: dict[str, Any], selected_strategy: str) -> dict[str, Any] | None:
+def _cached_script(db_path: str | Path, inputs: dict[str, Any], selected_strategy: str, script_mode: str) -> dict[str, Any] | None:
     context = inputs["context"]
     return _storage_call(
-        "get_deal_manager_full_script", db_path,
+        "get_deal_manager_call_script" if script_mode == "call" else "get_deal_manager_full_script", db_path,
         deal_id=str(context["deal"]["deal_id"]), source_report_id=int(context["source_report_id"]),
         situation_review_id=int(inputs["situation_id"]), quick_help_id=int(inputs["quick_help"]["id"]),
         selected_strategy=selected_strategy,
@@ -111,7 +112,7 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
     try:
         _touch(job, stage="context", detail="Собираем актуальный manager context", percent=20)
         inputs = _current_inputs(db_path, job.deal_id, job.quick_help_id, job.selected_strategy)
-        existing = _cached_script(db_path, inputs, job.selected_strategy)
+        existing = _cached_script(db_path, inputs, job.selected_strategy, job.script_mode)
         if isinstance(existing, dict):
             with _FULL_SCRIPT_LOCK:
                 job.script_id = int(existing["id"])
@@ -133,11 +134,11 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             analysis_projection=context["analysis_projection"], situation_projection=context["situation_projection"],
             deal=context["deal"], current_bitrix_task=context["current_bitrix_task"], checklist=checklist,
             communication_pattern_context=communication_context, quick_help=inputs["quick_help_content"],
-            selected_strategy=job.selected_strategy, relevant_tactics=relevant_tactics,
+            selected_strategy=job.selected_strategy, relevant_tactics=relevant_tactics, script_mode=job.script_mode,
         )
         _touch(job, stage="saving", detail="Сохраняем проверенный сценарий", percent=88)
         saved = _storage_call(
-            "save_deal_manager_full_script", db_path, deal_id=job.deal_id,
+            "save_deal_manager_call_script" if job.script_mode == "call" else "save_deal_manager_full_script", db_path, deal_id=job.deal_id,
             source_report_id=context["source_report_id"], situation_review_id=inputs["situation_id"],
             quick_help_id=job.quick_help_id, selected_strategy=job.selected_strategy,
             script_json=script, model_meta=_safe_model_meta(metadata),
@@ -153,13 +154,15 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
         _touch(job, stage="error", detail="Не удалось подготовить сценарий", percent=100)
 
 
-def start_full_script_job(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str, confirm_paid: bool) -> dict[str, Any]:
+def start_full_script_job(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str, script_mode: str = "message", confirm_paid: bool) -> dict[str, Any]:
+    if script_mode not in SCRIPT_MODES:
+        raise ValueError("Неизвестный режим сценария")
     inputs = _current_inputs(db_path, str(deal_id), int(quick_help_id), selected_strategy)
-    existing = _cached_script(db_path, inputs, selected_strategy)
+    existing = _cached_script(db_path, inputs, selected_strategy, script_mode)
     if isinstance(existing, dict):
         job = DealManagerFullScriptJob(
             job_id=uuid.uuid4().hex, deal_id=str(deal_id), quick_help_id=int(quick_help_id),
-            selected_strategy=selected_strategy, status="done", stage="done",
+            selected_strategy=selected_strategy, script_mode=script_mode, status="done", stage="done",
             detail="Открываем сохранённый актуальный сценарий", percent=100,
             script_id=int(existing["id"]), reused=True,
         )
@@ -169,18 +172,36 @@ def start_full_script_job(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str
     if not confirm_paid:
         raise ValueError("Подтвердите платный AI-вызов для полного скрипта")
     with _FULL_SCRIPT_LOCK:
-        active = next((item for item in _FULL_SCRIPT_JOBS.values() if item.deal_id == str(deal_id) and item.quick_help_id == int(quick_help_id) and item.selected_strategy == selected_strategy and item.status in {"queued", "running"}), None)
+        active = next((item for item in _FULL_SCRIPT_JOBS.values() if item.deal_id == str(deal_id) and item.quick_help_id == int(quick_help_id) and item.selected_strategy == selected_strategy and item.script_mode == script_mode and item.status in {"queued", "running"}), None)
         if active:
             return asdict(active)
-        job = DealManagerFullScriptJob(job_id=uuid.uuid4().hex, deal_id=str(deal_id), quick_help_id=int(quick_help_id), selected_strategy=selected_strategy)
+        job = DealManagerFullScriptJob(job_id=uuid.uuid4().hex, deal_id=str(deal_id), quick_help_id=int(quick_help_id), selected_strategy=selected_strategy, script_mode=script_mode)
         _FULL_SCRIPT_JOBS[job.job_id] = job
     threading.Thread(target=_run_full_script_job, args=(job.job_id, db_path), daemon=True).start()
     return asdict(job)
 
 
-def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str) -> dict[str, Any]:
+def _public_disc_profile(analysis_projection: dict[str, Any]) -> dict[str, Any] | None:
+    profile = analysis_projection.get("client_communication_profile")
+    if not isinstance(profile, dict) or profile.get("status") not in {"tentative", "supported"}:
+        return None
+    primary = profile.get("primary_style")
+    secondary = profile.get("secondary_style")
+    confidence = profile.get("profile_confidence")
+    if primary not in {"D", "I", "S", "C"} or confidence not in {"low", "medium", "high"}:
+        return None
+    return {
+        "primary_style": primary,
+        "secondary_style": secondary if secondary in {"D", "I", "S", "C"} and secondary != primary else None,
+        "profile_confidence": confidence,
+    }
+
+
+def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str, script_mode: str = "message") -> dict[str, Any]:
+    if script_mode not in SCRIPT_MODES:
+        raise ValueError("Неизвестный режим сценария")
     inputs = _current_inputs(db_path, str(deal_id), int(quick_help_id), selected_strategy)
-    script = _cached_script(db_path, inputs, selected_strategy)
+    script = _cached_script(db_path, inputs, selected_strategy, script_mode)
     checklist = _storage_call(
         "get_deal_daily_checklist_analysis_projection",
         db_path,
@@ -188,6 +209,8 @@ def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id:
     )
     return {
         "script": script,
+        "script_mode": script_mode,
+        "disc_profile": _public_disc_profile(inputs["context"]["analysis_projection"]),
         "checklist": checklist,
         "objection_handling": _public_objections(inputs["context"]["analysis_projection"]),
     }

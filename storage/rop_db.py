@@ -532,6 +532,27 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_deal_manager_full_scripts_current
                 ON deal_manager_full_scripts(deal_id, manager_id, source_report_id, situation_review_id, quick_help_id);
 
+            CREATE TABLE IF NOT EXISTS deal_manager_call_scripts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                situation_review_id INTEGER NOT NULL,
+                quick_help_id INTEGER NOT NULL,
+                selected_strategy TEXT NOT NULL CHECK(selected_strategy IN ('primary', 'alternative', 'pattern_break')),
+                script_json TEXT NOT NULL,
+                model_meta_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id),
+                FOREIGN KEY(situation_review_id) REFERENCES deal_manager_situation_reviews(id),
+                FOREIGN KEY(quick_help_id) REFERENCES deal_manager_quick_help(id),
+                UNIQUE(deal_id, manager_id, source_report_id, situation_review_id, quick_help_id, selected_strategy)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_manager_call_scripts_current
+                ON deal_manager_call_scripts(deal_id, manager_id, source_report_id, situation_review_id, quick_help_id);
+
             CREATE TABLE IF NOT EXISTS deal_manager_assistant_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
@@ -2340,6 +2361,105 @@ def save_deal_manager_full_script(
         row = conn.execute(
             """
             SELECT * FROM deal_manager_full_scripts
+            WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?
+              AND situation_review_id = ? AND quick_help_id = ? AND selected_strategy = ?
+            """,
+            (
+                str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
+                int(quick_help_id), selected_strategy,
+            ),
+        ).fetchone()
+    result = _row_to_deal_manager_full_script(row)
+    assert result is not None
+    return result
+
+
+def get_deal_manager_call_script(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    situation_review_id: int,
+    quick_help_id: int,
+    selected_strategy: str,
+) -> dict[str, Any] | None:
+    """Return the exact current-context phone call script."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT script.* FROM deal_manager_call_scripts AS script
+            JOIN deal_control_deals AS deal ON deal.deal_id = script.deal_id
+            WHERE script.deal_id = ? AND script.manager_id = deal.manager_id
+              AND script.source_report_id = ? AND script.situation_review_id = ?
+              AND script.quick_help_id = ? AND script.selected_strategy = ?
+            LIMIT 1
+            """,
+            (
+                str(deal_id), int(source_report_id), int(situation_review_id),
+                int(quick_help_id), str(selected_strategy),
+            ),
+        ).fetchone()
+    return _row_to_deal_manager_full_script(row)
+
+
+def save_deal_manager_call_script(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    situation_review_id: int,
+    quick_help_id: int,
+    selected_strategy: str,
+    script_json: dict[str, Any],
+    model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist one validated phone call script for its exact context."""
+    if selected_strategy not in {"primary", "alternative", "pattern_break"}:
+        raise ValueError("Неизвестный вариант сообщения")
+    if not isinstance(script_json, dict) or not script_json:
+        raise ValueError("Сценарий звонка должен быть непустым JSON-объектом")
+    if model_meta is not None and not isinstance(model_meta, dict):
+        raise ValueError("Метаданные модели должны быть JSON-объектом")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        manager_id = _deal_manager_situation_review_context(
+            conn, deal_id=str(deal_id), source_report_id=int(source_report_id),
+        )
+        linked = conn.execute(
+            """
+            SELECT quick_help.id FROM deal_manager_quick_help AS quick_help
+            JOIN deal_manager_situation_reviews AS review ON review.id = quick_help.situation_review_id
+            WHERE quick_help.id = ? AND quick_help.deal_id = ? AND quick_help.manager_id = ?
+              AND quick_help.source_report_id = ? AND quick_help.situation_review_id = ?
+              AND review.source_report_id = ?
+            """,
+            (
+                int(quick_help_id), str(deal_id), manager_id, int(source_report_id),
+                int(situation_review_id), int(source_report_id),
+            ),
+        ).fetchone()
+        if linked is None:
+            raise ValueError("Quick Help не относится к текущей подтверждённой ситуации")
+        conn.execute(
+            """
+            INSERT INTO deal_manager_call_scripts (
+                deal_id, manager_id, source_report_id, situation_review_id,
+                quick_help_id, selected_strategy, script_json, model_meta_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id, manager_id, source_report_id, situation_review_id, quick_help_id, selected_strategy)
+            DO NOTHING
+            """,
+            (
+                str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
+                int(quick_help_id), selected_strategy, dumps_json(script_json),
+                dumps_json(model_meta) if model_meta is not None else None, utcish_now(),
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM deal_manager_call_scripts
             WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?
               AND situation_review_id = ? AND quick_help_id = ? AND selected_strategy = ?
             """,

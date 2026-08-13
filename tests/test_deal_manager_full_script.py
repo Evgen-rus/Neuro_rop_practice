@@ -12,7 +12,9 @@ from openai_api.llm.deal_manager_full_script import (
     validate_full_script,
 )
 from storage.rop_db import (
+    get_deal_manager_call_script,
     get_deal_manager_full_script,
+    save_deal_manager_call_script,
     save_deal_manager_full_script,
     save_deal_manager_quick_help,
 )
@@ -78,6 +80,17 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertNotIn("objection_handling", full_script_schema()["properties"])
         self.assertEqual(validate_full_script(SCRIPT, selected_strategy="alternative"), SCRIPT)
 
+        call_prompt = build_full_script_prompt(
+            analysis_projection=CONTEXT["analysis_projection"],
+            situation_projection=CONTEXT["situation_projection"], deal=DEAL,
+            current_bitrix_task=CONTEXT["current_bitrix_task"], checklist={"items": []},
+            communication_pattern_context={"total_attempts": 2}, quick_help=ANSWER,
+            selected_strategy="alternative", relevant_tactics=ANSWER["lifehacks"], script_mode="call",
+        )
+        self.assertIn("SCRIPT_MODE:\n\"call\"", call_prompt)
+        self.assertIn("client_communication_profile", call_prompt)
+        self.assertIn("телефонного звонка", call_prompt)
+
     def test_storage_is_idempotent_and_exact_context_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
@@ -108,6 +121,17 @@ class DealManagerFullScriptTests(unittest.TestCase):
                 situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
                 selected_strategy="primary",
             ))
+            call_script = save_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative", script_json=SCRIPT,
+            )
+            self.assertNotEqual(call_script["id"], 0)
+            self.assertEqual(get_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative",
+            )["content"], SCRIPT)
 
     def test_cached_script_is_returned_without_paid_confirmation(self) -> None:
         inputs = {
@@ -166,6 +190,32 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(result["status"], "done")
         checklist_call = next(call for call in storage_calls if call[0] == "get_deal_daily_checklist_analysis_projection")
         self.assertEqual(checklist_call[1], {"deal_id": "101"})
+
+    def test_workspace_exposes_existing_disc_labels_without_calculation(self) -> None:
+        inputs = {
+            "context": {
+                "deal": DEAL,
+                "source_report_id": 17,
+                "analysis_projection": {"client_communication_profile": {
+                    "status": "supported", "primary_style": "D", "secondary_style": "C",
+                    "profile_confidence": "high",
+                }},
+            },
+            "quick_help": {"id": 31},
+            "quick_help_content": ANSWER,
+            "situation_id": 21,
+        }
+        with patch.object(full_script_api, "_current_inputs", return_value=inputs), \
+             patch.object(full_script_api, "_cached_script", return_value=None), \
+             patch.object(full_script_api, "_storage_call", return_value={"items": []}):
+            workspace = full_script_api.get_full_script_workspace(
+                db_path=Path("state.sqlite"), deal_id="101", quick_help_id=31,
+                selected_strategy="primary", script_mode="call",
+            )
+        self.assertEqual(workspace["disc_profile"], {
+            "primary_style": "D", "secondary_style": "C", "profile_confidence": "high",
+        })
+        self.assertEqual(workspace["script_mode"], "call")
 
     def test_public_objections_are_allowlisted(self) -> None:
         projection = {

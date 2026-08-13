@@ -12,6 +12,7 @@ from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix
 MAX_FULL_SCRIPT_OUTPUT_TOKENS = 5000
 SCRIPT_CONTRACT = "conversation_script_v1"
 STRATEGIES = ("primary", "alternative", "pattern_break")
+SCRIPT_MODES = ("message", "call")
 
 
 def full_script_schema() -> dict[str, Any]:
@@ -98,10 +99,22 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
-def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, checklist: dict[str, Any], communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]]) -> str:
+def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, checklist: dict[str, Any], communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]], script_mode: str = "message") -> str:
+    if script_mode not in SCRIPT_MODES:
+        raise ValueError("Неизвестный режим сценария")
+    mode_rules = (
+        "- Это сценарий именно телефонного звонка. Не предлагай переписку, мессенджер или отправку сообщения как основной блок. "
+        "Начни с короткого устного входа, проведи менеджера через вопросы и аргументацию и закончи конкретной договорённостью, двигающей сделку к деньгам.\n"
+        "- QUICK_HELP — это уже сделанный заход к клиенту. Не дублируй его текст: используй выбранную стратегию как основание звонка и продолжай с текущей точки.\n"
+        "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй устную речь под primary_style, secondary_style, profile_confidence и recommended_communication: темп, прямоту, длину фраз, порядок аргументов и способ задавать вопросы. Не объясняй DISC менеджеру и не меняй факты. При insufficient_evidence используй нейтральный деловой стиль.\n"
+    ) if script_mode == "call" else (
+        "- Это сценарий продолжения переписки. Давай короткие готовые сообщения и ветки ответа; не превращай его в телефонный разговор.\n"
+        "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй длину, прямоту и структуру сообщений под сохранённый профиль. При insufficient_evidence используй нейтральный деловой стиль.\n"
+    )
     return "\n\n".join([
         "SYSTEM_RULES:\nТы — прикладной помощник менеджера во время реального разговора по одной сделке. Полный анализ уже выполнен: не анализируй сделку заново.",
         "RULES:\n"
+        + mode_rules +
         "- Продолжай ровно выбранный менеджером вариант сообщения. primary соответствует варианту 1, alternative — 2, pattern_break — 3.\n"
         "- Сделай 3–6 коротких диалоговых блоков, а не текст для чтения целиком и не список из двадцати вопросов.\n"
         "- В каждом блоке укажи цель, 1–3 естественные фразы, что услышать в ответе и переход дальше.\n"
@@ -113,12 +126,15 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         _section("ANALYSIS_CONTEXT", analysis_projection), _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)), _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("CURRENT_DAILY_CHECKLIST", checklist), _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("RELEVANT_TACTICS", relevant_tactics),
+        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("RELEVANT_TACTICS", relevant_tactics),
     ])
 
 
 def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     selected_strategy = str(kwargs["selected_strategy"])
+    script_mode = str(kwargs.get("script_mode") or "message")
+    if script_mode not in SCRIPT_MODES:
+        raise ValueError("Неизвестный режим сценария")
     relevant_tactics = kwargs.get("relevant_tactics")
     allowed_tactic_ids = {
         str(item.get("tactic_id") or "").strip()
@@ -128,8 +144,8 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
     result, metadata = call_structured_output_json(
         prompt, schema=full_script_schema(), schema_name="deal_manager_full_script", model=MANAGER_MODEL,
         reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
-        log_title="deal manager full script prompt", call_type="deal_manager_full_script",
-        prompt_cache_key="neuro-rop:deal-manager-full-script:v1",
+        log_title="deal manager full script prompt", call_type=f"deal_manager_full_script_{script_mode}",
+        prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:v2",
         stable_prefix=prompt_prefix_before(prompt, "QUICK_HELP:"),
     )
     return validate_full_script(result, selected_strategy=selected_strategy, allowed_tactic_ids=allowed_tactic_ids), metadata

@@ -48,6 +48,7 @@ import {
   type ManagerQuickHelpStrategyContent,
   type ManagerQuickHelpStrategyV2Content,
   type ManagerFullScriptJob,
+  type ManagerFullScriptMode,
   type ManagerFullScriptWorkspace,
   type ManagerAssistantWorkspace,
   type ManagerSituationJob,
@@ -2301,6 +2302,7 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
   const content: ManagerQuickHelpContent = entry.content
   const [selectedStrategy, setSelectedStrategy] = useState<ManagerQuickHelpStrategy>('primary')
   const [fullScriptOpen, setFullScriptOpen] = useState(false)
+  const [fullScriptMode, setFullScriptMode] = useState<ManagerFullScriptMode>('message')
   const [fullScriptJob, setFullScriptJob] = useState<ManagerFullScriptJob | null>(null)
   const [fullScriptWorkspace, setFullScriptWorkspace] = useState<ManagerFullScriptWorkspace | null>(null)
   const [fullScriptError, setFullScriptError] = useState('')
@@ -2316,15 +2318,16 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
     onRevealFinished?.()
   }, [animate, onRevealFinished, reveal.step])
 
-  async function openFullScript() {
+  async function openFullScript(scriptMode: ManagerFullScriptMode) {
+    setFullScriptMode(scriptMode)
     setFullScriptOpen(true)
     setFullScriptError('')
     setFullScriptWorkspace(null)
     try {
-      const started = await startManagerFullScript(deal.deal_id, entry.id, selectedStrategy, true)
+      const started = await startManagerFullScript(deal.deal_id, entry.id, selectedStrategy, scriptMode, true)
       setFullScriptJob(started)
       if (started.status === 'done') {
-        setFullScriptWorkspace(await fetchManagerFullScript(deal.deal_id, entry.id, selectedStrategy))
+        setFullScriptWorkspace(await fetchManagerFullScript(deal.deal_id, entry.id, selectedStrategy, scriptMode))
       }
     } catch (error) {
       setFullScriptError(error instanceof Error ? error.message : 'Не удалось открыть полный скрипт')
@@ -2340,7 +2343,7 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
         if (cancelled) return
         setFullScriptJob(next)
         if (next.status === 'done') {
-          setFullScriptWorkspace(await fetchManagerFullScript(deal.deal_id, entry.id, selectedStrategy))
+          setFullScriptWorkspace(await fetchManagerFullScript(deal.deal_id, entry.id, selectedStrategy, fullScriptMode))
         } else if (next.status === 'error') {
           setFullScriptError(next.detail || 'Не удалось подготовить полный скрипт')
         }
@@ -2349,7 +2352,7 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
       }
     }, 900)
     return () => { cancelled = true; window.clearTimeout(timer) }
-  }, [deal.deal_id, entry.id, fullScriptJob, fullScriptOpen, selectedStrategy])
+  }, [deal.deal_id, entry.id, fullScriptJob, fullScriptMode, fullScriptOpen, selectedStrategy])
 
   return <article className="dc-manager-answer" aria-busy={reveal.animate && reveal.step !== 'done'}>
     <div className="dc-manager-answer-summary">
@@ -2374,11 +2377,12 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
       animate={reveal.animate}
     /> : null}
     {showFallback && (content.answer_contract === 'strategy_v1' || content.answer_contract === 'strategy_v2') && content.fallback_action ? <div className={revealClassName('dc-manager-answer-fallback', reveal.animate)}><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
-    {showRest && content.answer_contract === 'strategy_v2' ? <button className={revealClassName('dc-button dc-manager-full-script-open', reveal.animate)} onClick={() => void openFullScript()}>Открыть полный скрипт разговора</button> : null}
+    {showRest && content.answer_contract === 'strategy_v2' ? <div className={revealClassName('dc-manager-script-actions', reveal.animate)}><button className="dc-button dc-manager-full-script-open" onClick={() => void openFullScript('message')}>Продолжить переписку</button><button className="dc-button primary dc-manager-full-script-open" onClick={() => void openFullScript('call')}>Подготовить звонок</button></div> : null}
     {showRest ? <div className={revealClassName('dc-manager-answer-actions', reveal.animate)}><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div> : null}
     {fullScriptOpen ? <ManagerFullScriptModal
       deal={deal}
       selectedStrategy={selectedStrategy}
+      scriptMode={fullScriptMode}
       workspace={fullScriptWorkspace}
       job={fullScriptJob}
       error={fullScriptError}
@@ -2479,6 +2483,7 @@ function ManagerStrategyQuickHelpVariants({ content, onCopy, showMessage = true,
 function ManagerFullScriptModal(props: {
   deal: DealControlDeal
   selectedStrategy: ManagerQuickHelpStrategy
+  scriptMode: ManagerFullScriptMode
   workspace: ManagerFullScriptWorkspace | null
   job: ManagerFullScriptJob | null
   error: string
@@ -2500,9 +2505,13 @@ function ManagerFullScriptModal(props: {
   const objections = props.workspace?.objection_handling?.items || []
   const failed = props.job?.status === 'error' || Boolean(props.error)
   const variantNumber = props.selectedStrategy === 'primary' ? '1' : props.selectedStrategy === 'alternative' ? '2' : '3'
+  const title = props.scriptMode === 'call' ? 'Сценарий звонка' : 'Продолжение переписки'
+  const disc = props.workspace?.disc_profile
+  const discValue = disc ? [disc.primary_style, disc.secondary_style].filter(Boolean).join('/') : ''
+  const confidenceLabel = disc?.profile_confidence === 'high' ? 'высокая' : disc?.profile_confidence === 'medium' ? 'средняя' : 'низкая'
   return createPortal(<div className="dc-manager-full-script-layer">
     <section className="dc-manager-full-script-modal" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
-      <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}</small><h2 id="manager-full-script-title">Полный скрипт разговора</h2></div><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
+      <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}{discValue ? <> · <span className="dc-manager-disc">DISC: {discValue} · уверенность: {confidenceLabel}</span></> : null}</small><h2 id="manager-full-script-title">{title}</h2></div><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
       {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
       {!script && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : <>
         <div className="dc-manager-full-script-grid">
