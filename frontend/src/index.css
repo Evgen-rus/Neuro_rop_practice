@@ -41,6 +41,121 @@ textarea {
   min-height: 100vh;
 }
 
+/* Manager help v2: compact deal context and focused conversation workspace. */
+.dc-detail-top { align-items: flex-start; }
+.dc-detail-heading { width: 100%; }
+.dc-deal-title-row { flex-wrap: nowrap; }
+.dc-detail-heading > .dc-deal-compact-title { min-width: 0; max-width: none; margin: 3px 0 8px; overflow: hidden; color: #38516d; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.dc-detail-stats.dc-detail-stats-compact { display: grid; width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0 0 9px; }
+.dc-detail-stats.dc-detail-stats-compact > div { display: flex; min-width: 0; min-height: 30px; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid #dce6f0; border-radius: 7px; background: #f7faff; }
+.dc-detail-stats.dc-detail-stats-compact span { display: grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; border-radius: 4px; color: #467197; background: #e7f0f8; font-size: 8px; font-weight: 900; }
+.dc-detail-stats.dc-detail-stats-compact strong { min-width: 0; overflow: hidden; color: #294764; font-size: 10px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+.dc-manager-answer-v2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 10px; padding: 10px; }
+.dc-manager-answer-v2 > .dc-manager-answer-copy { min-height: 0; }
+.dc-manager-tone-tabs.numeric button { min-height: 38px; font-size: 14px; }
+.dc-manager-lifehacks { min-width: 0; padding: 11px; border: 1px solid #ead9b9; border-radius: 10px; background: #fffaf0; }
+.dc-manager-lifehacks > h4 { margin: 0 0 8px; color: #805d1e; font-size: 12.5px; }
+.dc-manager-lifehacks > div { display: grid; gap: 7px; }
+.dc-manager-lifehacks article { display: grid; gap: 3px; padding: 8px; border: 1px solid #eadfca; border-radius: 8px; background: #fff; }
+.dc-manager-lifehacks strong { color: #5f481e; font-size: 11.5px; }
+.dc-manager-lifehacks p { color: #45566b; font-size: 11px; line-height: 1.4; }
+.dc-manager-lifehacks small { color: #63768e; font-size: 10px; line-height: 1.35; }
+.dc-manager-lifehacks em { color: #8a6b2e; font-size: 9.5px; font-style: normal; line-height: 1.35; }
+.dc-manager-full-script-open { margin: 0 10px 10px; border-color: #1768f2; color: #1768f2; background: #f4f8ff; }
+.dc-manager-full-script-layer { position: fixed; z-index: 1250; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(12, 24, 41, .72); }
+.dc-manager-full-script-modal { display: grid; width: min(1500px, 98vw); height: min(920px, 96vh); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border-radius: 18px; background: #f4f7fb; box-shadow: 0 28px 80px rgba(6, 20, 38, .38); }
+.dc-manager-full-script-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #d9e2ec; background: #fff; }
+.dc-manager-full-script-modal > header small { color: #6b7e95; font-size: 10px; }
+.dc-manager-full-script-modal > header h2 { margin: 2px 0 0; color: #173756; font-size: 19px; }
+.dc-manager-full-script-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; color: #52677f; background: #edf2f7; font-size: 24px; cursor: pointer; }
+.dc-manager-full-script-modal > .dc-manager-error { margin: 10px 18px 0; }
+.dc-manager-full-script-loading { display: grid; place-content: center; justify-items: center; gap: 12px; color: #294764; }
+.dc-manager-full-script-grid { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 12px; padding: 12px; overflow: hidden; }
+.dc-manager-full-script-grid > main { min-width: 0; overflow: auto; padding: 2px 5px 18px; }
+.dc-manager-full-script-grid > aside { min-width: 0; overflow: auto; }
+.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist { margin: 0; background: #fff; }
+.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist > summary { padding: 13px; }
+.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist-body li > span { font-size: 11px; }
+.dc-manager-full-script-goal, .dc-manager-full-script-close { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #bcd6f3; border-radius: 11px; background: #eff6ff; }
+.dc-manager-full-script-goal small, .dc-manager-full-script-close small { color: #5b7591; font-size: 10px; text-transform: uppercase; }
+.dc-manager-full-script-goal strong, .dc-manager-full-script-close strong { color: #173d68; font-size: 13px; line-height: 1.45; }
+.dc-manager-full-script-grid ol { display: grid; gap: 9px; margin: 10px 0; padding: 0; list-style: none; }
+.dc-manager-full-script-grid ol > li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; align-items: start; }
+.dc-manager-full-script-grid ol > li > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; color: #fff; background: #1768f2; font-size: 11px; font-weight: 800; }
+.dc-manager-full-script-grid ol article { padding: 11px 13px; border: 1px solid #dce5ef; border-radius: 11px; background: #fff; }
+.dc-manager-full-script-grid ol h3 { margin: 0; color: #213e5c; font-size: 13px; }
+.dc-manager-full-script-grid ol p { margin: 3px 0 8px; color: #5a6d82; font-size: 11px; line-height: 1.4; }
+.dc-manager-full-script-phrases { display: grid; gap: 5px; }
+.dc-manager-full-script-phrases blockquote { margin: 0; padding: 8px 10px; border-left: 3px solid #54a276; border-radius: 0 7px 7px 0; color: #25483a; background: #f1faf5; font-size: 12px; line-height: 1.45; }
+.dc-manager-full-script-listen, .dc-manager-full-script-grid ol footer { margin-top: 7px; color: #52677e; font-size: 10.5px; line-height: 1.4; }
+.dc-manager-full-script-grid ol footer { padding-top: 7px; border-top: 1px solid #edf1f5; }
+.dc-manager-full-script-close { border-color: #b9dec8; background: #f1faf5; }
+.dc-manager-full-script-objections { margin: 0 12px 12px; border: 1px solid #e2d5c2; border-radius: 10px; background: #fff; }
+.dc-manager-full-script-objections summary { display: flex; justify-content: space-between; padding: 10px 13px; color: #624b2d; font-size: 12px; font-weight: 800; cursor: pointer; }
+.dc-manager-full-script-objections > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; padding: 0 10px 10px; }
+.dc-manager-full-script-objections article { padding: 9px; border: 1px solid #eadfce; border-radius: 8px; background: #fffaf3; }
+.dc-manager-full-script-objections h3 { margin: 0 0 6px; color: #563d1d; font-size: 11.5px; }
+.dc-manager-full-script-objections p { margin: 3px 0; color: #526172; font-size: 10.5px; line-height: 1.4; }
+.dc-manager-full-script-objections .avoid { color: #934444; }
+
+@media (max-width: 900px) {
+  .dc-detail-stats.dc-detail-stats-compact { gap: 4px; }
+  .dc-detail-stats.dc-detail-stats-compact > div { gap: 4px; padding-inline: 6px; }
+  .dc-detail-stats.dc-detail-stats-compact strong { font-size: 9px; }
+  .dc-manager-answer-v2 { grid-template-columns: 1fr; }
+  .dc-manager-full-script-layer { padding: 0; }
+  .dc-manager-full-script-modal { width: 100vw; height: 100dvh; border-radius: 0; }
+  .dc-manager-full-script-grid { grid-template-columns: 1fr; overflow: auto; }
+  .dc-manager-full-script-grid > main, .dc-manager-full-script-grid > aside { overflow: visible; }
+  .dc-manager-full-script-grid > aside { grid-row: 1; }
+}
+
+/* Keep the manager deal header full-width despite the legacy two-column detail header. */
+.dc-detail > header.dc-detail-top {
+  display: block;
+  margin-bottom: 15px;
+}
+
+.dc-detail-top > .dc-detail-heading {
+  width: 100%;
+  gap: 0;
+}
+
+.dc-detail-top .dc-deal-title-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.dc-detail-top .dc-deal-title-row h2 {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.dc-detail-top .dc-deal-title-row .dc-bitrix-detail-link {
+  width: auto;
+  min-width: 0;
+  min-height: 26px;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 9px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dc-detail-top .dc-detail-stats.dc-detail-stats-compact {
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dc-detail-top .dc-analysis-ready {
+  width: 100%;
+}
+
 .auth-page {
   position: relative;
   display: grid;

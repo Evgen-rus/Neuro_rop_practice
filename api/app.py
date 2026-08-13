@@ -83,6 +83,11 @@ from api.deal_manager_quick_help import (
     record_manager_communication_completed,
     start_quick_help_job,
 )
+from api.deal_manager_full_script import (
+    get_full_script_job,
+    get_full_script_workspace,
+    start_full_script_job,
+)
 from api.deal_manager_situation import (
     StorageContractUnavailable,
     confirm_deal_manager_situation,
@@ -258,6 +263,12 @@ class DealManagerSituationRefineRequest(BaseModel):
 
 class DealManagerQuickHelpRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
+    confirm_paid: bool = False
+
+
+class DealManagerFullScriptRequest(BaseModel):
+    quick_help_id: int = Field(ge=1)
+    selected_strategy: Literal["primary", "alternative", "pattern_break"] = "primary"
     confirm_paid: bool = False
 
 
@@ -944,6 +955,47 @@ def deal_manager_quick_help_history_get(
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/full-script")
+def deal_manager_full_script_start(deal_id: str, body: DealManagerFullScriptRequest) -> dict[str, Any]:
+    require_deal(deal_id, action="paid_ai")
+    try:
+        return start_full_script_job(
+            db_path=DEFAULT_DB_PATH, deal_id=deal_id, quick_help_id=body.quick_help_id,
+            selected_strategy=body.selected_strategy, confirm_paid=body.confirm_paid,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур полного скрипта ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/full-script-jobs/{job_id}")
+def deal_manager_full_script_job_get(job_id: str) -> dict[str, Any]:
+    job = get_full_script_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание полного скрипта не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    return job
+
+
+@app.get("/api/deal-control/deals/{deal_id}/full-script")
+def deal_manager_full_script_get(
+    deal_id: str,
+    quick_help_id: int = Query(ge=1),
+    selected_strategy: Literal["primary", "alternative", "pattern_break"] = Query(default="primary"),
+) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_full_script_workspace(
+            db_path=DEFAULT_DB_PATH, deal_id=deal_id, quick_help_id=quick_help_id,
+            selected_strategy=selected_strategy,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур полного скрипта ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

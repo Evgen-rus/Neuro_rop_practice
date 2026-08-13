@@ -24,7 +24,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Полный LLM-анализ и его рендеринг | `openai_api/llm/analyze_lead.py`, `openai_api/llm/analyze_deal.py` |
 | LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py` |
 | Change detection | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py` |
-| Контроль сделки, дневной чек-лист менеджера, исходы задач, дневные коммуникации и AI-подсказка менеджеру | `api/deal_control.py`, `api/deal_task_guidance.py`, `bitrix/customer_history.py`, `openai_api/llm/deal_task_guidance.py`, `storage/rop_db.py` |
+| Контроль сделки, дневной чек-лист менеджера, исходы задач, дневные коммуникации, Quick Help и полный скрипт разговора | `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `storage/rop_db.py` |
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
 | Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
 | Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` |
@@ -54,6 +54,7 @@ ROP Assistant помогает руководителю продаж разби�
 - Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
 - У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
 - AI-подсказка к задаче РОПа запускается только явно, привязывается к ревизии задачи и последнему полному deal-анализу; устаревшую подсказку нельзя показывать менеджеру как актуальную.
+- Quick Help не запускает повторный полный анализ: он использует подтверждённую manager situation, ограниченную проекцию последнего отчёта и отдельный knowledge playbook. Полный скрипт создаётся отдельным явным LLM-вызовом и переиспользуется только при совпадении `source_report_id`, situation review, Quick Help и выбранной стратегии; дневной checklist и `objection_handling` остаются существующими источниками истины.
 - Compact attention-delta — изолированный shadow/review. Ошибка, устаревший snapshot или неуспешное evidence coverage означают `full_fallback_recommended`, а не замену legacy report.
 
 ## Основные контуры
@@ -123,7 +124,7 @@ Compact run доступен только для уже сохранённых f
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
 | Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, auth tests |
 | Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
-| Чек-лист дожима, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации и AI-подсказка | `api/deal_control.py`, `api/deal_task_guidance.py`, `bitrix/customer_history.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx` |
+| Чек-лист дожима, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации, Quick Help и полный скрипт | `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx` |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
 | Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
 | Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |

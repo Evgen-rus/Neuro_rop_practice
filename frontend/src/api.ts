@@ -744,7 +744,22 @@ export type ManagerQuickHelpStrategyContent = ManagerQuickHelpCommonContent & {
   fallback_action: string
 }
 
-export type ManagerQuickHelpContent = ManagerQuickHelpLegacyContent | ManagerQuickHelpStrategyContent
+export type ManagerLifehack = {
+  tactic_id: string
+  title: string
+  action: string
+  why_relevant: string
+  conditions: string
+}
+
+export type ManagerQuickHelpStrategyV2Content = ManagerQuickHelpCommonContent & {
+  answer_contract: 'strategy_v2'
+  client_messages: Record<ManagerQuickHelpStrategy, string>
+  lifehacks: ManagerLifehack[]
+  fallback_action: string
+}
+
+export type ManagerQuickHelpContent = ManagerQuickHelpLegacyContent | ManagerQuickHelpStrategyContent | ManagerQuickHelpStrategyV2Content
 
 export type ManagerQuickHelpEntry = {
   id: number
@@ -774,6 +789,62 @@ export type ManagerQuickHelpHistory = {
   entries: ManagerQuickHelpEntry[]
   has_more?: boolean
   next_before_id?: number | null
+}
+
+export type ManagerFullScriptBlock = {
+  block_id: string
+  title: string
+  objective: string
+  suggested_phrases: string[]
+  listen_for: string[]
+  transition: string
+}
+
+export type ManagerFullScriptContent = {
+  script_contract: 'conversation_script_v1'
+  selected_strategy: ManagerQuickHelpStrategy
+  conversation_goal: string
+  blocks: ManagerFullScriptBlock[]
+  closing_agreement: string
+  relevant_tactic_ids: string[]
+}
+
+export type ManagerFullScriptRecord = {
+  id: number
+  quick_help_id: number
+  selected_strategy: ManagerQuickHelpStrategy
+  content: ManagerFullScriptContent
+  created_at: string
+}
+
+export type ManagerFullScriptJob = {
+  job_id: string
+  deal_id: string
+  quick_help_id: number
+  selected_strategy: ManagerQuickHelpStrategy
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
+  detail: string
+  percent: number
+  script_id?: number | null
+  reused?: boolean
+  error?: string | null
+}
+
+export type ManagerObjectionHandling = {
+  items: Array<{
+    objection: string
+    manager_reply: string
+    follow_up_question: string
+    next_step_goal: string
+    what_not_to_do: string
+  }>
+}
+
+export type ManagerFullScriptWorkspace = {
+  script: ManagerFullScriptRecord | null
+  checklist: Record<string, unknown>
+  objection_handling: ManagerObjectionHandling | null
 }
 
 export type ManagerAssistantTimelineEntry = {
@@ -1032,13 +1103,35 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
   const answerContract = asString(content.answer_contract)
   const recommendedStrategy = asString(content.recommended_strategy)
   const recommendedChannel = asString(content.recommended_channel)
+  const lifehacks = (Array.isArray(content.lifehacks) ? content.lifehacks : []).map((item) => {
+    const value = asRecord(item)
+    return {
+      tactic_id: asString(value.tactic_id),
+      title: asString(value.title),
+      action: asString(value.action),
+      why_relevant: asString(value.why_relevant),
+      conditions: asString(value.conditions),
+    }
+  }).filter((item) => item.tactic_id && item.title && item.action)
   const commonContent = {
     situation_summary: asString(content.situation_summary) || asString(content.problem_summary),
     next_action: asString(content.next_action) || asString(content.recommended_action),
     expected_result: asString(content.expected_result),
     crm_checklist: asStringList(content.crm_checklist),
   }
-  const normalizedContent: ManagerQuickHelpContent = answerContract === 'strategy_v1'
+  const normalizedContent: ManagerQuickHelpContent = answerContract === 'strategy_v2'
+    ? {
+        ...commonContent,
+        answer_contract: 'strategy_v2',
+        client_messages: {
+          primary: asString(clientMessages.primary),
+          alternative: asString(clientMessages.alternative),
+          pattern_break: asString(clientMessages.pattern_break),
+        },
+        lifehacks,
+        fallback_action: asString(content.fallback_action),
+      }
+    : answerContract === 'strategy_v1'
     ? {
         ...commonContent,
         answer_contract: 'strategy_v1',
@@ -1088,6 +1181,33 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
     created_at: asString(record.created_at),
     model_meta: asRecord(record.model_meta),
   }
+}
+
+export function startManagerFullScript(
+  dealId: string,
+  quickHelpId: number,
+  selectedStrategy: ManagerQuickHelpStrategy,
+  confirmPaid = true,
+) {
+  return api<ManagerFullScriptJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/full-script`, {
+    method: 'POST',
+    body: JSON.stringify({ quick_help_id: quickHelpId, selected_strategy: selectedStrategy, confirm_paid: confirmPaid }),
+  })
+}
+
+export function fetchManagerFullScriptJob(jobId: string) {
+  return api<ManagerFullScriptJob>(`/api/deal-control/full-script-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchManagerFullScript(
+  dealId: string,
+  quickHelpId: number,
+  selectedStrategy: ManagerQuickHelpStrategy,
+) {
+  const query = new URLSearchParams({ quick_help_id: String(quickHelpId), selected_strategy: selectedStrategy })
+  return api<ManagerFullScriptWorkspace>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/full-script?${query.toString()}`,
+  )
 }
 
 export async function transcribeManagerVoice(

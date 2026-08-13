@@ -59,7 +59,7 @@ CONTEXT = {
     },
 }
 ANSWER = {
-    "answer_contract": "strategy_v1",
+    "answer_contract": "strategy_v2",
     "situation_summary": "Клиент получил КП, но следующий шаг ещё не согласован.",
     "next_action": "Напишите клиенту один короткий вопрос о решении.",
     "expected_result": "Цель — получить ответ и согласовать дату следующего шага.",
@@ -68,15 +68,14 @@ ANSWER = {
         "alternative": "Добрый день! Какой вопрос по КП сейчас мешает определить дату решения?",
         "pattern_break": "Добрый день! Ответьте, пожалуйста, одним словом: обсуждаем, переносим или закрываем?",
     },
-    "call_scripts": {
-        "primary": "Добрый день! Предлагаю за минуту согласовать следующий шаг по КП.",
-        "alternative": "Добрый день! Какой критерий по КП нужно уточнить, чтобы определить дату решения?",
-        "pattern_break": "Добрый день! Давайте коротко выберем: продолжаем, переносим или закрываем вопрос?",
-    },
-    "recommended_strategy": "pattern_break",
-    "recommended_channel": "message",
+    "lifehacks": [{
+        "tactic_id": "MT-CONTACT-002",
+        "title": "Смена канала связи",
+        "action": "Перейти с безрезультатных звонков на короткое сообщение.",
+        "why_relevant": "История показывает несколько попыток без контакта.",
+        "conditions": "Использовать только доступный клиенту канал.",
+    }],
     "fallback_action": "Если ответа не будет, зафиксируйте паузу и следующий допустимый момент возврата.",
-    "crm_checklist": ["Ответ клиента", "Дата следующего шага"],
 }
 COMMUNICATION_CONTEXT = {
     "window_days": 30,
@@ -150,11 +149,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
-        self.assertEqual(quick_help_schema()["properties"]["crm_checklist"]["maxItems"], 4)
-        self.assertEqual(
-            quick_help_schema()["properties"]["recommended_strategy"]["enum"],
-            ["primary", "alternative", "pattern_break"],
-        )
+        self.assertNotIn("call_scripts", quick_help_schema()["properties"])
+        self.assertNotIn("crm_checklist", quick_help_schema()["properties"])
+        self.assertEqual(quick_help_schema()["properties"]["lifehacks"]["maxItems"], 3)
+        self.assertIn("MT-CONTACT-001", prompt)
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
 
     def test_generate_marks_reusable_deal_context_before_dynamic_question(self) -> None:
@@ -171,7 +169,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v3")
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v4")
         self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
         self.assertIn("COMMUNICATION_PATTERN_CONTEXT", kwargs["stable_prefix"])
         self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
@@ -183,7 +181,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             validate_quick_help(invalid)
 
     def test_validation_rejects_duplicate_strategy_variants_and_summary_list(self) -> None:
-        duplicate = {**ANSWER, "call_scripts": {"primary": "Одна фраза", "alternative": "Одна фраза", "pattern_break": "Одна фраза"}}
+        duplicate = {**ANSWER, "client_messages": {"primary": "Одна фраза", "alternative": "Одна фраза", "pattern_break": "Одна фраза"}}
         with self.assertRaisesRegex(ValueError, "разные варианты"):
             validate_quick_help(duplicate)
         listed = {**ANSWER, "next_action": "Сначала напишите.\nПотом позвоните."}
