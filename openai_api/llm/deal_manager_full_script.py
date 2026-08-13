@@ -12,7 +12,7 @@ from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix
 MAX_FULL_SCRIPT_OUTPUT_TOKENS = 5000
 SCRIPT_CONTRACT = "conversation_script_v1"
 STRATEGIES = ("primary", "alternative", "pattern_break")
-SCRIPT_MODES = ("message", "call")
+SCRIPT_MODES = ("message", "call", "email")
 
 
 def full_script_schema() -> dict[str, Any]:

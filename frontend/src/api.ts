@@ -801,7 +801,7 @@ export type ManagerFullScriptBlock = {
   relevant_objection_ids: string[]
 }
 
-export type ManagerFullScriptContent = {
+export type ManagerConversationScriptContent = {
   script_contract: 'conversation_script_v1'
   selected_strategy: ManagerQuickHelpStrategy
   conversation_goal: string
@@ -810,7 +810,20 @@ export type ManagerFullScriptContent = {
   relevant_tactic_ids: string[]
 }
 
-export type ManagerFullScriptMode = 'message' | 'call'
+export type ManagerEmailContent = {
+  email_contract: 'manager_email_v1'
+  selected_strategy: ManagerQuickHelpStrategy
+  subject: string
+  greeting: string
+  context: string
+  questions: string[]
+  value_point: string
+  call_to_action: string
+  closing: string
+}
+
+export type ManagerFullScriptContent = ManagerConversationScriptContent | ManagerEmailContent
+export type ManagerFullScriptMode = 'message' | 'call' | 'email'
 
 export type ManagerFullScriptRecord = {
   id: number
@@ -1194,6 +1207,38 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
   }
 }
 
+export type ManagerFollowupItem = {
+  item_id: string
+  concern_or_scenario: string
+  basis_status: 'confirmed' | 'inferred' | 'generic'
+  evidence_summary: string
+  followup_type: 'video' | 'article' | 'checklist' | 'email' | 'case' | 'news' | 'useful_tip' | 'other'
+  idea: string
+  why_it_may_help: string
+  suggested_channel: string
+  timing: string
+  target_micro_conversion: string
+  caution: string
+}
+
+export type ManagerFollowupsRecord = {
+  id: number
+  content: { followups_contract: 'followup_plan_v1'; context_summary: string; items: ManagerFollowupItem[] }
+  created_at: string
+}
+
+export type ManagerFollowupsJob = {
+  job_id: string
+  deal_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
+  detail: string
+  percent: number
+  followups_id?: number | null
+  reused?: boolean
+  error?: string | null
+}
+
 export function startManagerFullScript(
   dealId: string,
   quickHelpId: number,
@@ -1221,6 +1266,20 @@ export function fetchManagerFullScript(
   return api<ManagerFullScriptWorkspace>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/full-script?${query.toString()}`,
   )
+}
+
+export function startManagerFollowups(dealId: string, confirmPaid = true) {
+  return api<ManagerFollowupsJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/followups`, {
+    method: 'POST', body: JSON.stringify({ confirm_paid: confirmPaid }),
+  })
+}
+
+export function fetchManagerFollowupsJob(jobId: string) {
+  return api<ManagerFollowupsJob>(`/api/deal-control/followup-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchManagerFollowups(dealId: string) {
+  return api<{ followups: ManagerFollowupsRecord | null }>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/followups`)
 }
 
 export async function transcribeManagerVoice(

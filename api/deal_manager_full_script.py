@@ -19,6 +19,7 @@ from api.deal_manager_situation import (
     load_manager_screen_context,
 )
 from openai_api.llm.deal_manager_full_script import SCRIPT_MODES, STRATEGIES, generate_deal_manager_full_script
+from openai_api.llm.deal_manager_email import generate_deal_manager_email
 
 
 @dataclass
@@ -91,8 +92,12 @@ def _current_inputs(db_path: str | Path, deal_id: str, quick_help_id: int, selec
 
 def _cached_script(db_path: str | Path, inputs: dict[str, Any], selected_strategy: str, script_mode: str) -> dict[str, Any] | None:
     context = inputs["context"]
+    method = {
+        "call": "get_deal_manager_call_script",
+        "email": "get_deal_manager_email_script",
+    }.get(script_mode, "get_deal_manager_full_script")
     return _storage_call(
-        "get_deal_manager_call_script" if script_mode == "call" else "get_deal_manager_full_script", db_path,
+        method, db_path,
         deal_id=str(context["deal"]["deal_id"]), source_report_id=int(context["source_report_id"]),
         situation_review_id=int(inputs["situation_id"]), quick_help_id=int(inputs["quick_help"]["id"]),
         selected_strategy=selected_strategy,
@@ -135,7 +140,8 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
         relevant_tactics = tactics if isinstance(tactics, list) else []
         communication_context = build_communication_pattern_context(_load_local_communications(job.deal_id))
         _touch(job, stage="llm", detail="AI строит сценарий выбранного подхода", percent=55)
-        script, metadata = generate_deal_manager_full_script(
+        generator = generate_deal_manager_email if job.script_mode == "email" else generate_deal_manager_full_script
+        script, metadata = generator(
             analysis_projection=context["analysis_projection"], situation_projection=context["situation_projection"],
             deal=context["deal"], current_bitrix_task=context["current_bitrix_task"], checklist=checklist,
             communication_pattern_context=communication_context, quick_help=inputs["quick_help_content"],
@@ -143,8 +149,12 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             objection_handling=_public_objections(context["analysis_projection"]),
         )
         _touch(job, stage="saving", detail="Сохраняем проверенный сценарий", percent=88)
+        save_method = {
+            "call": "save_deal_manager_call_script",
+            "email": "save_deal_manager_email_script",
+        }.get(job.script_mode, "save_deal_manager_full_script")
         saved = _storage_call(
-            "save_deal_manager_call_script" if job.script_mode == "call" else "save_deal_manager_full_script", db_path, deal_id=job.deal_id,
+            save_method, db_path, deal_id=job.deal_id,
             source_report_id=context["source_report_id"], situation_review_id=inputs["situation_id"],
             quick_help_id=job.quick_help_id, selected_strategy=job.selected_strategy,
             script_json=script, model_meta=_safe_model_meta(metadata),

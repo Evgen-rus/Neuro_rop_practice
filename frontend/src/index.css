@@ -63,16 +63,20 @@ textarea {
 .dc-manager-lifehacks p { color: #45566b; font-size: 11px; line-height: 1.4; }
 .dc-manager-lifehacks small { color: #63768e; font-size: 10px; line-height: 1.35; }
 .dc-manager-lifehacks em { color: #8a6b2e; font-size: 9.5px; font-style: normal; line-height: 1.35; }
-.dc-manager-full-script-open { margin: 0 10px 10px; border-color: #1768f2; color: #1768f2; background: #f4f8ff; }
-.dc-manager-script-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 10px 10px; }
-.dc-manager-script-actions .dc-manager-full-script-open { margin: 0; }
+.dc-manager-message-tools { display: flex; align-items: center; gap: 7px; }
+.dc-manager-format-icons { display: flex; gap: 4px; }
+.dc-manager-format-icons button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid #c9d9e8; border-radius: 8px; color: #365b7e; background: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
+.dc-manager-format-icons button:hover { border-color: #7eace0; background: #edf5ff; }
+.dc-manager-format-icons button.active { border-color: #1768f2; color: #fff; background: #1768f2; }
 .dc-manager-full-script-layer { position: fixed; z-index: 1250; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(12, 24, 41, .72); }
 .dc-manager-full-script-modal { display: grid; width: min(1500px, 98vw); height: min(920px, 96vh); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border-radius: 18px; background: #f4f7fb; box-shadow: 0 28px 80px rgba(6, 20, 38, .38); }
 .dc-manager-full-script-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #d9e2ec; background: #fff; }
 .dc-manager-full-script-modal > header small { color: #6b7e95; font-size: 10px; }
 .dc-manager-disc { color: #536f8d; white-space: nowrap; }
 .dc-manager-full-script-modal > header h2 { margin: 2px 0 0; color: #173756; font-size: 19px; }
-.dc-manager-full-script-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; color: #52677f; background: #edf2f7; font-size: 24px; cursor: pointer; }
+.dc-manager-full-script-header-actions { display: flex; align-items: center; gap: 8px; }
+.dc-manager-full-script-modal > header .dc-manager-full-script-copy { min-height: 34px; padding: 6px 11px; font-size: 11px; }
+.dc-manager-full-script-modal > header .dc-manager-full-script-close-button { width: 34px; height: 34px; border: 0; border-radius: 9px; color: #52677f; background: #edf2f7; font-size: 24px; cursor: pointer; }
 .dc-manager-full-script-modal > .dc-manager-error { margin: 10px 18px 0; }
 .dc-manager-full-script-loading { display: grid; place-content: center; justify-items: center; gap: 12px; color: #294764; }
 .dc-manager-full-script-failed { display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; color: #5f6f82; text-align: center; }
@@ -110,6 +114,14 @@ textarea {
 .dc-manager-full-script-objections h3 { margin: 0 0 6px; color: #563d1d; font-size: 11.5px; }
 .dc-manager-full-script-objections p { margin: 3px 0; color: #526172; font-size: 10.5px; line-height: 1.4; }
 .dc-manager-full-script-objections .avoid { color: #934444; }
+.dc-manager-email { display: grid; min-height: 0; grid-template-rows: auto minmax(0, 1fr); gap: 12px; overflow: hidden; padding: 18px; }
+.dc-manager-email > div, .dc-manager-email > article { padding: 16px; border: 1px solid #d6e2ed; border-radius: 12px; background: #fff; }
+.dc-manager-email > div { display: grid; min-height: 0; gap: 5px; padding: 10px 16px; }
+.dc-manager-email > article { min-height: 0; overflow: auto; }
+.dc-manager-email small { color: #71859b; font-size: 10px; text-transform: uppercase; }
+.dc-manager-email strong { color: #183d64; font-size: 15px; }
+.dc-manager-email article { color: #344f6b; font-size: 13px; line-height: 1.55; }
+.dc-manager-email article p { white-space: pre-wrap; }
 
 @media (max-width: 900px) {
   .dc-detail-stats.dc-detail-stats-compact { gap: 4px; }
@@ -6994,6 +7006,24 @@ ul.facts.bad li:before {
 .dc-manager-assistant-context-grid div { display: grid; gap: 4px; min-height: 65px; padding: 12px; border: 1px solid #d6e2ed; border-radius: 11px; background: #fff; }
 .dc-manager-assistant-context-grid small { color: #7a8ca1; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .dc-manager-assistant-context-grid strong { color: #274462; font-size: 11px; line-height: 1.45; }
+.dc-manager-followups { display: grid; gap: 12px; }
+.dc-manager-followups > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.dc-manager-followups > header h3, .dc-manager-followups > header p { margin: 0; }
+.dc-manager-followups > header p, .dc-manager-followups .summary, .dc-manager-followups .empty { color: #64788f; font-size: 11px; }
+.dc-manager-followups > div { display: grid; gap: 10px; }
+.dc-manager-followups article { display: grid; gap: 7px; padding: 13px; border: 1px solid #d8e3ed; border-radius: 12px; background: #fff; }
+.dc-manager-followups article > header { display: flex; justify-content: space-between; gap: 8px; }
+.dc-manager-followups article > header strong { color: #234868; font-size: 12px; }
+.dc-manager-followups article > header span { padding: 3px 7px; border-radius: 10px; color: #17603a; background: #eaf8f0; font-size: 9px; white-space: nowrap; }
+.dc-manager-followups h4, .dc-manager-followups article p { margin: 0; }
+.dc-manager-followups h4 { color: #173c62; font-size: 13px; }
+.dc-manager-followups article p { color: #526980; font-size: 11px; line-height: 1.45; }
+.dc-manager-followups dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.dc-manager-followups dl div { display: grid; gap: 2px; padding: 7px; border-radius: 8px; background: #f4f7fa; }
+.dc-manager-followups dt { color: #8595a6; font-size: 8px; text-transform: uppercase; }
+.dc-manager-followups dd { margin: 0; color: #405a73; font-size: 10px; }
+.dc-manager-followups article small, .dc-manager-followups article em { color: #74869a; font-size: 9.5px; line-height: 1.4; }
+.dc-manager-followups article em { color: #8a6735; font-style: normal; }
 
 .dc-manager-assistant-main > footer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 11px 13px; border-top: 1px solid #d6e2ed; background: #fff; }
 .dc-manager-assistant-main > footer .dc-manager-voice-control { align-self: center; }

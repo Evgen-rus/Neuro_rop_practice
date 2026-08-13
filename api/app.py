@@ -88,6 +88,7 @@ from api.deal_manager_full_script import (
     get_full_script_workspace,
     start_full_script_job,
 )
+from api.deal_manager_followups import get_followups_job, get_followups_workspace, start_followups_job
 from api.deal_manager_situation import (
     StorageContractUnavailable,
     confirm_deal_manager_situation,
@@ -269,7 +270,11 @@ class DealManagerQuickHelpRequest(BaseModel):
 class DealManagerFullScriptRequest(BaseModel):
     quick_help_id: int = Field(ge=1)
     selected_strategy: Literal["primary", "alternative", "pattern_break"] = "primary"
-    script_mode: Literal["message", "call"] = "message"
+    script_mode: Literal["message", "call", "email"] = "message"
+    confirm_paid: bool = False
+
+
+class DealManagerFollowupsRequest(BaseModel):
     confirm_paid: bool = False
 
 
@@ -988,7 +993,7 @@ def deal_manager_full_script_get(
     deal_id: str,
     quick_help_id: int = Query(ge=1),
     selected_strategy: Literal["primary", "alternative", "pattern_break"] = Query(default="primary"),
-    script_mode: Literal["message", "call"] = Query(default="message"),
+    script_mode: Literal["message", "call", "email"] = Query(default="message"),
 ) -> dict[str, Any]:
     require_deal(deal_id, action="open")
     try:
@@ -998,6 +1003,37 @@ def deal_manager_full_script_get(
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур полного скрипта ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/followups")
+def deal_manager_followups_start(deal_id: str, body: DealManagerFollowupsRequest) -> dict[str, Any]:
+    require_deal(deal_id, action="paid_ai")
+    try:
+        return start_followups_job(db_path=DEFAULT_DB_PATH, deal_id=deal_id, confirm_paid=body.confirm_paid)
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур фоллоуапов ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/followup-jobs/{job_id}")
+def deal_manager_followups_job_get(job_id: str) -> dict[str, Any]:
+    job = get_followups_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание фоллоуапов не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    return job
+
+
+@app.get("/api/deal-control/deals/{deal_id}/followups")
+def deal_manager_followups_get(deal_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_followups_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур фоллоуапов ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
