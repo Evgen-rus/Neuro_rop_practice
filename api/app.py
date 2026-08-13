@@ -263,7 +263,8 @@ class DealManagerSituationRefineRequest(BaseModel):
 
 
 class DealManagerQuickHelpRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=4000)
+    question: str = Field(default="", max_length=4000)
+    mode: Literal["push", "reanimator"] | None = None
     confirm_paid: bool = False
 
 
@@ -928,6 +929,7 @@ def deal_manager_quick_help_start(
             db_path=DEFAULT_DB_PATH,
             deal_id=deal_id,
             question=body.question,
+            mode=body.mode,
             confirm_paid=body.confirm_paid,
         )
     except StorageContractUnavailable as error:

@@ -499,6 +499,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 manager_id TEXT NOT NULL,
                 source_report_id INTEGER NOT NULL,
                 situation_review_id INTEGER NOT NULL,
+                mode TEXT,
+                origin TEXT,
                 question TEXT NOT NULL,
                 answer_json TEXT NOT NULL,
                 model_meta_json TEXT,
@@ -758,6 +760,13 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_control_task_crm_facts", "contact_class", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "deal_control_task_crm_facts", "review_status", "TEXT NOT NULL DEFAULT 'candidate'")
         _ensure_column(conn, "deal_control_task_crm_facts", "fact_key", "TEXT")
+        _ensure_column(conn, "deal_manager_quick_help", "mode", "TEXT")
+        _ensure_column(conn, "deal_manager_quick_help", "origin", "TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deal_manager_quick_help_current "
+            "ON deal_manager_quick_help("
+            "deal_id, manager_id, source_report_id, situation_review_id, mode, id DESC)"
+        )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_crm_facts_key "
             "ON deal_control_task_crm_facts(task_id, fact_key) WHERE fact_key IS NOT NULL"
@@ -2164,12 +2173,31 @@ def get_deal_manager_situation_state(db_path: str | Path, *, deal_id: str) -> di
     }
 
 
+def _normalize_quick_help_mode(value: Any, *, content: dict[str, Any] | None = None) -> str:
+    mode = str(value or "").strip()
+    if mode in {"push", "reanimator"}:
+        return mode
+    if isinstance(content, dict):
+        content_mode = str(content.get("mode") or "").strip()
+        if content_mode in {"push", "reanimator"}:
+            return content_mode
+    return "reanimator"
+
+
+def _normalize_quick_help_origin(value: Any) -> str:
+    origin = str(value or "").strip()
+    return origin if origin in {"auto", "manager"} else "manager"
+
+
 def _row_to_deal_manager_quick_help(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     value = dict(row)
-    value["content"] = loads_json(value.pop("answer_json", None), {})
+    content = loads_json(value.pop("answer_json", None), {})
+    value["content"] = content if isinstance(content, dict) else {}
     value["model_meta"] = loads_json(value.pop("model_meta_json", None), None)
+    value["mode"] = _normalize_quick_help_mode(value.get("mode"), content=value["content"])
+    value["origin"] = _normalize_quick_help_origin(value.get("origin"))
     return value
 
 
@@ -2182,6 +2210,8 @@ def save_deal_manager_quick_help(
     question: str,
     answer_json: dict[str, Any],
     model_meta: dict[str, Any] | None = None,
+    mode: str | None = None,
+    origin: str | None = None,
 ) -> dict[str, Any]:
     """Append one independent quick-help question and validated answer."""
     normalized_question = str(question or "").strip()
@@ -2191,6 +2221,8 @@ def save_deal_manager_quick_help(
         raise ValueError("Ответ quick help должен быть непустым JSON-объектом")
     if model_meta is not None and not isinstance(model_meta, dict):
         raise ValueError("Метаданные модели должны быть JSON-объектом")
+    normalized_mode = _normalize_quick_help_mode(mode, content=answer_json)
+    normalized_origin = _normalize_quick_help_origin(origin)
     init_db(db_path)
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -2212,15 +2244,17 @@ def save_deal_manager_quick_help(
             """
             INSERT INTO deal_manager_quick_help (
                 deal_id, manager_id, source_report_id, situation_review_id,
-                question, answer_json, model_meta_json, created_at
+                mode, origin, question, answer_json, model_meta_json, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(deal_id),
                 manager_id,
                 int(source_report_id),
                 int(situation_review_id),
+                normalized_mode,
+                normalized_origin,
                 normalized_question,
                 dumps_json(answer_json),
                 dumps_json(model_meta) if model_meta is not None else None,
@@ -2297,6 +2331,43 @@ def get_deal_manager_quick_help(
             (int(quick_help_id), str(deal_id)),
         ).fetchone()
     return _row_to_deal_manager_quick_help(row)
+
+
+def get_current_deal_manager_quick_help(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    situation_review_id: int,
+    mode: str,
+) -> dict[str, Any] | None:
+    """Return the latest recommendation for one mode on the current situation."""
+    normalized_mode = _normalize_quick_help_mode(mode)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        deal = conn.execute(
+            "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+            (str(deal_id),),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        manager_id = str(deal["manager_id"] or "").strip()
+        if not manager_id:
+            raise ValueError("У сделки не указан локальный ответственный менеджер")
+        rows = conn.execute(
+            """
+            SELECT * FROM deal_manager_quick_help
+            WHERE deal_id = ? AND manager_id = ?
+              AND source_report_id = ? AND situation_review_id = ?
+            ORDER BY id DESC
+            """,
+            (str(deal_id), manager_id, int(source_report_id), int(situation_review_id)),
+        ).fetchall()
+    for row in rows:
+        value = _row_to_deal_manager_quick_help(row)
+        if value is not None and value.get("mode") == normalized_mode:
+            return value
+    return None
 
 
 def _row_to_deal_manager_full_script(row: sqlite3.Row | None) -> dict[str, Any] | None:

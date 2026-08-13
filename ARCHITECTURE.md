@@ -27,7 +27,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Контроль сделки, дневной чек-лист менеджера, исходы задач, дневные коммуникации, Quick Help и полный скрипт разговора | `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `storage/rop_db.py` |
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
 | Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
-| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` |
+| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` |
 | Compact attention-delta shadow | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py`, `benchmarks/*` |
 
 `README.md` описывает только быстрый запуск. Операционные детали принадлежат runbook-файлам и не должны дублироваться здесь.
@@ -54,7 +54,7 @@ ROP Assistant помогает руководителю продаж разби�
 - Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
 - У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
 - AI-подсказка к задаче РОПа запускается только явно, привязывается к ревизии задачи и последнему полному deal-анализу; устаревшую подсказку нельзя показывать менеджеру как актуальную.
-- Quick Help не запускает повторный полный анализ: он использует подтверждённую manager situation, ограниченную проекцию последнего отчёта и отдельный knowledge playbook. Продолжение переписки, сценарий звонка и email создаются отдельными явными LLM-вызовами и переиспользуются независимо только при совпадении `source_report_id`, situation review, Quick Help и выбранной стратегии. Идеи фоллоуапов также запускаются явно, привязаны к текущим `source_report_id` и situation review и не создают сами материалы; дневной checklist и `objection_handling` остаются существующими источниками истины.
+- Quick Help / «Дожим сделки» не запускает повторный полный анализ: он использует подтверждённую manager situation, ограниченную проекцию последнего отчёта и отдельный knowledge playbook. Для актуальной пары `source_report_id` + situation review хранится отдельный ответ режимов `push` и `reanimator`; повторное открытие и переключение вкладки не создают новый LLM-вызов. Уточнение в чате пересобирает только активный режим. Продолжение переписки, сценарий звонка и email создаются отдельными явными LLM-вызовами и переиспользуются независимо только при совпадении `source_report_id`, situation review, Quick Help и выбранной стратегии. Идеи фоллоуапов также запускаются явно, привязаны к текущим `source_report_id` и situation review и не создают сами материалы; дневной checklist и `objection_handling` остаются существующими источниками истины.
 - Compact attention-delta — изолированный shadow/review. Ошибка, устаревший snapshot или неуспешное evidence coverage означают `full_fallback_recommended`, а не замену legacy report.
 
 ## Основные контуры
@@ -124,10 +124,10 @@ Compact run доступен только для уже сохранённых f
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
 | Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, auth tests |
 | Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
-| Чек-лист дожима, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации, Quick Help и полный скрипт | `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx` |
+| Чек-лист дожима, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации, Quick Help / «Дожим сделки» и полный скрипт | `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `storage/rop_db.py` | `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx`, `frontend/src/dealPush.ts` |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
 | Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
-| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts` | FastAPI только если HTTP-contract меняется |
+| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` | FastAPI только если HTTP-contract меняется |
 | Московское форматирование дат в UI | `frontend/src/dateTime.ts` | компоненты должны использовать общий helper, а не локальный `Date` formatter |
 
 ## Интеграционные границы и данные

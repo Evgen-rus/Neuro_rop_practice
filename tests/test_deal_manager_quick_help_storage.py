@@ -92,6 +92,49 @@ class DealManagerQuickHelpStorageTests(unittest.TestCase):
             self.assertNotIn("\\u041e", raw["answer_json"])
             self.assertEqual(list_deal_manager_quick_help(db_path, deal_id="101"), [])
 
+    def test_mode_and_origin_are_stored_and_legacy_rows_read_as_reanimator(self) -> None:
+        from storage.rop_db import get_current_deal_manager_quick_help
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            report_id, review_id = _seed_deal(db_path)
+            legacy = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="подскажи что делать",
+                answer_json={"answer_contract": "strategy_v2", "next_action": "Написать"},
+            )
+            push = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="Сформируй текущий дожим сделки",
+                answer_json={"answer_contract": "strategy_v3", "mode": "push", "pressure_lever": {"title": "Сроки", "rationale": "Есть дата"}},
+                mode="push",
+                origin="auto",
+            )
+            self.assertEqual(legacy["mode"], "reanimator")
+            self.assertEqual(legacy["origin"], "manager")
+            self.assertEqual(push["mode"], "push")
+            self.assertEqual(push["origin"], "auto")
+            self.assertEqual(
+                get_current_deal_manager_quick_help(
+                    db_path, deal_id="101", source_report_id=report_id,
+                    situation_review_id=review_id, mode="push",
+                )["id"],
+                push["id"],
+            )
+            self.assertEqual(
+                get_current_deal_manager_quick_help(
+                    db_path, deal_id="101", source_report_id=report_id,
+                    situation_review_id=review_id, mode="reanimator",
+                )["id"],
+                legacy["id"],
+            )
+
     def test_rejects_review_from_another_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

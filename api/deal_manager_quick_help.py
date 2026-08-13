@@ -32,7 +32,7 @@ from api.deal_manager_situation import (
     _situation_status,
     _storage_call,
 )
-from openai_api.llm.deal_manager_quick_help import generate_deal_manager_quick_help
+from openai_api.llm.deal_manager_quick_help import ASSISTANT_MODES, generate_deal_manager_quick_help
 from setup import MSK_TZ
 
 
@@ -40,6 +40,10 @@ MAX_QUESTION_CHARS = 4000
 COMMUNICATION_WINDOW_DAYS = 30
 COMMUNICATION_HISTORY_DAYS = 60
 MAX_COMMUNICATION_EVENTS = 10
+AUTO_QUESTIONS = {
+    "push": "Сформируй текущий дожим сделки",
+    "reanimator": "Сформируй текущую рекомендацию по восстановлению коммуникации",
+}
 
 
 def _now() -> str:
@@ -52,6 +56,8 @@ class DealManagerQuickHelpJob:
     deal_id: str
     question: str
     situation_id: int | None
+    mode: str | None = None
+    origin: str = "manager"
     status: str = "queued"
     stage: str = "queued"
     detail: str = "Подготавливаем ответ тренера"
@@ -59,6 +65,8 @@ class DealManagerQuickHelpJob:
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
     quick_help_id: int | None = None
+    saved_by_mode: dict[str, int] = field(default_factory=dict)
+    reused: bool = False
     error: str | None = None
 
 
@@ -80,6 +88,61 @@ def get_quick_help_job(job_id: str) -> dict[str, Any] | None:
         return asdict(job) if job else None
 
 
+def _current_for_mode(db_path: str | Path, context: dict[str, Any], mode: str) -> dict[str, Any] | None:
+    situation_id = context.get("situation_id")
+    if situation_id is None:
+        return None
+    saved = _storage_call(
+        "get_current_deal_manager_quick_help",
+        db_path,
+        deal_id=str(context["deal"]["deal_id"]),
+        source_report_id=int(context["source_report_id"]),
+        situation_review_id=int(situation_id),
+        mode=mode,
+    )
+    return saved if isinstance(saved, dict) else None
+
+
+def _save_mode_answer(
+    *,
+    db_path: str | Path,
+    job: DealManagerQuickHelpJob,
+    context: dict[str, Any],
+    situation_id: int,
+    mode: str,
+    question: str,
+    origin: str,
+    communication_pattern_context: dict[str, Any],
+) -> dict[str, Any]:
+    answer, metadata = generate_deal_manager_quick_help(
+        question=question,
+        analysis_projection=context["analysis_projection"],
+        deal=context["deal"],
+        current_bitrix_task=context["current_bitrix_task"],
+        situation_projection=context["situation_projection"],
+        communication_pattern_context=communication_pattern_context,
+        mode=mode,
+    )
+    saved = _storage_call(
+        "save_deal_manager_quick_help",
+        db_path,
+        deal_id=job.deal_id,
+        source_report_id=context["source_report_id"],
+        situation_review_id=situation_id,
+        question=question,
+        answer_json=answer,
+        model_meta=_safe_model_meta(metadata),
+        mode=mode,
+        origin=origin,
+    )
+    saved_id = int(saved["id"]) if isinstance(saved, dict) and saved.get("id") is not None else None
+    with _QUICK_HELP_LOCK:
+        if saved_id is not None:
+            job.saved_by_mode[mode] = saved_id
+            job.quick_help_id = saved_id
+    return saved if isinstance(saved, dict) else {}
+
+
 def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
     with _QUICK_HELP_LOCK:
         job = _QUICK_HELP_JOBS[job_id]
@@ -97,33 +160,33 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
         communication_pattern_context = build_communication_pattern_context(
             _load_local_communications(job.deal_id)
         )
-        _touch(job, stage="llm", detail="AI разбирает вопрос менеджера", percent=55)
-        answer, metadata = generate_deal_manager_quick_help(
-            question=job.question,
-            analysis_projection=context["analysis_projection"],
-            deal=context["deal"],
-            current_bitrix_task=context["current_bitrix_task"],
-            situation_projection=context["situation_projection"],
-            communication_pattern_context=communication_pattern_context,
-        )
-        _touch(job, stage="saving", detail="Сохраняем полный проверенный ответ", percent=88)
-        saved = _storage_call(
-            "save_deal_manager_quick_help",
-            db_path,
-            deal_id=job.deal_id,
-            source_report_id=context["source_report_id"],
-            situation_review_id=situation_id,
-            question=job.question,
-            answer_json=answer,
-            model_meta=_safe_model_meta(metadata),
-        )
+        modes = list(ASSISTANT_MODES) if job.origin == "auto" and not job.question.strip() else [job.mode or "reanimator"]
+        generated = 0
+        for index, mode in enumerate(modes):
+            existing = _current_for_mode(db_path, context, mode) if job.origin == "auto" else None
+            if isinstance(existing, dict) and existing.get("id") is not None:
+                with _QUICK_HELP_LOCK:
+                    job.saved_by_mode[mode] = int(existing["id"])
+                    job.quick_help_id = int(existing["id"])
+                continue
+            label = "дожим" if mode == "push" else "реаниматор"
+            _touch(job, stage="llm", detail=f"AI готовит {label}", percent=40 + index * 25)
+            question = job.question.strip() or AUTO_QUESTIONS[mode]
+            _save_mode_answer(
+                db_path=db_path,
+                job=job,
+                context=context,
+                situation_id=int(situation_id),
+                mode=mode,
+                question=question,
+                origin=job.origin,
+                communication_pattern_context=communication_pattern_context,
+            )
+            generated += 1
         with _QUICK_HELP_LOCK:
-            try:
-                job.quick_help_id = int(saved.get("id")) if isinstance(saved, dict) and saved.get("id") is not None else None
-            except (TypeError, ValueError):
-                job.quick_help_id = None
+            job.reused = generated == 0
             job.status = "done"
-        _touch(job, stage="done", detail="Ответ тренера готов", percent=100)
+        _touch(job, stage="done", detail="Рекомендация готова", percent=100)
     except Exception as error:  # noqa: BLE001 - never return model content in a job error
         with _QUICK_HELP_LOCK:
             job.status = "error"
@@ -135,19 +198,57 @@ def start_quick_help_job(
     *,
     db_path: str | Path = DEFAULT_DB_PATH,
     deal_id: str,
-    question: str,
+    question: str | None = None,
     confirm_paid: bool,
+    mode: str | None = None,
 ) -> dict[str, Any]:
-    if not confirm_paid:
-        raise ValueError("Подтвердите платный AI-вызов для quick help")
     normalized_question = str(question or "").strip()
-    if not 1 <= len(normalized_question) <= MAX_QUESTION_CHARS:
+    if normalized_question and not 1 <= len(normalized_question) <= MAX_QUESTION_CHARS:
         raise ValueError("Вопрос должен содержать от 1 до 4000 знаков")
+    if mode is not None and mode not in ASSISTANT_MODES:
+        raise ValueError("mode должен быть push или reanimator")
+    origin = "manager" if normalized_question else "auto"
+    if origin == "manager" and mode is None:
+        mode = "reanimator"
+    # Уточнение в чате всегда платное. Автогенерация может переиспользовать
+    # уже сохранённые режимы без LLM, поэтому confirm_paid проверяем после контекста.
+    if origin == "manager" and not confirm_paid:
+        raise ValueError("Подтвердите платный AI-вызов для quick help")
     context = load_manager_screen_context(
         db_path,
         str(deal_id),
         require_confirmed_situation=True,
     )
+    if origin == "auto":
+        saved_by_mode: dict[str, int] = {}
+        missing: list[str] = []
+        for item_mode in ASSISTANT_MODES:
+            current = _current_for_mode(db_path, context, item_mode)
+            if isinstance(current, dict) and current.get("id") is not None:
+                saved_by_mode[item_mode] = int(current["id"])
+            else:
+                missing.append(item_mode)
+        if not missing:
+            job = DealManagerQuickHelpJob(
+                job_id=uuid.uuid4().hex,
+                deal_id=str(deal_id),
+                question="",
+                situation_id=context["situation_id"],
+                mode=mode,
+                origin="auto",
+                status="done",
+                stage="done",
+                detail="Открываем сохранённую актуальную рекомендацию",
+                percent=100,
+                quick_help_id=saved_by_mode.get("push") or next(iter(saved_by_mode.values()), None),
+                saved_by_mode=saved_by_mode,
+                reused=True,
+            )
+            with _QUICK_HELP_LOCK:
+                _QUICK_HELP_JOBS[job.job_id] = job
+            return asdict(job)
+    if not confirm_paid:
+        raise ValueError("Подтвердите платный AI-вызов для quick help")
     with _QUICK_HELP_LOCK:
         existing = next(
             (
@@ -165,6 +266,8 @@ def start_quick_help_job(
             deal_id=str(deal_id),
             question=normalized_question,
             situation_id=context["situation_id"],
+            mode=mode,
+            origin=origin,
         )
         _QUICK_HELP_JOBS[job_id] = job
     thread = threading.Thread(target=_run_quick_help_job, args=(job_id, db_path), daemon=True)
@@ -380,11 +483,18 @@ def get_manager_assistant_workspace(
     communications = _load_local_communications(str(deal_id))
     timeline: list[dict[str, Any]] = []
     for entry in entries:
+        origin = str(entry.get("origin") or "manager")
+        mode = str(entry.get("mode") or "reanimator")
+        mode_label = "Дожим" if mode == "push" else "Реаниматор"
+        if origin == "auto":
+            text = f"Система сформировала рекомендацию: {mode_label}"
+        else:
+            text = f"Менеджер уточнил {mode_label}: {str(entry.get('question') or '').strip()}"
         timeline.append({
             "id": f"assistant:{entry.get('id')}",
             "kind": "assistant_request",
             "occurred_at": entry.get("created_at"),
-            "text": f"Менеджер запросил помощь: {str(entry.get('question') or '').strip()}",
+            "text": text,
         })
     for event in local_events:
         timeline.append({
@@ -413,9 +523,26 @@ def get_manager_assistant_workspace(
     deal = context.get("deal") if isinstance(context.get("deal"), dict) else {}
     analysis = context.get("analysis_projection") if isinstance(context.get("analysis_projection"), dict) else {}
     situation = context.get("situation_projection") if isinstance(context.get("situation_projection"), dict) else {}
+    current_by_mode: dict[str, Any] = {"push": None, "reanimator": None}
+    source_report_id = context.get("source_report_id")
+    situation_id = context.get("situation_id")
+    for entry in entries:
+        mode = str(entry.get("mode") or "reanimator")
+        if mode not in current_by_mode:
+            continue
+        if current_by_mode[mode] is not None:
+            continue
+        if source_report_id is not None and int(entry.get("source_report_id") or 0) != int(source_report_id):
+            continue
+        if situation_id is not None and int(entry.get("situation_review_id") or 0) != int(situation_id):
+            continue
+        current_by_mode[mode] = entry
     return {
         "started": bool(entries),
         "entries": entries,
+        "current_by_mode": current_by_mode,
+        "source_report_id": source_report_id,
+        "situation_review_id": situation_id,
         "timeline": timeline[:50],
         "context": {
             "stage": str(deal.get("stage_name") or ""),

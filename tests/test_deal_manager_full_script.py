@@ -78,6 +78,8 @@ class DealManagerFullScriptTests(unittest.TestCase):
             objection_handling={"items": [{"objection_id": "technical_doubt", "objection": "Нужно проверить", "manager_reply": "Проверим", "follow_up_question": "Что критично?", "next_step_goal": "Зафиксировать", "what_not_to_do": "Не обещать"}]},
         )
         self.assertIn("CURRENT_DAILY_CHECKLIST", prompt)
+        self.assertIn("ASSISTANT_MODE", prompt)
+        self.assertIn("PRESSURE_LEVER", prompt)
         self.assertIn("не создавай новый checklist", prompt)
         self.assertIn("не генерируй новые ответы", prompt)
         self.assertNotIn("checklist", full_script_schema()["properties"])

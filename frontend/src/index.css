@@ -55,6 +55,37 @@ textarea {
 .dc-manager-answer-v2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 10px; padding: 10px; }
 .dc-manager-answer-v2 > .dc-manager-answer-copy { min-height: 0; }
 .dc-manager-tone-tabs.numeric button { min-height: 38px; font-size: 14px; }
+.dc-manager-tone-tabs.labeled { gap: 6px; }
+.dc-manager-tone-tabs.labeled button { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.dc-manager-lever {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: start;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid #ead9b9;
+  border-radius: 10px;
+  background: #fff8ee;
+}
+.dc-manager-answer.mode-push .dc-manager-lever { border-color: #efd3b0; background: #fff6ea; }
+.dc-manager-lever small { display: block; color: #8a6b2e; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.dc-manager-lever strong { color: #5f481e; font-size: 12.5px; line-height: 1.35; }
+.dc-manager-lever p { grid-column: 1 / -1; margin: 0; color: #5c4a32; font-size: 11.5px; line-height: 1.45; }
+.dc-manager-lifehacks-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dc-manager-lifehacks-head h4 { margin: 0; }
+.dc-manager-lifehacks-head nav { display: flex; align-items: center; gap: 6px; }
+.dc-manager-lifehacks-head button { width: 26px; height: 26px; border: 1px solid #ead9b9; border-radius: 7px; background: #fff; color: #805d1e; cursor: pointer; }
+.dc-manager-lifehacks-head button:disabled { opacity: .4; cursor: default; }
+.dc-manager-lifehacks-head span { color: #8a6b2e; font-size: 10.5px; font-weight: 700; }
+.dc-manager-mode-switch { display: flex; gap: 8px; margin-bottom: 8px; }
+.dc-manager-mode-switch button { min-height: 34px; padding: 6px 12px; border: 1px solid #d2dfec; border-radius: 9px; background: #fff; color: #405a78; font-size: 12.5px; font-weight: 750; cursor: pointer; }
+.dc-manager-mode-switch button.active.push { border-color: #e0b57a; color: #8a5310; background: #fff4e6; }
+.dc-manager-mode-switch button.active.reanimator { border-color: #9abfff; color: #075ddc; background: #e8f1ff; }
+.dc-manager-assistant-modal.mode-push .dc-manager-assistant-content { background: #fffaf6; }
+.dc-manager-assistant-modal.mode-push .dc-manager-answer { border-color: #efd3b0; box-shadow: inset 3px 0 0 #e8b86a; }
+.dc-manager-assistant-modal.mode-reanimator .dc-manager-answer { border-color: #d2dfec; }
+.dc-manager-request-heading-only-nav { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 .dc-manager-lifehacks { min-width: 0; padding: 11px; border: 1px solid #ead9b9; border-radius: 10px; background: #fffaf0; }
 .dc-manager-lifehacks > h4 { margin: 0 0 8px; color: #805d1e; font-size: 12.5px; }
 .dc-manager-lifehacks > div { display: grid; gap: 7px; }
@@ -6925,6 +6956,9 @@ ul.facts.bad li:before {
 .dc-manager-request-navigation button:disabled { color: #8da0b7; cursor: default; opacity: .6; }
 .dc-manager-request-navigation span { color: #627b98; font-variant-numeric: tabular-nums; }
 .dc-manager-assistant-turn > .dc-manager-answer { margin: 0; padding: 0; border: 1px solid #d9e4ef; border-radius: 14px; overflow: hidden; background: #fff; }
+.dc-manager-assistant-modal.mode-push .dc-manager-assistant-turn > .dc-manager-answer { border-color: #efd3b0; background: #fffdf9; box-shadow: inset 3px 0 0 #e8b86a; }
+.dc-manager-assistant-modal.mode-push .dc-manager-answer-summary { border-bottom-color: #f0ddc0; background: #fff7ee; }
+.dc-manager-assistant-modal.mode-reanimator .dc-manager-assistant-turn > .dc-manager-answer { border-color: #d2dfec; }
 .dc-manager-answer-summary { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 11px 13px; border-bottom: 1px solid #d9e4ef; background: #f5f9ff; }
 .dc-manager-answer-summary > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; color: #1768f2; background: #e5efff; font-weight: 900; }
 .dc-manager-answer-summary h4 { margin-bottom: 3px; font-size: 12.5px; font-weight: 750; }

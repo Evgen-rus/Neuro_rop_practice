@@ -127,7 +127,8 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         "SYSTEM_RULES:\nТы — прикладной помощник менеджера во время реального разговора по одной сделке. Полный анализ уже выполнен: не анализируй сделку заново.",
         "RULES:\n"
         + mode_rules +
-        "- Продолжай ровно выбранный менеджером вариант сообщения. primary соответствует варианту 1, alternative — 2, pattern_break — 3.\n"
+        "- Продолжай ровно выбранный менеджером вариант сообщения. Используй SELECTED_STRATEGY, ASSISTANT_MODE и pressure_lever из QUICK_HELP, если он есть.\n"
+        "- Если ASSISTANT_MODE = push, держи экспертный коммерческий тон выбранного дожима и опирайся на выбранный рычаг. Если ASSISTANT_MODE = reanimator, держи мягкое восстановление контакта: приветствие, при необходимости кто мы и на чём остановились, польза ответить, один следующий шаг. Не смешивай эти голоса.\n"
         "- Сделай 3–6 коротких диалоговых блоков, а не текст для чтения целиком и не список из двадцати вопросов.\n"
         "- В каждом блоке укажи цель, 1–3 естественные фразы, что услышать в ответе и переход дальше.\n"
         "- Незакрытые пункты CURRENT_DAILY_CHECKLIST помоги получить естественно, но не создавай новый checklist и не объявляй отметки менеджера фактами клиента.\n"
@@ -138,7 +139,7 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         _section("ANALYSIS_CONTEXT", analysis_projection), _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)), _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("CURRENT_DAILY_CHECKLIST", checklist), _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("RELEVANT_TACTICS", relevant_tactics), _section("OBJECTION_HANDLING", objection_handling or {"items": []}),
+        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("ASSISTANT_MODE", str(quick_help.get("mode") or "reanimator") if isinstance(quick_help, dict) else "reanimator"), _section("PRESSURE_LEVER", quick_help.get("pressure_lever") if isinstance(quick_help, dict) else None), _section("RELEVANT_TACTICS", relevant_tactics), _section("OBJECTION_HANDLING", objection_handling or {"items": []}),
     ])
 
 
@@ -162,7 +163,7 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         prompt, schema=full_script_schema(), schema_name="deal_manager_full_script", model=MANAGER_MODEL,
         reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
         log_title="deal manager full script prompt", call_type=f"deal_manager_full_script_{script_mode}",
-        prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:v2",
+        prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:v3",
         stable_prefix=prompt_prefix_before(prompt, "QUICK_HELP:"),
     )
     return validate_full_script(

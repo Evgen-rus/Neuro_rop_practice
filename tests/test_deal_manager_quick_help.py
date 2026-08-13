@@ -58,7 +58,7 @@ CONTEXT = {
         "facts_to_clarify": ["Дата решения"],
     },
 }
-ANSWER = {
+ANSWER_V2 = {
     "answer_contract": "strategy_v2",
     "situation_summary": "Клиент получил КП, но следующий шаг ещё не согласован.",
     "next_action": "Напишите клиенту один короткий вопрос о решении.",
@@ -76,6 +76,39 @@ ANSWER = {
         "conditions": "Использовать только доступный клиенту канал.",
     }],
     "fallback_action": "Если ответа не будет, зафиксируйте паузу и следующий допустимый момент возврата.",
+}
+ANSWER = {
+    **ANSWER_V2,
+    "answer_contract": "strategy_v3",
+    "mode": "reanimator",
+    "pressure_lever": {
+        "title": "Низкое усилие ответа",
+        "rationale": "Несколько исходящих попыток без подтверждённого контакта, поэтому сейчас важнее вернуть клиента в диалог.",
+    },
+    "strategy_labels": {
+        "primary": "Через короткий вопрос",
+        "alternative": "Через уточнение blocker",
+        "pattern_break": "Через выбор из трёх",
+    },
+    "client_messages": {
+        "primary": "Добрый день! Подскажите, какой следующий шаг по КП вам удобнее согласовать?",
+        "alternative": "Добрый день! Какой вопрос по КП сейчас мешает определить дату решения?",
+        "pattern_break": "Добрый день! Ответьте, пожалуйста, одним словом: обсуждаем, переносим или закрываем?",
+    },
+}
+PUSH_ANSWER = {
+    **ANSWER,
+    "mode": "push",
+    "pressure_lever": {
+        "title": "Отстройка через надёжность",
+        "rationale": "Клиент сравнивает решение с конкурентом, ключевой вопрос — стабильная работа, а не цена.",
+    },
+    "strategy_labels": {
+        "primary": "Через надёжность",
+        "alternative": "Через сроки",
+        "pattern_break": "Через согласование",
+    },
+    "next_action": "Отправьте экспертное письмо с подтверждением надёжности узлов и одним следующим шагом.",
 }
 COMMUNICATION_CONTEXT = {
     "window_days": 30,
@@ -144,8 +177,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("одна главная ближайшая micro-conversion", prompt)
         self.assertIn("не делай fallback сложнее основного касания", prompt)
         self.assertIn("при активном техническом обсуждении", prompt)
-        self.assertIn("зачем клиенту отвечать", prompt)
+        self.assertIn("зачем клиенту ответить", prompt)
         self.assertIn("Не придумывай выгоду", prompt)
+        self.assertIn("pressure_lever", prompt)
+        self.assertIn("strategy_labels", prompt)
         self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
@@ -154,6 +189,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(quick_help_schema()["properties"]["lifehacks"]["maxItems"], 3)
         self.assertIn("MT-CONTACT-001", prompt)
         self.assertEqual(validate_quick_help(ANSWER), ANSWER)
+        self.assertEqual(validate_quick_help(ANSWER_V2), ANSWER_V2)
 
     def test_generate_marks_reusable_deal_context_before_dynamic_question(self) -> None:
         with patch(
@@ -169,7 +205,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v4")
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v5")
         self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
         self.assertIn("COMMUNICATION_PATTERN_CONTEXT", kwargs["stable_prefix"])
         self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
@@ -253,6 +289,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(kwargs["question"], "Что сказать клиенту после паузы?")
         self.assertEqual(kwargs["answer_json"], ANSWER)
         self.assertEqual(kwargs["situation_review_id"], 21)
+        self.assertEqual(kwargs["mode"], "reanimator")
+        self.assertEqual(kwargs["origin"], "manager")
         self.assertNotIn("raw_output_text", kwargs["model_meta"])
         communication_context = generate.call_args.kwargs["communication_pattern_context"]
         self.assertEqual(communication_context["window_days"], 30)
@@ -285,7 +323,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "от 1 до 4000"):
             quick_help.start_quick_help_job(
-                db_path=Path("state.sqlite"), deal_id="101", question=" ", confirm_paid=True
+                db_path=Path("state.sqlite"), deal_id="101", question="x" * 4001, confirm_paid=True
             )
         with self.assertRaisesRegex(ValueError, "от 1 до 100"):
             quick_help.list_quick_help_history(
@@ -296,6 +334,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         entry = {
             "id": 31,
             "deal_id": "101",
+            "source_report_id": 17,
+            "situation_review_id": 21,
+            "mode": "reanimator",
+            "origin": "manager",
             "question": "Что делать после отправки КП?",
             "content": ANSWER,
             "created_at": "2026-08-05T11:20:00+03:00",
@@ -335,10 +377,113 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(result["context"]["current_task"], "Позвонить клиенту")
         self.assertEqual(result["context"]["main_risk"], "Нет даты решения")
         self.assertEqual(result["context"]["last_communication"]["occurred_at"], "2026-08-04T16:10:00+03:00")
+        self.assertEqual(result["current_by_mode"]["reanimator"]["id"], 31)
+        self.assertIsNone(result["current_by_mode"]["push"])
         self.assertEqual(
             [item["kind"] for item in result["timeline"]],
             ["communication_completed", "assistant_request", "communication"],
         )
+
+    def test_push_contract_requires_lever_labels_and_mode(self) -> None:
+        prompt = build_quick_help_prompt(
+            question="",
+            analysis_projection=CONTEXT["analysis_projection"],
+            deal=DEAL,
+            current_bitrix_task=CONTEXT["current_bitrix_task"],
+            situation_projection=CONTEXT["situation_projection"],
+            communication_pattern_context=COMMUNICATION_CONTEXT,
+            mode="push",
+        )
+        self.assertIn("режиме Дожим", prompt)
+        self.assertIn("один приоритетный рычаг", prompt)
+        self.assertNotIn("мягкий режим восстановления контакта", prompt)
+        self.assertEqual(validate_quick_help(PUSH_ANSWER, expected_mode="push"), PUSH_ANSWER)
+        with self.assertRaisesRegex(ValueError, "mode не соответствует"):
+            validate_quick_help(PUSH_ANSWER, expected_mode="reanimator")
+
+    def test_ensure_reuses_current_modes_and_does_not_call_llm(self) -> None:
+        calls: list[str] = []
+
+        def storage_call(name, db_path, **kwargs):
+            calls.append(name)
+            if name == "get_current_deal_manager_quick_help":
+                mode = kwargs["mode"]
+                return {"id": 40 if mode == "push" else 41, "mode": mode}
+            raise AssertionError(name)
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value={**CONTEXT, "deal": DEAL}), \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch.object(quick_help, "generate_deal_manager_quick_help") as generate:
+            first = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=True,
+            )
+            second = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=False,
+            )
+
+        self.assertTrue(first["reused"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(first["saved_by_mode"], {"push": 40, "reanimator": 41})
+        generate.assert_not_called()
+        self.assertEqual(calls.count("get_current_deal_manager_quick_help"), 4)
+
+    def test_chat_refinement_stays_in_active_mode(self) -> None:
+        saved = []
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "save_deal_manager_quick_help":
+                saved.append(kwargs)
+                return {"id": 55, "deal_id": "101"}
+            raise AssertionError(name)
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(PUSH_ANSWER, {})) as generate, \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            started = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="Этот рычаг не подходит, давай через сроки",
+                mode="push",
+                confirm_paid=True,
+            )
+
+        self.assertEqual(started["status"], "done")
+        self.assertEqual(generate.call_args.kwargs["mode"], "push")
+        self.assertEqual(saved[0]["mode"], "push")
+        self.assertEqual(saved[0]["origin"], "manager")
+        self.assertEqual(saved[0]["question"], "Этот рычаг не подходит, давай через сроки")
+
+    def test_new_situation_context_allows_fresh_ensure(self) -> None:
+        generated_modes: list[str] = []
+
+        def current_for_mode(db_path, context, mode):
+            if int(context["source_report_id"]) == 17:
+                return {"id": 40 if mode == "push" else 41, "mode": mode}
+            return None
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "save_deal_manager_quick_help":
+                generated_modes.append(kwargs["mode"])
+                return {"id": 90 + len(generated_modes), "deal_id": "101"}
+            raise AssertionError(name)
+
+        def generate(**kwargs):
+            return (PUSH_ANSWER if kwargs["mode"] == "push" else ANSWER, {})
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value={**CONTEXT, "deal": DEAL, "source_report_id": 18, "situation_id": 22}), \
+             patch.object(quick_help, "_current_for_mode", side_effect=current_for_mode), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", side_effect=generate), \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            started = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=True,
+            )
+
+        self.assertFalse(started["reused"])
+        self.assertEqual(generated_modes, ["push", "reanimator"])
 
     def test_communication_completed_uses_confirmed_deal_context(self) -> None:
         calls = []

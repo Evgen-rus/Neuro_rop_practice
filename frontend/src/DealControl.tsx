@@ -50,6 +50,8 @@ import {
   type ManagerQuickHelpStrategy,
   type ManagerQuickHelpStrategyContent,
   type ManagerQuickHelpStrategyV2Content,
+  type ManagerQuickHelpStrategyV3Content,
+  type ManagerAssistantMode,
   type ManagerFullScriptJob,
   type ManagerFullScriptMode,
   type ManagerFullScriptWorkspace,
@@ -68,6 +70,17 @@ import {
   shouldAnimateQuickHelpAnswer,
 } from './quickHelpReveal'
 import { useQuickHelpReveal } from './useQuickHelpReveal'
+import {
+  answerModeClassName,
+  currentEntryForMode,
+  entriesForMode,
+  isAutoOrigin,
+  missingCurrentModes,
+  pressureLever,
+  strategyLabel,
+  visibleLifehack,
+  workspaceModeClassName,
+} from './dealPush'
 
 type DealControlView = 'dashboard' | 'rop' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -1670,10 +1683,10 @@ function DealDetail(props: {
     }
   }
 
-  async function requestQuickHelp(question: string) {
+  async function requestQuickHelp(question: string, mode?: ManagerAssistantMode) {
     if (!props.deal) return
     const normalized = question.trim()
-    if (normalized.length < 1 || normalized.length > 4000) {
+    if (normalized.length > 4000) {
       setQuickHelpError('Опиши вопрос от 1 до 4000 символов.')
       return
     }
@@ -1681,7 +1694,7 @@ function DealDetail(props: {
     setQuickHelpError('')
     setFreshQuickHelpId(null)
     try {
-      const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true)
+      const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true, mode)
       setQuickHelpDraft('')
       setQuickHelpJob(started)
       if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
@@ -1696,6 +1709,15 @@ function DealDetail(props: {
       }
     } catch (reason) {
       setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function openAssistant() {
+    const workspace = await loadAssistantWorkspace(true)
+    if (!workspace) return
+    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
+    if (missingCurrentModes(workspace.current_by_mode).length) {
+      await requestQuickHelp('')
     }
   }
 
@@ -1833,7 +1855,7 @@ function DealDetail(props: {
       onRefineSituation={() => void refineSituation()}
       onQuickHelpDraft={setQuickHelpDraft}
       onQuickHelp={requestQuickHelp}
-      onOpenAssistant={() => void loadAssistantWorkspace(true)}
+      onOpenAssistant={() => void openAssistant()}
       onCloseAssistant={() => { setAssistantOpen(false); consumeFreshQuickHelp() }}
       freshQuickHelpId={freshQuickHelpId}
       onFreshAnswerConsumed={consumeFreshQuickHelp}
@@ -1924,7 +1946,7 @@ type ManagerDealScreenProps = {
   onConfirmSituation: () => void
   onRefineSituation: () => void
   onQuickHelpDraft: (value: string) => void
-  onQuickHelp: (question: string) => Promise<void>
+  onQuickHelp: (question: string, mode?: ManagerAssistantMode) => Promise<void>
   onOpenAssistant: () => void
   onCloseAssistant: () => void
   freshQuickHelpId: number | null
@@ -1954,19 +1976,13 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onTranscribe={props.onTranscribe}
     /> : null}
     {confirmed ? <>
-      <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerQuickHelp
-        dealId={props.deal.deal_id}
-        draft={props.quickHelpDraft}
         error={props.quickHelpError}
         job={props.quickHelpJob}
-        started={Boolean(props.assistantWorkspace?.started)}
         loading={props.assistantLoading}
-        onDraft={props.onQuickHelpDraft}
-        onRequest={props.onQuickHelp}
         onOpen={props.onOpenAssistant}
-        onTranscribe={props.onTranscribe}
       />
+      <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
       {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
         deal={props.deal}
@@ -2267,36 +2283,25 @@ function ManagerBitrixTaskCard({ deal, onToggleCompletion }: {
 }
 
 function ManagerQuickHelp(props: {
-  dealId: string
-  draft: string
   error: string
   job: ManagerQuickHelpJob | null
-  started: boolean
   loading: boolean
-  onDraft: (value: string) => void
-  onRequest: (question: string) => Promise<void>
   onOpen: () => void
-  onTranscribe: (audio: Blob) => Promise<string>
 }) {
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   return <section className="dc-manager-quick-help">
-    <div className="dc-section-head"><div><h3>{props.started ? 'Помощник менеджера' : 'Быстрая ИИ помощь менеджеру'}</h3>{props.started ? <p>Диалог по сделке уже начат</p> : null}</div><span>AI</span></div>
-    {props.started ? <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading} onClick={props.onOpen}>{props.loading ? <><span className="dc-spinner" />Открываем…</> : 'Открыть помощника'}</button> : <>
-      <div className="dc-manager-voice-field dc-manager-quick-help-field">
-        <textarea value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} placeholder="Опишите ситуацию или задайте вопрос..." aria-label="Вопрос помощнику менеджера" />
-        <ManagerVoiceInput dealId={props.dealId} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
-      </div>
-      <div className="dc-manager-quick-help-actions"><small>{props.draft.length}/4000</small><button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void props.onRequest(props.draft)}>{busy ? <><span className="dc-spinner" />Обрабатываем…</> : 'Отправить'}</button></div>
-    </>}
+    <div className="dc-section-head"><div><h3>Дожим сделки</h3><p>Как продвинуть клиента дальше</p></div><span>AI</span></div>
+    <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading || busy} onClick={props.onOpen}>{props.loading || busy ? <><span className="dc-spinner" />Открываем…</> : 'Открыть дожим сделки'}</button>
     {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
-    {props.job ? <ManagerJobProgress job={props.job} label="Подготовка ответа тренера" /> : null}
+    {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label="Подготовка рекомендации" /> : null}
   </section>
 }
 
-function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
+function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
   deal: DealControlDeal
   entry: ManagerQuickHelpEntry
   animate?: boolean
+  mode: ManagerAssistantMode
   onCopy: (text: string, label: string) => Promise<void>
   onEdit: () => void
   onComplete: () => void
@@ -2359,7 +2364,9 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [deal.deal_id, entry.id, fullScriptJob, fullScriptMode, fullScriptOpen, selectedStrategy])
 
-  return <article className="dc-manager-answer" aria-busy={reveal.animate && reveal.step !== 'done'}>
+  const lever = pressureLever(content)
+
+  return <article className={answerModeClassName(mode)} aria-busy={reveal.animate && reveal.step !== 'done'}>
     <div className="dc-manager-answer-summary">
       <span>◎</span>
       <div>
@@ -2372,6 +2379,7 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
       </div>
       <button className="dc-link-button" onClick={onEdit}>Изменить</button>
     </div>
+    {showMessage && lever ? <ManagerPressureLeverCard lever={lever} animate={reveal.animate} /> : null}
     {showMessage || showSecondary ? <ManagerQuickHelpVariants
       content={content}
       onCopy={onCopy}
@@ -2384,7 +2392,7 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
       showSecondary={showSecondary}
       animate={reveal.animate}
     /> : null}
-    {showFallback && (content.answer_contract === 'strategy_v1' || content.answer_contract === 'strategy_v2') && content.fallback_action ? <div className={revealClassName('dc-manager-answer-fallback', reveal.animate)}><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
+    {showFallback && (content.answer_contract === 'strategy_v1' || content.answer_contract === 'strategy_v2' || content.answer_contract === 'strategy_v3') && content.fallback_action ? <div className={revealClassName('dc-manager-answer-fallback', reveal.animate)}><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
     {showRest ? <div className={revealClassName('dc-manager-answer-actions', reveal.animate)}><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div> : null}
     {fullScriptOpen ? <ManagerFullScriptModal
       deal={deal}
@@ -2400,6 +2408,18 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComple
   </article>
 }
 
+function ManagerPressureLeverCard({ lever, animate = false }: { lever: { title: string; rationale: string }; animate?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return <section className={revealClassName('dc-manager-lever', animate)}>
+    <div>
+      <small>Рычаг дожима</small>
+      <strong>{lever.title}</strong>
+    </div>
+    <button type="button" className="dc-link-button" onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть' : 'Подробнее'}</button>
+    {open ? <p>{lever.rationale}</p> : null}
+  </section>
+}
+
 function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpContent
   onCopy: (text: string, label: string) => Promise<void>
@@ -2412,15 +2432,30 @@ function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelecte
   showSecondary?: boolean
   animate?: boolean
 }) {
-  return content.answer_contract === 'strategy_v2'
+  return content.answer_contract === 'strategy_v3' || content.answer_contract === 'strategy_v2'
     ? <ManagerStrategyV2QuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={onSelectedStrategy} onOpenScript={onOpenScript} activeScriptMode={activeScriptMode} showScriptActions={showScriptActions} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
     : content.answer_contract === 'strategy_v1'
     ? <ManagerStrategyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
     : <ManagerLegacyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
 }
 
+function ManagerLifehackCarousel({ lifehacks, animate = false }: { lifehacks: ManagerQuickHelpStrategyV2Content['lifehacks'] | ManagerQuickHelpStrategyV3Content['lifehacks']; animate?: boolean }) {
+  const [index, setIndex] = useState(0)
+  const visible = visibleLifehack(lifehacks, index)
+  const item = visible?.item || null
+  const total = visible?.total || 0
+  const safeIndex = visible?.index || 0
+  return <section className={revealClassName('dc-manager-lifehacks', animate)}>
+    <div className="dc-manager-lifehacks-head">
+      <h4>Лайфхаки</h4>
+      {total > 1 ? <nav aria-label="Лайфхаки"><button type="button" disabled={safeIndex === 0} onClick={() => setIndex((value) => Math.max(0, value - 1))}>←</button><span>{safeIndex + 1} из {total}</span><button type="button" disabled={safeIndex >= total - 1} onClick={() => setIndex((value) => Math.min(total - 1, value + 1))}>→</button></nav> : null}
+    </div>
+    {item ? <article key={item.tactic_id}><strong>{item.title}</strong><p>{item.action}</p><small>{item.why_relevant}</small><em>{item.conditions}</em></article> : <p>Подходящий лайфхак не найден.</p>}
+  </section>
+}
+
 function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false }: {
-  content: ManagerQuickHelpStrategyV2Content
+  content: ManagerQuickHelpStrategyV2Content | ManagerQuickHelpStrategyV3Content
   onCopy: (text: string, label: string) => Promise<void>
   selectedStrategy: ManagerQuickHelpStrategy
   onSelectedStrategy: (strategy: ManagerQuickHelpStrategy) => void
@@ -2431,16 +2466,16 @@ function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy,
   showSecondary?: boolean
   animate?: boolean
 }) {
-  const strategies: Array<[ManagerQuickHelpStrategy, string]> = [['primary', '1'], ['alternative', '2'], ['pattern_break', '3']]
+  const strategies: ManagerQuickHelpStrategy[] = ['primary', 'alternative', 'pattern_break']
   const message = content.client_messages[selectedStrategy]
   const formats: Array<[ManagerFullScriptMode, string, string]> = [['message', '💬', 'Переписка'], ['call', '☎', 'Звонок'], ['email', '✉', 'Email']]
   return <div className="dc-manager-answer-v2">
     {showMessage ? <section className={revealClassName('dc-manager-answer-copy message', animate)}>
       <div><h4>Сообщение клиенту</h4><div className="dc-manager-message-tools">{showScriptActions ? <div className="dc-manager-format-icons" role="group" aria-label="Формат коммуникации">{formats.map(([mode, icon, label]) => <button key={mode} type="button" className={activeScriptMode === mode ? 'active' : ''} title={label} aria-label={label} aria-pressed={activeScriptMode === mode} onClick={() => void onOpenScript(mode)}>{icon}</button>)}</div> : null}<button className="dc-button" disabled={!message} onClick={() => void onCopy(message, 'Сообщение клиенту')}>Скопировать</button></div></div>
-      <div className="dc-manager-tone-tabs numeric" role="tablist" aria-label="Вариант сообщения клиенту">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={selectedStrategy === strategy} className={selectedStrategy === strategy ? 'active' : ''} onClick={() => onSelectedStrategy(strategy)}><span>{label}</span></button>)}</div>
+      <div className="dc-manager-tone-tabs labeled" role="tablist" aria-label="Вариант сообщения клиенту">{strategies.map((strategy) => <button key={strategy} type="button" role="tab" aria-selected={selectedStrategy === strategy} className={selectedStrategy === strategy ? 'active' : ''} onClick={() => onSelectedStrategy(strategy)}><span>{strategyLabel(content, strategy)}</span></button>)}</div>
       <pre>{message || 'Сообщение пока не сформировано.'}</pre>
     </section> : null}
-    {showSecondary ? <section className={revealClassName('dc-manager-lifehacks', animate)}><h4>Лайфхаки</h4>{content.lifehacks.length ? <div>{content.lifehacks.map((item) => <article key={item.tactic_id}><strong>{item.title}</strong><p>{item.action}</p><small>{item.why_relevant}</small><em>{item.conditions}</em></article>)}</div> : <p>Подходящий лайфхак не найден.</p>}</section> : null}
+    {showSecondary ? <ManagerLifehackCarousel lifehacks={content.lifehacks} animate={animate} /> : null}
   </div>
 }
 
@@ -2563,17 +2598,21 @@ function ManagerFullScriptModal(props: {
               </li>})}</ol>
             <section className="dc-manager-full-script-close"><small>Завершить договорённостью</small><strong>{script.closing_agreement}</strong></section>
           </main>
-          <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} /></aside>
+          <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
         </div>
         {objections.length ? <details className="dc-manager-full-script-objections"><summary>Возражения и отработка <span>⌄</span></summary><div>{objections.map((item, index) => <article key={`${item.objection}-${index}`}><h3>{item.objection}</h3><p><strong>Как ответить:</strong> {item.manager_reply}</p><p><strong>Follow-up:</strong> {item.follow_up_question}</p><p><strong>Следующий шаг:</strong> {item.next_step_goal}</p>{item.what_not_to_do ? <p className="avoid"><strong>Чего не делать:</strong> {item.what_not_to_do}</p> : null}</article>)}</div></details> : null}
-      </> : <section className="dc-manager-email"><div><small>Тема</small><strong>{script.subject}</strong></div><article><p>{script.greeting}</p><p>{script.context}</p>{script.questions.length ? <ol>{script.questions.map((question) => <li key={question}>{question}</li>)}</ol> : null}<p>{script.value_point}</p><p>{script.call_to_action}</p><p>{script.closing}</p></article></section>}
+      </> : <div className="dc-manager-full-script-grid">
+        <section className="dc-manager-email"><div><small>Тема</small><strong>{script.subject}</strong></div><article><p>{script.greeting}</p><p>{script.context}</p>{script.questions.length ? <ol>{script.questions.map((question) => <li key={question}>{question}</li>)}</ol> : null}<p>{script.value_point}</p><p>{script.call_to_action}</p><p>{script.closing}</p></article></section>
+        <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
+      </div>}
     </section>
   </div>, document.body)
 }
 
-function ManagerAssistantChecklist({ deal, onToggle }: {
+function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false }: {
   deal: DealControlDeal
   onToggle: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+  defaultOpen?: boolean
 }) {
   const [pendingItemId, setPendingItemId] = useState<string | null>(null)
   const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
@@ -2598,7 +2637,7 @@ function ManagerAssistantChecklist({ deal, onToggle }: {
     }
   }
 
-  return <details className="dc-manager-assistant-checklist">
+  return <details className="dc-manager-assistant-checklist" open={defaultOpen || undefined}>
     <summary>
       <span className="dc-manager-assistant-checklist-icon">✓</span>
       <span className="dc-manager-assistant-checklist-heading">
@@ -2636,7 +2675,7 @@ function ManagerAssistantModal(props: {
   error: string
   job: ManagerQuickHelpJob | null
   onDraft: (value: string) => void
-  onRequest: (question: string) => Promise<void>
+  onRequest: (question: string, mode?: ManagerAssistantMode) => Promise<void>
   onClose: () => void
   onEditSituation: () => void
   onCopy: (text: string, label: string) => Promise<void>
@@ -2647,16 +2686,24 @@ function ManagerAssistantModal(props: {
   onFreshAnswerConsumed: () => void
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups'>('answer')
+  const [assistantMode, setAssistantMode] = useState<ManagerAssistantMode>('push')
   const [followups, setFollowups] = useState<ManagerFollowupsRecord | null>(null)
   const [followupsJob, setFollowupsJob] = useState<ManagerFollowupsJob | null>(null)
   const [followupsError, setFollowupsError] = useState('')
   const [historyOffset, setHistoryOffset] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
-  const entries = [...props.workspace.entries].sort((first, second) => first.id - second.id)
+  const entries = entriesForMode(props.workspace.entries, assistantMode)
+  const current = currentEntryForMode(
+    props.workspace.entries,
+    assistantMode,
+    props.workspace.source_report_id,
+    props.workspace.situation_review_id,
+  )
   const safeHistoryOffset = Math.min(historyOffset, Math.max(0, entries.length - 1))
   const visibleEntryIndex = entries.length - 1 - safeHistoryOffset
-  const visibleEntry = visibleEntryIndex >= 0 ? entries[visibleEntryIndex] : null
+  const latest = current || (entries.length ? entries[entries.length - 1] : null)
+  const visibleEntry = safeHistoryOffset === 0 ? latest : (visibleEntryIndex >= 0 ? entries[visibleEntryIndex] : null)
   const viewingLatest = safeHistoryOffset === 0
   const animateAnswer = Boolean(visibleEntry && shouldAnimateQuickHelpAnswer({
     entryId: visibleEntry.id,
@@ -2688,7 +2735,13 @@ function ManagerAssistantModal(props: {
     if (busy || !props.draft.trim()) return
     setView('answer')
     setHistoryOffset(0)
-    await props.onRequest(props.draft)
+    await props.onRequest(props.draft, assistantMode)
+  }
+
+  function switchMode(next: ManagerAssistantMode) {
+    if (next === assistantMode) return
+    setAssistantMode(next)
+    setHistoryOffset(0)
   }
 
   async function generateFollowups() {
@@ -2745,12 +2798,12 @@ function ManagerAssistantModal(props: {
   }
 
   return createPortal(<div className="dc-manager-assistant-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
-    <section className="dc-manager-assistant-modal" role="dialog" aria-modal="true" aria-labelledby="manager-assistant-title">
+    <section className={workspaceModeClassName(assistantMode)} role="dialog" aria-modal="true" aria-labelledby="manager-assistant-title">
       <aside className="dc-manager-assistant-sidebar">
-        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Помощник менеджера</strong><small>Работа по текущей сделке</small></div></div>
+        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим сделки</strong><small>Как продвинуть клиента дальше</small></div></div>
         <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span></div>
         <nav>
-          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Чат с ИИ</button>
+          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Дожим</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
           <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
           <button className={view === 'followups' ? 'active' : ''} onClick={() => setView('followups')}><span>↗</span>Фоллоуапы</button>
@@ -2759,18 +2812,27 @@ function ManagerAssistantModal(props: {
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
       </aside>
       <main className="dc-manager-assistant-main">
-        <header><div><h2 id="manager-assistant-title">Быстрая ИИ помощь менеджеру</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
+        <header><div><h2 id="manager-assistant-title">Дожим сделки</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
         <div className="dc-manager-assistant-content">
           <div className="dc-manager-assistant-checklist-mobile">
             <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
           </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
-            {visibleEntry ? <div className="dc-manager-assistant-turn" key={visibleEntry.id}>
-              <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{entries.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleEntry.question}</p></div>
+            <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
+              <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
+              <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
+            </div>
+            {visibleEntry ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleEntry.id}`}>
+              {isAutoOrigin(visibleEntry) ? (
+                entries.length > 1 ? <div className="dc-manager-request-heading dc-manager-request-heading-only-nav"><nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav></div> : null
+              ) : (
+                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{entries.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleEntry.question}</p></div>
+              )}
               <ManagerQuickHelpAnswer
                 deal={props.deal}
                 entry={visibleEntry}
                 animate={animateAnswer}
+                mode={assistantMode}
                 onCopy={props.onCopy}
                 onEdit={props.onEditSituation}
                 onComplete={() => complete(visibleEntry)}
@@ -2779,7 +2841,7 @@ function ManagerAssistantModal(props: {
                 onRevealFinished={onFreshAnswerConsumed}
               />
             </div> : null}
-            {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Помощник готовит ответ'}</small></div> : null}
+            {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <section className="dc-manager-assistant-context-grid">
@@ -2792,7 +2854,7 @@ function ManagerAssistantModal(props: {
         </div>
         <footer>
           <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
-          <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Напишите, что произошло после коммуникации или что ещё нужно сделать..." aria-label="Продолжение диалога с помощником" />
+          <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Уточните рычаг, тон или что уже пробовали..." aria-label="Уточнение рекомендации" />
           <button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void send()}>{busy ? <span className="dc-spinner" /> : 'Отправить'}</button>
           {props.error ? <small className="dc-manager-error">{props.error}</small> : null}
         </footer>

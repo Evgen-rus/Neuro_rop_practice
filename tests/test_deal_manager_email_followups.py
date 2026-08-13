@@ -62,6 +62,8 @@ class DealManagerEmailFollowupsTests(unittest.TestCase):
             communication_pattern_context=COMMUNICATION_CONTEXT, quick_help=ANSWER, selected_strategy="primary",
         )
         self.assertIn("client_communication_profile", prompt)
+        self.assertIn("ASSISTANT_MODE", prompt)
+        self.assertIn("PRESSURE_LEVER", prompt)
         self.assertIn("не выводи из профиля факты или страхи", prompt)
         self.assertEqual(validate_email(EMAIL, selected_strategy="primary"), EMAIL)
         with self.assertRaisesRegex(ValueError, "1 до 4"):

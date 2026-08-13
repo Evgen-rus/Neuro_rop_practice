@@ -752,6 +752,11 @@ export type ManagerLifehack = {
   conditions: string
 }
 
+export type ManagerPressureLever = {
+  title: string
+  rationale: string
+}
+
 export type ManagerQuickHelpStrategyV2Content = ManagerQuickHelpCommonContent & {
   answer_contract: 'strategy_v2'
   client_messages: Record<ManagerQuickHelpStrategy, string>
@@ -759,13 +764,27 @@ export type ManagerQuickHelpStrategyV2Content = ManagerQuickHelpCommonContent & 
   fallback_action: string
 }
 
-export type ManagerQuickHelpContent = ManagerQuickHelpLegacyContent | ManagerQuickHelpStrategyContent | ManagerQuickHelpStrategyV2Content
+export type ManagerAssistantMode = 'push' | 'reanimator'
+
+export type ManagerQuickHelpStrategyV3Content = ManagerQuickHelpCommonContent & {
+  answer_contract: 'strategy_v3'
+  mode: ManagerAssistantMode
+  pressure_lever: ManagerPressureLever
+  strategy_labels: Record<ManagerQuickHelpStrategy, string>
+  client_messages: Record<ManagerQuickHelpStrategy, string>
+  lifehacks: ManagerLifehack[]
+  fallback_action: string
+}
+
+export type ManagerQuickHelpContent = ManagerQuickHelpLegacyContent | ManagerQuickHelpStrategyContent | ManagerQuickHelpStrategyV2Content | ManagerQuickHelpStrategyV3Content
 
 export type ManagerQuickHelpEntry = {
   id: number
   deal_id: string
   source_report_id?: number | null
   situation_review_id?: number | null
+  mode?: ManagerAssistantMode | null
+  origin?: 'auto' | 'manager' | null
   question: string
   content: ManagerQuickHelpContent
   created_at: string
@@ -779,7 +798,11 @@ export type ManagerQuickHelpJob = {
   stage: 'queued' | 'context' | 'llm' | 'saving' | 'done' | 'error'
   detail: string
   percent: number
+  mode?: ManagerAssistantMode | null
+  origin?: 'auto' | 'manager' | null
   quick_help_id?: number | null
+  saved_by_mode?: Partial<Record<ManagerAssistantMode, number>>
+  reused?: boolean
   entry_id?: number | null
   entry?: ManagerQuickHelpEntry | null
   error?: string | null
@@ -882,6 +905,9 @@ export type ManagerAssistantTimelineEntry = {
 export type ManagerAssistantWorkspace = {
   started: boolean
   entries: ManagerQuickHelpEntry[]
+  current_by_mode?: Partial<Record<ManagerAssistantMode, ManagerQuickHelpEntry | null>>
+  source_report_id?: number | null
+  situation_review_id?: number | null
   timeline: ManagerAssistantTimelineEntry[]
   context: {
     stage: string
@@ -1070,10 +1096,15 @@ export function fetchManagerSituationJob(jobId: string) {
   return api<ManagerSituationJob>(`/api/deal-control/situation-jobs/${encodeURIComponent(jobId)}`)
 }
 
-export function startManagerQuickHelp(dealId: string, question: string, confirmPaid = true) {
+export function startManagerQuickHelp(
+  dealId: string,
+  question = '',
+  confirmPaid = true,
+  mode?: ManagerAssistantMode,
+) {
   return api<ManagerQuickHelpJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/quick-help`, {
     method: 'POST',
-    body: JSON.stringify({ question, confirm_paid: confirmPaid }),
+    body: JSON.stringify({ question, confirm_paid: confirmPaid, mode: mode ?? null }),
   })
 }
 
@@ -1143,7 +1174,32 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
     expected_result: asString(content.expected_result),
     crm_checklist: asStringList(content.crm_checklist),
   }
-  const normalizedContent: ManagerQuickHelpContent = answerContract === 'strategy_v2'
+  const strategyLabels = asRecord(content.strategy_labels)
+  const pressureLever = asRecord(content.pressure_lever)
+  const contentMode = asString(content.mode)
+  const normalizedContent: ManagerQuickHelpContent = answerContract === 'strategy_v3'
+    ? {
+        ...commonContent,
+        answer_contract: 'strategy_v3',
+        mode: contentMode === 'push' ? 'push' : 'reanimator',
+        pressure_lever: {
+          title: asString(pressureLever.title),
+          rationale: asString(pressureLever.rationale),
+        },
+        strategy_labels: {
+          primary: asString(strategyLabels.primary),
+          alternative: asString(strategyLabels.alternative),
+          pattern_break: asString(strategyLabels.pattern_break),
+        },
+        client_messages: {
+          primary: asString(clientMessages.primary),
+          alternative: asString(clientMessages.alternative),
+          pattern_break: asString(clientMessages.pattern_break),
+        },
+        lifehacks,
+        fallback_action: asString(content.fallback_action),
+      }
+    : answerContract === 'strategy_v2'
     ? {
         ...commonContent,
         answer_contract: 'strategy_v2',
@@ -1195,11 +1251,15 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
           ? recommendedCallTone as ManagerQuickHelpLegacyContent['recommended_call_tone']
           : 'business',
       }
+  const entryMode = asString(record.mode) || (answerContract === 'strategy_v3' ? contentMode : '')
+  const entryOrigin = asString(record.origin)
   return {
     id,
     deal_id: asString(record.deal_id),
     source_report_id: record.source_report_id == null ? null : Number(record.source_report_id),
     situation_review_id: record.situation_review_id == null ? null : Number(record.situation_review_id),
+    mode: entryMode === 'push' ? 'push' : entryMode === 'reanimator' ? 'reanimator' : null,
+    origin: entryOrigin === 'auto' || entryOrigin === 'manager' ? entryOrigin : null,
     question: asString(record.question),
     content: normalizedContent,
     created_at: asString(record.created_at),
@@ -1303,11 +1363,21 @@ export async function fetchManagerAssistantWorkspace(dealId: string) {
   const payload = await api<ManagerAssistantWorkspace>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/assistant-workspace`,
   )
+  const entries = (Array.isArray(payload.entries) ? payload.entries : [])
+    .map(normalizeManagerQuickHelpEntry)
+    .filter((entry): entry is ManagerQuickHelpEntry => Boolean(entry))
+  const currentByMode = {
+    push: payload.current_by_mode?.push
+      ? normalizeManagerQuickHelpEntry(payload.current_by_mode.push)
+      : entries.find((entry) => (entry.mode || 'reanimator') === 'push') || null,
+    reanimator: payload.current_by_mode?.reanimator
+      ? normalizeManagerQuickHelpEntry(payload.current_by_mode.reanimator)
+      : entries.find((entry) => (entry.mode || 'reanimator') === 'reanimator') || null,
+  }
   return {
     ...payload,
-    entries: (Array.isArray(payload.entries) ? payload.entries : [])
-      .map(normalizeManagerQuickHelpEntry)
-      .filter((entry): entry is ManagerQuickHelpEntry => Boolean(entry)),
+    entries,
+    current_by_mode: currentByMode,
   }
 }
 
