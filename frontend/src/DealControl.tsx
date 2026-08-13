@@ -2820,6 +2820,7 @@ function ManagerAssistantModal(props: {
             <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
             <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
           </div>
+          {view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}
           <span>Контекст учтён</span>
           <button onClick={props.onClose} aria-label="Закрыть">×</button>
         </header>
@@ -2829,10 +2830,8 @@ function ManagerAssistantModal(props: {
           </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
             {visibleTurn ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleTurn.key}`}>
-              {visibleTurn.origin === 'auto' ? (
-                turns.length > 1 ? <div className="dc-manager-request-heading dc-manager-request-heading-only-nav"><nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav></div> : null
-              ) : (
-                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleTurn.question}</p></div>
+              {visibleTurn.origin === 'auto' ? null : (
+                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small></div><p>{visibleTurn.question}</p></div>
               )}
               {visibleEntry ? <ManagerQuickHelpAnswer
                 deal={props.deal}
