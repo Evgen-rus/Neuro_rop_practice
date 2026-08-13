@@ -2290,7 +2290,7 @@ function ManagerQuickHelp(props: {
 }) {
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   return <section className="dc-manager-quick-help">
-    <div className="dc-section-head"><div><h3>Дожим сделки</h3><p>Как продвинуть клиента дальше</p></div><span>AI</span></div>
+    <div className="dc-section-head"><div><h3>Дожим</h3></div><span>AI</span></div>
     <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading || busy} onClick={props.onOpen}>{props.loading || busy ? <><span className="dc-spinner" />Открываем…</> : 'Открыть дожим сделки'}</button>
     {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
     {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label="Подготовка рекомендации" /> : null}
@@ -2798,9 +2798,9 @@ function ManagerAssistantModal(props: {
   }
 
   return createPortal(<div className="dc-manager-assistant-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
-    <section className={workspaceModeClassName(assistantMode)} role="dialog" aria-modal="true" aria-labelledby="manager-assistant-title">
+    <section className={workspaceModeClassName(assistantMode)} role="dialog" aria-modal="true" aria-label="Дожим сделки">
       <aside className="dc-manager-assistant-sidebar">
-        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим сделки</strong><small>Как продвинуть клиента дальше</small></div></div>
+        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим</strong></div></div>
         <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span></div>
         <nav>
           <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Дожим</button>
@@ -2812,16 +2812,19 @@ function ManagerAssistantModal(props: {
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
       </aside>
       <main className="dc-manager-assistant-main">
-        <header><div><h2 id="manager-assistant-title">Дожим сделки</h2><p>Сделка #{props.deal.deal_id} · текущая задача: {task ? compactTaskText(task.subject).toLowerCase() : 'не назначена'}</p></div><span>Контекст учтён</span><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
+        <header>
+          <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
+            <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
+            <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
+          </div>
+          <span>Контекст учтён</span>
+          <button onClick={props.onClose} aria-label="Закрыть">×</button>
+        </header>
         <div className="dc-manager-assistant-content">
           <div className="dc-manager-assistant-checklist-mobile">
             <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
           </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
-            <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
-              <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
-              <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
-            </div>
             {visibleEntry ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleEntry.id}`}>
               {isAutoOrigin(visibleEntry) ? (
                 entries.length > 1 ? <div className="dc-manager-request-heading dc-manager-request-heading-only-nav"><nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav></div> : null

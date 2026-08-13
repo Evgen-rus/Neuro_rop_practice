@@ -78,8 +78,8 @@ textarea {
 .dc-manager-lifehacks-head button { width: 26px; height: 26px; border: 1px solid #ead9b9; border-radius: 7px; background: #fff; color: #805d1e; cursor: pointer; }
 .dc-manager-lifehacks-head button:disabled { opacity: .4; cursor: default; }
 .dc-manager-lifehacks-head span { color: #8a6b2e; font-size: 10.5px; font-weight: 700; }
-.dc-manager-mode-switch { display: flex; gap: 8px; margin-bottom: 8px; }
-.dc-manager-mode-switch button { min-height: 34px; padding: 6px 12px; border: 1px solid #d2dfec; border-radius: 9px; background: #fff; color: #405a78; font-size: 12.5px; font-weight: 750; cursor: pointer; }
+.dc-manager-mode-switch { display: flex; gap: 8px; }
+.dc-manager-mode-switch button { min-height: 34px; padding: 6px 14px; border: 1px solid #d2dfec; border-radius: 9px; background: #fff; color: #405a78; font-size: 13px; font-weight: 750; cursor: pointer; }
 .dc-manager-mode-switch button.active.push { border-color: #e0b57a; color: #8a5310; background: #fff4e6; }
 .dc-manager-mode-switch button.active.reanimator { border-color: #9abfff; color: #075ddc; background: #e8f1ff; }
 .dc-manager-assistant-modal.mode-push .dc-manager-assistant-content { background: #fffaf6; }
@@ -6936,9 +6936,7 @@ ul.facts.bad li:before {
 .dc-manager-assistant-context-status { margin: auto 12px 12px; padding: 10px; border-radius: 10px; color: #137042; background: #eaf8f0; font-size: 11.5px; font-weight: 700; line-height: 1.45; }
 
 .dc-manager-assistant-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
-.dc-manager-assistant-main > header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; min-height: 68px; padding: 13px 17px; border-bottom: 1px solid #d6e2ed; background: #fff; }
-.dc-manager-assistant-main > header h2 { margin: 0 0 3px; color: #112b4b; font-size: 22px; font-weight: 750; }
-.dc-manager-assistant-main > header p { margin: 0; color: #728399; font-size: 11.5px; }
+.dc-manager-assistant-main > header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; min-height: 56px; padding: 10px 17px; border-bottom: 1px solid #d6e2ed; background: #fff; }
 .dc-manager-assistant-main > header > span { padding: 5px 10px; border-radius: 99px; color: #147346; background: #eaf8f0; font-size: 10.5px; font-weight: 750; }
 .dc-manager-assistant-main > header > button { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #61758e; background: transparent; cursor: pointer; font-size: 23px; }
 .dc-manager-assistant-main > header > button:hover { background: #eef3f8; }
