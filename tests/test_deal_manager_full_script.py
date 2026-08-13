@@ -127,6 +127,46 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertTrue(result["reused"])
         self.assertEqual(result["script_id"], 44)
 
+    def test_uncached_job_reads_checklist_with_named_deal_id_and_saves_script(self) -> None:
+        inputs = {
+            "context": {
+                "deal": DEAL,
+                "source_report_id": 17,
+                "analysis_projection": CONTEXT["analysis_projection"],
+                "situation_projection": CONTEXT["situation_projection"],
+                "current_bitrix_task": CONTEXT["current_bitrix_task"],
+            },
+            "quick_help": {"id": 31},
+            "quick_help_content": ANSWER,
+            "situation_id": 21,
+        }
+        saved_script = {**SCRIPT, "selected_strategy": "primary"}
+        storage_calls = []
+
+        def storage_call(name, db_path, **kwargs):
+            storage_calls.append((name, kwargs))
+            if name == "get_deal_daily_checklist_analysis_projection":
+                return {"tracked": True, "items": []}
+            if name == "save_deal_manager_full_script":
+                return {"id": 44}
+            raise AssertionError(name)
+
+        job = full_script_api.DealManagerFullScriptJob(
+            job_id="job-1", deal_id="101", quick_help_id=31, selected_strategy="primary",
+        )
+        full_script_api._FULL_SCRIPT_JOBS[job.job_id] = job
+        with patch.object(full_script_api, "_current_inputs", return_value=inputs), \
+             patch.object(full_script_api, "_cached_script", return_value=None), \
+             patch.object(full_script_api, "_storage_call", side_effect=storage_call), \
+             patch.object(full_script_api, "_load_local_communications", return_value=[]), \
+             patch.object(full_script_api, "generate_deal_manager_full_script", return_value=(saved_script, {})):
+            full_script_api._run_full_script_job(job.job_id, Path("state.sqlite"))
+
+        result = full_script_api.get_full_script_job(job.job_id)
+        self.assertEqual(result["status"], "done")
+        checklist_call = next(call for call in storage_calls if call[0] == "get_deal_daily_checklist_analysis_projection")
+        self.assertEqual(checklist_call[1], {"deal_id": "101"})
+
     def test_public_objections_are_allowlisted(self) -> None:
         projection = {
             "objection_handling": {

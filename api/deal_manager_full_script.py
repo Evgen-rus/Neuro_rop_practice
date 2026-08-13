@@ -120,7 +120,11 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             _touch(job, stage="done", detail="Открываем сохранённый актуальный сценарий", percent=100)
             return
         context = inputs["context"]
-        checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, str(job.deal_id))
+        checklist = _storage_call(
+            "get_deal_daily_checklist_analysis_projection",
+            db_path,
+            deal_id=str(job.deal_id),
+        )
         tactics = inputs["quick_help_content"].get("lifehacks")
         relevant_tactics = tactics if isinstance(tactics, list) else []
         communication_context = build_communication_pattern_context(_load_local_communications(job.deal_id))
@@ -177,7 +181,11 @@ def start_full_script_job(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str
 def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str) -> dict[str, Any]:
     inputs = _current_inputs(db_path, str(deal_id), int(quick_help_id), selected_strategy)
     script = _cached_script(db_path, inputs, selected_strategy)
-    checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, str(deal_id))
+    checklist = _storage_call(
+        "get_deal_daily_checklist_analysis_projection",
+        db_path,
+        deal_id=str(deal_id),
+    )
     return {
         "script": script,
         "checklist": checklist,

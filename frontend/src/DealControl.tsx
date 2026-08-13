@@ -55,6 +55,13 @@ import {
   isNeuroRopTask,
 } from './api'
 import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
+import {
+  freshQuickHelpIdFromJob,
+  latestQuickHelpEntryId,
+  revealClassName,
+  shouldAnimateQuickHelpAnswer,
+} from './quickHelpReveal'
+import { useQuickHelpReveal } from './useQuickHelpReveal'
 
 type DealControlView = 'dashboard' | 'rop' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -1486,6 +1493,8 @@ function DealDetail(props: {
   const [assistantWorkspace, setAssistantWorkspace] = useState<ManagerAssistantWorkspace | null>(null)
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  // Анимируем только свежий ответ; история и повторное открытие показываем сразу.
+  const [freshQuickHelpId, setFreshQuickHelpId] = useState<number | null>(null)
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
   const detailView = props.view
@@ -1509,6 +1518,7 @@ function DealDetail(props: {
     setAssistantWorkspace(null)
     setAssistantLoading(false)
     setAssistantOpen(false)
+    setFreshQuickHelpId(null)
   }, [activeDealId, activeReportId])
 
   useEffect(() => {
@@ -1518,6 +1528,8 @@ function DealDetail(props: {
   useEffect(() => {
     writeDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId, quickHelpDraft)
   }, [activeDealId, quickHelpDraft])
+
+  const consumeFreshQuickHelp = useCallback(() => setFreshQuickHelpId(null), [])
 
   const loadAssistantWorkspace = useCallback(async (open = false) => {
     if (!activeDealId) return null
@@ -1592,7 +1604,15 @@ function DealDetail(props: {
         if (terminalHandled) return
         if (next.status === 'done') {
           terminalHandled = true
-          if (!cancelled) await loadAssistantWorkspace(true)
+          if (!cancelled) {
+            const knownId = freshQuickHelpIdFromJob(next)
+            if (knownId) setFreshQuickHelpId(knownId)
+            const workspace = await loadAssistantWorkspace(true)
+            if (!cancelled && !knownId) {
+              const fallback = latestQuickHelpEntryId(workspace?.entries || [])
+              if (fallback) setFreshQuickHelpId(fallback)
+            }
+          }
         } else if (next.status === 'error') {
           terminalHandled = true
           setQuickHelpError(next.error || 'Не удалось получить помощь тренера')
@@ -1653,13 +1673,20 @@ function DealDetail(props: {
     }
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
     setQuickHelpError('')
+    setFreshQuickHelpId(null)
     try {
       const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true)
       setQuickHelpDraft('')
       setQuickHelpJob(started)
       if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
       if (started.status === 'done') {
-        await loadAssistantWorkspace(true)
+        const knownId = freshQuickHelpIdFromJob(started)
+        if (knownId) setFreshQuickHelpId(knownId)
+        const workspace = await loadAssistantWorkspace(true)
+        if (!knownId) {
+          const fallback = latestQuickHelpEntryId(workspace?.entries || [])
+          if (fallback) setFreshQuickHelpId(fallback)
+        }
       }
     } catch (reason) {
       setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
@@ -1801,7 +1828,9 @@ function DealDetail(props: {
       onQuickHelpDraft={setQuickHelpDraft}
       onQuickHelp={requestQuickHelp}
       onOpenAssistant={() => void loadAssistantWorkspace(true)}
-      onCloseAssistant={() => setAssistantOpen(false)}
+      onCloseAssistant={() => { setAssistantOpen(false); consumeFreshQuickHelp() }}
+      freshQuickHelpId={freshQuickHelpId}
+      onFreshAnswerConsumed={consumeFreshQuickHelp}
       onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
@@ -1892,6 +1921,8 @@ type ManagerDealScreenProps = {
   onQuickHelp: (question: string) => Promise<void>
   onOpenAssistant: () => void
   onCloseAssistant: () => void
+  freshQuickHelpId: number | null
+  onFreshAnswerConsumed: () => void
   onCompleteCommunication: (quickHelpId: number) => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
@@ -1945,6 +1976,8 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onTranscribe={props.onTranscribe}
         onCompleteCommunication={props.onCompleteCommunication}
         onToggleChecklistItem={props.onToggleChecklistItem}
+        freshEntryId={props.freshQuickHelpId}
+        onFreshAnswerConsumed={props.onFreshAnswerConsumed}
       /> : null}
     </> : null}
   </>
@@ -2254,14 +2287,16 @@ function ManagerQuickHelp(props: {
   </section>
 }
 
-function ManagerQuickHelpAnswer({ deal, entry, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem }: {
+function ManagerQuickHelpAnswer({ deal, entry, animate, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
   deal: DealControlDeal
   entry: ManagerQuickHelpEntry
+  animate?: boolean
   onCopy: (text: string, label: string) => Promise<void>
   onEdit: () => void
   onComplete: () => void
   onBitrix: () => void
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+  onRevealFinished?: () => void
 }) {
   const content: ManagerQuickHelpContent = entry.content
   const [selectedStrategy, setSelectedStrategy] = useState<ManagerQuickHelpStrategy>('primary')
@@ -2269,6 +2304,17 @@ function ManagerQuickHelpAnswer({ deal, entry, onCopy, onEdit, onComplete, onBit
   const [fullScriptJob, setFullScriptJob] = useState<ManagerFullScriptJob | null>(null)
   const [fullScriptWorkspace, setFullScriptWorkspace] = useState<ManagerFullScriptWorkspace | null>(null)
   const [fullScriptError, setFullScriptError] = useState('')
+  const summaryText = content.situation_summary || 'Ситуация пока не сформирована.'
+  const reveal = useQuickHelpReveal(Boolean(animate), summaryText)
+  const showMessage = !reveal.animate || reveal.step !== 'summary'
+  const showSecondary = !reveal.animate || reveal.step === 'secondary' || reveal.step === 'fallback' || reveal.step === 'done'
+  const showFallback = !reveal.animate || reveal.step === 'fallback' || reveal.step === 'done'
+  const showRest = !reveal.animate || reveal.step === 'done'
+
+  useEffect(() => {
+    if (!animate || reveal.step !== 'done') return
+    onRevealFinished?.()
+  }, [animate, onRevealFinished, reveal.step])
 
   async function openFullScript() {
     setFullScriptOpen(true)
@@ -2305,14 +2351,31 @@ function ManagerQuickHelpAnswer({ deal, entry, onCopy, onEdit, onComplete, onBit
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [deal.deal_id, entry.id, fullScriptJob, fullScriptOpen, selectedStrategy])
 
-  return <article className="dc-manager-answer">
+  return <article className="dc-manager-answer" aria-busy={reveal.animate && reveal.step !== 'done'}>
     <div className="dc-manager-answer-summary">
-      <span>◎</span><div><h4>Понял ситуацию</h4><p><span>{content.situation_summary || 'Ситуация пока не сформирована.'}</span>{content.next_action ? <> <strong>{content.next_action}</strong></> : null}{content.expected_result ? <> <span> {content.expected_result}</span></> : null}</p></div><button className="dc-link-button" onClick={onEdit}>Изменить</button>
+      <span>◎</span>
+      <div>
+        <h4>Понял ситуацию</h4>
+        <p>
+          <span>{reveal.typedSummary}{reveal.animate && !reveal.summaryReady ? <i className="dc-manager-answer-caret" aria-hidden="true" /> : null}</span>
+          {reveal.summaryReady && content.next_action ? <> <strong>{content.next_action}</strong></> : null}
+          {reveal.summaryReady && content.expected_result ? <> <span> {content.expected_result}</span></> : null}
+        </p>
+      </div>
+      <button className="dc-link-button" onClick={onEdit}>Изменить</button>
     </div>
-    <ManagerQuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={setSelectedStrategy} />
-    {(content.answer_contract === 'strategy_v1' || content.answer_contract === 'strategy_v2') && content.fallback_action ? <div className="dc-manager-answer-fallback"><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
-    {content.answer_contract === 'strategy_v2' ? <button className="dc-button dc-manager-full-script-open" onClick={() => void openFullScript()}>Открыть полный скрипт разговора</button> : null}
-    <div className="dc-manager-answer-actions"><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div>
+    {showMessage || showSecondary ? <ManagerQuickHelpVariants
+      content={content}
+      onCopy={onCopy}
+      selectedStrategy={selectedStrategy}
+      onSelectedStrategy={setSelectedStrategy}
+      showMessage={showMessage}
+      showSecondary={showSecondary}
+      animate={reveal.animate}
+    /> : null}
+    {showFallback && (content.answer_contract === 'strategy_v1' || content.answer_contract === 'strategy_v2') && content.fallback_action ? <div className={revealClassName('dc-manager-answer-fallback', reveal.animate)}><strong>Если не сработало</strong><span>{content.fallback_action}</span></div> : null}
+    {showRest && content.answer_contract === 'strategy_v2' ? <button className={revealClassName('dc-button dc-manager-full-script-open', reveal.animate)} onClick={() => void openFullScript()}>Открыть полный скрипт разговора</button> : null}
+    {showRest ? <div className={revealClassName('dc-manager-answer-actions', reveal.animate)}><button className="dc-button primary" onClick={onComplete}>Коммуникация выполнена</button><button className="dc-button" onClick={onBitrix}>Добавить комментарий в Bitrix24</button></div> : null}
     {fullScriptOpen ? <ManagerFullScriptModal
       deal={deal}
       selectedStrategy={selectedStrategy}
@@ -2325,40 +2388,49 @@ function ManagerQuickHelpAnswer({ deal, entry, onCopy, onEdit, onComplete, onBit
   </article>
 }
 
-function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy }: {
+function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpContent
   onCopy: (text: string, label: string) => Promise<void>
   selectedStrategy: ManagerQuickHelpStrategy
   onSelectedStrategy: (strategy: ManagerQuickHelpStrategy) => void
+  showMessage?: boolean
+  showSecondary?: boolean
+  animate?: boolean
 }) {
   return content.answer_contract === 'strategy_v2'
-    ? <ManagerStrategyV2QuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={onSelectedStrategy} />
+    ? <ManagerStrategyV2QuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={onSelectedStrategy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
     : content.answer_contract === 'strategy_v1'
-    ? <ManagerStrategyQuickHelpVariants content={content} onCopy={onCopy} />
-    : <ManagerLegacyQuickHelpVariants content={content} onCopy={onCopy} />
+    ? <ManagerStrategyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
+    : <ManagerLegacyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
 }
 
-function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy }: {
+function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpStrategyV2Content
   onCopy: (text: string, label: string) => Promise<void>
   selectedStrategy: ManagerQuickHelpStrategy
   onSelectedStrategy: (strategy: ManagerQuickHelpStrategy) => void
+  showMessage?: boolean
+  showSecondary?: boolean
+  animate?: boolean
 }) {
   const strategies: Array<[ManagerQuickHelpStrategy, string]> = [['primary', '1'], ['alternative', '2'], ['pattern_break', '3']]
   const message = content.client_messages[selectedStrategy]
   return <div className="dc-manager-answer-v2">
-    <section className="dc-manager-answer-copy message">
+    {showMessage ? <section className={revealClassName('dc-manager-answer-copy message', animate)}>
       <div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!message} onClick={() => void onCopy(message, 'Сообщение клиенту')}>Скопировать</button></div>
       <div className="dc-manager-tone-tabs numeric" role="tablist" aria-label="Вариант сообщения клиенту">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={selectedStrategy === strategy} className={selectedStrategy === strategy ? 'active' : ''} onClick={() => onSelectedStrategy(strategy)}><span>{label}</span></button>)}</div>
       <pre>{message || 'Сообщение пока не сформировано.'}</pre>
-    </section>
-    {content.lifehacks.length ? <section className="dc-manager-lifehacks"><h4>Лайфхаки</h4><div>{content.lifehacks.map((item) => <article key={item.tactic_id}><strong>{item.title}</strong><p>{item.action}</p><small>{item.why_relevant}</small><em>{item.conditions}</em></article>)}</div></section> : null}
+    </section> : null}
+    {showSecondary && content.lifehacks.length ? <section className={revealClassName('dc-manager-lifehacks', animate)}><h4>Лайфхаки</h4><div>{content.lifehacks.map((item) => <article key={item.tactic_id}><strong>{item.title}</strong><p>{item.action}</p><small>{item.why_relevant}</small><em>{item.conditions}</em></article>)}</div></section> : null}
   </div>
 }
 
-function ManagerLegacyQuickHelpVariants({ content, onCopy }: {
+function ManagerLegacyQuickHelpVariants({ content, onCopy, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpLegacyContent
   onCopy: (text: string, label: string) => Promise<void>
+  showMessage?: boolean
+  showSecondary?: boolean
+  animate?: boolean
 }) {
   const [clientTone, setClientTone] = useState<ManagerQuickHelpLegacyContent['recommended_client_tone']>(content.recommended_client_tone)
   const [callTone, setCallTone] = useState<ManagerQuickHelpLegacyContent['recommended_call_tone']>(content.recommended_call_tone)
@@ -2375,14 +2447,17 @@ function ManagerLegacyQuickHelpVariants({ content, onCopy }: {
   const clientMessage = content.client_messages[clientTone]
   const callScript = content.call_scripts[callTone]
   return <div className="dc-manager-answer-modules">
-      <section className="dc-manager-answer-copy message"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон сообщения клиенту">{clientTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={clientTone === tone} className={clientTone === tone ? 'active' : ''} onClick={() => setClientTone(tone)}><span>{label}</span>{content.recommended_client_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section>
-      <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон речевого модуля">{callTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={callTone === tone} className={callTone === tone ? 'active' : ''} onClick={() => setCallTone(tone)}><span>{label}</span>{content.recommended_call_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section>
+      {showMessage ? <section className={revealClassName('dc-manager-answer-copy message', animate)}><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон сообщения клиенту">{clientTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={clientTone === tone} className={clientTone === tone ? 'active' : ''} onClick={() => setClientTone(tone)}><span>{label}</span>{content.recommended_client_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section> : null}
+      {showSecondary ? <section className={revealClassName('dc-manager-answer-copy speech', animate)}><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Тон речевого модуля">{callTones.map(([tone, label]) => <button key={tone} type="button" role="tab" aria-selected={callTone === tone} className={callTone === tone ? 'active' : ''} onClick={() => setCallTone(tone)}><span>{label}</span>{content.recommended_call_tone === tone ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section> : null}
     </div>
 }
 
-function ManagerStrategyQuickHelpVariants({ content, onCopy }: {
+function ManagerStrategyQuickHelpVariants({ content, onCopy, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpStrategyContent
   onCopy: (text: string, label: string) => Promise<void>
+  showMessage?: boolean
+  showSecondary?: boolean
+  animate?: boolean
 }) {
   const initialMessage = content.recommended_channel === 'message' ? content.recommended_strategy : 'primary'
   const initialCall = content.recommended_channel === 'call' ? content.recommended_strategy : 'primary'
@@ -2396,8 +2471,8 @@ function ManagerStrategyQuickHelpVariants({ content, onCopy }: {
   const clientMessage = content.client_messages[messageStrategy]
   const callScript = content.call_scripts[callStrategy]
   return <div className="dc-manager-answer-modules">
-    <section className="dc-manager-answer-copy message"><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия сообщения клиенту">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={messageStrategy === strategy} className={messageStrategy === strategy ? 'active' : ''} onClick={() => setMessageStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'message' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section>
-    <section className="dc-manager-answer-copy speech"><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия речевого модуля">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={callStrategy === strategy} className={callStrategy === strategy ? 'active' : ''} onClick={() => setCallStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'call' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section>
+    {showMessage ? <section className={revealClassName('dc-manager-answer-copy message', animate)}><div><h4>Сообщение клиенту</h4><button className="dc-button" disabled={!clientMessage} onClick={() => void onCopy(clientMessage, 'Сообщение клиенту')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия сообщения клиенту">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={messageStrategy === strategy} className={messageStrategy === strategy ? 'active' : ''} onClick={() => setMessageStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'message' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{clientMessage || 'Сообщение пока не сформировано.'}</pre></section> : null}
+    {showSecondary ? <section className={revealClassName('dc-manager-answer-copy speech', animate)}><div><h4>Речевой модуль</h4><button className="dc-button" disabled={!callScript} onClick={() => void onCopy(callScript, 'Речевой модуль')}>Скопировать</button></div><div className="dc-manager-tone-tabs" role="tablist" aria-label="Стратегия речевого модуля">{strategies.map(([strategy, label]) => <button key={strategy} type="button" role="tab" aria-selected={callStrategy === strategy} className={callStrategy === strategy ? 'active' : ''} onClick={() => setCallStrategy(strategy)}><span>{label}</span>{content.recommended_channel === 'call' && content.recommended_strategy === strategy ? <small>Рекомендуется</small> : null}</button>)}</div><pre>{callScript || 'Речевой модуль пока не сформирован.'}</pre></section> : null}
   </div>
 }
 
@@ -2423,12 +2498,13 @@ function ManagerFullScriptModal(props: {
   }, [onClose])
   const script = props.workspace?.script?.content
   const objections = props.workspace?.objection_handling?.items || []
+  const failed = props.job?.status === 'error' || Boolean(props.error)
   const variantNumber = props.selectedStrategy === 'primary' ? '1' : props.selectedStrategy === 'alternative' ? '2' : '3'
   return createPortal(<div className="dc-manager-full-script-layer">
     <section className="dc-manager-full-script-modal" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
       <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}</small><h2 id="manager-full-script-title">Полный скрипт разговора</h2></div><button onClick={props.onClose} aria-label="Закрыть">×</button></header>
       {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
-      {!script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : <>
+      {!script && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : <>
         <div className="dc-manager-full-script-grid">
           <main>
             <section className="dc-manager-full-script-goal"><small>Цель разговора</small><strong>{script.conversation_goal}</strong></section>
@@ -2517,6 +2593,8 @@ function ManagerAssistantModal(props: {
   onTranscribe: (audio: Blob) => Promise<string>
   onCompleteCommunication: (quickHelpId: number) => void
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+  freshEntryId: number | null
+  onFreshAnswerConsumed: () => void
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context'>('answer')
   const [historyOffset, setHistoryOffset] = useState(0)
@@ -2526,8 +2604,16 @@ function ManagerAssistantModal(props: {
   const safeHistoryOffset = Math.min(historyOffset, Math.max(0, entries.length - 1))
   const visibleEntryIndex = entries.length - 1 - safeHistoryOffset
   const visibleEntry = visibleEntryIndex >= 0 ? entries[visibleEntryIndex] : null
+  const viewingLatest = safeHistoryOffset === 0
+  const animateAnswer = Boolean(visibleEntry && shouldAnimateQuickHelpAnswer({
+    entryId: visibleEntry.id,
+    freshEntryId: props.freshEntryId,
+    viewingLatest: viewingLatest && view === 'answer',
+    reducedMotion: false,
+  }))
   const task = primaryBitrixTaskOf(props.deal)
   const onClose = props.onClose
+  const onFreshAnswerConsumed = props.onFreshAnswerConsumed
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -2539,6 +2625,11 @@ function ManagerAssistantModal(props: {
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])
+
+  useEffect(() => {
+    if (props.freshEntryId == null) return
+    if (busy || view !== 'answer' || !viewingLatest) onFreshAnswerConsumed()
+  }, [busy, onFreshAnswerConsumed, props.freshEntryId, view, viewingLatest])
 
   async function send() {
     if (busy || !props.draft.trim()) return
@@ -2590,11 +2681,13 @@ function ManagerAssistantModal(props: {
               <ManagerQuickHelpAnswer
                 deal={props.deal}
                 entry={visibleEntry}
+                animate={animateAnswer}
                 onCopy={props.onCopy}
                 onEdit={props.onEditSituation}
                 onComplete={() => complete(visibleEntry)}
                 onBitrix={() => void prepareBitrixComment(visibleEntry)}
                 onToggleChecklistItem={props.onToggleChecklistItem}
+                onRevealFinished={onFreshAnswerConsumed}
               />
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Помощник готовит ответ'}</small></div> : null}

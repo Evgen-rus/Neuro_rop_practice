@@ -72,6 +72,9 @@ textarea {
 .dc-manager-full-script-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; color: #52677f; background: #edf2f7; font-size: 24px; cursor: pointer; }
 .dc-manager-full-script-modal > .dc-manager-error { margin: 10px 18px 0; }
 .dc-manager-full-script-loading { display: grid; place-content: center; justify-items: center; gap: 12px; color: #294764; }
+.dc-manager-full-script-failed { display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; color: #5f6f82; text-align: center; }
+.dc-manager-full-script-failed strong { color: #b42318; font-size: 16px; }
+.dc-manager-full-script-failed p { margin: 0 0 6px; font-size: 12px; }
 .dc-manager-full-script-grid { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 12px; padding: 12px; overflow: hidden; }
 .dc-manager-full-script-grid > main { min-width: 0; overflow: auto; padding: 2px 5px 18px; }
 .dc-manager-full-script-grid > aside { min-width: 0; overflow: auto; }
@@ -5424,6 +5427,11 @@ ul.facts.bad li:before {
     animation: none;
     border-style: dotted;
   }
+  .dc-manager-answer-reveal,
+  .dc-manager-answer-caret,
+  .dc-manager-assistant-typing span {
+    animation: none !important;
+  }
 }
 
 .daily-custom-period {
@@ -6944,6 +6952,27 @@ ul.facts.bad li:before {
 .dc-manager-assistant-typing span:nth-child(3) { animation-delay: .3s; }
 .dc-manager-assistant-typing small { margin-left: 5px; color: #71839a; font-size: 9px; }
 @keyframes dc-assistant-dot { 0%, 80%, 100% { opacity: .35; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+.dc-manager-answer-reveal {
+  animation: dc-qh-block-in .28s ease both;
+}
+.dc-manager-answer-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: .9em;
+  margin-left: 1px;
+  background: #1768f2;
+  vertical-align: -1px;
+  animation: dc-qh-caret .8s steps(1) infinite;
+}
+@keyframes dc-qh-block-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dc-qh-caret {
+  0%, 45% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
 
 .dc-manager-assistant-history { padding: 2px; }
 .dc-manager-assistant-history h3 { margin: 0 0 15px; color: #183454; font-size: 14px; }
