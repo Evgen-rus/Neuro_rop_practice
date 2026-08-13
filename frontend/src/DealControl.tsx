@@ -1760,14 +1760,17 @@ function DealDetail(props: {
   return <aside className="dc-detail">
     <header className="dc-detail-top">
       <div className="dc-detail-heading">
-        <div className="dc-deal-title-row"><h2>Сделка #{deal.deal_id}</h2><a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a></div>
+        <div className="dc-deal-title-row">
+          <h2>Сделка #{deal.deal_id}</h2>
+          <a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a>
+          <section className="dc-detail-stats dc-detail-stats-compact" aria-label="Основные данные сделки">
+            <div className="dc-detail-stat-grow" title={`Этап: ${deal.stage_name || 'не указан'}`} aria-label={`Этап: ${deal.stage_name || 'не указан'}`}><span aria-hidden="true">◆</span><strong>{deal.stage_name || '—'}</strong></div>
+            <div className="dc-detail-stat-fixed" title={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`} aria-label={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`}><span aria-hidden="true">◔</span><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
+            <div className="dc-detail-stat-grow" title={`Менеджер: ${deal.manager_name || 'не указан'}`} aria-label={`Менеджер: ${deal.manager_name || 'не указан'}`}><span aria-hidden="true">●</span><strong>{deal.manager_name || '—'}</strong></div>
+            <div className="dc-detail-stat-fixed" title={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`} aria-label={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`}><span aria-hidden="true">₽</span><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
+          </section>
+        </div>
         <p className="dc-deal-compact-title">{deal.title}</p>
-        <section className="dc-detail-stats dc-detail-stats-compact" aria-label="Основные данные сделки">
-          <div title={`Этап: ${deal.stage_name || 'не указан'}`} aria-label={`Этап: ${deal.stage_name || 'не указан'}`}><span aria-hidden="true">◆</span><strong>{deal.stage_name || '—'}</strong></div>
-          <div title={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`} aria-label={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`}><span aria-hidden="true">◔</span><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>
-          <div title={`Менеджер: ${deal.manager_name || 'не указан'}`} aria-label={`Менеджер: ${deal.manager_name || 'не указан'}`}><span aria-hidden="true">●</span><strong>{deal.manager_name || '—'}</strong></div>
-          <div title={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`} aria-label={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`}><span aria-hidden="true">₽</span><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
-        </section>
         {hasAnalysis ? analysisReady : analysisMissing}
       </div>
     </header>

@@ -44,10 +44,12 @@ textarea {
 /* Manager help v2: compact deal context and focused conversation workspace. */
 .dc-detail-top { align-items: flex-start; }
 .dc-detail-heading { width: 100%; }
-.dc-deal-title-row { flex-wrap: nowrap; }
+.dc-deal-title-row { flex-wrap: nowrap; min-width: 0; }
 .dc-detail-heading > .dc-deal-compact-title { min-width: 0; max-width: none; margin: 3px 0 8px; overflow: hidden; color: #38516d; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.dc-detail-stats.dc-detail-stats-compact { display: grid; width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0 0 9px; }
-.dc-detail-stats.dc-detail-stats-compact > div { display: flex; min-width: 0; min-height: 30px; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid #dce6f0; border-radius: 7px; background: #f7faff; }
+.dc-detail-stats.dc-detail-stats-compact { display: flex; min-width: 0; flex: 1 1 auto; flex-wrap: nowrap; justify-content: flex-end; gap: 5px; margin: 0; }
+.dc-detail-stats.dc-detail-stats-compact > div { display: flex; min-width: 0; min-height: 26px; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid #dce6f0; border-radius: 7px; background: #f7faff; }
+.dc-detail-stats.dc-detail-stats-compact > .dc-detail-stat-grow { flex: 1 1 7em; min-width: 0; }
+.dc-detail-stats.dc-detail-stats-compact > .dc-detail-stat-fixed { flex: 0 0 auto; }
 .dc-detail-stats.dc-detail-stats-compact span { display: grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; border-radius: 4px; color: #467197; background: #e7f0f8; font-size: 8px; font-weight: 900; }
 .dc-detail-stats.dc-detail-stats-compact strong { min-width: 0; overflow: hidden; color: #294764; font-size: 10px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 .dc-manager-answer-v2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 10px; padding: 10px; }
@@ -124,6 +126,7 @@ textarea {
 .dc-detail-top .dc-deal-title-row {
   display: flex;
   width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
@@ -132,6 +135,8 @@ textarea {
 .dc-detail-top .dc-deal-title-row h2 {
   flex: 0 0 auto;
   margin: 0;
+  font-size: 15px;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
@@ -148,8 +153,7 @@ textarea {
 }
 
 .dc-detail-top .dc-detail-stats.dc-detail-stats-compact {
-  width: 100%;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: auto;
 }
 
 .dc-detail-top .dc-analysis-ready {
