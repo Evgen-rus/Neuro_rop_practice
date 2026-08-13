@@ -5,10 +5,12 @@ import {
   answerModeClassName,
   currentEntryForMode,
   entriesForMode,
+  entryForTurn,
   entryMode,
   isAutoOrigin,
   missingCurrentModes,
   pressureLever,
+  sharedTurns,
   strategyLabel,
   visibleLifehack,
   workspaceModeClassName,
@@ -76,6 +78,31 @@ test('strategy tabs use semantic labels instead of 1/2/3', () => {
   assert.equal(strategyLabel(push.content, 'primary'), 'Через надёжность')
   assert.equal(strategyLabel(push.content, 'alternative'), 'Через сроки')
   assert.equal(strategyLabel(push.content, 'pattern_break'), 'Через согласование')
+})
+
+test('shared history keeps one turn for both voices', () => {
+  const reanimator = {
+    ...push,
+    id: 5,
+    mode: 'reanimator',
+    origin: 'manager',
+    turn_id: 'turn-1',
+    question: 'Давай другой рычаг',
+    content: { ...push.content, mode: 'reanimator' },
+  }
+  const pairedPush = {
+    ...push,
+    id: 6,
+    origin: 'manager',
+    turn_id: 'turn-1',
+    question: 'Давай другой рычаг',
+  }
+  const turns = sharedTurns([v2, push, reanimator, pairedPush])
+  assert.equal(turns.length, 3)
+  assert.equal(turns[2].key, 'turn-1')
+  assert.equal(entryForTurn(turns[2], 'push')?.id, 6)
+  assert.equal(entryForTurn(turns[2], 'reanimator')?.id, 5)
+  assert.equal(turns[0].key, 'legacy:1')
 })
 
 test('current recommendation is per mode and does not mix voices', () => {

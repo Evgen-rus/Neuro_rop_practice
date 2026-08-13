@@ -58,6 +58,7 @@ class DealManagerQuickHelpJob:
     situation_id: int | None
     mode: str | None = None
     origin: str = "manager"
+    turn_id: str | None = None
     status: str = "queued"
     stage: str = "queued"
     detail: str = "Подготавливаем ответ тренера"
@@ -134,6 +135,7 @@ def _save_mode_answer(
         model_meta=_safe_model_meta(metadata),
         mode=mode,
         origin=origin,
+        turn_id=job.turn_id,
     )
     saved_id = int(saved["id"]) if isinstance(saved, dict) and saved.get("id") is not None else None
     with _QUICK_HELP_LOCK:
@@ -160,10 +162,19 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
         communication_pattern_context = build_communication_pattern_context(
             _load_local_communications(job.deal_id)
         )
-        modes = list(ASSISTANT_MODES) if job.origin == "auto" and not job.question.strip() else [job.mode or "reanimator"]
+        if job.origin == "auto" and not job.question.strip():
+            for item_mode in ASSISTANT_MODES:
+                current = _current_for_mode(db_path, context, item_mode)
+                sibling_turn = str((current or {}).get("turn_id") or "").strip()
+                if sibling_turn:
+                    job.turn_id = sibling_turn
+                    break
+        if not job.turn_id:
+            job.turn_id = uuid.uuid4().hex
+        modes = list(ASSISTANT_MODES)
         generated = 0
         for index, mode in enumerate(modes):
-            existing = _current_for_mode(db_path, context, mode) if job.origin == "auto" else None
+            existing = _current_for_mode(db_path, context, mode) if job.origin == "auto" and not job.question.strip() else None
             if isinstance(existing, dict) and existing.get("id") is not None:
                 with _QUICK_HELP_LOCK:
                     job.saved_by_mode[mode] = int(existing["id"])
@@ -268,6 +279,7 @@ def start_quick_help_job(
             situation_id=context["situation_id"],
             mode=mode,
             origin=origin,
+            turn_id=uuid.uuid4().hex,
         )
         _QUICK_HELP_JOBS[job_id] = job
     thread = threading.Thread(target=_run_quick_help_job, args=(job_id, db_path), daemon=True)

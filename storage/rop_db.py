@@ -501,6 +501,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 situation_review_id INTEGER NOT NULL,
                 mode TEXT,
                 origin TEXT,
+                turn_id TEXT,
                 question TEXT NOT NULL,
                 answer_json TEXT NOT NULL,
                 model_meta_json TEXT,
@@ -762,6 +763,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_control_task_crm_facts", "fact_key", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "mode", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "origin", "TEXT")
+        _ensure_column(conn, "deal_manager_quick_help", "turn_id", "TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deal_manager_quick_help_current "
             "ON deal_manager_quick_help("
@@ -2198,6 +2200,8 @@ def _row_to_deal_manager_quick_help(row: sqlite3.Row | None) -> dict[str, Any] |
     value["model_meta"] = loads_json(value.pop("model_meta_json", None), None)
     value["mode"] = _normalize_quick_help_mode(value.get("mode"), content=value["content"])
     value["origin"] = _normalize_quick_help_origin(value.get("origin"))
+    turn_id = str(value.get("turn_id") or "").strip()
+    value["turn_id"] = turn_id or None
     return value
 
 
@@ -2212,6 +2216,7 @@ def save_deal_manager_quick_help(
     model_meta: dict[str, Any] | None = None,
     mode: str | None = None,
     origin: str | None = None,
+    turn_id: str | None = None,
 ) -> dict[str, Any]:
     """Append one independent quick-help question and validated answer."""
     normalized_question = str(question or "").strip()
@@ -2223,6 +2228,7 @@ def save_deal_manager_quick_help(
         raise ValueError("Метаданные модели должны быть JSON-объектом")
     normalized_mode = _normalize_quick_help_mode(mode, content=answer_json)
     normalized_origin = _normalize_quick_help_origin(origin)
+    normalized_turn_id = str(turn_id or "").strip() or None
     init_db(db_path)
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -2244,9 +2250,9 @@ def save_deal_manager_quick_help(
             """
             INSERT INTO deal_manager_quick_help (
                 deal_id, manager_id, source_report_id, situation_review_id,
-                mode, origin, question, answer_json, model_meta_json, created_at
+                mode, origin, turn_id, question, answer_json, model_meta_json, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(deal_id),
@@ -2255,6 +2261,7 @@ def save_deal_manager_quick_help(
                 int(situation_review_id),
                 normalized_mode,
                 normalized_origin,
+                normalized_turn_id,
                 normalized_question,
                 dumps_json(answer_json),
                 dumps_json(model_meta) if model_meta is not None else None,

@@ -120,19 +120,44 @@ class DealManagerQuickHelpStorageTests(unittest.TestCase):
             self.assertEqual(legacy["origin"], "manager")
             self.assertEqual(push["mode"], "push")
             self.assertEqual(push["origin"], "auto")
+            self.assertEqual(legacy.get("turn_id"), None)
+            paired_push = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="Давай другой рычаг",
+                answer_json={"answer_contract": "strategy_v3", "mode": "push"},
+                mode="push",
+                origin="manager",
+                turn_id="turn-shared",
+            )
+            paired_reanimator = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="Давай другой рычаг",
+                answer_json={"answer_contract": "strategy_v3", "mode": "reanimator"},
+                mode="reanimator",
+                origin="manager",
+                turn_id="turn-shared",
+            )
+            self.assertEqual(paired_push["turn_id"], "turn-shared")
+            self.assertEqual(paired_reanimator["turn_id"], "turn-shared")
             self.assertEqual(
                 get_current_deal_manager_quick_help(
                     db_path, deal_id="101", source_report_id=report_id,
                     situation_review_id=review_id, mode="push",
                 )["id"],
-                push["id"],
+                paired_push["id"],
             )
             self.assertEqual(
                 get_current_deal_manager_quick_help(
                     db_path, deal_id="101", source_report_id=report_id,
                     situation_review_id=review_id, mode="reanimator",
                 )["id"],
-                legacy["id"],
+                paired_reanimator["id"],
             )
 
     def test_rejects_review_from_another_report(self) -> None:

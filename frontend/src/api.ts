@@ -785,6 +785,7 @@ export type ManagerQuickHelpEntry = {
   situation_review_id?: number | null
   mode?: ManagerAssistantMode | null
   origin?: 'auto' | 'manager' | null
+  turn_id?: string | null
   question: string
   content: ManagerQuickHelpContent
   created_at: string
@@ -1260,6 +1261,7 @@ function normalizeManagerQuickHelpEntry(value: unknown): ManagerQuickHelpEntry |
     situation_review_id: record.situation_review_id == null ? null : Number(record.situation_review_id),
     mode: entryMode === 'push' ? 'push' : entryMode === 'reanimator' ? 'reanimator' : null,
     origin: entryOrigin === 'auto' || entryOrigin === 'manager' ? entryOrigin : null,
+    turn_id: asString(record.turn_id) || null,
     question: asString(record.question),
     content: normalizedContent,
     created_at: asString(record.created_at),

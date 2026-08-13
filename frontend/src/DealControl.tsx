@@ -73,10 +73,10 @@ import { useQuickHelpReveal } from './useQuickHelpReveal'
 import {
   answerModeClassName,
   currentEntryForMode,
-  entriesForMode,
-  isAutoOrigin,
+  entryForTurn,
   missingCurrentModes,
   pressureLever,
+  sharedTurns,
   strategyLabel,
   visibleLifehack,
   workspaceModeClassName,
@@ -2693,21 +2693,25 @@ function ManagerAssistantModal(props: {
   const [historyOffset, setHistoryOffset] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
-  const entries = entriesForMode(props.workspace.entries, assistantMode)
-  const current = currentEntryForMode(
-    props.workspace.entries,
-    assistantMode,
-    props.workspace.source_report_id,
-    props.workspace.situation_review_id,
-  )
-  const safeHistoryOffset = Math.min(historyOffset, Math.max(0, entries.length - 1))
-  const visibleEntryIndex = entries.length - 1 - safeHistoryOffset
-  const latest = current || (entries.length ? entries[entries.length - 1] : null)
-  const visibleEntry = safeHistoryOffset === 0 ? latest : (visibleEntryIndex >= 0 ? entries[visibleEntryIndex] : null)
+  const turns = sharedTurns(props.workspace.entries)
+  const latestTurn = turns.length ? turns[turns.length - 1] : null
+  const safeHistoryOffset = Math.min(historyOffset, Math.max(0, turns.length - 1))
+  const visibleTurnIndex = turns.length - 1 - safeHistoryOffset
+  const visibleTurn = safeHistoryOffset === 0 ? latestTurn : (turns[visibleTurnIndex] || null)
+  const visibleEntry = entryForTurn(visibleTurn, assistantMode)
+    || (safeHistoryOffset === 0
+      ? currentEntryForMode(
+          props.workspace.entries,
+          assistantMode,
+          props.workspace.source_report_id,
+          props.workspace.situation_review_id,
+        )
+      : null)
   const viewingLatest = safeHistoryOffset === 0
+  const freshEntryId = props.job?.saved_by_mode?.[assistantMode] ?? props.freshEntryId
   const animateAnswer = Boolean(visibleEntry && shouldAnimateQuickHelpAnswer({
     entryId: visibleEntry.id,
-    freshEntryId: props.freshEntryId,
+    freshEntryId,
     viewingLatest: viewingLatest && view === 'answer',
     reducedMotion: false,
   }))
@@ -2741,7 +2745,6 @@ function ManagerAssistantModal(props: {
   function switchMode(next: ManagerAssistantMode) {
     if (next === assistantMode) return
     setAssistantMode(next)
-    setHistoryOffset(0)
   }
 
   async function generateFollowups() {
@@ -2825,13 +2828,13 @@ function ManagerAssistantModal(props: {
             <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
           </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
-            {visibleEntry ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleEntry.id}`}>
-              {isAutoOrigin(visibleEntry) ? (
-                entries.length > 1 ? <div className="dc-manager-request-heading dc-manager-request-heading-only-nav"><nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav></div> : null
+            {visibleTurn ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleTurn.key}`}>
+              {visibleTurn.origin === 'auto' ? (
+                turns.length > 1 ? <div className="dc-manager-request-heading dc-manager-request-heading-only-nav"><nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav></div> : null
               ) : (
-                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{entries.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= entries.length - 1} onClick={() => setHistoryOffset((value) => Math.min(entries.length - 1, value + 1))}>← Предыдущий</button><span>{visibleEntryIndex + 1} из {entries.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleEntry.question}</p></div>
+                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small>{turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по запросам"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}</div><p>{visibleTurn.question}</p></div>
               )}
-              <ManagerQuickHelpAnswer
+              {visibleEntry ? <ManagerQuickHelpAnswer
                 deal={props.deal}
                 entry={visibleEntry}
                 animate={animateAnswer}
@@ -2842,7 +2845,7 @@ function ManagerAssistantModal(props: {
                 onBitrix={() => void prepareBitrixComment(visibleEntry)}
                 onToggleChecklistItem={props.onToggleChecklistItem}
                 onRevealFinished={onFreshAnswerConsumed}
-              />
+              /> : <p className="dc-manager-assistant-missing-mode">В этом режиме ответа на этот запрос ещё нет.</p>}
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}

@@ -69,6 +69,45 @@ export function entriesForMode(entries: ManagerQuickHelpEntry[], mode: Assistant
   return [...entries].filter((entry) => entryMode(entry) === mode).sort((first, second) => first.id - second.id)
 }
 
+export type AssistantTurn = {
+  key: string
+  question: string
+  origin: 'auto' | 'manager'
+  latestId: number
+  byMode: Partial<Record<AssistantMode, ManagerQuickHelpEntry>>
+}
+
+export function sharedTurns(entries: ManagerQuickHelpEntry[]): AssistantTurn[] {
+  const groups = new Map<string, AssistantTurn>()
+  const ranked = [...entries].sort((first, second) => first.id - second.id)
+  for (const entry of ranked) {
+    const key = entry.turn_id?.trim() || `legacy:${entry.id}`
+    const mode = entryMode(entry)
+    const existing = groups.get(key)
+    if (!existing) {
+      groups.set(key, {
+        key,
+        question: entry.question,
+        origin: isAutoOrigin(entry) ? 'auto' : 'manager',
+        latestId: entry.id,
+        byMode: { [mode]: entry },
+      })
+      continue
+    }
+    existing.byMode[mode] = entry
+    existing.latestId = Math.max(existing.latestId, entry.id)
+    if (!isAutoOrigin(entry)) {
+      existing.origin = 'manager'
+      existing.question = entry.question
+    }
+  }
+  return [...groups.values()].sort((first, second) => first.latestId - second.latestId)
+}
+
+export function entryForTurn(turn: AssistantTurn | null | undefined, mode: AssistantMode): ManagerQuickHelpEntry | null {
+  return turn?.byMode[mode] || null
+}
+
 export function missingCurrentModes(
   currentByMode: Partial<Record<AssistantMode, ManagerQuickHelpEntry | null>> | null | undefined,
 ): AssistantMode[] {

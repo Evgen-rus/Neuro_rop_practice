@@ -284,12 +284,13 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         job = quick_help.get_quick_help_job(started["job_id"])
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["quick_help_id"], 31)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([item[1]["mode"] for item in calls], ["push", "reanimator"])
+        self.assertEqual({item[1]["turn_id"] for item in calls}, {job["turn_id"]})
         name, kwargs = calls[0]
         self.assertEqual(name, "save_deal_manager_quick_help")
         self.assertEqual(kwargs["question"], "Что сказать клиенту после паузы?")
-        self.assertEqual(kwargs["answer_json"], ANSWER)
         self.assertEqual(kwargs["situation_review_id"], 21)
-        self.assertEqual(kwargs["mode"], "reanimator")
         self.assertEqual(kwargs["origin"], "manager")
         self.assertNotIn("raw_output_text", kwargs["model_meta"])
         communication_context = generate.call_args.kwargs["communication_pattern_context"]
@@ -445,18 +446,21 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         generate.assert_not_called()
         self.assertEqual(calls.count("get_current_deal_manager_quick_help"), 4)
 
-    def test_chat_refinement_stays_in_active_mode(self) -> None:
+    def test_chat_refinement_updates_both_modes_with_shared_turn(self) -> None:
         saved = []
 
         def storage_call(name, db_path, **kwargs):
             if name == "save_deal_manager_quick_help":
                 saved.append(kwargs)
-                return {"id": 55, "deal_id": "101"}
+                return {"id": 50 + len(saved), "deal_id": "101"}
             raise AssertionError(name)
+
+        def generate(**kwargs):
+            return (PUSH_ANSWER if kwargs["mode"] == "push" else ANSWER, {})
 
         with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
              patch.object(quick_help, "_load_local_communications", return_value=[]), \
-             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(PUSH_ANSWER, {})) as generate, \
+             patch.object(quick_help, "generate_deal_manager_quick_help", side_effect=generate) as generate_mock, \
              patch.object(quick_help, "_storage_call", side_effect=storage_call), \
              patch.object(quick_help.threading, "Thread", ImmediateThread):
             started = quick_help.start_quick_help_job(
@@ -468,10 +472,13 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             )
 
         self.assertEqual(started["status"], "done")
-        self.assertEqual(generate.call_args.kwargs["mode"], "push")
-        self.assertEqual(saved[0]["mode"], "push")
+        self.assertEqual([call.kwargs["mode"] for call in generate_mock.call_args_list], ["push", "reanimator"])
+        self.assertEqual([item["mode"] for item in saved], ["push", "reanimator"])
+        self.assertEqual({item["turn_id"] for item in saved}, {started["turn_id"]})
+        self.assertTrue(started["turn_id"])
         self.assertEqual(saved[0]["origin"], "manager")
         self.assertEqual(saved[0]["question"], "Этот рычаг не подходит, давай через сроки")
+        self.assertEqual(saved[1]["question"], "Этот рычаг не подходит, давай через сроки")
 
     def test_new_situation_context_allows_fresh_ensure(self) -> None:
         generated_modes: list[str] = []
