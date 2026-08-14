@@ -55,6 +55,7 @@ DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "competitor_defense_checklist",
     "priority_recommendation",
     "qualification_assessment",
+    "deal_context",
 }
 
 LEAD_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
@@ -99,6 +100,12 @@ MAX_LIST_LIMITS = {
     "qualification_assessment.lead_category.budget_factors": 7,
     "qualification_assessment.lead_category.missing_facts": 7,
     "qualification_assessment.lead_route.evidence": 7,
+    "deal_context.critical_facts": 10,
+    "deal_context.turning_points": 8,
+    "deal_context.pain_points": 6,
+    "deal_context.pressure_levers": 6,
+    "deal_context.open_questions": 7,
+    "deal_context.source_conflicts": 5,
 }
 
 
@@ -1398,6 +1405,116 @@ def validate_client_communication_profile(value: Any) -> None:
         raise AnalysisValidationError("Invalid client communication profile: " + "; ".join(errors))
 
 
+def _validate_deal_context(value: Any, errors: list[str]) -> None:
+    path = "deal_context"
+    context = _expect_dict(value, path, errors)
+    if not context:
+        return
+    _require_fields(
+        context,
+        {"current_truth", "critical_facts", "turning_points", "pain_points", "pressure_levers", "open_questions", "source_conflicts"},
+        path,
+        errors,
+    )
+    truth = _expect_dict(context.get("current_truth"), f"{path}.current_truth", errors)
+    if truth:
+        required_truth = {
+            "client_profile", "current_need", "desired_outcome", "current_status",
+            "current_task", "next_checkpoint", "next_step_owner",
+        }
+        _require_fields(truth, required_truth, f"{path}.current_truth", errors)
+        for field in ("client_profile", "current_need", "desired_outcome", "current_status", "current_task"):
+            _expect_non_empty_string(truth.get(field), f"{path}.current_truth.{field}", errors)
+        _validate_optional_question(truth.get("next_checkpoint"), f"{path}.current_truth.next_checkpoint", errors)
+        _expect_enum(
+            truth.get("next_step_owner"), f"{path}.current_truth.next_step_owner",
+            {"manager", "client", "rop", "finance", "leasing", "unknown"}, errors,
+        )
+
+    def validate_evidence(item: dict[str, Any], item_path: str) -> None:
+        evidence = _validate_short_text_list(item.get("evidence"), f"{item_path}.evidence", 5, errors)
+        if not evidence:
+            errors.append(f"{item_path}.evidence must not be empty")
+
+    facts = _expect_max_list_length(context.get("critical_facts"), f"{path}.critical_facts", 10, errors)
+    for index, raw in enumerate(facts):
+        item_path = f"{path}.critical_facts[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"fact_id", "category", "fact", "status", "importance", "observed_at", "source_type", "evidence"}, item_path, errors)
+        for field in ("fact_id", "fact"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _expect_enum(item.get("category"), f"{item_path}.category", {"deadline", "budget", "need", "authority", "technical", "delivery", "payment", "competitor", "commitment", "other"}, errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"confirmed", "needs_confirmation", "conflicted", "outdated"}, errors)
+        _expect_enum(item.get("importance"), f"{item_path}.importance", {"high", "medium", "low"}, errors)
+        _expect_enum(item.get("source_type"), f"{item_path}.source_type", {"client_communication", "crm_fact", "manager_comment", "internal_context", "model_inference"}, errors)
+        _validate_optional_question(item.get("observed_at"), f"{item_path}.observed_at", errors)
+        validate_evidence(item, item_path)
+
+    turning_points = _expect_max_list_length(context.get("turning_points"), f"{path}.turning_points", 8, errors)
+    for index, raw in enumerate(turning_points):
+        item_path = f"{path}.turning_points[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"turning_point_id", "occurred_at", "title", "what_happened", "impact", "status", "evidence"}, item_path, errors)
+        for field in ("turning_point_id", "title", "what_happened", "impact"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _validate_optional_question(item.get("occurred_at"), f"{item_path}.occurred_at", errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"active", "resolved", "superseded"}, errors)
+        validate_evidence(item, item_path)
+
+    pain_points = _expect_max_list_length(context.get("pain_points"), f"{path}.pain_points", 6, errors)
+    for index, raw in enumerate(pain_points):
+        item_path = f"{path}.pain_points[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"pain_id", "title", "description", "status", "impact", "evidence"}, item_path, errors)
+        for field in ("pain_id", "title", "description", "impact"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"active", "partially_resolved", "resolved", "unknown"}, errors)
+        validate_evidence(item, item_path)
+
+    levers = _expect_max_list_length(context.get("pressure_levers"), f"{path}.pressure_levers", 6, errors)
+    used_priorities: set[int] = set()
+    for index, raw in enumerate(levers):
+        item_path = f"{path}.pressure_levers[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"lever_id", "type", "title", "fact", "why_important", "business_consequence", "basis_status", "status", "ai_priority", "evidence"}, item_path, errors)
+        for field in ("lever_id", "title", "fact", "why_important", "business_consequence"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _expect_enum(item.get("type"), f"{item_path}.type", {"deadline", "budget", "operational_impact", "technical", "authority", "competitor", "trust", "other"}, errors)
+        _expect_enum(item.get("basis_status"), f"{item_path}.basis_status", {"confirmed", "inferred", "needs_confirmation"}, errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"active", "weakened", "resolved", "unknown"}, errors)
+        priority = item.get("ai_priority")
+        if priority is not None:
+            if isinstance(priority, bool) or priority not in {1, 2, 3}:
+                errors.append(f"{item_path}.ai_priority must be 1, 2, 3 or null")
+            elif priority in used_priorities:
+                errors.append(f"{path}.pressure_levers contains duplicate ai_priority {priority}")
+            else:
+                used_priorities.add(priority)
+        validate_evidence(item, item_path)
+
+    _validate_short_text_list(context.get("open_questions"), f"{path}.open_questions", 7, errors)
+    conflicts = _expect_max_list_length(context.get("source_conflicts"), f"{path}.source_conflicts", 5, errors)
+    for index, raw in enumerate(conflicts):
+        item_path = f"{path}.source_conflicts[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"description", "sources", "next_check"}, item_path, errors)
+        _expect_non_empty_string(item.get("description"), f"{item_path}.description", errors)
+        _expect_non_empty_string(item.get("next_check"), f"{item_path}.next_check", errors)
+        sources = _validate_short_text_list(item.get("sources"), f"{item_path}.sources", 4, errors)
+        if not sources:
+            errors.append(f"{item_path}.sources must not be empty")
+
+
 def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
     _validate_deal_recommendation_materialization_fields(analysis, errors)
     _validate_client_communication_profile(analysis.get("client_communication_profile"), errors)
@@ -1794,6 +1911,7 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _expect_list(analysis.get("what_changed"), "what_changed", errors)
     _expect_dict(analysis.get("deal_progress"), "deal_progress", errors)
     _validate_qualification_assessment(analysis, errors)
+    _validate_deal_context(analysis.get("deal_context"), errors)
     if "recommendation_feedback" in analysis:
         _validate_recommendation_feedback(analysis.get("recommendation_feedback"), errors)
     if "daily_checklist_update" in analysis:

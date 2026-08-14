@@ -430,6 +430,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                     "event_type": "communication_completed",
                     "created_at": "2026-08-05T11:40:00+03:00",
                 }]
+            if name == "list_deal_context_lever_priorities":
+                return []
             raise AssertionError(name)
 
         communications = [{
@@ -454,6 +456,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(result["context"]["stage"], "КП")
         self.assertEqual(result["context"]["current_task"], "Позвонить клиенту")
         self.assertEqual(result["context"]["main_risk"], "Нет даты решения")
+        self.assertIn("deal_context", result["context"])
+        self.assertEqual(result["context"]["report"]["report_id"], 17)
         self.assertEqual(result["disc_profile"], {
             "primary_style": "C",
             "secondary_style": None,
@@ -620,6 +624,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
 
         methods = {route.path: route.methods for route in app.routes}
         self.assertEqual(methods["/api/deal-control/deals/{deal_id}/assistant-workspace"], {"GET"})
+        self.assertEqual(
+            methods["/api/deal-control/deals/{deal_id}/context/levers/{lever_id}/priority"],
+            {"PUT"},
+        )
         self.assertEqual(
             methods["/api/deal-control/deals/{deal_id}/assistant/communication-completed"],
             {"POST"},

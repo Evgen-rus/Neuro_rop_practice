@@ -81,6 +81,7 @@ from api.deal_manager_quick_help import (
     get_quick_help_job,
     list_quick_help_history,
     record_manager_communication_completed,
+    set_deal_context_lever_priority,
     start_quick_help_job,
 )
 from api.deal_manager_full_script import (
@@ -281,6 +282,10 @@ class DealManagerFollowupsRequest(BaseModel):
 
 class DealManagerCommunicationCompletedRequest(BaseModel):
     quick_help_id: int = Field(ge=1)
+
+
+class DealContextLeverPriorityRequest(BaseModel):
+    priority: Literal[1, 2, 3] | None = None
 
 
 class DealControlTaskOutcomeRequest(BaseModel):
@@ -1066,6 +1071,27 @@ def deal_manager_assistant_workspace_get(deal_id: str) -> dict[str, Any]:
         return get_manager_assistant_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур помощника ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/deal-control/deals/{deal_id}/context/levers/{lever_id}/priority")
+def deal_context_lever_priority_update(
+    deal_id: str,
+    lever_id: str,
+    body: DealContextLeverPriorityRequest,
+) -> dict[str, Any]:
+    require_deal(deal_id, action="edit")
+    try:
+        return set_deal_context_lever_priority(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            lever_id=lever_id,
+            priority=body.priority,
+            actor_role=actor_source_role(auth_current_user()),
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур контекста сделки ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

@@ -292,6 +292,31 @@ def build_prompt(
 - Неполный BANT или технические данные обычно требуют hard_qualification и одного контакта менеджера с конкретными вопросами и CRM-фактами. Не добавляй lead-категории A–E и не скрывай payment_blocker/closed_deal_review.
 </qualification_rules>
 
+<deal_context_rules>
+Сформируй deal_context как описательную живую карту сделки. Этот блок пока не является
+инструкцией для дожима, фоллоуапов или клиентских текстов и не должен сам по себе менять
+остальные рекомендации.
+- current_truth — только актуальный срез, без длинной хронологии.
+- critical_facts — до 10 фактов, потеря которых может изменить решение по сделке: точные
+  сроки, бюджет, технические ограничения, ЛПР, путь согласования, доставка/монтаж,
+  конкурент и подтверждённые обещания. Не ослабляй точный смысл: «должно работать к дате»
+  не заменяй на «отгрузить к дате».
+- turning_points — до 8 событий, которые действительно изменили состояние сделки, а не
+  все коммуникации подряд.
+- pain_points — до 6 клиентских или операционных проблем с текущим состоянием решения.
+- pressure_levers — до 6 коммерческих рычагов. Рычагом может быть срок, бюджет,
+  операционное последствие, техническое ограничение, ЛПР, конкурент или доверие, но не
+  личная уязвимость и не чрезвычайная ситуация сама по себе. Для каждого рычага отделяй
+  подтверждённое основание от вывода, сохраняй business_consequence и назначай уникальный
+  ai_priority 1, 2 или 3 только трём самым важным активным рычагам; остальным ставь null.
+- manager_comment и internal_context допустимы как основание для контроля, но не как слова
+  клиента. Если важный факт подтверждён только ими, ставь needs_confirmation.
+- open_questions — только вопросы, ответ на которые способен изменить движение сделки.
+- source_conflicts — явные противоречия источников; не выбирай удобную версию молча.
+- У всех элементов должны быть стабильные короткие ID латиницей, пригодные для ручной
+  приоритизации в интерфейсе. Для одного и того же смысла сохраняй тот же ID между анализами.
+</deal_context_rules>
+
 <price_comparability_rules>
 - Заполни price_comparability_check, если в истории есть цена нашего предложения, бюджет клиента, цена конкурента, "дорого", "не проходит по цене", "предложили дешевле", "Китай", локальный поставщик или другой ценовой ориентир.
 - Не используй жесткие числовые пороги и не принимай решение только по коэффициенту разницы. Существенная или кратная разница в цене — это красный флаг проверки, а не автоматическое доказательство ошибочного закрытия или окончательной неквалификации.
@@ -522,6 +547,72 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
     }},
     "solution_fit": {{"equipment_type": "labeler|filling_line|block|unknown", "status": "compatible|not_compatible|needs_technical_data|unknown", "reason_code": "technical_mismatch|unknown|null", "evidence": [], "missing_facts": []}},
     "commercial_fit": {{"new_equipment_budget_status": "sufficient|below_minimum|unknown", "confirmed_budget_rub": "число или null", "new_equipment_minimum_rub": 1000000, "reason_code": "budget_below_new_equipment_minimum|unknown|null", "evidence": []}}
+  }},
+  "deal_context": {{
+    "current_truth": {{
+      "client_profile": "кто клиент и какова его подтверждённая роль",
+      "current_need": "актуальная потребность клиента",
+      "desired_outcome": "какой результат нужен клиенту",
+      "current_status": "что реально происходит со сделкой сейчас",
+      "current_task": "ближайшая актуальная задача",
+      "next_checkpoint": "ближайшая контрольная дата/событие или null",
+      "next_step_owner": "manager|client|rop|finance|leasing|unknown"
+    }},
+    "critical_facts": [
+      {{
+        "fact_id": "stable_fact_id",
+        "category": "deadline|budget|need|authority|technical|delivery|payment|competitor|commitment|other",
+        "fact": "точная формулировка факта",
+        "status": "confirmed|needs_confirmation|conflicted|outdated",
+        "importance": "high|medium|low",
+        "observed_at": "ISO-дата/время или null",
+        "source_type": "client_communication|crm_fact|manager_comment|internal_context|model_inference",
+        "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
+    "turning_points": [
+      {{
+        "turning_point_id": "stable_turning_point_id",
+        "occurred_at": "ISO-дата/время или null",
+        "title": "краткое название",
+        "what_happened": "что произошло",
+        "impact": "что изменилось в сделке",
+        "status": "active|resolved|superseded",
+        "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
+    "pain_points": [
+      {{
+        "pain_id": "stable_pain_id",
+        "title": "краткое название проблемы",
+        "description": "в чём проблема",
+        "status": "active|partially_resolved|resolved|unknown",
+        "impact": "как проблема влияет на сделку",
+        "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
+    "pressure_levers": [
+      {{
+        "lever_id": "stable_lever_id",
+        "type": "deadline|budget|operational_impact|technical|authority|competitor|trust|other",
+        "title": "название рычага",
+        "fact": "фактическое основание",
+        "why_important": "почему важно для движения сделки",
+        "business_consequence": "подтверждённое или условное бизнес-последствие",
+        "basis_status": "confirmed|inferred|needs_confirmation",
+        "status": "active|weakened|resolved|unknown",
+        "ai_priority": 1,
+        "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
+    "open_questions": ["до 7 действительно важных неизвестных"],
+    "source_conflicts": [
+      {{
+        "description": "в чём противоречие",
+        "sources": ["1-4 конфликтующих основания"],
+        "next_check": "что проверить для разрешения"
+      }}
+    ]
   }},
   "rop_manager_message_block": {{
     "check_for_rop": "что конкретно РОПу проверить по сделке",
@@ -861,6 +952,7 @@ def render_report(
     primary = manager.get("primary_text", {}) or {}
     rop = analysis.get("rop_action", {}) or {}
     communication_audit = analysis.get("communication_quality_audit", {}) or {}
+    deal_context = analysis.get("deal_context", {}) or {}
 
     def bullet_list(values: Any) -> str:
         if not values:
@@ -882,6 +974,107 @@ def render_report(
         if value is False:
             return "нет"
         return human_value(value)
+
+    def render_deal_context(value: Any) -> str:
+        if not isinstance(value, dict) or not value:
+            return "## Живая карта сделки\n\nНет данных"
+        truth = value.get("current_truth") if isinstance(value.get("current_truth"), dict) else {}
+
+        def evidence_text(item: dict[str, Any]) -> str:
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+            return "; ".join(str(entry) for entry in evidence if str(entry).strip()) or "нет данных"
+
+        def cards(title: str, items: Any, formatter: Any) -> str:
+            rows = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+            if not rows:
+                return f"### {title}\n\n- Нет данных"
+            rendered = []
+            for index, item in enumerate(rows, start=1):
+                rendered.append(formatter(index, item, evidence_text(item)))
+            return f"### {title}\n\n" + "\n\n".join(rendered)
+
+        facts = cards(
+            "Критические факты",
+            value.get("critical_facts"),
+            lambda index, item, evidence: (
+                f"{index}. **{item.get('fact', 'не указано')}**\n"
+                f"   - Категория: {item.get('category', 'other')}\n"
+                f"   - Статус / важность: {item.get('status', 'unknown')} / {item.get('importance', 'unknown')}\n"
+                f"   - Источник: {item.get('source_type', 'unknown')}\n"
+                f"   - Основание: {evidence}"
+            ),
+        )
+        turning_points = cards(
+            "Переломные моменты",
+            value.get("turning_points"),
+            lambda index, item, evidence: (
+                f"{index}. **{item.get('title', 'не указано')}** — {item.get('what_happened', 'не указано')}\n"
+                f"   - Когда: {human_value(item.get('occurred_at'))}\n"
+                f"   - Что изменилось: {item.get('impact', 'не указано')}\n"
+                f"   - Статус: {item.get('status', 'unknown')}\n"
+                f"   - Основание: {evidence}"
+            ),
+        )
+        pains = cards(
+            "Боли и ограничения",
+            value.get("pain_points"),
+            lambda index, item, evidence: (
+                f"{index}. **{item.get('title', 'не указано')}** — {item.get('description', 'не указано')}\n"
+                f"   - Статус: {item.get('status', 'unknown')}\n"
+                f"   - Влияние: {item.get('impact', 'не указано')}\n"
+                f"   - Основание: {evidence}"
+            ),
+        )
+        levers = cards(
+            "Рычаги сделки",
+            value.get("pressure_levers"),
+            lambda index, item, evidence: (
+                f"{index}. **{item.get('title', 'не указано')}**"
+                f" (приоритет ИИ: {human_value(item.get('ai_priority'))})\n"
+                f"   - Тип / статус: {item.get('type', 'other')} / {item.get('status', 'unknown')}\n"
+                f"   - Факт: {item.get('fact', 'не указано')}\n"
+                f"   - Почему важно: {item.get('why_important', 'не указано')}\n"
+                f"   - Бизнес-последствие: {item.get('business_consequence', 'не указано')}\n"
+                f"   - Достоверность основания: {item.get('basis_status', 'unknown')}\n"
+                f"   - Основание: {evidence}"
+            ),
+        )
+        conflicts = cards(
+            "Противоречия источников",
+            value.get("source_conflicts"),
+            lambda index, item, _evidence: (
+                f"{index}. **{item.get('description', 'не указано')}**\n"
+                f"   - Источники: {'; '.join(str(entry) for entry in item.get('sources', []) if str(entry).strip()) or 'нет данных'}\n"
+                f"   - Что проверить: {item.get('next_check', 'не указано')}"
+            ),
+        )
+        return f"""## Живая карта сделки
+
+### Текущая истина
+
+- Клиент и роль: {truth.get('client_profile', 'не указано')}
+- Текущая потребность: {truth.get('current_need', 'не указано')}
+- Желаемый результат: {truth.get('desired_outcome', 'не указано')}
+- Текущий статус: {truth.get('current_status', 'не указано')}
+- Текущая задача: {truth.get('current_task', 'не указано')}
+- Следующая контрольная точка: {human_value(truth.get('next_checkpoint'))}
+- Владелец следующего шага: {truth.get('next_step_owner', 'unknown')}
+
+{facts}
+
+{turning_points}
+
+{pains}
+
+{levers}
+
+### Важные неизвестные
+
+{bullet_list(value.get('open_questions'))}
+
+{conflicts}"""
+
+    deal_context_section = render_deal_context(deal_context)
 
     def render_qualification_assessment(value: Any) -> str:
         if not isinstance(value, dict):
@@ -1105,6 +1298,8 @@ def render_report(
 - Сумма: {deal_state.get('amount', 'не указано')}
 - Этап: {deal_state.get('stage', 'не указано')}
 - Кратко: {deal_state.get('summary', 'не указано')}
+
+{deal_context_section}
 
 ## Новое событие
 

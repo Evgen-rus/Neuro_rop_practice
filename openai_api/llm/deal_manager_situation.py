@@ -36,7 +36,7 @@ _ANALYSIS_FIELDS = (
     "rop_manager_message_block",
     "price_comparability_check",
     "objection_handling",
-    "priority",
+    "priority_recommendation",
     "new_event",
 )
 _DEAL_FIELDS = (

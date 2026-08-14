@@ -552,6 +552,21 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_deal_manager_situation_reviews_latest
                 ON deal_manager_situation_reviews(deal_id, source_report_id, revision DESC, id DESC);
 
+            CREATE TABLE IF NOT EXISTS deal_context_lever_priority_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                lever_id TEXT NOT NULL,
+                priority INTEGER CHECK(priority IN (1, 2, 3) OR priority IS NULL),
+                actor_role TEXT NOT NULL CHECK(actor_role IN ('manager', 'rop')),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_context_lever_priority_current
+                ON deal_context_lever_priority_events(deal_id, source_report_id, lever_id, id DESC);
+
             CREATE TABLE IF NOT EXISTS deal_manager_quick_help (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
@@ -2303,6 +2318,108 @@ def _row_to_deal_manager_quick_help(row: sqlite3.Row | None) -> dict[str, Any] |
     turn_id = str(value.get("turn_id") or "").strip()
     value["turn_id"] = turn_id or None
     return value
+
+
+def list_deal_context_lever_priorities(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT events.*
+            FROM deal_context_lever_priority_events AS events
+            INNER JOIN (
+                SELECT lever_id, MAX(id) AS latest_id
+                FROM deal_context_lever_priority_events
+                WHERE deal_id = ? AND source_report_id = ?
+                GROUP BY lever_id
+            ) AS latest ON latest.latest_id = events.id
+            ORDER BY CASE WHEN events.priority IS NULL THEN 4 ELSE events.priority END, events.id DESC
+            """,
+            (str(deal_id), int(source_report_id)),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_deal_context_lever_priority(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    source_report_id: int,
+    lever_id: str,
+    priority: int | None,
+    actor_role: str,
+) -> dict[str, Any]:
+    init_db(db_path)
+    normalized_deal_id = str(deal_id).strip()
+    normalized_lever_id = str(lever_id).strip()
+    normalized_role = "manager" if str(actor_role) == "manager" else "rop"
+    if not normalized_lever_id or len(normalized_lever_id) > 120:
+        raise ValueError("lever_id должен содержать от 1 до 120 символов")
+    if priority is not None and (isinstance(priority, bool) or int(priority) not in {1, 2, 3}):
+        raise ValueError("priority должен быть 1, 2, 3 или null")
+    normalized_priority = int(priority) if priority is not None else None
+    created_at = utcish_now()
+    with connect(db_path) as conn:
+        report = conn.execute(
+            "SELECT id FROM ui_reports WHERE id = ? AND entity_type = 'deal' AND entity_id = ?",
+            (int(source_report_id), normalized_deal_id),
+        ).fetchone()
+        if report is None:
+            raise ValueError("Отчёт не принадлежит выбранной сделке")
+        if normalized_priority is not None:
+            occupied = conn.execute(
+                """
+                SELECT events.lever_id
+                FROM deal_context_lever_priority_events AS events
+                INNER JOIN (
+                    SELECT lever_id, MAX(id) AS latest_id
+                    FROM deal_context_lever_priority_events
+                    WHERE deal_id = ? AND source_report_id = ?
+                    GROUP BY lever_id
+                ) AS latest ON latest.latest_id = events.id
+                WHERE events.priority = ? AND events.lever_id <> ?
+                """,
+                (normalized_deal_id, int(source_report_id), normalized_priority, normalized_lever_id),
+            ).fetchall()
+            for row in occupied:
+                conn.execute(
+                    """
+                    INSERT INTO deal_context_lever_priority_events (
+                        deal_id, source_report_id, lever_id, priority, actor_role, created_at
+                    ) VALUES (?, ?, ?, NULL, ?, ?)
+                    """,
+                    (normalized_deal_id, int(source_report_id), str(row["lever_id"]), normalized_role, created_at),
+                )
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_context_lever_priority_events (
+                deal_id, source_report_id, lever_id, priority, actor_role, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_deal_id,
+                int(source_report_id),
+                normalized_lever_id,
+                normalized_priority,
+                normalized_role,
+                created_at,
+            ),
+        )
+        event_id = int(cursor.lastrowid)
+    return {
+        "id": event_id,
+        "deal_id": normalized_deal_id,
+        "source_report_id": int(source_report_id),
+        "lever_id": normalized_lever_id,
+        "priority": normalized_priority,
+        "actor_role": normalized_role,
+        "created_at": created_at,
+    }
 
 
 def save_deal_manager_quick_help(

@@ -590,9 +590,6 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         deal_state = analysis.get("deal_state") if isinstance(analysis.get("deal_state"), dict) else {}
         if deal_state and not attention:
             attention = str(deal_state.get("summary") or "") or None
-    priority = analysis.get("priority_recommendation") if isinstance(analysis.get("priority_recommendation"), dict) else {}
-    if priority and not risk:
-        risk = str(priority.get("level") or "") or None
     return {
         "risk_level": risk,
         "attention_reason": attention,

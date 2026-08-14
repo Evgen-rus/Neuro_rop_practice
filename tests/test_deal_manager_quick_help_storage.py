@@ -6,9 +6,11 @@ from pathlib import Path
 
 from storage.rop_db import (
     connect,
+    list_deal_context_lever_priorities,
     list_deal_manager_assistant_events,
     list_deal_manager_quick_help,
     record_deal_manager_assistant_event,
+    save_deal_context_lever_priority,
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
     save_ui_report,
@@ -48,6 +50,29 @@ def _seed_deal(db_path: Path, *, manager_id: str = "42") -> tuple[int, int]:
 
 
 class DealManagerQuickHelpStorageTests(unittest.TestCase):
+    def test_context_lever_priorities_are_versioned_and_unique_per_rank(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            report_id, _review_id = _seed_deal(db_path)
+            save_deal_context_lever_priority(
+                db_path, deal_id="101", source_report_id=report_id,
+                lever_id="deadline", priority=1, actor_role="rop",
+            )
+            save_deal_context_lever_priority(
+                db_path, deal_id="101", source_report_id=report_id,
+                lever_id="budget", priority=1, actor_role="manager",
+            )
+            current = {item["lever_id"]: item["priority"] for item in list_deal_context_lever_priorities(
+                db_path, deal_id="101", source_report_id=report_id,
+            )}
+            self.assertIsNone(current["deadline"])
+            self.assertEqual(current["budget"], 1)
+            with connect(db_path) as conn:
+                events = conn.execute(
+                    "SELECT lever_id, priority FROM deal_context_lever_priority_events ORDER BY id"
+                ).fetchall()
+            self.assertEqual(len(events), 3)
+
     def test_history_is_append_only_utf8_and_filtered_by_current_manager(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

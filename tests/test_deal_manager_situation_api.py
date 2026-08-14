@@ -23,6 +23,10 @@ from storage import rop_db as storage
 REPORT = {
     "id": 17,
     "report_json": {
+        "priority_recommendation": {
+            "priority": "high",
+            "reason": "Есть подтверждённый срок",
+        },
         "deal_state": {"summary": "КП отправлено"},
         "deal_control_brief": {
             "current_situation": "Клиент получил КП",
@@ -103,6 +107,7 @@ class DealManagerSituationTests(unittest.TestCase):
 
     def test_prompt_is_sectioned_and_analysis_is_allow_listed(self) -> None:
         projection = compact_analysis_projection(REPORT["report_json"])
+        self.assertEqual(projection["priority_recommendation"]["priority"], "high")
         prompt = build_situation_prompt(
             analysis_projection=projection,
             deal=DEAL,
@@ -117,6 +122,7 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertIn("Менеджер уточнил", prompt)
         self.assertIn("КП отправлено", prompt)
         self.assertIn("client_communication_profile", prompt)
+        self.assertIn("priority_recommendation", prompt)
         self.assertIn("адаптируй тон и структуру", prompt)
         self.assertNotIn("private_extra", prompt)
         self.assertNotIn("не передавать", prompt)

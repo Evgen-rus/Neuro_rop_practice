@@ -10,6 +10,7 @@ from openai_api.llm.analyze_deal import (
     HISTORY_SECTION_MARKER,
     build_prompt,
     deal_prompt_cache_markers,
+    render_report,
     transcript_text_for_prompt,
 )
 from openai_api.llm.llm_client import prompt_prefix_before
@@ -90,11 +91,49 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertIn("contact_questions", prompt)
         self.assertIn("call_script", prompt)
         self.assertIn("call_opening_variants", prompt)
+        self.assertIn('"deal_context"', prompt)
+        self.assertIn('"pressure_levers"', prompt)
+        self.assertIn("описательную живую карту сделки", prompt)
         self.assertIn("Красавчик", prompt)
         self.assertIn("без канцелярита и мата", prompt)
         self.assertIn("История стадий Bitrix подтверждает движение карточки", prompt)
         self.assertIn("сообщения в чатах задач — внутренний рабочий контекст", prompt)
         self.assertIn("ближайшего незавершённого шага к деньгам", prompt)
+
+    def test_deal_context_is_rendered_into_full_markdown(self) -> None:
+        markdown = render_report({
+            "deal_id": "18827",
+            "deal_state": {"client": "Клиент", "amount": "240000", "stage": "КП", "summary": "КП отправлено"},
+            "deal_context": {
+                "current_truth": {
+                    "client_profile": "Директор участвует в решении",
+                    "current_need": "Оборудование для производства",
+                    "desired_outcome": "Запуск к 1 сентября",
+                    "current_status": "КП на рассмотрении",
+                    "current_task": "Получить решение",
+                    "next_checkpoint": "2026-08-17",
+                    "next_step_owner": "client",
+                },
+                "critical_facts": [{
+                    "fact_id": "launch_deadline", "category": "deadline", "fact": "С 1 сентября оборудование должно работать",
+                    "status": "needs_confirmation", "importance": "high", "observed_at": None,
+                    "source_type": "manager_comment", "evidence": ["Комментарий CRM"],
+                }],
+                "turning_points": [],
+                "pain_points": [],
+                "pressure_levers": [{
+                    "lever_id": "launch_deadline", "type": "deadline", "title": "Срок запуска",
+                    "fact": "С 1 сентября оборудование должно работать", "why_important": "Окно решения сокращается",
+                    "business_consequence": "Можно не успеть к запуску", "basis_status": "needs_confirmation",
+                    "status": "active", "ai_priority": 1, "evidence": ["Комментарий CRM"],
+                }],
+                "open_questions": ["Сохранился ли срок запуска?"],
+                "source_conflicts": [],
+            },
+        })
+        self.assertIn("## Живая карта сделки", markdown)
+        self.assertIn("### Рычаги сделки", markdown)
+        self.assertIn("С 1 сентября оборудование должно работать", markdown)
 
     def test_converted_lead_handoff_uses_local_related_deal(self) -> None:
         with patch(

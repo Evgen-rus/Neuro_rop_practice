@@ -10,6 +10,7 @@ import {
   fetchManagerFollowupsJob,
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
+  fetchReportMarkdown,
   fetchJob,
   recordManagerCommunicationCompleted,
   saveDealControlScope,
@@ -23,12 +24,14 @@ import {
   updateDealControlDeal,
   updateDealControlBitrixTaskCompletion,
   updateDealControlChecklistItemCompletion,
+  updateDealContextLeverPriority,
   type DealControlDashboard,
   type DealControlBitrixTask,
   type DealControlCommunicationsToday,
   type DealControlDeal,
   type DealControlTask,
   type DealControlRecommendationState,
+  type DealContextSnapshot,
   type AuthUser,
   type JobState,
   type ManagerQuickHelpContent,
@@ -2558,13 +2561,16 @@ function ManagerAssistantModal(props: {
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
-          {view === 'context' ? <section className="dc-manager-assistant-context-grid">
-            <div><small>Этап</small><strong>{props.workspace.context.stage || 'Не указан'}</strong></div>
-            <div><small>Текущая задача</small><strong>{props.workspace.context.current_task || 'Нет открытой задачи'}</strong></div>
-            <div><small>Последняя коммуникация</small><strong>{props.workspace.context.last_communication ? `${dateTime(props.workspace.context.last_communication.occurred_at)} · ${props.workspace.context.last_communication.text}` : 'Нет доступных данных'}</strong></div>
-            <div><small>Главный риск</small><strong>{props.workspace.context.main_risk || 'Не выделен'}</strong></div>
-            <div><small>DISC клиента</small><strong>{discProfileLabel(props.workspace.disc_profile)}</strong></div>
-          </section> : null}
+          {view === 'context' ? <ManagerDealContextView
+            dealId={props.deal.deal_id}
+            context={props.workspace.context.deal_context || null}
+            stage={props.workspace.context.stage}
+            currentTask={props.workspace.context.current_task}
+            lastCommunication={props.workspace.context.last_communication || null}
+            mainRisk={props.workspace.context.main_risk}
+            discProfile={props.workspace.disc_profile}
+            report={props.workspace.context.report || null}
+          /> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <><p className="summary">{followups.content.context_summary}</p><div>{followups.content.items.map((item) => <article key={item.item_id}><header><strong>{item.concern_or_scenario}</strong><span>{item.basis_status === 'confirmed' ? 'Подтверждено' : item.basis_status === 'inferred' ? 'Гипотеза' : 'Условный сценарий'}</span></header><h4>{item.idea}</h4><p>{item.why_it_may_help}</p><dl><div><dt>Формат</dt><dd>{item.followup_type}</dd></div><div><dt>Канал</dt><dd>{item.suggested_channel}</dd></div><div><dt>Когда</dt><dd>{item.timing}</dd></div><div><dt>Цель</dt><dd>{item.target_micro_conversion}</dd></div></dl><small>Основание: {item.evidence_summary}</small><em>{item.caution}</em></article>)}</div></> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
         </div>
         <footer>
@@ -2576,6 +2582,135 @@ function ManagerAssistantModal(props: {
       </main>
     </section>
   </div>, document.body)
+}
+
+function contextStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    confirmed: 'Подтверждено',
+    needs_confirmation: 'Нужно подтвердить',
+    conflicted: 'Есть противоречие',
+    outdated: 'Устарело',
+    inferred: 'Вывод',
+    active: 'Активно',
+    weakened: 'Ослабло',
+    resolved: 'Решено',
+    partially_resolved: 'Частично решено',
+    superseded: 'Заменено новым',
+    unknown: 'Неизвестно',
+  }
+  return labels[value] || value || 'Неизвестно'
+}
+
+function ContextEvidence({ values }: { values: string[] }) {
+  return values.length ? <details className="dc-deal-context-evidence"><summary>Основание · {values.length}</summary><ul>{values.map((value, index) => <li key={`${index}:${value}`}>{value}</li>)}</ul></details> : null
+}
+
+function ManagerDealContextView(props: {
+  dealId: string
+  context: DealContextSnapshot | null
+  stage: string
+  currentTask: string
+  lastCommunication: { occurred_at?: string | null; text: string } | null
+  mainRisk: string
+  discProfile?: ManagerDiscProfile | null
+  report: { report_id?: number | null; markdown_available: boolean } | null
+}) {
+  const [priorities, setPriorities] = useState<Record<string, 1 | 2 | 3 | null>>({})
+  const [priorityBusy, setPriorityBusy] = useState('')
+  const [priorityError, setPriorityError] = useState('')
+  const [markdown, setMarkdown] = useState<string | null>(null)
+  const [markdownOpen, setMarkdownOpen] = useState(false)
+  const [markdownLoading, setMarkdownLoading] = useState(false)
+  const [markdownError, setMarkdownError] = useState('')
+  const context = props.context
+
+  useEffect(() => {
+    const next: Record<string, 1 | 2 | 3 | null> = {}
+    for (const lever of context?.pressure_levers || []) next[lever.lever_id] = lever.manual_priority ?? null
+    setPriorities(next)
+  }, [context])
+
+  async function savePriority(leverId: string, value: string) {
+    const priority = value ? Number(value) as 1 | 2 | 3 : null
+    setPriorityBusy(leverId)
+    setPriorityError('')
+    try {
+      const result = await updateDealContextLeverPriority(props.dealId, leverId, priority)
+      const next: Record<string, 1 | 2 | 3 | null> = {}
+      for (const item of result.priorities) next[item.lever_id] = item.priority
+      setPriorities(next)
+    } catch (error) {
+      setPriorityError(error instanceof Error ? error.message : 'Не удалось сохранить приоритет')
+    } finally {
+      setPriorityBusy('')
+    }
+  }
+
+  async function toggleMarkdown() {
+    if (markdownOpen) {
+      setMarkdownOpen(false)
+      return
+    }
+    if (markdown) {
+      setMarkdownOpen(true)
+      return
+    }
+    const reportId = props.report?.report_id
+    if (!reportId) return
+    setMarkdownLoading(true)
+    setMarkdownError('')
+    try {
+      const result = await fetchReportMarkdown(reportId)
+      setMarkdown(result.markdown)
+      setMarkdownOpen(true)
+    } catch (error) {
+      setMarkdownError(error instanceof Error ? error.message : 'Не удалось открыть Markdown-отчёт')
+    } finally {
+      setMarkdownLoading(false)
+    }
+  }
+
+  if (!context) return <section className="dc-manager-assistant-context-grid">
+    <div><small>Этап</small><strong>{props.stage || 'Не указан'}</strong></div>
+    <div><small>Текущая задача</small><strong>{props.currentTask || 'Нет открытой задачи'}</strong></div>
+    <div><small>Последняя коммуникация</small><strong>{props.lastCommunication ? `${dateTime(props.lastCommunication.occurred_at)} · ${props.lastCommunication.text}` : 'Нет доступных данных'}</strong></div>
+    <div><small>Главный риск</small><strong>{props.mainRisk || 'Не выделен'}</strong></div>
+    <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
+  </section>
+
+  const truth = context.current_truth
+  const levers = [...context.pressure_levers].sort((left, right) => {
+    const leftPriority = priorities[left.lever_id] ?? left.ai_priority ?? 9
+    const rightPriority = priorities[right.lever_id] ?? right.ai_priority ?? 9
+    return leftPriority - rightPriority
+  })
+  return <section className="dc-deal-context">
+    <header className="dc-deal-context-heading"><div><h3>Живая карта сделки</h3><p>Информационный срез последнего полного анализа. Выбранные рычаги пока не влияют на дожим и фоллоуапы.</p></div><span>Отчёт #{props.report?.report_id || '—'}</span></header>
+    <section className="dc-deal-context-truth">
+      <h4>Текущая истина</h4>
+      <div><small>Клиент и роль</small><strong>{truth.client_profile}</strong></div>
+      <div><small>Потребность</small><strong>{truth.current_need}</strong></div>
+      <div><small>Желаемый результат</small><strong>{truth.desired_outcome}</strong></div>
+      <div><small>Текущий статус</small><strong>{truth.current_status}</strong></div>
+      <div><small>Текущая задача</small><strong>{truth.current_task}</strong></div>
+      <div><small>Контрольная точка</small><strong>{truth.next_checkpoint ? dateTime(truth.next_checkpoint) : 'Не назначена'} · {truth.next_step_owner}</strong></div>
+    </section>
+
+    <section className="dc-deal-context-section"><h4>Критические факты</h4><div className="dc-deal-context-cards">{context.critical_facts.length ? context.critical_facts.map((fact) => <article key={fact.fact_id}><header><span>{fact.category}</span><em className={fact.status}>{contextStatusLabel(fact.status)}</em></header><strong>{fact.fact}</strong><small>Важность: {fact.importance} · Источник: {fact.source_type}</small><ContextEvidence values={fact.evidence} /></article>) : <p>Критические факты пока не выделены.</p>}</div></section>
+
+    <section className="dc-deal-context-section"><h4>Рычаги сделки</h4><p className="dc-deal-context-note">Ручной приоритет сохраняется отдельно от отчёта. Один номер может быть назначен только одному рычагу.</p>{priorityError ? <small className="dc-manager-error">{priorityError}</small> : null}<div className="dc-deal-context-levers">{levers.length ? levers.map((lever) => <article key={lever.lever_id}><header><div><span>{lever.type}</span><strong>{lever.title}</strong></div><label>Приоритет<select value={priorities[lever.lever_id] ?? ''} disabled={priorityBusy === lever.lever_id} onChange={(event) => void savePriority(lever.lever_id, event.target.value)}><option value="">—</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></header><p>{lever.fact}</p><dl><div><dt>Почему важно</dt><dd>{lever.why_important}</dd></div><div><dt>Последствие</dt><dd>{lever.business_consequence}</dd></div></dl><footer><span>{contextStatusLabel(lever.basis_status)}</span><small>Приоритет ИИ: {lever.ai_priority || '—'}</small></footer><ContextEvidence values={lever.evidence} /></article>) : <p>Рычаги пока не выделены.</p>}</div></section>
+
+    <section className="dc-deal-context-columns">
+      <div><h4>Боли и ограничения</h4>{context.pain_points.length ? context.pain_points.map((pain) => <article key={pain.pain_id}><header><strong>{pain.title}</strong><span>{contextStatusLabel(pain.status)}</span></header><p>{pain.description}</p><small>{pain.impact}</small><ContextEvidence values={pain.evidence} /></article>) : <p>Не выделены.</p>}</div>
+      <div><h4>Важные неизвестные</h4>{context.open_questions.length ? <ul>{context.open_questions.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Нет зафиксированных вопросов.</p>}</div>
+    </section>
+
+    <section className="dc-deal-context-section"><h4>Переломные моменты</h4><ol className="dc-deal-context-timeline">{context.turning_points.length ? context.turning_points.map((point) => <li key={point.turning_point_id}><time>{point.occurred_at ? dateTime(point.occurred_at) : 'Дата не указана'}</time><div><header><strong>{point.title}</strong><span>{contextStatusLabel(point.status)}</span></header><p>{point.what_happened}</p><small>{point.impact}</small><ContextEvidence values={point.evidence} /></div></li>) : <li><div><p>Переломные моменты пока не выделены.</p></div></li>}</ol></section>
+
+    {context.source_conflicts.length ? <section className="dc-deal-context-section warning"><h4>Противоречия источников</h4>{context.source_conflicts.map((conflict, index) => <article key={`${index}:${conflict.description}`}><strong>{conflict.description}</strong><p>{conflict.sources.join(' · ')}</p><small>Проверить: {conflict.next_check}</small></article>)}</section> : null}
+
+    <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown"><button className="dc-analysis-material-link" disabled={markdownLoading || !props.report?.report_id || props.report.markdown_available === false} onClick={() => void toggleMarkdown()}>{markdownLoading ? 'Открываем полный отчёт…' : markdownOpen ? 'Скрыть полный Markdown-отчёт' : 'Открыть полный Markdown-отчёт'}</button>{markdownError ? <small className="dc-manager-error">{markdownError}</small> : null}{markdownOpen && markdown ? <pre>{markdown}</pre> : null}</section>
+  </section>
 }
 
 function ManagerJobProgress({ job, label }: { job: Pick<ManagerSituationJob, 'status' | 'detail' | 'percent' | 'error'>; label: string }) {

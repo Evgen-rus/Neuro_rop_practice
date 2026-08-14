@@ -935,6 +935,68 @@ export type ManagerAssistantTimelineEntry = {
   contact_class?: string | null
 }
 
+export type DealContextCriticalFact = {
+  fact_id: string
+  category: string
+  fact: string
+  status: 'confirmed' | 'needs_confirmation' | 'conflicted' | 'outdated' | string
+  importance: 'high' | 'medium' | 'low' | string
+  observed_at?: string | null
+  source_type: string
+  evidence: string[]
+}
+
+export type DealContextTurningPoint = {
+  turning_point_id: string
+  occurred_at?: string | null
+  title: string
+  what_happened: string
+  impact: string
+  status: string
+  evidence: string[]
+}
+
+export type DealContextPainPoint = {
+  pain_id: string
+  title: string
+  description: string
+  status: string
+  impact: string
+  evidence: string[]
+}
+
+export type DealContextPressureLever = {
+  lever_id: string
+  type: string
+  title: string
+  fact: string
+  why_important: string
+  business_consequence: string
+  basis_status: 'confirmed' | 'inferred' | 'needs_confirmation' | string
+  status: string
+  ai_priority?: 1 | 2 | 3 | null
+  manual_priority?: 1 | 2 | 3 | null
+  evidence: string[]
+}
+
+export type DealContextSnapshot = {
+  current_truth: {
+    client_profile: string
+    current_need: string
+    desired_outcome: string
+    current_status: string
+    current_task: string
+    next_checkpoint?: string | null
+    next_step_owner: string
+  }
+  critical_facts: DealContextCriticalFact[]
+  turning_points: DealContextTurningPoint[]
+  pain_points: DealContextPainPoint[]
+  pressure_levers: DealContextPressureLever[]
+  open_questions: string[]
+  source_conflicts: Array<{ description: string; sources: string[]; next_check: string }>
+}
+
 export type ManagerAssistantWorkspace = {
   started: boolean
   entries: ManagerQuickHelpEntry[]
@@ -948,6 +1010,8 @@ export type ManagerAssistantWorkspace = {
     current_task: string
     last_communication?: { occurred_at?: string | null; text: string } | null
     main_risk: string
+    deal_context?: DealContextSnapshot | null
+    report?: { report_id?: number | null; markdown_available: boolean } | null
   }
 }
 
@@ -1420,6 +1484,20 @@ export function recordManagerCommunicationCompleted(dealId: string, quickHelpId:
   return api<{ ok: boolean }>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/assistant/communication-completed`,
     { method: 'POST', body: JSON.stringify({ quick_help_id: quickHelpId }) },
+  )
+}
+
+export function updateDealContextLeverPriority(
+  dealId: string,
+  leverId: string,
+  priority: 1 | 2 | 3 | null,
+) {
+  return api<{
+    ok: boolean
+    priorities: Array<{ lever_id: string; priority: 1 | 2 | 3 | null }>
+  }>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/context/levers/${encodeURIComponent(leverId)}/priority`,
+    { method: 'PUT', body: JSON.stringify({ priority }) },
   )
 }
 

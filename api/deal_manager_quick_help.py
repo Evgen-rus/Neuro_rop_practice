@@ -471,6 +471,140 @@ def _main_risk(analysis: dict[str, Any], situation: dict[str, Any]) -> str:
     return str(situation.get("what_blocks_progress") or "").strip()
 
 
+def _fallback_deal_context(
+    analysis: dict[str, Any],
+    situation: dict[str, Any],
+    deal: dict[str, Any],
+    task: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a safe display-only context for reports created before deal_context."""
+    deal_state = analysis.get("deal_state") if isinstance(analysis.get("deal_state"), dict) else {}
+    brief = analysis.get("deal_control_brief") if isinstance(analysis.get("deal_control_brief"), dict) else {}
+    money = analysis.get("money_path_diagnosis") if isinstance(analysis.get("money_path_diagnosis"), dict) else {}
+    assessment = analysis.get("qualification_assessment") if isinstance(analysis.get("qualification_assessment"), dict) else {}
+    bant = assessment.get("bant") if isinstance(assessment.get("bant"), dict) else {}
+    timeframe = bant.get("timeframe") if isinstance(bant.get("timeframe"), dict) else {}
+    commercial = assessment.get("commercial_fit") if isinstance(assessment.get("commercial_fit"), dict) else {}
+    risk = _main_risk(analysis, situation)
+
+    critical_facts: list[dict[str, Any]] = []
+    levers: list[dict[str, Any]] = []
+    launch_timing = str(timeframe.get("need_or_launch_timing") or "").strip()
+    timing_evidence = [str(item).strip() for item in timeframe.get("evidence", []) if str(item).strip()][:5]
+    if launch_timing:
+        timing_confirmed = timeframe.get("need_or_launch_timing_status") == "confirmed"
+        critical_facts.append({
+            "fact_id": "launch_timing",
+            "category": "deadline",
+            "fact": launch_timing,
+            "status": "confirmed" if timing_confirmed else "needs_confirmation",
+            "importance": "high",
+            "observed_at": None,
+            "source_type": "model_inference",
+            "evidence": timing_evidence or [launch_timing],
+        })
+        levers.append({
+            "lever_id": "launch_timing",
+            "type": "deadline",
+            "title": "Срок потребности или запуска",
+            "fact": launch_timing,
+            "why_important": "Срок ограничивает окно для решения и выполнения обязательств.",
+            "business_consequence": "Актуальность срока и реалистичность исполнения необходимо подтвердить.",
+            "basis_status": "confirmed" if timing_confirmed else "needs_confirmation",
+            "status": "active",
+            "ai_priority": 1,
+            "evidence": timing_evidence or [launch_timing],
+        })
+    budget = commercial.get("confirmed_budget_rub")
+    if budget is not None:
+        budget_text = f"Подтверждённый бюджет: {budget} ₽"
+        budget_evidence = [str(item).strip() for item in commercial.get("evidence", []) if str(item).strip()][:5]
+        critical_facts.append({
+            "fact_id": "confirmed_budget",
+            "category": "budget",
+            "fact": budget_text,
+            "status": "confirmed",
+            "importance": "high",
+            "observed_at": None,
+            "source_type": "model_inference",
+            "evidence": budget_evidence or [budget_text],
+        })
+        levers.append({
+            "lever_id": "confirmed_budget",
+            "type": "budget",
+            "title": "Бюджетное ограничение",
+            "fact": budget_text,
+            "why_important": "Бюджет определяет реалистичный состав решения.",
+            "business_consequence": "Несопоставимый состав предложения может остановить решение.",
+            "basis_status": "confirmed",
+            "status": "active",
+            "ai_priority": 2 if levers else 1,
+            "evidence": budget_evidence or [budget_text],
+        })
+    pain_points = []
+    if risk:
+        pain_points.append({
+            "pain_id": "main_risk",
+            "title": "Главный риск",
+            "description": risk,
+            "status": "active",
+            "impact": str(money.get("why_money_is_at_risk") or risk),
+            "evidence": [str(item).strip() for item in money.get("evidence", []) if str(item).strip()][:5] or [risk],
+        })
+    changes = [str(item).strip() for item in analysis.get("what_changed", []) if str(item).strip()]
+    turning_points = [{
+        "turning_point_id": f"change_{index}",
+        "occurred_at": None,
+        "title": f"Изменение {index}",
+        "what_happened": text,
+        "impact": text,
+        "status": "active",
+        "evidence": [text],
+    } for index, text in enumerate(changes[:8], start=1)]
+    missing = [str(item).strip() for item in brief.get("missing_facts", []) if str(item).strip()]
+    missing.extend(str(item).strip() for item in bant.get("missing_facts", []) if str(item).strip())
+    open_questions = list(dict.fromkeys(missing))[:7]
+    return {
+        "current_truth": {
+            "client_profile": str(deal_state.get("client") or deal.get("title") or "Не определён"),
+            "current_need": str((bant.get("need") or {}).get("evidence", [""])[0] if isinstance(bant.get("need"), dict) and (bant.get("need") or {}).get("evidence") else deal_state.get("summary") or "Не определена"),
+            "desired_outcome": str(situation.get("target_result") or brief.get("contact_goal") or "Требует уточнения"),
+            "current_status": str(situation.get("current_situation") or brief.get("current_situation") or deal_state.get("summary") or "Не определён"),
+            "current_task": str(task.get("subject") or task.get("description") or "Нет открытой задачи"),
+            "next_checkpoint": task.get("deadline"),
+            "next_step_owner": str(money.get("current_owner_of_next_step") or "unknown"),
+        },
+        "critical_facts": critical_facts,
+        "turning_points": turning_points,
+        "pain_points": pain_points,
+        "pressure_levers": levers,
+        "open_questions": open_questions,
+        "source_conflicts": [],
+    }
+
+
+def _public_deal_context(
+    analysis: dict[str, Any],
+    situation: dict[str, Any],
+    deal: dict[str, Any],
+    task: dict[str, Any],
+    priority_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw = analysis.get("deal_context")
+    context = dict(raw) if isinstance(raw, dict) and raw else _fallback_deal_context(analysis, situation, deal, task)
+    manual = {str(item.get("lever_id") or ""): item.get("priority") for item in priority_rows}
+    levers = []
+    for raw_lever in context.get("pressure_levers", []):
+        if not isinstance(raw_lever, dict):
+            continue
+        lever = dict(raw_lever)
+        lever_id = str(lever.get("lever_id") or "")
+        lever["manual_priority"] = manual.get(lever_id)
+        levers.append(lever)
+    context["pressure_levers"] = levers
+    return context
+
+
 def get_manager_assistant_workspace(
     *,
     db_path: str | Path = DEFAULT_DB_PATH,
@@ -554,6 +688,18 @@ def get_manager_assistant_workspace(
         if situation_id is not None and int(entry.get("situation_review_id") or 0) != int(situation_id):
             continue
         current_by_mode[mode] = entry
+    priority_rows = (
+        _storage_call(
+            "list_deal_context_lever_priorities",
+            db_path,
+            deal_id=str(deal_id),
+            source_report_id=int(source_report_id),
+        )
+        if source_report_id is not None
+        else []
+    )
+    report = context.get("report") if isinstance(context.get("report"), dict) else {}
+    report_path = Path(str(report.get("report_path") or "")) if report.get("report_path") else None
     return {
         "started": bool(entries),
         "entries": entries,
@@ -570,8 +716,66 @@ def get_manager_assistant_workspace(
                 "text": _communication_text(latest_communication),
             } if latest_communication else None,
             "main_risk": _main_risk(analysis, situation),
+            "deal_context": _public_deal_context(
+                analysis,
+                situation,
+                deal,
+                task,
+                priority_rows if isinstance(priority_rows, list) else [],
+            ),
+            "report": {
+                "report_id": source_report_id,
+                "markdown_available": bool(report_path and report_path.is_file()),
+            },
         },
     }
+
+
+def set_deal_context_lever_priority(
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    deal_id: str,
+    lever_id: str,
+    priority: int | None,
+    actor_role: str,
+) -> dict[str, Any]:
+    context = load_manager_screen_context(
+        db_path,
+        str(deal_id),
+        require_confirmed_situation=True,
+    )
+    source_report_id = context.get("source_report_id")
+    if source_report_id is None:
+        raise ValueError("Для сделки ещё нет полного отчёта")
+    analysis = context.get("analysis_projection") if isinstance(context.get("analysis_projection"), dict) else {}
+    situation = context.get("situation_projection") if isinstance(context.get("situation_projection"), dict) else {}
+    deal = context.get("deal") if isinstance(context.get("deal"), dict) else {}
+    task = context.get("current_bitrix_task") if isinstance(context.get("current_bitrix_task"), dict) else {}
+    public_context = _public_deal_context(analysis, situation, deal, task, [])
+    available_ids = {
+        str(item.get("lever_id") or "")
+        for item in public_context.get("pressure_levers", [])
+        if isinstance(item, dict)
+    }
+    normalized_lever_id = str(lever_id).strip()
+    if normalized_lever_id not in available_ids:
+        raise ValueError("Выбранный рычаг отсутствует в текущем отчёте")
+    event = _storage_call(
+        "save_deal_context_lever_priority",
+        db_path,
+        deal_id=str(deal_id),
+        source_report_id=int(source_report_id),
+        lever_id=normalized_lever_id,
+        priority=priority,
+        actor_role=actor_role,
+    )
+    rows = _storage_call(
+        "list_deal_context_lever_priorities",
+        db_path,
+        deal_id=str(deal_id),
+        source_report_id=int(source_report_id),
+    )
+    return {"ok": True, "event": event, "priorities": rows if isinstance(rows, list) else []}
 
 
 def record_manager_communication_completed(
