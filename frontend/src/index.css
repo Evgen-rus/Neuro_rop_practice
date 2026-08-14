@@ -97,8 +97,6 @@ textarea {
 .dc-manager-format-icons button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid #c9d9e8; border-radius: 8px; color: #365b7e; background: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
 .dc-manager-format-icons button:hover { border-color: #7eace0; background: #edf5ff; }
 .dc-manager-format-icons button.active { border-color: #1768f2; color: #fff; background: #1768f2; }
-.dc-manager-format-icons button.preparing, .dc-manager-format-icons button:disabled { cursor: progress; color: #7a90a8; background: #f3f7fb; }
-.dc-manager-format-icons button.preparing:hover { border-color: #c9d9e8; background: #f3f7fb; }
 .dc-manager-full-script-layer { position: fixed; z-index: 1250; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; background: rgba(12, 24, 41, .72); }
 .dc-manager-full-script-modal { display: grid; width: min(1500px, 98vw); max-width: calc(100vw - 32px); min-width: 0; height: min(920px, 96vh); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border-radius: 18px; background: #f4f7fb; box-shadow: 0 28px 80px rgba(6, 20, 38, .38); }
 .dc-manager-full-script-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #d9e2ec; background: #fff; }

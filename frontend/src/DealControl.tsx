@@ -70,7 +70,6 @@ import {
   missingCurrentModes,
   pressureLever,
   quickHelpAnswerReady,
-  scriptMaterialStatus,
   sharedTurns,
   strategyLabel,
   visibleLifehack,
@@ -1794,16 +1793,15 @@ function ManagerQuickHelp(props: {
     <div className="dc-section-head"><div><h3>Дожим</h3></div><span>AI</span></div>
     <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading || busy} onClick={props.onOpen}>{props.loading || busy ? <><span className="dc-spinner" />Открываем…</> : 'Открыть дожим сделки'}</button>
     {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
-    {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label={quickHelpAnswerReady(props.job) ? 'Дособираем карточки' : 'Подготовка пакета дожима'} /> : null}
+    {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label="Подготовка пакета дожима" /> : null}
   </section>
 }
 
-function ManagerQuickHelpAnswer({ deal, entry, animate, mode, job, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
+function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
   deal: DealControlDeal
   entry: ManagerQuickHelpEntry
   animate?: boolean
   mode: ManagerAssistantMode
-  job: ManagerQuickHelpJob | null
   onCopy: (text: string, label: string) => Promise<void>
   onEdit: () => void
   onComplete: () => void
@@ -1893,8 +1891,6 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, job, onCopy, onEdi
       onOpenScript={openFullScript}
       activeScriptMode={fullScriptOpen ? fullScriptMode : null}
       showScriptActions={showRest}
-      materialJob={job}
-      quickHelpId={entry.id}
       showMessage={showMessage}
       showSecondary={showSecondary}
       animate={reveal.animate}
@@ -1927,7 +1923,7 @@ function ManagerPressureLeverCard({ lever, animate = false }: { lever: { title: 
   </section>
 }
 
-function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false, materialJob = null, quickHelpId }: {
+function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpContent
   onCopy: (text: string, label: string) => Promise<void>
   selectedStrategy: ManagerQuickHelpStrategy
@@ -1938,11 +1934,9 @@ function ManagerQuickHelpVariants({ content, onCopy, selectedStrategy, onSelecte
   showMessage?: boolean
   showSecondary?: boolean
   animate?: boolean
-  materialJob?: ManagerQuickHelpJob | null
-  quickHelpId?: number
 }) {
   return content.answer_contract === 'strategy_v3' || content.answer_contract === 'strategy_v2'
-    ? <ManagerStrategyV2QuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={onSelectedStrategy} onOpenScript={onOpenScript} activeScriptMode={activeScriptMode} showScriptActions={showScriptActions} showMessage={showMessage} showSecondary={showSecondary} animate={animate} materialJob={materialJob} quickHelpId={quickHelpId} />
+    ? <ManagerStrategyV2QuickHelpVariants content={content} onCopy={onCopy} selectedStrategy={selectedStrategy} onSelectedStrategy={onSelectedStrategy} onOpenScript={onOpenScript} activeScriptMode={activeScriptMode} showScriptActions={showScriptActions} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
     : content.answer_contract === 'strategy_v1'
     ? <ManagerStrategyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
     : <ManagerLegacyQuickHelpVariants content={content} onCopy={onCopy} showMessage={showMessage} showSecondary={showSecondary} animate={animate} />
@@ -1963,7 +1957,7 @@ function ManagerLifehackCarousel({ lifehacks, animate = false }: { lifehacks: Ma
   </section>
 }
 
-function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false, materialJob = null, quickHelpId }: {
+function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy, onSelectedStrategy, onOpenScript, activeScriptMode, showScriptActions, showMessage = true, showSecondary = true, animate = false }: {
   content: ManagerQuickHelpStrategyV2Content | ManagerQuickHelpStrategyV3Content
   onCopy: (text: string, label: string) => Promise<void>
   selectedStrategy: ManagerQuickHelpStrategy
@@ -1974,19 +1968,13 @@ function ManagerStrategyV2QuickHelpVariants({ content, onCopy, selectedStrategy,
   showMessage?: boolean
   showSecondary?: boolean
   animate?: boolean
-  materialJob?: ManagerQuickHelpJob | null
-  quickHelpId?: number
 }) {
   const strategies: ManagerQuickHelpStrategy[] = ['primary', 'alternative', 'pattern_break']
   const message = content.client_messages[selectedStrategy]
   const formats: Array<[ManagerFullScriptMode, string, string]> = [['call', '☎', 'Звонок'], ['message', '💬', 'Переписка'], ['email', '✉', 'Email']]
   return <div className="dc-manager-answer-v2">
     {showMessage ? <section className={revealClassName('dc-manager-answer-copy message', animate)}>
-      <div><h4>Сообщение клиенту</h4><div className="dc-manager-message-tools">{showScriptActions ? <div className="dc-manager-format-icons" role="group" aria-label="Формат коммуникации">{formats.map(([mode, icon, label]) => {
-        const status = quickHelpId ? scriptMaterialStatus({ quickHelpId, strategy: selectedStrategy, scriptMode: mode, job: materialJob }) : 'idle'
-        const preparing = status === 'preparing'
-        return <button key={mode} type="button" className={`${activeScriptMode === mode ? 'active' : ''} ${preparing ? 'preparing' : ''}`.trim()} title={preparing ? `${label}: карточка ещё готовится` : label} aria-label={preparing ? `${label}: карточка ещё готовится` : label} aria-pressed={activeScriptMode === mode} disabled={preparing} onClick={() => void onOpenScript(mode)}>{preparing ? '…' : icon}</button>
-      })}</div> : null}<button className="dc-button" disabled={!message} onClick={() => void onCopy(message, 'Сообщение клиенту')}>Скопировать</button></div></div>
+      <div><h4>Сообщение клиенту</h4><div className="dc-manager-message-tools">{showScriptActions ? <div className="dc-manager-format-icons" role="group" aria-label="Формат коммуникации">{formats.map(([mode, icon, label]) => <button key={mode} type="button" className={activeScriptMode === mode ? 'active' : ''} title={label} aria-label={label} aria-pressed={activeScriptMode === mode} onClick={() => void onOpenScript(mode)}>{icon}</button>)}</div> : null}<button className="dc-button" disabled={!message} onClick={() => void onCopy(message, 'Сообщение клиенту')}>Скопировать</button></div></div>
       <div className="dc-manager-tone-tabs labeled" role="tablist" aria-label="Вариант сообщения клиенту">{strategies.map((strategy) => <button key={strategy} type="button" role="tab" aria-selected={selectedStrategy === strategy} className={selectedStrategy === strategy ? 'active' : ''} onClick={() => onSelectedStrategy(strategy)}><span>{strategyLabel(content, strategy)}</span></button>)}</div>
       <pre>{message || 'Сообщение пока не сформировано.'}</pre>
     </section> : null}
@@ -2559,7 +2547,6 @@ function ManagerAssistantModal(props: {
                 entry={visibleEntry}
                 animate={animateAnswer}
                 mode={assistantMode}
-                job={props.job}
                 onCopy={props.onCopy}
                 onEdit={props.onEditSituation}
                 onComplete={() => complete(visibleEntry)}
@@ -2568,7 +2555,7 @@ function ManagerAssistantModal(props: {
                 onRevealFinished={onFreshAnswerConsumed}
               /> : <p className="dc-manager-assistant-missing-mode">В этом режиме ответа на этот запрос ещё нет.</p>}
             </div> : null}
-            {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{quickHelpAnswerReady(props.job) ? (props.job?.detail || 'Дособираем карточки') : (props.job?.detail || 'Готовим рекомендацию')}</small></div> : null}
+            {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <section className="dc-manager-assistant-context-grid">

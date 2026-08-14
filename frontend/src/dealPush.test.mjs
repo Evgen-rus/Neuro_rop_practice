@@ -11,7 +11,6 @@ import {
   missingCurrentModes,
   pressureLever,
   quickHelpAnswerReady,
-  scriptMaterialStatus,
   sharedTurns,
   strategyLabel,
   visibleLifehack,
@@ -136,17 +135,7 @@ test('mode class names keep push warm and reanimator cool', () => {
   assert.ok(pressureLever(push.content)?.title.includes('надёжность'))
 })
 
-test('script cards stay preparing until the current job marks them ready', () => {
+test('quick help answer is ready after the first saved mode', () => {
   assert.equal(quickHelpAnswerReady({ saved_by_mode: {} }), false)
   assert.equal(quickHelpAnswerReady({ saved_by_mode: { push: 31 } }), true)
-  const job = {
-    status: 'running',
-    saved_by_mode: { push: 31 },
-    ready_materials: [{ quick_help_id: 31, selected_strategy: 'primary', script_mode: 'call' }],
-    expanding_material: { quick_help_id: 31, selected_strategy: 'primary', script_mode: 'message' },
-  }
-  assert.equal(scriptMaterialStatus({ quickHelpId: 31, strategy: 'primary', scriptMode: 'call', job }), 'ready')
-  assert.equal(scriptMaterialStatus({ quickHelpId: 31, strategy: 'primary', scriptMode: 'message', job }), 'preparing')
-  assert.equal(scriptMaterialStatus({ quickHelpId: 31, strategy: 'primary', scriptMode: 'email', job }), 'preparing')
-  assert.equal(scriptMaterialStatus({ quickHelpId: 99, strategy: 'primary', scriptMode: 'call', job }), 'idle')
 })

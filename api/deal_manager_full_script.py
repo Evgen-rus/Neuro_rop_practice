@@ -173,7 +173,7 @@ def expand_and_save_strategy_materials(
     on_material: Any | None = None,
     progress_start: int = 70,
 ) -> None:
-    """Fail-soft: one channel may fail without dropping the Quick Help answer."""
+    """Batch helper for tests. Production cards are generated on icon click via start_full_script_job."""
     tactics = quick_help_content.get("lifehacks")
     relevant_tactics = tactics if isinstance(tactics, list) else []
     checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, deal_id=str(deal_id))

@@ -131,44 +131,6 @@ export function workspaceModeClassName(mode: AssistantMode): string {
   return mode === 'push' ? 'dc-manager-assistant-modal mode-push' : 'dc-manager-assistant-modal mode-reanimator'
 }
 
-export type ScriptMaterialRef = {
-  quick_help_id: number
-  selected_strategy: ManagerQuickHelpStrategy
-  script_mode: 'message' | 'call' | 'email'
-}
-
-function sameScriptMaterial(left: ScriptMaterialRef | null | undefined, right: ScriptMaterialRef): boolean {
-  return Boolean(
-    left
-    && Number(left.quick_help_id) === Number(right.quick_help_id)
-    && left.selected_strategy === right.selected_strategy
-    && left.script_mode === right.script_mode,
-  )
-}
-
 export function quickHelpAnswerReady(job: { saved_by_mode?: Partial<Record<string, number>> } | null | undefined): boolean {
   return Object.values(job?.saved_by_mode || {}).some((value) => Number(value) >= 1)
-}
-
-export function scriptMaterialStatus(input: {
-  quickHelpId: number
-  strategy: ManagerQuickHelpStrategy
-  scriptMode: 'message' | 'call' | 'email'
-  job: {
-    status?: string
-    saved_by_mode?: Partial<Record<string, number>>
-    ready_materials?: ScriptMaterialRef[]
-    expanding_material?: ScriptMaterialRef | null
-  } | null | undefined
-}): 'ready' | 'preparing' | 'idle' {
-  const target = {
-    quick_help_id: input.quickHelpId,
-    selected_strategy: input.strategy,
-    script_mode: input.scriptMode,
-  }
-  if (input.job?.ready_materials?.some((item) => sameScriptMaterial(item, target))) return 'ready'
-  const jobHelpIds = Object.values(input.job?.saved_by_mode || {}).map((value) => Number(value))
-  if (!jobHelpIds.includes(Number(input.quickHelpId))) return 'idle'
-  if (['queued', 'running'].includes(input.job?.status || '')) return 'preparing'
-  return 'idle'
 }
