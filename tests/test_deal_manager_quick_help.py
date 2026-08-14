@@ -310,6 +310,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["quick_help_id"], 31)
         self.assertEqual(expand.call_count, 2)
+        self.assertEqual(expand.call_args_list[0].kwargs["quick_help_id"], 31)
         self.assertEqual(len(calls), 2)
         self.assertEqual([item[1]["mode"] for item in calls], ["push", "reanimator"])
         self.assertEqual({item[1]["turn_id"] for item in calls}, {job["turn_id"]})
@@ -322,6 +323,43 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         communication_context = generate.call_args.kwargs["communication_pattern_context"]
         self.assertEqual(communication_context["window_days"], 30)
         self.assertEqual(communication_context["recent_events"], [])
+
+    def test_brain_is_visible_on_the_job_before_cards_expand(self) -> None:
+        seen = []
+
+        def expand(*args, **kwargs):
+            job = next(iter(quick_help._QUICK_HELP_JOBS.values()))
+            seen.append(dict(job.saved_by_mode))
+            self.assertEqual(job.status, "running")
+
+        def save_call(name, db_path, **kwargs):
+            if name == "save_deal_manager_quick_help":
+                return {"id": 40 + len(seen), "deal_id": "101"}
+            raise AssertionError(name)
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {})), \
+             patch.object(quick_help, "_storage_call", side_effect=save_call), \
+             patch("api.deal_manager_full_script.expand_and_save_strategy_materials", side_effect=expand), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="Что сказать клиенту после паузы?",
+                confirm_paid=True,
+            )
+        self.assertEqual(seen[0].get("push"), 40)
+        self.assertNotIn("reanimator", seen[0])
+        self.assertEqual(seen[1].get("reanimator"), 41)
+
+    def test_record_material_tracks_expanding_and_ready(self) -> None:
+        job = quick_help.DealManagerQuickHelpJob(job_id="job", deal_id="101", question="q", situation_id=21)
+        quick_help._record_material(job, quick_help_id=31, strategy="primary", script_mode="call", state="expanding")
+        self.assertEqual(job.expanding_material["script_mode"], "call")
+        quick_help._record_material(job, quick_help_id=31, strategy="primary", script_mode="call", state="ready")
+        self.assertIsNone(job.expanding_material)
+        self.assertEqual(job.ready_materials[0]["script_mode"], "call")
 
     def test_quick_help_stays_done_if_strategy_pack_expand_fails(self) -> None:
         def save_call(name, db_path, **kwargs):

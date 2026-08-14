@@ -70,6 +70,8 @@ class DealManagerQuickHelpJob:
     saved_by_mode: dict[str, int] = field(default_factory=dict)
     reused: bool = False
     error: str | None = None
+    ready_materials: list[dict[str, Any]] = field(default_factory=list)
+    expanding_material: dict[str, Any] | None = None
 
 
 _QUICK_HELP_JOBS: dict[str, DealManagerQuickHelpJob] = {}
@@ -81,6 +83,40 @@ def _touch(job: DealManagerQuickHelpJob, *, stage: str, detail: str, percent: in
         job.stage = stage
         job.detail = detail
         job.percent = percent
+        job.updated_at = _now()
+
+
+def _same_material(left: dict[str, Any] | None, right: dict[str, Any]) -> bool:
+    if not isinstance(left, dict):
+        return False
+    return (
+        int(left.get("quick_help_id") or 0) == int(right["quick_help_id"])
+        and left.get("selected_strategy") == right["selected_strategy"]
+        and left.get("script_mode") == right["script_mode"]
+    )
+
+
+def _record_material(
+    job: DealManagerQuickHelpJob,
+    *,
+    quick_help_id: int,
+    strategy: str,
+    script_mode: str,
+    state: str,
+) -> None:
+    ref = {
+        "quick_help_id": int(quick_help_id),
+        "selected_strategy": strategy,
+        "script_mode": script_mode,
+    }
+    with _QUICK_HELP_LOCK:
+        if state == "expanding":
+            job.expanding_material = ref
+        elif state == "ready":
+            if not any(_same_material(item, ref) for item in job.ready_materials):
+                job.ready_materials.append(ref)
+            if _same_material(job.expanding_material, ref):
+                job.expanding_material = None
         job.updated_at = _now()
 
 
@@ -198,6 +234,7 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
             generated += 1
             saved_id = int(saved["id"]) if saved.get("id") is not None else None
             if saved_id is not None:
+                _touch(job, stage="llm", detail="Совет готов, готовим сценарий звонка", percent=min(92, brain_percent + 6))
                 try:
                     from api.deal_manager_full_script import expand_and_save_strategy_materials
                     expand_and_save_strategy_materials(
@@ -209,6 +246,9 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
                         quick_help_content=answer,
                         communication_pattern_context=communication_pattern_context,
                         on_progress=lambda detail, percent: _touch(job, stage="llm", detail=detail, percent=percent),
+                        on_material=lambda **kwargs: _record_material(
+                            job, quick_help_id=saved_id, **kwargs,
+                        ),
                         progress_start=brain_percent + 6,
                     )
                 except Exception:  # noqa: BLE001 - pack expansion must not drop the brain answer

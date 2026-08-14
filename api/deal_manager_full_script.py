@@ -27,7 +27,6 @@ from openai_api.llm.deal_manager_full_script import (
 )
 from openai_api.llm.deal_manager_email import generate_deal_manager_email
 from openai_api.llm.deal_manager_quick_help import MATERIAL_PROMPT_REVISION
-from openai_api.llm.deal_manager_strategy_pack import generate_strategy_pack
 
 
 @dataclass
@@ -50,6 +49,12 @@ class DealManagerFullScriptJob:
 
 _FULL_SCRIPT_JOBS: dict[str, DealManagerFullScriptJob] = {}
 _FULL_SCRIPT_LOCK = threading.Lock()
+EXPAND_CHANNEL_ORDER = ("call", "message", "email")
+EXPAND_CHANNEL_LABELS = {
+    "call": "сценарий звонка",
+    "message": "переписку",
+    "email": "письмо",
+}
 
 
 def _public_objections(analysis_projection: dict[str, Any]) -> dict[str, Any] | None:
@@ -146,11 +151,13 @@ def _save_script(
     )
 
 
-def _strategy_pack_is_ready(db_path: str | Path, inputs: dict[str, Any], selected_strategy: str) -> bool:
-    return all(
-        isinstance(_cached_script(db_path, inputs, selected_strategy, script_mode), dict)
-        for script_mode in ("message", "call", "email")
-    )
+def _strategies_to_expand(quick_help_content: dict[str, Any]) -> list[str]:
+    messages = quick_help_content.get("client_messages") if isinstance(quick_help_content.get("client_messages"), dict) else {}
+    pending = [strategy for strategy in STRATEGIES if str(messages.get(strategy) or "").strip()]
+    recommended = str(quick_help_content.get("recommended_strategy") or "").strip()
+    if recommended in pending:
+        return [recommended, *[item for item in pending if item != recommended]]
+    return pending
 
 
 def expand_and_save_strategy_materials(
@@ -163,10 +170,10 @@ def expand_and_save_strategy_materials(
     quick_help_content: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     on_progress: Any | None = None,
+    on_material: Any | None = None,
     progress_start: int = 70,
 ) -> None:
-    """Fail-soft: one strategy pack may fail without dropping the Quick Help answer."""
-    messages = quick_help_content.get("client_messages") if isinstance(quick_help_content.get("client_messages"), dict) else {}
+    """Fail-soft: one channel may fail without dropping the Quick Help answer."""
     tactics = quick_help_content.get("lifehacks")
     relevant_tactics = tactics if isinstance(tactics, list) else []
     checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, deal_id=str(deal_id))
@@ -178,41 +185,56 @@ def expand_and_save_strategy_materials(
         "situation_id": int(situation_id),
     }
     strategy_labels = {"primary": "вариант 1", "alternative": "вариант 2", "pattern_break": "вариант 3"}
-    pending = [strategy for strategy in STRATEGIES if str(messages.get(strategy) or "").strip()]
+    pending = _strategies_to_expand(quick_help_content)
+    total = max(1, len(pending) * len(EXPAND_CHANNEL_ORDER))
+    common_kwargs = {
+        "analysis_projection": context["analysis_projection"],
+        "situation_projection": context["situation_projection"],
+        "deal": context["deal"],
+        "current_bitrix_task": context["current_bitrix_task"],
+        "checklist": checklist,
+        "communication_pattern_context": communication_pattern_context,
+        "quick_help": quick_help_content,
+        "relevant_tactics": relevant_tactics,
+        "objection_handling": objections,
+    }
     for index, strategy in enumerate(pending):
-        if _strategy_pack_is_ready(db_path, inputs, strategy):
-            continue
-        if on_progress is not None:
-            on_progress(f"Раскрываем {strategy_labels[strategy]} в письмо, переписку и звонок", min(96, progress_start + index * 8))
-        try:
-            pack, metadata = generate_strategy_pack(
-                analysis_projection=context["analysis_projection"],
-                situation_projection=context["situation_projection"],
-                deal=context["deal"],
-                current_bitrix_task=context["current_bitrix_task"],
-                checklist=checklist,
-                communication_pattern_context=communication_pattern_context,
-                quick_help=quick_help_content,
-                selected_strategy=strategy,
-                relevant_tactics=relevant_tactics,
-                objection_handling=objections,
-            )
-        except Exception:  # noqa: BLE001 - keep the brain answer even if one card fails
-            continue
-        common = {
-            "deal_id": str(deal_id),
-            "source_report_id": int(context["source_report_id"]),
-            "situation_review_id": int(situation_id),
-            "quick_help_id": int(quick_help_id),
-            "selected_strategy": strategy,
-            "metadata": metadata,
-        }
-        try:
-            _save_script(db_path, script_mode="email", script=pack["email"], **common)
-            _save_script(db_path, script_mode="message", script=pack["message_script"], **common)
-            _save_script(db_path, script_mode="call", script=pack["call_script"], **common)
-        except Exception:  # noqa: BLE001 - a save failure must not wipe Quick Help
-            continue
+        for channel_index, script_mode in enumerate(EXPAND_CHANNEL_ORDER):
+            existing = _cached_script(db_path, inputs, strategy, script_mode)
+            if isinstance(existing, dict):
+                if on_material is not None:
+                    on_material(strategy=strategy, script_mode=script_mode, state="ready")
+                continue
+            step = index * len(EXPAND_CHANNEL_ORDER) + channel_index
+            if on_progress is not None:
+                on_progress(
+                    f"Готовим {EXPAND_CHANNEL_LABELS[script_mode]}, {strategy_labels[strategy]}",
+                    min(96, progress_start + int(step / total * 20)),
+                )
+            if on_material is not None:
+                on_material(strategy=strategy, script_mode=script_mode, state="expanding")
+            try:
+                generator = generate_deal_manager_email if script_mode == "email" else generate_deal_manager_full_script
+                script, metadata = generator(
+                    selected_strategy=strategy,
+                    script_mode=script_mode,
+                    **common_kwargs,
+                )
+                _save_script(
+                    db_path,
+                    script_mode=script_mode,
+                    deal_id=str(deal_id),
+                    source_report_id=int(context["source_report_id"]),
+                    situation_review_id=int(situation_id),
+                    quick_help_id=int(quick_help_id),
+                    selected_strategy=strategy,
+                    script=script,
+                    metadata=metadata,
+                )
+            except Exception:  # noqa: BLE001 - keep the brain answer even if one card fails
+                continue
+            if on_material is not None:
+                on_material(strategy=strategy, script_mode=script_mode, state="ready")
 
 
 def get_full_script_job(job_id: str) -> dict[str, Any] | None:

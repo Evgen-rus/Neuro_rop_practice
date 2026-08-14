@@ -803,10 +803,18 @@ export type ManagerQuickHelpJob = {
   origin?: 'auto' | 'manager' | null
   quick_help_id?: number | null
   saved_by_mode?: Partial<Record<ManagerAssistantMode, number>>
+  ready_materials?: ManagerScriptMaterialRef[]
+  expanding_material?: ManagerScriptMaterialRef | null
   reused?: boolean
   entry_id?: number | null
   entry?: ManagerQuickHelpEntry | null
   error?: string | null
+}
+
+export type ManagerScriptMaterialRef = {
+  quick_help_id: number
+  selected_strategy: ManagerQuickHelpStrategy
+  script_mode: ManagerFullScriptMode
 }
 
 export type ManagerQuickHelpHistory = {

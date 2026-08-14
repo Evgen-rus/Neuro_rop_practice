@@ -385,7 +385,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertNotIn("evidence", result["items"][0])
         self.assertEqual(result["items"][0]["objection_id"], "price")
 
-    def test_expand_saves_all_channels_and_skips_a_failed_card(self) -> None:
+    def test_expand_saves_call_then_message_then_email_and_skips_a_failed_card(self) -> None:
         saved = []
 
         def storage_call(name, db_path, **kwargs):
@@ -398,18 +398,20 @@ class DealManagerFullScriptTests(unittest.TestCase):
                 return {"id": len(saved)}
             raise AssertionError(name)
 
-        def generate_pack(**kwargs):
+        def generate_script(**kwargs):
+            if kwargs["selected_strategy"] == "alternative" and kwargs["script_mode"] == "call":
+                raise RuntimeError("call failed")
             strategy = kwargs["selected_strategy"]
-            if strategy == "alternative":
-                raise RuntimeError("pack failed")
-            return ({
-                "email": {**EMAIL, "selected_strategy": strategy},
-                "message_script": {**SCRIPT, "selected_strategy": strategy},
-                "call_script": {**CALL_SCRIPT, "selected_strategy": strategy},
-            }, {})
+            if kwargs["script_mode"] == "call":
+                return ({**CALL_SCRIPT, "selected_strategy": strategy}, {})
+            return ({**SCRIPT, "selected_strategy": strategy}, {})
+
+        def generate_email(**kwargs):
+            return ({**EMAIL, "selected_strategy": kwargs["selected_strategy"]}, {})
 
         with patch.object(full_script_api, "_storage_call", side_effect=storage_call), \
-             patch.object(full_script_api, "generate_strategy_pack", side_effect=generate_pack):
+             patch.object(full_script_api, "generate_deal_manager_full_script", side_effect=generate_script), \
+             patch.object(full_script_api, "generate_deal_manager_email", side_effect=generate_email):
             full_script_api.expand_and_save_strategy_materials(
                 Path("state.sqlite"),
                 deal_id="101",
@@ -422,19 +424,55 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(
             saved,
             [
-                ("save_deal_manager_email_script", "primary"),
-                ("save_deal_manager_full_script", "primary"),
                 ("save_deal_manager_call_script", "primary"),
-                ("save_deal_manager_email_script", "pattern_break"),
-                ("save_deal_manager_full_script", "pattern_break"),
+                ("save_deal_manager_full_script", "primary"),
+                ("save_deal_manager_email_script", "primary"),
+                ("save_deal_manager_full_script", "alternative"),
+                ("save_deal_manager_email_script", "alternative"),
                 ("save_deal_manager_call_script", "pattern_break"),
+                ("save_deal_manager_full_script", "pattern_break"),
+                ("save_deal_manager_email_script", "pattern_break"),
             ],
         )
 
-    def test_expand_skips_llm_when_pack_already_ready(self) -> None:
+    def test_expand_starts_with_recommended_strategy_call(self) -> None:
+        saved = []
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "get_deal_daily_checklist_analysis_projection":
+                return {"items": []}
+            if name.startswith("get_deal_manager_"):
+                return None
+            if name.startswith("save_deal_manager_"):
+                saved.append((name, kwargs["selected_strategy"], kwargs.get("script_json", {}).get("script_contract") or kwargs.get("script_json", {}).get("email_contract")))
+                return {"id": len(saved)}
+            raise AssertionError(name)
+
+        def generate_script(**kwargs):
+            strategy = kwargs["selected_strategy"]
+            if kwargs["script_mode"] == "call":
+                return ({**CALL_SCRIPT, "selected_strategy": strategy}, {})
+            return ({**SCRIPT, "selected_strategy": strategy}, {})
+
+        with patch.object(full_script_api, "_storage_call", side_effect=storage_call), \
+             patch.object(full_script_api, "generate_deal_manager_full_script", side_effect=generate_script), \
+             patch.object(full_script_api, "generate_deal_manager_email", return_value=({**EMAIL, "selected_strategy": "pattern_break"}, {})):
+            full_script_api.expand_and_save_strategy_materials(
+                Path("state.sqlite"),
+                deal_id="101",
+                context=CONTEXT,
+                situation_id=21,
+                quick_help_id=31,
+                quick_help_content={**ANSWER, "recommended_strategy": "pattern_break"},
+                communication_pattern_context={"total_attempts": 1},
+            )
+        self.assertEqual(saved[0], ("save_deal_manager_call_script", "pattern_break", CALL_SCRIPT_CONTRACT))
+
+    def test_expand_skips_llm_when_channel_already_ready(self) -> None:
         with patch.object(full_script_api, "_storage_call", return_value={"items": []}), \
-             patch.object(full_script_api, "_strategy_pack_is_ready", return_value=True), \
-             patch.object(full_script_api, "generate_strategy_pack") as generate:
+             patch.object(full_script_api, "_cached_script", return_value={"id": 1}), \
+             patch.object(full_script_api, "generate_deal_manager_full_script") as generate_script, \
+             patch.object(full_script_api, "generate_deal_manager_email") as generate_email:
             full_script_api.expand_and_save_strategy_materials(
                 Path("state.sqlite"),
                 deal_id="101",
@@ -444,7 +482,8 @@ class DealManagerFullScriptTests(unittest.TestCase):
                 quick_help_content=ANSWER,
                 communication_pattern_context={"total_attempts": 1},
             )
-        generate.assert_not_called()
+        generate_script.assert_not_called()
+        generate_email.assert_not_called()
 
 
 if __name__ == "__main__":
