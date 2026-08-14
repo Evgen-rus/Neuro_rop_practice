@@ -7,6 +7,10 @@ from typing import Any
 
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
+from openai_api.llm.deal_manager_quick_help import (
+    project_locked_move,
+    project_quick_help_for_material,
+)
 
 
 MAX_FULL_SCRIPT_OUTPUT_TOKENS = 6000
@@ -168,7 +172,8 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
             "- Один блок = одна основная реплика. spoken_text — готовый кусок речи, который менеджер реально говорит: ценность/причина + один главный вопрос. Не давай 2–3 равноправных варианта текста и не превращай блок в допрос из нескольких вопросов подряд.\n"
             "- clarifying_question — не второй основной текст. Заполняй его только если ответ клиента может потребовать одно уточнение внутри того же блока; иначе верни пустую строку. Это не отдельный этап разговора.\n"
             "- DISC может менять длину, темп, прямоту, детализацию и порядок аргументов. Он не отменяет человеческую связку. Даже для прямого D-клиента нужна короткая причина вопроса, а не голые вопросы подряд. Жёсткий допрос не подходит никому.\n"
-            "- QUICK_HELP — это уже сделанный заход к клиенту. Не дублируй его текст: используй выбранную стратегию как основание звонка и продолжай с текущей точки.\n"
+            "- Готовое сообщение из LOCKED_MOVE ещё не сказано по телефону. Первый блок — устная версия того же захода: тот же смысл, тот же рычаг, та же ближайшая цель. Не начинай «с середины», как будто письменное сообщение уже состоялось, и не подменяй его другим человеком.\n"
+            "- Не копируй письменный текст дословно, если он звучит как переписка: адаптируй в живую устную речь, сохранив личность, аргумент и CTA.\n"
             "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй устную речь под primary_style, secondary_style, profile_confidence и recommended_communication: темп, прямоту, длину фраз, порядок аргументов и способ задавать вопросы. Не объясняй DISC менеджеру и не меняй факты. При insufficient_evidence используй нейтральный деловой стиль.\n"
             "- Перед финальным резюме проверь один главный скрытый стоп-фактор, который реально может остановить ближайший денежный шаг. Не собирай все риски подряд.\n"
             "- OBJECTION_HANDLING содержит готовые возражения из полного анализа. Не придумывай и не переписывай их: укажи в relevant_objection_ids блока не более двух существующих objection_id, только если они уместны в этой точке разговора.\n"
@@ -185,6 +190,7 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
     else:
         mode_rules = (
             "- Это сценарий продолжения переписки. Давай короткие готовые сообщения и ветки ответа; не превращай его в телефонный разговор.\n"
+            "- Раскрой выбранный LOCKED_MOVE в переписке: первое сообщение — сам SELECTED_CLIENT_MESSAGE или его естественное продолжение в том же голосе. Не начинай новую стратегию.\n"
             "- Если ANALYSIS_CONTEXT.client_communication_profile имеет status tentative или supported, адаптируй длину, прямоту и структуру сообщений под сохранённый профиль. При insufficient_evidence используй нейтральный деловой стиль.\n"
         )
         shape_rules = (
@@ -192,12 +198,15 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
             "- В каждом блоке укажи цель, 1–3 естественные фразы, что услышать в ответе и переход дальше.\n"
         )
         closing_rule = "- Заверши разговор одной конкретной проверяемой договорённостью. Верни только JSON по схеме на русском языке."
+    locked_move = project_locked_move(quick_help, selected_strategy)
     return "\n\n".join([
         "SYSTEM_RULES:\nТы — прикладной помощник менеджера во время реального разговора по одной сделке. Полный анализ уже выполнен: не анализируй сделку заново.",
         "RULES:\n"
         + mode_rules +
-        "- Продолжай ровно выбранный менеджером вариант сообщения. Используй SELECTED_STRATEGY, ASSISTANT_MODE и pressure_lever из QUICK_HELP, если он есть.\n"
-        "- Если ASSISTANT_MODE = push, держи экспертный коммерческий тон выбранного дожима и опирайся на выбранный рычаг. Если ASSISTANT_MODE = reanimator, держи мягкое восстановление контакта: приветствие, при необходимости кто мы и на чём остановились, польза ответить, один следующий шаг. Не смешивай эти голоса.\n"
+        "- LOCKED_MOVE — уже выбранный ход Дожима или Реаниматора. Сценарий должен звучать как тот же человек: тот же тон, тот же рычаг, та же ближайшая цель. Не изобретай новую стратегию и не пересобирай ситуацию заново из сырого анализа, если LOCKED_MOVE её уже зафиксировал.\n"
+        "- Опирайся на selected_client_message как на эталон захода. Не смешивай с невыбранными вариантами. Другие client_messages в исходном Quick Help сюда не передаются специально.\n"
+        "- Продолжай ровно выбранный менеджером вариант сообщения. Используй LOCKED_MOVE, SELECTED_STRATEGY, ASSISTANT_MODE и pressure_lever.\n"
+        "- Если ASSISTANT_MODE = push, держи экспертный коммерческий тон выбранного дожима: уверенно, предметно, через выбранный рычаг, без канцелярита и без пустого «посмотрели КП?». Если ASSISTANT_MODE = reanimator, держи мягкое восстановление контакта: приветствие, при необходимости кто мы и на чём остановились, польза ответить, низкое усилие, один следующий шаг. Не смешивай эти голоса.\n"
         + shape_rules +
         "- Незакрытые пункты CURRENT_DAILY_CHECKLIST помоги получить естественно, но не создавай новый checklist и не объявляй отметки менеджера фактами клиента.\n"
         "- RELEVANT_TACTICS — допустимые условные приёмы. Не обещай их доступность и не превращай в факт без подтверждения контекстом.\n"
@@ -207,7 +216,14 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         _section("ANALYSIS_CONTEXT", analysis_projection), _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)), _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("CURRENT_DAILY_CHECKLIST", checklist), _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        _section("SCRIPT_MODE", script_mode), _section("QUICK_HELP", quick_help), _section("SELECTED_STRATEGY", selected_strategy), _section("ASSISTANT_MODE", str(quick_help.get("mode") or "reanimator") if isinstance(quick_help, dict) else "reanimator"), _section("PRESSURE_LEVER", quick_help.get("pressure_lever") if isinstance(quick_help, dict) else None), _section("RELEVANT_TACTICS", relevant_tactics), _section("OBJECTION_HANDLING", objection_handling or {"items": []}),
+        _section("SCRIPT_MODE", script_mode),
+        _section("LOCKED_MOVE", locked_move),
+        _section("QUICK_HELP", project_quick_help_for_material(quick_help, selected_strategy)),
+        _section("SELECTED_STRATEGY", selected_strategy),
+        _section("ASSISTANT_MODE", locked_move["mode"]),
+        _section("PRESSURE_LEVER", locked_move["pressure_lever"]),
+        _section("RELEVANT_TACTICS", relevant_tactics),
+        _section("OBJECTION_HANDLING", objection_handling or {"items": []}),
     ])
 
 
@@ -227,13 +243,13 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         for item in objection_handling.get("items", []) if isinstance(item, dict)
     } if isinstance(objection_handling, dict) else set()
     prompt = build_full_script_prompt(**kwargs)
-    cache_version = "v4" if script_mode == "call" else "v3"
+    cache_version = "v5" if script_mode == "call" else "v4"
     result, metadata = call_structured_output_json(
         prompt, schema=full_script_schema(script_mode), schema_name="deal_manager_full_script", model=MANAGER_MODEL,
         reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
         log_title="deal manager full script prompt", call_type=f"deal_manager_full_script_{script_mode}",
         prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:{cache_version}",
-        stable_prefix=prompt_prefix_before(prompt, "QUICK_HELP:"),
+        stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
     )
     return validate_full_script(
         result, selected_strategy=selected_strategy, script_mode=script_mode,

@@ -56,6 +56,16 @@ def loads_json(value: str | None, default: Any = None) -> Any:
     return json.loads(value)
 
 
+def _manager_script_should_replace(stored: Any, incoming: dict[str, Any]) -> bool:
+    """Replace a cached material when its contract or prompt revision is outdated."""
+    if not isinstance(stored, dict):
+        return True
+    for key in ("script_contract", "email_contract", "prompt_revision"):
+        if incoming.get(key) != stored.get(key):
+            return True
+    return False
+
+
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2469,6 +2479,30 @@ def save_deal_manager_full_script(
                 dumps_json(model_meta) if model_meta is not None else None, utcish_now(),
             ),
         )
+        existing = conn.execute(
+            """
+            SELECT id, script_json FROM deal_manager_full_scripts
+            WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?
+              AND situation_review_id = ? AND quick_help_id = ? AND selected_strategy = ?
+            """,
+            (
+                str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
+                int(quick_help_id), selected_strategy,
+            ),
+        ).fetchone()
+        if existing is not None and _manager_script_should_replace(loads_json(existing["script_json"], {}), script_json):
+            conn.execute(
+                """
+                UPDATE deal_manager_full_scripts
+                SET script_json = ?, model_meta_json = ?, created_at = ?
+                WHERE id = ?
+                """,
+                (
+                    dumps_json(script_json),
+                    dumps_json(model_meta) if model_meta is not None else None,
+                    utcish_now(), int(existing["id"]),
+                ),
+            )
         row = conn.execute(
             """
             SELECT * FROM deal_manager_full_scripts
@@ -2584,9 +2618,7 @@ def save_deal_manager_call_script(
                 payload,
             )
         else:
-            stored = loads_json(existing["script_json"], {})
-            stored_contract = stored.get("script_contract") if isinstance(stored, dict) else None
-            if stored_contract != script_json.get("script_contract"):
+            if _manager_script_should_replace(loads_json(existing["script_json"], {}), script_json):
                 conn.execute(
                     """
                     UPDATE deal_manager_call_scripts
@@ -2668,6 +2700,24 @@ def save_deal_manager_email_script(
              int(quick_help_id), selected_strategy, dumps_json(script_json),
              dumps_json(model_meta) if model_meta is not None else None, utcish_now()),
         )
+        existing = conn.execute(
+            """SELECT id, script_json FROM deal_manager_email_scripts
+               WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?
+                 AND situation_review_id = ? AND quick_help_id = ? AND selected_strategy = ?""",
+            (str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
+             int(quick_help_id), selected_strategy),
+        ).fetchone()
+        if existing is not None and _manager_script_should_replace(loads_json(existing["script_json"], {}), script_json):
+            conn.execute(
+                """UPDATE deal_manager_email_scripts
+                   SET script_json = ?, model_meta_json = ?, created_at = ?
+                   WHERE id = ?""",
+                (
+                    dumps_json(script_json),
+                    dumps_json(model_meta) if model_meta is not None else None,
+                    utcish_now(), int(existing["id"]),
+                ),
+            )
         row = conn.execute(
             """SELECT * FROM deal_manager_email_scripts
                WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?

@@ -913,14 +913,16 @@ export type ManagerObjectionHandling = {
   }>
 }
 
+export type ManagerDiscProfile = {
+  primary_style: 'D' | 'I' | 'S' | 'C'
+  secondary_style?: 'D' | 'I' | 'S' | 'C' | null
+  profile_confidence: 'low' | 'medium' | 'high'
+}
+
 export type ManagerFullScriptWorkspace = {
   script: ManagerFullScriptRecord | null
   script_mode: ManagerFullScriptMode
-  disc_profile: {
-    primary_style: 'D' | 'I' | 'S' | 'C'
-    secondary_style?: 'D' | 'I' | 'S' | 'C' | null
-    profile_confidence: 'low' | 'medium' | 'high'
-  } | null
+  disc_profile: ManagerDiscProfile | null
   checklist: Record<string, unknown>
   objection_handling: ManagerObjectionHandling | null
 }
@@ -940,6 +942,7 @@ export type ManagerAssistantWorkspace = {
   source_report_id?: number | null
   situation_review_id?: number | null
   timeline: ManagerAssistantTimelineEntry[]
+  disc_profile?: ManagerDiscProfile | null
   context: {
     stage: string
     current_task: string

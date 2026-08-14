@@ -17,6 +17,7 @@ from api.deal_manager_situation import (
     _safe_model_meta,
     _storage_call,
     load_manager_screen_context,
+    public_disc_profile,
 )
 from openai_api.llm.deal_manager_full_script import (
     CALL_SCRIPT_CONTRACT,
@@ -25,6 +26,8 @@ from openai_api.llm.deal_manager_full_script import (
     generate_deal_manager_full_script,
 )
 from openai_api.llm.deal_manager_email import generate_deal_manager_email
+from openai_api.llm.deal_manager_quick_help import MATERIAL_PROMPT_REVISION
+from openai_api.llm.deal_manager_strategy_pack import generate_strategy_pack
 
 
 @dataclass
@@ -111,7 +114,105 @@ def _cached_script(db_path: str | Path, inputs: dict[str, Any], selected_strateg
         content = result.get("content") if isinstance(result.get("content"), dict) else {}
         if content.get("script_contract") != CALL_SCRIPT_CONTRACT:
             return None
+    if isinstance(result, dict):
+        content = result.get("content") if isinstance(result.get("content"), dict) else {}
+        if content.get("prompt_revision") != MATERIAL_PROMPT_REVISION:
+            return None
     return result
+
+
+def _save_script(
+    db_path: str | Path,
+    *,
+    script_mode: str,
+    deal_id: str,
+    source_report_id: int,
+    situation_review_id: int,
+    quick_help_id: int,
+    selected_strategy: str,
+    script: dict[str, Any],
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    save_method = {
+        "call": "save_deal_manager_call_script",
+        "email": "save_deal_manager_email_script",
+    }.get(script_mode, "save_deal_manager_full_script")
+    return _storage_call(
+        save_method, db_path, deal_id=deal_id,
+        source_report_id=source_report_id, situation_review_id=situation_review_id,
+        quick_help_id=quick_help_id, selected_strategy=selected_strategy,
+        script_json={**script, "prompt_revision": MATERIAL_PROMPT_REVISION},
+        model_meta=_safe_model_meta(metadata),
+    )
+
+
+def _strategy_pack_is_ready(db_path: str | Path, inputs: dict[str, Any], selected_strategy: str) -> bool:
+    return all(
+        isinstance(_cached_script(db_path, inputs, selected_strategy, script_mode), dict)
+        for script_mode in ("message", "call", "email")
+    )
+
+
+def expand_and_save_strategy_materials(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    context: dict[str, Any],
+    situation_id: int,
+    quick_help_id: int,
+    quick_help_content: dict[str, Any],
+    communication_pattern_context: dict[str, Any],
+    on_progress: Any | None = None,
+    progress_start: int = 70,
+) -> None:
+    """Fail-soft: one strategy pack may fail without dropping the Quick Help answer."""
+    messages = quick_help_content.get("client_messages") if isinstance(quick_help_content.get("client_messages"), dict) else {}
+    tactics = quick_help_content.get("lifehacks")
+    relevant_tactics = tactics if isinstance(tactics, list) else []
+    checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, deal_id=str(deal_id))
+    objections = _public_objections(context["analysis_projection"])
+    inputs = {
+        "context": context,
+        "quick_help": {"id": int(quick_help_id)},
+        "quick_help_content": quick_help_content,
+        "situation_id": int(situation_id),
+    }
+    strategy_labels = {"primary": "вариант 1", "alternative": "вариант 2", "pattern_break": "вариант 3"}
+    pending = [strategy for strategy in STRATEGIES if str(messages.get(strategy) or "").strip()]
+    for index, strategy in enumerate(pending):
+        if _strategy_pack_is_ready(db_path, inputs, strategy):
+            continue
+        if on_progress is not None:
+            on_progress(f"Раскрываем {strategy_labels[strategy]} в письмо, переписку и звонок", min(96, progress_start + index * 8))
+        try:
+            pack, metadata = generate_strategy_pack(
+                analysis_projection=context["analysis_projection"],
+                situation_projection=context["situation_projection"],
+                deal=context["deal"],
+                current_bitrix_task=context["current_bitrix_task"],
+                checklist=checklist,
+                communication_pattern_context=communication_pattern_context,
+                quick_help=quick_help_content,
+                selected_strategy=strategy,
+                relevant_tactics=relevant_tactics,
+                objection_handling=objections,
+            )
+        except Exception:  # noqa: BLE001 - keep the brain answer even if one card fails
+            continue
+        common = {
+            "deal_id": str(deal_id),
+            "source_report_id": int(context["source_report_id"]),
+            "situation_review_id": int(situation_id),
+            "quick_help_id": int(quick_help_id),
+            "selected_strategy": strategy,
+            "metadata": metadata,
+        }
+        try:
+            _save_script(db_path, script_mode="email", script=pack["email"], **common)
+            _save_script(db_path, script_mode="message", script=pack["message_script"], **common)
+            _save_script(db_path, script_mode="call", script=pack["call_script"], **common)
+        except Exception:  # noqa: BLE001 - a save failure must not wipe Quick Help
+            continue
 
 
 def get_full_script_job(job_id: str) -> dict[str, Any] | None:
@@ -159,15 +260,11 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             objection_handling=_public_objections(context["analysis_projection"]),
         )
         _touch(job, stage="saving", detail="Сохраняем проверенный сценарий", percent=88)
-        save_method = {
-            "call": "save_deal_manager_call_script",
-            "email": "save_deal_manager_email_script",
-        }.get(job.script_mode, "save_deal_manager_full_script")
-        saved = _storage_call(
-            save_method, db_path, deal_id=job.deal_id,
-            source_report_id=context["source_report_id"], situation_review_id=inputs["situation_id"],
-            quick_help_id=job.quick_help_id, selected_strategy=job.selected_strategy,
-            script_json=script, model_meta=_safe_model_meta(metadata),
+        saved = _save_script(
+            db_path, script_mode=job.script_mode, deal_id=job.deal_id,
+            source_report_id=int(context["source_report_id"]), situation_review_id=int(inputs["situation_id"]),
+            quick_help_id=int(job.quick_help_id), selected_strategy=job.selected_strategy,
+            script=script, metadata=metadata,
         )
         with _FULL_SCRIPT_LOCK:
             job.script_id = int(saved["id"])
@@ -207,22 +304,6 @@ def start_full_script_job(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str
     return asdict(job)
 
 
-def _public_disc_profile(analysis_projection: dict[str, Any]) -> dict[str, Any] | None:
-    profile = analysis_projection.get("client_communication_profile")
-    if not isinstance(profile, dict) or profile.get("status") not in {"tentative", "supported"}:
-        return None
-    primary = profile.get("primary_style")
-    secondary = profile.get("secondary_style")
-    confidence = profile.get("profile_confidence")
-    if primary not in {"D", "I", "S", "C"} or confidence not in {"low", "medium", "high"}:
-        return None
-    return {
-        "primary_style": primary,
-        "secondary_style": secondary if secondary in {"D", "I", "S", "C"} and secondary != primary else None,
-        "profile_confidence": confidence,
-    }
-
-
 def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id: str, quick_help_id: int, selected_strategy: str, script_mode: str = "message") -> dict[str, Any]:
     if script_mode not in SCRIPT_MODES:
         raise ValueError("Неизвестный режим сценария")
@@ -236,7 +317,7 @@ def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id:
     return {
         "script": script,
         "script_mode": script_mode,
-        "disc_profile": _public_disc_profile(inputs["context"]["analysis_projection"]),
+        "disc_profile": public_disc_profile(inputs["context"]["analysis_projection"]),
         "checklist": checklist,
         "objection_handling": _public_objections(inputs["context"]["analysis_projection"]),
     }

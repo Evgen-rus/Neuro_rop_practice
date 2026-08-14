@@ -10,6 +10,8 @@ from api import deal_manager_situation as situation
 from openai_api.llm.deal_manager_quick_help import (
     build_quick_help_prompt,
     generate_deal_manager_quick_help,
+    project_locked_move,
+    project_quick_help_for_material,
     quick_help_schema,
     validate_quick_help,
 )
@@ -181,6 +183,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("Не придумывай выгоду", prompt)
         self.assertIn("pressure_lever", prompt)
         self.assertIn("strategy_labels", prompt)
+        self.assertLess(prompt.index("MANAGER_TACTICS"), prompt.index("SITUATION_CONTEXT"))
         self.assertLess(prompt.index("CURRENT_BITRIX_TASK"), prompt.index("MANAGER_QUESTION"))
         self.assertNotIn("old_quick_help_answer", prompt)
         self.assertFalse(quick_help_schema()["additionalProperties"])
@@ -210,11 +213,16 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         kwargs = call.call_args.kwargs
-        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v6")
-        self.assertIn("CURRENT_BITRIX_TASK", kwargs["stable_prefix"])
-        self.assertIn("COMMUNICATION_PATTERN_CONTEXT", kwargs["stable_prefix"])
-        self.assertNotIn("MANAGER_QUESTION", kwargs["stable_prefix"])
-        self.assertTrue(call.call_args.args[0].startswith(kwargs["stable_prefix"]))
+        self.assertEqual(kwargs["prompt_cache_key"], "neuro-rop:deal-manager-quick-help:v7")
+        prefixes = kwargs["cache_prefixes"]
+        self.assertEqual(len(prefixes), 2)
+        self.assertIn("MANAGER_TACTICS", prefixes[0])
+        self.assertNotIn("SITUATION_CONTEXT", prefixes[0])
+        self.assertIn("CURRENT_BITRIX_TASK", prefixes[1])
+        self.assertIn("COMMUNICATION_PATTERN_CONTEXT", prefixes[1])
+        self.assertNotIn("MANAGER_QUESTION", prefixes[1])
+        self.assertTrue(call.call_args.args[0].startswith(prefixes[0]))
+        self.assertIsNone(kwargs.get("stable_prefix"))
 
     def test_validation_rejects_missing_strategy_variant(self) -> None:
         invalid = {**ANSWER, "client_messages": {"primary": "Текст", "alternative": "Другой текст"}}
@@ -228,6 +236,17 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         listed = {**ANSWER, "next_action": "Сначала напишите.\nПотом позвоните."}
         with self.assertRaisesRegex(ValueError, "без списка"):
             validate_quick_help(listed)
+
+    def test_locked_move_keeps_only_the_selected_strategy(self) -> None:
+        locked = project_locked_move(ANSWER, "alternative")
+        self.assertEqual(locked["mode"], "reanimator")
+        self.assertEqual(locked["selected_strategy"], "alternative")
+        self.assertEqual(locked["selected_client_message"], ANSWER["client_messages"]["alternative"])
+        self.assertEqual(locked["strategy_label"], "Через уточнение blocker")
+        projected = project_quick_help_for_material(ANSWER, "alternative")
+        self.assertEqual(projected["client_messages"], {"alternative": ANSWER["client_messages"]["alternative"]})
+        self.assertNotIn("primary", projected["client_messages"])
+        self.assertNotIn("pattern_break", projected["strategy_labels"])
 
     def test_communication_pattern_context_is_bounded_and_fact_only(self) -> None:
         events = [
@@ -277,6 +296,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
              patch.object(quick_help, "_load_local_communications", return_value=[]), \
              patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {"model": "gpt-5.6-luna", "raw_output_text": "secret"})) as generate, \
              patch.object(quick_help, "_storage_call", side_effect=save_call), \
+             patch("api.deal_manager_full_script.expand_and_save_strategy_materials") as expand, \
              patch.object(quick_help.threading, "Thread", ImmediateThread):
             started = quick_help.start_quick_help_job(
                 db_path=Path("state.sqlite"),
@@ -289,6 +309,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         job = quick_help.get_quick_help_job(started["job_id"])
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["quick_help_id"], 31)
+        self.assertEqual(expand.call_count, 2)
         self.assertEqual(len(calls), 2)
         self.assertEqual([item[1]["mode"] for item in calls], ["push", "reanimator"])
         self.assertEqual({item[1]["turn_id"] for item in calls}, {job["turn_id"]})
@@ -301,6 +322,28 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         communication_context = generate.call_args.kwargs["communication_pattern_context"]
         self.assertEqual(communication_context["window_days"], 30)
         self.assertEqual(communication_context["recent_events"], [])
+
+    def test_quick_help_stays_done_if_strategy_pack_expand_fails(self) -> None:
+        def save_call(name, db_path, **kwargs):
+            if name == "save_deal_manager_quick_help":
+                return {"id": 31, "deal_id": "101"}
+            raise AssertionError(name)
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {})), \
+             patch.object(quick_help, "_storage_call", side_effect=save_call), \
+             patch("api.deal_manager_full_script.expand_and_save_strategy_materials", side_effect=RuntimeError("pack failed")), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            started = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="Что сказать клиенту после паузы?",
+                confirm_paid=True,
+            )
+        self.assertEqual(started["status"], "done")
+        self.assertEqual(started["quick_help_id"], 31)
+        self.assertEqual(started["detail"], "Пакет рекомендации готов")
 
     def test_history_has_limit_cursor_and_does_not_bypass_situation_gate(self) -> None:
         calls = []
@@ -382,6 +425,11 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(result["context"]["stage"], "КП")
         self.assertEqual(result["context"]["current_task"], "Позвонить клиенту")
         self.assertEqual(result["context"]["main_risk"], "Нет даты решения")
+        self.assertEqual(result["disc_profile"], {
+            "primary_style": "C",
+            "secondary_style": None,
+            "profile_confidence": "low",
+        })
         self.assertEqual(result["context"]["last_communication"]["occurred_at"], "2026-08-04T16:10:00+03:00")
         self.assertEqual(result["current_by_mode"]["reanimator"]["id"], 31)
         self.assertIsNone(result["current_by_mode"]["push"])
@@ -426,8 +474,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
                 mode="push",
             )
-        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-push:v3")
-        self.assertNotIn("MANAGER_QUESTION", call.call_args.kwargs["stable_prefix"])
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-push:v4")
+        prefixes = call.call_args.kwargs["cache_prefixes"]
+        self.assertIn("MANAGER_TACTICS", prefixes[0])
+        self.assertNotIn("MANAGER_QUESTION", prefixes[1])
 
     def test_ensure_reuses_current_modes_and_does_not_call_llm(self) -> None:
         calls: list[str] = []
@@ -471,6 +521,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
              patch.object(quick_help, "_load_local_communications", return_value=[]), \
              patch.object(quick_help, "generate_deal_manager_quick_help", side_effect=generate) as generate_mock, \
              patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch("api.deal_manager_full_script.expand_and_save_strategy_materials"), \
              patch.object(quick_help.threading, "Thread", ImmediateThread):
             started = quick_help.start_quick_help_job(
                 db_path=Path("state.sqlite"),
@@ -511,6 +562,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
              patch.object(quick_help, "_load_local_communications", return_value=[]), \
              patch.object(quick_help, "generate_deal_manager_quick_help", side_effect=generate), \
              patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch("api.deal_manager_full_script.expand_and_save_strategy_materials"), \
              patch.object(quick_help.threading, "Thread", ImmediateThread):
             started = quick_help.start_quick_help_job(
                 db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=True,

@@ -609,6 +609,53 @@ textarea {
   background: var(--dc-green-weak);
 }
 
+.dc-toast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1600;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 11px 12px 11px 14px;
+  border: 1px solid #b7e4ca;
+  border-radius: 12px;
+  background: var(--dc-green-weak, #effaf4);
+  color: #116c3b;
+  box-shadow: 0 12px 32px rgba(15, 35, 65, .16);
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif;
+  animation: dc-toast-in .18s ease;
+}
+
+.dc-toast > p {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.dc-toast-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin: -4px -4px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.dc-toast-close:hover {
+  background: rgba(17, 108, 59, .1);
+}
+
+@keyframes dc-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
 .dc-analysis-global {
   display: flex;
   align-items: center;
@@ -6840,7 +6887,7 @@ ul.facts.bad li:before {
 .dc-manager-assistant-deal { display: grid; gap: 4px; margin: 0 15px 14px; padding: 11px; border: 1px solid #d2dfec; border-radius: 11px; background: #fff; }
 .dc-manager-assistant-deal small { color: #73879e; font-size: 10.5px; font-weight: 800; text-transform: uppercase; }
 .dc-manager-assistant-deal strong { color: #163254; font-size: 13px; line-height: 1.35; }
-.dc-manager-assistant-deal span { color: #71839a; font-size: 11.5px; line-height: 1.45; }
+.dc-manager-assistant-deal em { display: block; margin-top: 6px; color: #3d5f86; font-size: 11.5px; font-style: normal; font-weight: 750; }
 .dc-manager-assistant-sidebar nav { display: grid; gap: 5px; padding: 12px 10px; border-top: 1px solid #d7e2ed; }
 .dc-manager-assistant-sidebar nav button { display: flex; gap: 9px; align-items: center; min-height: 39px; border: 1px solid transparent; border-radius: 9px; padding: 8px 10px; color: #405a78; background: transparent; cursor: pointer; font-size: 12.5px; font-weight: 750; text-align: left; }
 .dc-manager-assistant-sidebar nav button span { display: grid; width: 23px; height: 23px; place-items: center; border: 1px solid #ccdae8; border-radius: 7px; background: #fff; }
@@ -6941,7 +6988,10 @@ ul.facts.bad li:before {
 .dc-manager-assistant-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
 .dc-manager-assistant-main > header { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 17px; border-bottom: 1px solid #d6e2ed; background: #fff; }
 .dc-manager-assistant-main > header .dc-manager-mode-switch { margin-right: auto; }
-.dc-manager-assistant-main > header > span { padding: 5px 10px; border-radius: 99px; color: #147346; background: #eaf8f0; font-size: 10.5px; font-weight: 750; }
+.dc-manager-assistant-main > header .dc-manager-disc-badge,
+.dc-manager-assistant-main > header .dc-manager-context-chip { padding: 5px 10px; border-radius: 99px; font-size: 10.5px; font-weight: 750; white-space: nowrap; }
+.dc-manager-assistant-main > header .dc-manager-disc-badge { color: #1d4f86; background: #e8f1ff; }
+.dc-manager-assistant-main > header .dc-manager-context-chip { color: #147346; background: #eaf8f0; }
 .dc-manager-assistant-main > header > button { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #61758e; background: transparent; cursor: pointer; font-size: 23px; }
 .dc-manager-assistant-main > header > button:hover { background: #eef3f8; }
 .dc-manager-assistant-content { min-height: 0; overflow: auto; padding: 12px 18px; background: #fff; scroll-behavior: smooth; }
@@ -7131,7 +7181,8 @@ ul.facts.bad li:before {
   .dc-manager-assistant-checklist-mobile { display: block; }
   .dc-manager-assistant-checklist-mobile .dc-manager-assistant-checklist { margin: 0 0 10px; }
   .dc-manager-assistant-main > header { gap: 8px; }
-  .dc-manager-assistant-main > header > span { display: none; }
+  .dc-manager-assistant-main > header .dc-manager-context-chip { display: none; }
+  .dc-manager-assistant-main > header .dc-manager-disc-badge { min-width: 0; max-width: 48vw; overflow: hidden; text-overflow: ellipsis; }
   .dc-manager-answer-modules,
   .dc-manager-assistant-context-grid { grid-template-columns: 1fr; }
   .dc-manager-answer-copy.speech { grid-column: auto; }

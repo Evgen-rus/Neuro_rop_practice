@@ -551,6 +551,7 @@ def call_structured_output_json(
     call_type: str | None = None,
     prompt_cache_key: str | None = None,
     stable_prefix: str | None = None,
+    cache_prefixes: list[str] | None = None,
     disable_implicit_cache: bool = False,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
@@ -558,12 +559,13 @@ def call_structured_output_json(
     """Call Responses structured outputs without changing the legacy JSON client."""
     effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
     effective_call_type = call_type or schema_name
-    request_fingerprint = _request_fingerprint(prompt, stable_prefix)
+    request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
     request_input, cache_options, cache_metadata = _cache_request(
         prompt,
         model=model,
         prompt_cache_key=prompt_cache_key,
         stable_prefix=stable_prefix,
+        cache_prefixes=cache_prefixes,
         disable_implicit_cache=disable_implicit_cache,
     )
     log_model_text_payload(

@@ -64,6 +64,10 @@ class DealManagerEmailFollowupsTests(unittest.TestCase):
         self.assertIn("client_communication_profile", prompt)
         self.assertIn("ASSISTANT_MODE", prompt)
         self.assertIn("PRESSURE_LEVER", prompt)
+        self.assertIn("LOCKED_MOVE", prompt)
+        self.assertIn("тот же человек", prompt)
+        self.assertIn(ANSWER["client_messages"]["primary"], prompt)
+        self.assertNotIn(ANSWER["client_messages"]["pattern_break"], prompt)
         self.assertIn("не выводи из профиля факты или страхи", prompt)
         self.assertEqual(validate_email(EMAIL, selected_strategy="primary"), EMAIL)
         with self.assertRaisesRegex(ValueError, "1 до 4"):

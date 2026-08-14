@@ -58,6 +58,7 @@ import {
   type ManagerFollowupsJob,
   type ManagerFollowupsRecord,
   type ManagerAssistantWorkspace,
+  type ManagerDiscProfile,
   type ManagerSituationJob,
   type ManagerSituationState,
   isCallScriptContent,
@@ -488,11 +489,30 @@ function writeDealDraft(prefix: string, dealId: string, value: string) {
   }
 }
 
+function discProfileLabel(profile: ManagerDiscProfile | null | undefined) {
+  if (!profile) return 'DISC: недостаточно данных'
+  const styles = [profile.primary_style, profile.secondary_style].filter(Boolean).join('/')
+  const confidence = profile.profile_confidence === 'high' ? 'высокая' : profile.profile_confidence === 'medium' ? 'средняя' : 'низкая'
+  return `DISC: ${styles} · уверенность: ${confidence}`
+}
+
 function appendVoiceText(current: string, transcript: string) {
   const next = transcript.trim()
   if (!next) return current
   if (!current.trim()) return next
   return `${current.trim()}\n${next}`
+}
+
+const NOTICE_TOAST_MS = 20_000
+
+function NoticeToast({ message, onClose }: { message: string; onClose: () => void }) {
+  return createPortal(
+    <div className="dc-toast" role="status">
+      <p>{message}</p>
+      <button type="button" className="dc-toast-close" aria-label="Закрыть уведомление" onClick={onClose}>×</button>
+    </div>,
+    document.body,
+  )
 }
 
 export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; onLogout?: () => Promise<void>; user: AuthUser }) {
@@ -774,6 +794,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       `guidance_opened:${guidanceId}`,
     ).catch(() => undefined)
   }, [selectedTask, view])
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(''), NOTICE_TOAST_MS)
+    return () => window.clearTimeout(timer)
+  }, [notice])
 
   async function sync() {
     setSyncing(true)
@@ -1155,7 +1181,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       </header>
 
       {error ? <div className="dc-alert error">{error}</div> : null}
-      {notice ? <div className="dc-alert success">{notice}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
       <Filters
@@ -1271,6 +1296,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <div><button className="dc-button" onClick={() => setAnalysisConfirmDeal(null)}>Отмена</button><button className="dc-button primary" onClick={() => { const deal = analysisConfirmDeal; setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true) }}>Проверить и обновить</button></div>
       </section>
     </div> : null}
+
+    {notice ? <NoticeToast message={notice} onClose={() => setNotice('')} /> : null}
   </main>
 }
 
@@ -2294,7 +2321,7 @@ function ManagerQuickHelp(props: {
     <div className="dc-section-head"><div><h3>Дожим</h3></div><span>AI</span></div>
     <button className="dc-button primary dc-manager-assistant-open" disabled={props.loading || busy} onClick={props.onOpen}>{props.loading || busy ? <><span className="dc-spinner" />Открываем…</> : 'Открыть дожим сделки'}</button>
     {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
-    {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label="Подготовка рекомендации" /> : null}
+    {props.job && ['queued', 'running'].includes(props.job.status) ? <ManagerJobProgress job={props.job} label="Подготовка пакета дожима" /> : null}
   </section>
 }
 
@@ -2558,9 +2585,7 @@ function ManagerFullScriptModal(props: {
   const failed = props.job?.status === 'error' || Boolean(props.error)
   const variantNumber = props.selectedStrategy === 'primary' ? '1' : props.selectedStrategy === 'alternative' ? '2' : '3'
   const title = props.scriptMode === 'call' ? 'Сценарий звонка' : props.scriptMode === 'email' ? 'Email клиенту' : 'Продолжение переписки'
-  const disc = props.workspace?.disc_profile
-  const discValue = disc ? [disc.primary_style, disc.secondary_style].filter(Boolean).join('/') : ''
-  const confidenceLabel = disc?.profile_confidence === 'high' ? 'высокая' : disc?.profile_confidence === 'medium' ? 'средняя' : 'низкая'
+  const discLabel = discProfileLabel(props.workspace?.disc_profile)
   const copyText = script ? 'script_contract' in script
     ? [
         `Цель: ${script.conversation_goal}`,
@@ -2593,7 +2618,7 @@ function ManagerFullScriptModal(props: {
     : ''
   return createPortal(<div className="dc-manager-full-script-layer">
     <section className="dc-manager-full-script-modal" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
-      <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}{discValue ? <> · <span className="dc-manager-disc">DISC: {discValue} · уверенность: {confidenceLabel}</span></> : null}</small><h2 id="manager-full-script-title">{title}</h2></div><div className="dc-manager-full-script-header-actions"><button className="dc-button dc-manager-full-script-copy" disabled={!copyText} onClick={() => void props.onCopy(copyText, title)}>Скопировать</button><button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button></div></header>
+      <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}{props.workspace?.disc_profile ? <> · <span className="dc-manager-disc">{discLabel}</span></> : null}</small><h2 id="manager-full-script-title">{title}</h2></div><div className="dc-manager-full-script-header-actions"><button className="dc-button dc-manager-full-script-copy" disabled={!copyText} onClick={() => void props.onCopy(copyText, title)}>Скопировать</button><button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button></div></header>
       {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
       {!script && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : 'script_contract' in script ? <>
         <div className="dc-manager-full-script-grid">
@@ -2812,7 +2837,7 @@ function ManagerAssistantModal(props: {
     <section className={workspaceModeClassName(assistantMode)} role="dialog" aria-modal="true" aria-label="Дожим сделки">
       <aside className="dc-manager-assistant-sidebar">
         <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим</strong></div></div>
-        <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span></div>
+        <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span><em className="dc-manager-disc">{discProfileLabel(props.workspace.disc_profile)}</em></div>
         <nav>
           <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Дожим</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
@@ -2829,7 +2854,8 @@ function ManagerAssistantModal(props: {
             <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
           </div>
           {view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}
-          <span>Контекст учтён</span>
+          <span className="dc-manager-disc-badge">{discProfileLabel(props.workspace.disc_profile)}</span>
+          <span className="dc-manager-context-chip">Контекст учтён</span>
           <button onClick={props.onClose} aria-label="Закрыть">×</button>
         </header>
         <div className="dc-manager-assistant-content">
@@ -2862,6 +2888,7 @@ function ManagerAssistantModal(props: {
             <div><small>Текущая задача</small><strong>{props.workspace.context.current_task || 'Нет открытой задачи'}</strong></div>
             <div><small>Последняя коммуникация</small><strong>{props.workspace.context.last_communication ? `${dateTime(props.workspace.context.last_communication.occurred_at)} · ${props.workspace.context.last_communication.text}` : 'Нет доступных данных'}</strong></div>
             <div><small>Главный риск</small><strong>{props.workspace.context.main_risk || 'Не выделен'}</strong></div>
+            <div><small>DISC клиента</small><strong>{discProfileLabel(props.workspace.disc_profile)}</strong></div>
           </section> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <><p className="summary">{followups.content.context_summary}</p><div>{followups.content.items.map((item) => <article key={item.item_id}><header><strong>{item.concern_or_scenario}</strong><span>{item.basis_status === 'confirmed' ? 'Подтверждено' : item.basis_status === 'inferred' ? 'Гипотеза' : 'Условный сценарий'}</span></header><h4>{item.idea}</h4><p>{item.why_it_may_help}</p><dl><div><dt>Формат</dt><dd>{item.followup_type}</dd></div><div><dt>Канал</dt><dd>{item.suggested_channel}</dd></div><div><dt>Когда</dt><dd>{item.timing}</dd></div><div><dt>Цель</dt><dd>{item.target_micro_conversion}</dd></div></dl><small>Основание: {item.evidence_summary}</small><em>{item.caution}</em></article>)}</div></> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
         </div>

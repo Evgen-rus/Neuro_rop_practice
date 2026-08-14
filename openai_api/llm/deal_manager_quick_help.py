@@ -27,6 +27,9 @@ ASSISTANT_MODES = ("push", "reanimator")
 _STRATEGIES = ("primary", "alternative", "pattern_break")
 _ANSWER_CONTRACT = "strategy_v3"
 _LEGACY_CONTRACT = "strategy_v2"
+# Stamped onto call/message/email JSON after validation so a voice-sync prompt
+# change can invalidate stored materials without a new LLM contract.
+MATERIAL_PROMPT_REVISION = "voice_sync_v1"
 _MESSAGE_LIMIT = 1800
 _REQUIRED_FIELDS = (
     "answer_contract",
@@ -232,6 +235,43 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
+def project_locked_move(quick_help: dict[str, Any] | None, selected_strategy: str) -> dict[str, Any]:
+    """Extract the chosen Quick Help move so later materials cannot invent a new personality."""
+    content = quick_help if isinstance(quick_help, dict) else {}
+    messages = content.get("client_messages") if isinstance(content.get("client_messages"), dict) else {}
+    labels = content.get("strategy_labels") if isinstance(content.get("strategy_labels"), dict) else {}
+    return {
+        "mode": str(content.get("mode") or "reanimator"),
+        "pressure_lever": content.get("pressure_lever") if isinstance(content.get("pressure_lever"), dict) else None,
+        "selected_strategy": selected_strategy,
+        "strategy_label": str(labels.get(selected_strategy) or "").strip(),
+        "selected_client_message": str(messages.get(selected_strategy) or "").strip(),
+        "situation_summary": str(content.get("situation_summary") or "").strip(),
+        "next_action": str(content.get("next_action") or "").strip(),
+        "expected_result": str(content.get("expected_result") or "").strip(),
+        "fallback_action": str(content.get("fallback_action") or "").strip(),
+    }
+
+
+def project_quick_help_for_material(quick_help: dict[str, Any] | None, selected_strategy: str) -> dict[str, Any]:
+    """Pass Quick Help into a follow-up material without the unused strategy variants."""
+    locked = project_locked_move(quick_help, selected_strategy)
+    content = quick_help if isinstance(quick_help, dict) else {}
+    lifehacks = content.get("lifehacks") if isinstance(content.get("lifehacks"), list) else []
+    projected: dict[str, Any] = {
+        "mode": locked["mode"],
+        "situation_summary": locked["situation_summary"],
+        "next_action": locked["next_action"],
+        "expected_result": locked["expected_result"],
+        "pressure_lever": locked["pressure_lever"],
+        "fallback_action": locked["fallback_action"],
+        "lifehacks": lifehacks,
+        "strategy_labels": {selected_strategy: locked["strategy_label"]} if locked["strategy_label"] else {},
+        "client_messages": {selected_strategy: locked["selected_client_message"]} if locked["selected_client_message"] else {},
+    }
+    return projected
+
+
 def _shared_context_sections(
     *,
     analysis_projection: dict[str, Any],
@@ -243,12 +283,12 @@ def _shared_context_sections(
     question: str,
 ) -> list[str]:
     return [
+        f"MANAGER_TACTICS:\n{manager_tactics}",
         _section("SITUATION_CONTEXT", situation_projection),
         _section("ANALYSIS_CONTEXT", analysis_projection),
         _section("DEAL_CONTEXT", project_deal(deal)),
         _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        f"MANAGER_TACTICS:\n{manager_tactics}",
         _section("MANAGER_QUESTION", question),
     ]
 
@@ -415,10 +455,12 @@ def generate_deal_manager_quick_help(
         mode=mode,
     )
     cache_key = (
-        "neuro-rop:deal-manager-push:v3"
+        "neuro-rop:deal-manager-push:v4"
         if mode == "push"
-        else "neuro-rop:deal-manager-quick-help:v6"
+        else "neuro-rop:deal-manager-quick-help:v7"
     )
+    knowledge_prefix = prompt_prefix_before(prompt, "SITUATION_CONTEXT:")
+    deal_prefix = prompt_prefix_before(prompt, "MANAGER_QUESTION:")
     result, metadata = call_structured_output_json(
         prompt,
         schema=quick_help_schema(tactic_ids=tactic_ids),
@@ -429,6 +471,6 @@ def generate_deal_manager_quick_help(
         log_title=f"deal manager {mode} prompt",
         call_type=f"deal_manager_quick_help_{mode}",
         prompt_cache_key=cache_key,
-        stable_prefix=prompt_prefix_before(prompt, "MANAGER_QUESTION:"),
+        cache_prefixes=[knowledge_prefix, deal_prefix],
     )
     return validate_quick_help(result, allowed_tactic_ids=tactic_ids, expected_mode=mode), metadata

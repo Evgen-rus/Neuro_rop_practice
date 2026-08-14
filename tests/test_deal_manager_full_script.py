@@ -12,6 +12,7 @@ from openai_api.llm.deal_manager_full_script import (
     full_script_schema,
     validate_full_script,
 )
+from openai_api.llm.deal_manager_quick_help import MATERIAL_PROMPT_REVISION
 from storage.rop_db import (
     get_deal_manager_call_script,
     get_deal_manager_full_script,
@@ -19,6 +20,7 @@ from storage.rop_db import (
     save_deal_manager_full_script,
     save_deal_manager_quick_help,
 )
+from tests.test_deal_manager_email_followups import EMAIL
 from tests.test_deal_manager_quick_help import ANSWER, CONTEXT, DEAL
 from tests.test_deal_manager_quick_help_storage import _seed_deal
 
@@ -121,6 +123,8 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertIn("CURRENT_DAILY_CHECKLIST", prompt)
         self.assertIn("ASSISTANT_MODE", prompt)
         self.assertIn("PRESSURE_LEVER", prompt)
+        self.assertIn("LOCKED_MOVE", prompt)
+        self.assertIn(ANSWER["client_messages"]["alternative"], prompt)
         self.assertIn("не создавай новый checklist", prompt)
         self.assertIn("не генерируй новые ответы", prompt)
         self.assertNotIn("checklist", full_script_schema()["properties"])
@@ -156,6 +160,11 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertIn("не отменяет человеческую связку", call_prompt)
         self.assertIn("не заполняй резюме фактами", call_prompt.lower())
         self.assertNotIn("1–3 естественные фразы", call_prompt)
+        self.assertNotIn("уже сделанный заход", call_prompt)
+        self.assertIn("LOCKED_MOVE", call_prompt)
+        self.assertIn("тот же человек", call_prompt)
+        self.assertIn(ANSWER["client_messages"]["alternative"], call_prompt)
+        self.assertNotIn(ANSWER["client_messages"]["primary"], call_prompt)
         self.assertIn("technical_doubt", call_prompt)
 
     def test_storage_is_idempotent_and_exact_context_only(self) -> None:
@@ -218,6 +227,14 @@ class DealManagerFullScriptTests(unittest.TestCase):
             )
             self.assertEqual(kept["id"], replaced["id"])
             self.assertEqual(kept["content"], CALL_SCRIPT)
+            restamped = save_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative",
+                script_json={**CALL_SCRIPT, "prompt_revision": MATERIAL_PROMPT_REVISION},
+            )
+            self.assertEqual(restamped["id"], kept["id"])
+            self.assertEqual(restamped["content"]["prompt_revision"], MATERIAL_PROMPT_REVISION)
 
     def test_cached_script_is_returned_without_paid_confirmation(self) -> None:
         inputs = {
@@ -268,7 +285,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
 
         def storage_call(name, db_path, **kwargs):
             if name == "get_deal_manager_call_script":
-                return {"id": 51, "content": CALL_SCRIPT}
+                return {"id": 51, "content": {**CALL_SCRIPT, "prompt_revision": MATERIAL_PROMPT_REVISION}}
             raise AssertionError(name)
 
         with patch.object(full_script_api, "_current_inputs", return_value=inputs), \
@@ -366,6 +383,67 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertNotIn("objection_type", result["items"][0])
         self.assertNotIn("evidence", result["items"][0])
         self.assertEqual(result["items"][0]["objection_id"], "price")
+
+    def test_expand_saves_all_channels_and_skips_a_failed_card(self) -> None:
+        saved = []
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "get_deal_daily_checklist_analysis_projection":
+                return {"items": []}
+            if name.startswith("get_deal_manager_"):
+                return None
+            if name.startswith("save_deal_manager_"):
+                saved.append((name, kwargs["selected_strategy"]))
+                return {"id": len(saved)}
+            raise AssertionError(name)
+
+        def generate_pack(**kwargs):
+            strategy = kwargs["selected_strategy"]
+            if strategy == "alternative":
+                raise RuntimeError("pack failed")
+            return ({
+                "email": {**EMAIL, "selected_strategy": strategy},
+                "message_script": {**SCRIPT, "selected_strategy": strategy},
+                "call_script": {**CALL_SCRIPT, "selected_strategy": strategy},
+            }, {})
+
+        with patch.object(full_script_api, "_storage_call", side_effect=storage_call), \
+             patch.object(full_script_api, "generate_strategy_pack", side_effect=generate_pack):
+            full_script_api.expand_and_save_strategy_materials(
+                Path("state.sqlite"),
+                deal_id="101",
+                context=CONTEXT,
+                situation_id=21,
+                quick_help_id=31,
+                quick_help_content=ANSWER,
+                communication_pattern_context={"total_attempts": 1},
+            )
+        self.assertEqual(
+            saved,
+            [
+                ("save_deal_manager_email_script", "primary"),
+                ("save_deal_manager_full_script", "primary"),
+                ("save_deal_manager_call_script", "primary"),
+                ("save_deal_manager_email_script", "pattern_break"),
+                ("save_deal_manager_full_script", "pattern_break"),
+                ("save_deal_manager_call_script", "pattern_break"),
+            ],
+        )
+
+    def test_expand_skips_llm_when_pack_already_ready(self) -> None:
+        with patch.object(full_script_api, "_storage_call", return_value={"items": []}), \
+             patch.object(full_script_api, "_strategy_pack_is_ready", return_value=True), \
+             patch.object(full_script_api, "generate_strategy_pack") as generate:
+            full_script_api.expand_and_save_strategy_materials(
+                Path("state.sqlite"),
+                deal_id="101",
+                context=CONTEXT,
+                situation_id=21,
+                quick_help_id=31,
+                quick_help_content=ANSWER,
+                communication_pattern_context={"total_attempts": 1},
+            )
+        generate.assert_not_called()
 
 
 if __name__ == "__main__":

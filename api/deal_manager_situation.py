@@ -84,6 +84,23 @@ def _safe_model_meta(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return {key: metadata[key] for key in allowed if metadata and key in metadata}
 
 
+def public_disc_profile(analysis_projection: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Allow-listed DISC labels for the manager UI; never expose evidence or reasons."""
+    profile = analysis_projection.get("client_communication_profile") if isinstance(analysis_projection, dict) else None
+    if not isinstance(profile, dict) or profile.get("status") not in {"tentative", "supported"}:
+        return None
+    primary = profile.get("primary_style")
+    secondary = profile.get("secondary_style")
+    confidence = profile.get("profile_confidence")
+    if primary not in {"D", "I", "S", "C"} or confidence not in {"low", "medium", "high"}:
+        return None
+    return {
+        "primary_style": primary,
+        "secondary_style": secondary if secondary in {"D", "I", "S", "C"} and secondary != primary else None,
+        "profile_confidence": confidence,
+    }
+
+
 def _parse_json_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value

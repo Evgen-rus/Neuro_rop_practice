@@ -7,6 +7,7 @@ from typing import Any
 
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
+from openai_api.llm.deal_manager_quick_help import project_locked_move, project_quick_help_for_material
 
 
 EMAIL_CONTRACT = "manager_email_v1"
@@ -56,11 +57,14 @@ def _section(name: str, value: Any) -> str:
 
 
 def build_email_prompt(**kwargs: Any) -> str:
+    selected_strategy = str(kwargs["selected_strategy"])
+    locked_move = project_locked_move(kwargs.get("quick_help"), selected_strategy)
     return "\n\n".join([
         "SYSTEM_RULES:\nТы — прикладной помощник менеджера. Подготовь одно деловое email-письмо по текущей сделке; полный анализ уже выполнен.",
         "RULES:\n"
-        "- Продолжай выбранную стратегию текущего режима помощника и решай одну ближайшую micro-conversion.\n"
-        "- Если QUICK_HELP.mode = push, пиши экспертно и предметно, опираясь на pressure_lever. Если mode = reanimator, пиши мягче: напомни контекст, дай понятную пользу ответить и один низкий по усилию следующий шаг. Не смешивай эти голоса.\n"
+        "- LOCKED_MOVE — уже выбранный ход Дожима или Реаниматора. Письмо должно звучать как тот же человек и решать ту же ближайшую micro-conversion, а не начинать новую стратегию.\n"
+        "- Продолжай выбранную стратегию текущего режима помощника. Опирайся на selected_client_message как на эталон захода: тот же тон, рычаг, аргумент и CTA, адаптированные в формат письма.\n"
+        "- Если QUICK_HELP.mode = push, пиши экспертно и предметно, опираясь на pressure_lever, без канцелярита и без пустого «посмотрели КП?». Если mode = reanimator, пиши мягче: напомни контекст, дай понятную пользу ответить и один низкий по усилию следующий шаг. Не смешивай эти голоса.\n"
         "- У письма должна быть самостоятельная тема, обращение, краткий контекст, 1–4 связанных вопроса, полезный аргумент, ясный следующий шаг и завершение.\n"
         "- Вопросы допустимы только если нужны для одной общей цели письма; не превращай письмо в анкету.\n"
         "- Используй ANALYSIS_CONTEXT.client_communication_profile для формы подачи: D — прямота и результат, I — живой интерес и образ результата, S — спокойствие и снижение риска, C — структура и точность. Не называй DISC клиенту и не выводи из профиля факты или страхи. При недостаточных данных пиши нейтрально.\n"
@@ -71,10 +75,11 @@ def build_email_prompt(**kwargs: Any) -> str:
         _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
         _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
         _section("COMMUNICATION_PATTERN_CONTEXT", kwargs["communication_pattern_context"]),
-        _section("SELECTED_STRATEGY", kwargs["selected_strategy"]),
-        _section("ASSISTANT_MODE", str(kwargs["quick_help"].get("mode") or "reanimator") if isinstance(kwargs.get("quick_help"), dict) else "reanimator"),
-        _section("PRESSURE_LEVER", kwargs["quick_help"].get("pressure_lever") if isinstance(kwargs.get("quick_help"), dict) else None),
-        _section("QUICK_HELP", kwargs["quick_help"]),
+        _section("LOCKED_MOVE", locked_move),
+        _section("SELECTED_STRATEGY", selected_strategy),
+        _section("ASSISTANT_MODE", locked_move["mode"]),
+        _section("PRESSURE_LEVER", locked_move["pressure_lever"]),
+        _section("QUICK_HELP", project_quick_help_for_material(kwargs.get("quick_help"), selected_strategy)),
     ])
 
 
@@ -85,7 +90,7 @@ def generate_deal_manager_email(**kwargs: Any) -> tuple[dict[str, Any], dict[str
         prompt, schema=email_schema(), schema_name="deal_manager_email", model=MANAGER_MODEL,
         reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_EMAIL_OUTPUT_TOKENS,
         log_title="deal manager email prompt", call_type="deal_manager_email",
-        prompt_cache_key="neuro-rop:deal-manager-email:v2",
-        stable_prefix=prompt_prefix_before(prompt, "SELECTED_STRATEGY:"),
+        prompt_cache_key="neuro-rop:deal-manager-email:v3",
+        stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
     )
     return validate_email(result, selected_strategy=selected_strategy), metadata

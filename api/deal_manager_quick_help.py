@@ -31,6 +31,7 @@ from api.deal_manager_situation import (
     _situation_id,
     _situation_status,
     _storage_call,
+    public_disc_profile,
 )
 from openai_api.llm.deal_manager_quick_help import ASSISTANT_MODES, generate_deal_manager_quick_help
 from setup import MSK_TZ
@@ -114,7 +115,7 @@ def _save_mode_answer(
     question: str,
     origin: str,
     communication_pattern_context: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     answer, metadata = generate_deal_manager_quick_help(
         question=question,
         analysis_projection=context["analysis_projection"],
@@ -142,7 +143,7 @@ def _save_mode_answer(
         if saved_id is not None:
             job.saved_by_mode[mode] = saved_id
             job.quick_help_id = saved_id
-    return saved if isinstance(saved, dict) else {}
+    return (saved if isinstance(saved, dict) else {}), answer
 
 
 def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
@@ -181,9 +182,10 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
                     job.quick_help_id = int(existing["id"])
                 continue
             label = "дожим" if mode == "push" else "реаниматор"
-            _touch(job, stage="llm", detail=f"AI готовит {label}", percent=40 + index * 25)
+            brain_percent = 28 + index * 36
+            _touch(job, stage="llm", detail=f"AI готовит {label}", percent=brain_percent)
             question = job.question.strip() or AUTO_QUESTIONS[mode]
-            _save_mode_answer(
+            saved, answer = _save_mode_answer(
                 db_path=db_path,
                 job=job,
                 context=context,
@@ -194,10 +196,27 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
                 communication_pattern_context=communication_pattern_context,
             )
             generated += 1
+            saved_id = int(saved["id"]) if saved.get("id") is not None else None
+            if saved_id is not None:
+                try:
+                    from api.deal_manager_full_script import expand_and_save_strategy_materials
+                    expand_and_save_strategy_materials(
+                        db_path,
+                        deal_id=job.deal_id,
+                        context=context,
+                        situation_id=int(situation_id),
+                        quick_help_id=saved_id,
+                        quick_help_content=answer,
+                        communication_pattern_context=communication_pattern_context,
+                        on_progress=lambda detail, percent: _touch(job, stage="llm", detail=detail, percent=percent),
+                        progress_start=brain_percent + 6,
+                    )
+                except Exception:  # noqa: BLE001 - pack expansion must not drop the brain answer
+                    pass
         with _QUICK_HELP_LOCK:
             job.reused = generated == 0
             job.status = "done"
-        _touch(job, stage="done", detail="Рекомендация готова", percent=100)
+        _touch(job, stage="done", detail="Пакет рекомендации готов", percent=100)
     except Exception as error:  # noqa: BLE001 - never return model content in a job error
         with _QUICK_HELP_LOCK:
             job.status = "error"
@@ -556,6 +575,7 @@ def get_manager_assistant_workspace(
         "source_report_id": source_report_id,
         "situation_review_id": situation_id,
         "timeline": timeline[:50],
+        "disc_profile": public_disc_profile(analysis),
         "context": {
             "stage": str(deal.get("stage_name") or ""),
             "current_task": str(task.get("subject") or task.get("description") or ""),
