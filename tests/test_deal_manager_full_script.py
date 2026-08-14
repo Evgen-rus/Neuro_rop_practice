@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from api import deal_manager_full_script as full_script_api
 from openai_api.llm.deal_manager_full_script import (
+    CALL_SCRIPT_CONTRACT,
     build_full_script_prompt,
     full_script_schema,
     validate_full_script,
@@ -59,6 +60,46 @@ SCRIPT = {
     "relevant_tactic_ids": ["MT-CONTACT-002"],
 }
 
+CALL_SCRIPT = {
+    "script_contract": "conversation_script_v2",
+    "selected_strategy": "alternative",
+    "conversation_goal": "Согласовать подтверждаемую дату следующего шага по КП.",
+    "blocks": [
+        {
+            "block_id": "opening",
+            "title": "Начало разговора",
+            "objective": "Открыть звонок и получить согласие говорить.",
+            "spoken_text": "Добрый день. Хочу коротко пройтись по КП, чтобы потом не возвращаться к переделкам. Удобно две минуты?",
+            "clarifying_question": "",
+            "listen_for": ["Готовность говорить"],
+            "transition": "После согласия перейти к текущему blocker.",
+            "relevant_objection_ids": [],
+        },
+        {
+            "block_id": "blocker",
+            "title": "Что мешает решению",
+            "objective": "Уточнить один текущий blocker.",
+            "spoken_text": "Чтобы не предлагать лишний шаг, хочу понять, какой вопрос сейчас реально мешает зафиксировать следующий этап. Что именно останавливает решение?",
+            "clarifying_question": "Если это согласование внутри, кто ещё должен подтвердить условия?",
+            "listen_for": ["Конкретный вопрос или участник согласования"],
+            "transition": "Предложить действие только под названный blocker.",
+            "relevant_objection_ids": ["technical_doubt"],
+        },
+        {
+            "block_id": "agreement",
+            "title": "Следующий шаг",
+            "objective": "Выйти на конкретное действие после ответа клиента.",
+            "spoken_text": "Чтобы не потерять договорённость, давайте зафиксируем только тот шаг, который реально снимает этот вопрос. Какое действие и дату можем поставить?",
+            "clarifying_question": "",
+            "listen_for": ["Действие и дата"],
+            "transition": "Перейти к резюме подтверждённого.",
+            "relevant_objection_ids": [],
+        },
+    ],
+    "closing_agreement": "Коротко перечислите только то, что клиент подтвердил в этом звонке, назовите следующий шаг из текущего контекста и спросите: всё верно зафиксировал?",
+    "relevant_tactic_ids": ["MT-CONTACT-002"],
+}
+
 
 class DealManagerFullScriptTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -87,6 +128,17 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(validate_full_script(
             SCRIPT, selected_strategy="alternative", allowed_objection_ids={"technical_doubt"},
         ), SCRIPT)
+        call_schema = full_script_schema("call")
+        self.assertEqual(call_schema["properties"]["script_contract"]["enum"], [CALL_SCRIPT_CONTRACT])
+        self.assertIn("spoken_text", call_schema["properties"]["blocks"]["items"]["properties"])
+        self.assertIn("clarifying_question", call_schema["properties"]["blocks"]["items"]["properties"])
+        self.assertNotIn("suggested_phrases", call_schema["properties"]["blocks"]["items"]["properties"])
+        self.assertEqual(validate_full_script(
+            CALL_SCRIPT, selected_strategy="alternative", script_mode="call",
+            allowed_objection_ids={"technical_doubt"},
+        ), CALL_SCRIPT)
+        with self.assertRaises(ValueError):
+            validate_full_script(SCRIPT, selected_strategy="alternative", script_mode="call")
 
         call_prompt = build_full_script_prompt(
             analysis_projection=CONTEXT["analysis_projection"],
@@ -99,6 +151,11 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertIn("SCRIPT_MODE:\n\"call\"", call_prompt)
         self.assertIn("client_communication_profile", call_prompt)
         self.assertIn("телефонного звонка", call_prompt)
+        self.assertIn("полноценное открытие разговора", call_prompt)
+        self.assertIn("spoken_text", call_prompt)
+        self.assertIn("не отменяет человеческую связку", call_prompt)
+        self.assertIn("не заполняй резюме фактами", call_prompt.lower())
+        self.assertNotIn("1–3 естественные фразы", call_prompt)
         self.assertIn("technical_doubt", call_prompt)
 
     def test_storage_is_idempotent_and_exact_context_only(self) -> None:
@@ -142,6 +199,25 @@ class DealManagerFullScriptTests(unittest.TestCase):
                 situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
                 selected_strategy="alternative",
             )["content"], SCRIPT)
+            replaced = save_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative", script_json=CALL_SCRIPT,
+            )
+            self.assertEqual(replaced["id"], call_script["id"])
+            self.assertEqual(get_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative",
+            )["content"], CALL_SCRIPT)
+            kept = save_deal_manager_call_script(
+                db_path, deal_id="101", source_report_id=report_id,
+                situation_review_id=review_id, quick_help_id=int(quick_help["id"]),
+                selected_strategy="alternative",
+                script_json={**CALL_SCRIPT, "conversation_goal": "Другая цель звонка"},
+            )
+            self.assertEqual(kept["id"], replaced["id"])
+            self.assertEqual(kept["content"], CALL_SCRIPT)
 
     def test_cached_script_is_returned_without_paid_confirmation(self) -> None:
         inputs = {
@@ -160,6 +236,51 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(result["status"], "done")
         self.assertTrue(result["reused"])
         self.assertEqual(result["script_id"], 44)
+
+    def test_legacy_call_script_is_not_reused_without_paid_confirmation(self) -> None:
+        inputs = {
+            "context": {"deal": {"deal_id": "101"}, "source_report_id": 17},
+            "quick_help": {"id": 31},
+            "quick_help_content": ANSWER,
+            "situation_id": 21,
+        }
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "get_deal_manager_call_script":
+                return {"id": 44, "content": SCRIPT}
+            raise AssertionError(name)
+
+        with patch.object(full_script_api, "_current_inputs", return_value=inputs), \
+             patch.object(full_script_api, "_storage_call", side_effect=storage_call):
+            with self.assertRaisesRegex(ValueError, "платный"):
+                full_script_api.start_full_script_job(
+                    db_path=Path("state.sqlite"), deal_id="101", quick_help_id=31,
+                    selected_strategy="alternative", script_mode="call", confirm_paid=False,
+                )
+
+    def test_current_call_script_is_reused_without_paid_confirmation(self) -> None:
+        inputs = {
+            "context": {"deal": {"deal_id": "101"}, "source_report_id": 17},
+            "quick_help": {"id": 31},
+            "quick_help_content": ANSWER,
+            "situation_id": 21,
+        }
+
+        def storage_call(name, db_path, **kwargs):
+            if name == "get_deal_manager_call_script":
+                return {"id": 51, "content": CALL_SCRIPT}
+            raise AssertionError(name)
+
+        with patch.object(full_script_api, "_current_inputs", return_value=inputs), \
+             patch.object(full_script_api, "_storage_call", side_effect=storage_call):
+            result = full_script_api.start_full_script_job(
+                db_path=Path("state.sqlite"), deal_id="101", quick_help_id=31,
+                selected_strategy="alternative", script_mode="call", confirm_paid=False,
+            )
+        self.assertEqual(result["status"], "done")
+        self.assertTrue(result["reused"])
+        self.assertEqual(result["script_id"], 51)
+        self.assertEqual(result["script_mode"], "call")
 
     def test_uncached_job_reads_checklist_with_named_deal_id_and_saves_script(self) -> None:
         inputs = {

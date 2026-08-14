@@ -815,7 +815,7 @@ export type ManagerQuickHelpHistory = {
   next_before_id?: number | null
 }
 
-export type ManagerFullScriptBlock = {
+export type ManagerMessageScriptBlock = {
   block_id: string
   title: string
   objective: string
@@ -825,14 +825,38 @@ export type ManagerFullScriptBlock = {
   relevant_objection_ids: string[]
 }
 
-export type ManagerConversationScriptContent = {
+export type ManagerCallScriptBlock = {
+  block_id: string
+  title: string
+  objective: string
+  spoken_text: string
+  clarifying_question: string
+  listen_for: string[]
+  transition: string
+  relevant_objection_ids: string[]
+}
+
+export type ManagerFullScriptBlock = ManagerMessageScriptBlock | ManagerCallScriptBlock
+
+export type ManagerMessageScriptContent = {
   script_contract: 'conversation_script_v1'
   selected_strategy: ManagerQuickHelpStrategy
   conversation_goal: string
-  blocks: ManagerFullScriptBlock[]
+  blocks: ManagerMessageScriptBlock[]
   closing_agreement: string
   relevant_tactic_ids: string[]
 }
+
+export type ManagerCallScriptContent = {
+  script_contract: 'conversation_script_v2'
+  selected_strategy: ManagerQuickHelpStrategy
+  conversation_goal: string
+  blocks: ManagerCallScriptBlock[]
+  closing_agreement: string
+  relevant_tactic_ids: string[]
+}
+
+export type ManagerConversationScriptContent = ManagerMessageScriptContent | ManagerCallScriptContent
 
 export type ManagerEmailContent = {
   email_contract: 'manager_email_v1'
@@ -848,6 +872,12 @@ export type ManagerEmailContent = {
 
 export type ManagerFullScriptContent = ManagerConversationScriptContent | ManagerEmailContent
 export type ManagerFullScriptMode = 'message' | 'call' | 'email'
+
+export function isCallScriptContent(
+  script: ManagerConversationScriptContent,
+): script is ManagerCallScriptContent {
+  return script.script_contract === 'conversation_script_v2'
+}
 
 export type ManagerFullScriptRecord = {
   id: number

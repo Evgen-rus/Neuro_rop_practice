@@ -2525,7 +2525,11 @@ def save_deal_manager_call_script(
     script_json: dict[str, Any],
     model_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist one validated phone call script for its exact context."""
+    """Persist one validated phone call script for its exact context.
+
+    Same-contract writes stay idempotent. A newer script_contract replaces an outdated row
+    so a regenerated call script is not blocked by an old cached JSON shape.
+    """
     if selected_strategy not in {"primary", "alternative", "pattern_break"}:
         raise ValueError("Неизвестный вариант сообщения")
     if not isinstance(script_json, dict) or not script_json:
@@ -2553,21 +2557,44 @@ def save_deal_manager_call_script(
         ).fetchone()
         if linked is None:
             raise ValueError("Quick Help не относится к текущей подтверждённой ситуации")
-        conn.execute(
+        existing = conn.execute(
             """
-            INSERT INTO deal_manager_call_scripts (
-                deal_id, manager_id, source_report_id, situation_review_id,
-                quick_help_id, selected_strategy, script_json, model_meta_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(deal_id, manager_id, source_report_id, situation_review_id, quick_help_id, selected_strategy)
-            DO NOTHING
+            SELECT id, script_json FROM deal_manager_call_scripts
+            WHERE deal_id = ? AND manager_id = ? AND source_report_id = ?
+              AND situation_review_id = ? AND quick_help_id = ? AND selected_strategy = ?
             """,
             (
                 str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
-                int(quick_help_id), selected_strategy, dumps_json(script_json),
-                dumps_json(model_meta) if model_meta is not None else None, utcish_now(),
+                int(quick_help_id), selected_strategy,
             ),
+        ).fetchone()
+        payload = (
+            str(deal_id), manager_id, int(source_report_id), int(situation_review_id),
+            int(quick_help_id), selected_strategy, dumps_json(script_json),
+            dumps_json(model_meta) if model_meta is not None else None, utcish_now(),
         )
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO deal_manager_call_scripts (
+                    deal_id, manager_id, source_report_id, situation_review_id,
+                    quick_help_id, selected_strategy, script_json, model_meta_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+        else:
+            stored = loads_json(existing["script_json"], {})
+            stored_contract = stored.get("script_contract") if isinstance(stored, dict) else None
+            if stored_contract != script_json.get("script_contract"):
+                conn.execute(
+                    """
+                    UPDATE deal_manager_call_scripts
+                    SET script_json = ?, model_meta_json = ?, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (payload[6], payload[7], payload[8], int(existing["id"])),
+                )
         row = conn.execute(
             """
             SELECT * FROM deal_manager_call_scripts

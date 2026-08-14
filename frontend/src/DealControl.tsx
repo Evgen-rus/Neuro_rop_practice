@@ -60,6 +60,7 @@ import {
   type ManagerAssistantWorkspace,
   type ManagerSituationJob,
   type ManagerSituationState,
+  isCallScriptContent,
   isNeuroRopTask,
 } from './api'
 import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
@@ -2566,11 +2567,18 @@ function ManagerFullScriptModal(props: {
         ...script.blocks.map((block, index) => [
           `${index + 1}. ${block.title}`,
           block.objective,
-          ...block.suggested_phrases.map((phrase) => `— ${phrase}`),
+          ...('spoken_text' in block
+            ? [
+                block.spoken_text,
+                block.clarifying_question?.trim() ? `Если нужно уточнить: ${block.clarifying_question}` : '',
+              ]
+            : block.suggested_phrases.map((phrase) => `— ${phrase}`)),
           block.listen_for.length ? `Услышать: ${block.listen_for.join(' · ')}` : '',
           `Переход: ${block.transition}`,
         ].filter(Boolean).join('\n')),
-        `Завершить договорённостью: ${script.closing_agreement}`,
+        isCallScriptContent(script)
+          ? `Резюме и следующий шаг: ${script.closing_agreement}`
+          : `Завершить договорённостью: ${script.closing_agreement}`,
       ].join('\n\n')
     : [
         `Тема: ${script.subject}`,
@@ -2594,9 +2602,9 @@ function ManagerFullScriptModal(props: {
             <ol>{script.blocks.map((block, index) => {
               const linkedObjections = objections.filter((item) => block.relevant_objection_ids?.includes(item.objection_id))
               return <li key={block.block_id}>
-              <span>{index + 1}</span><article><h3>{block.title}</h3><p>{block.objective}</p><div className="dc-manager-full-script-phrases">{block.suggested_phrases.map((phrase) => <blockquote key={phrase}>{phrase}</blockquote>)}</div>{block.listen_for.length ? <div className="dc-manager-full-script-listen"><strong>Услышать:</strong> {block.listen_for.join(' · ')}</div> : null}{linkedObjections.length ? <div className="dc-manager-block-objections"><strong>Если возникнет возражение</strong>{linkedObjections.map((item) => <div key={item.objection_id}><b>{item.objection}</b><span>{item.manager_reply}</span><small>{item.follow_up_question}</small></div>)}</div> : null}<footer><strong>Переход:</strong> {block.transition}</footer></article>
+              <span>{index + 1}</span><article><h3>{block.title}</h3><p>{block.objective}</p><div className="dc-manager-full-script-phrases">{'spoken_text' in block ? <><blockquote>{block.spoken_text}</blockquote>{block.clarifying_question?.trim() ? <div className="dc-manager-full-script-clarify"><small>Если нужно уточнить</small><blockquote className="clarify">{block.clarifying_question}</blockquote></div> : null}</> : block.suggested_phrases.map((phrase) => <blockquote key={phrase}>{phrase}</blockquote>)}</div>{block.listen_for.length ? <div className="dc-manager-full-script-listen"><strong>Услышать:</strong> {block.listen_for.join(' · ')}</div> : null}{linkedObjections.length ? <div className="dc-manager-block-objections"><strong>Если возникнет возражение</strong>{linkedObjections.map((item) => <div key={item.objection_id}><b>{item.objection}</b><span>{item.manager_reply}</span><small>{item.follow_up_question}</small></div>)}</div> : null}<footer><strong>Переход:</strong> {block.transition}</footer></article>
               </li>})}</ol>
-            <section className="dc-manager-full-script-close"><small>Завершить договорённостью</small><strong>{script.closing_agreement}</strong></section>
+            <section className="dc-manager-full-script-close"><small>{isCallScriptContent(script) ? 'Резюме разговора и следующий шаг' : 'Завершить договорённостью'}</small><strong>{script.closing_agreement}</strong></section>
           </main>
           <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
         </div>
