@@ -157,6 +157,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertIn("телефонного звонка", call_prompt)
         self.assertIn("полноценное открытие разговора", call_prompt)
         self.assertIn("spoken_text", call_prompt)
+        self.assertIn("clarifying_question не показывается менеджеру", call_prompt)
         self.assertIn("не отменяет человеческую связку", call_prompt)
         self.assertIn("не заполняй резюме фактами", call_prompt.lower())
         self.assertNotIn("1–3 естественные фразы", call_prompt)

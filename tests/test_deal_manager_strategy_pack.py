@@ -41,6 +41,7 @@ class DealManagerStrategyPackTests(unittest.TestCase):
         )
         self.assertIn("LOCKED_MOVE", prompt)
         self.assertIn("раскрываешь уже выбранный ход", prompt)
+        self.assertIn("Не выноси вопрос в clarifying_question", prompt)
         self.assertIn(ANSWER["client_messages"]["alternative"], prompt)
         self.assertNotIn(ANSWER["client_messages"]["primary"], prompt)
         self.assertNotIn(ANSWER["client_messages"]["pattern_break"], prompt)

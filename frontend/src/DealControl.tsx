@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  confirmDealControlTaskCrmMatch,
   confirmManagerSituation,
-  createDealControlTask,
   fetchDealControl,
-  fetchDealTaskGuidanceJob,
   fetchManagerAssistantWorkspace,
   fetchManagerFullScript,
   fetchManagerFullScriptJob,
@@ -14,14 +11,9 @@ import {
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
   fetchJob,
-  fetchReportMarkdown,
-  recordDealControlTaskEvent,
   recordManagerCommunicationCompleted,
-  reviewDealControlCrmFact,
   saveDealControlScope,
-  saveDealControlTaskOutcome,
   startAnalyze,
-  startDealTaskGuidance,
   startManagerQuickHelp,
   startManagerFullScript,
   startManagerFollowups,
@@ -31,16 +23,12 @@ import {
   updateDealControlDeal,
   updateDealControlBitrixTaskCompletion,
   updateDealControlChecklistItemCompletion,
-  updateDealControlTask,
   type DealControlDashboard,
   type DealControlBitrixTask,
   type DealControlCommunicationsToday,
   type DealControlDeal,
   type DealControlTask,
-  type DealControlTaskOutcome,
   type DealControlRecommendationState,
-  type DealTaskGuidanceContent,
-  type DealTaskGuidanceJob,
   type AuthUser,
   type JobState,
   type ManagerQuickHelpContent,
@@ -52,9 +40,12 @@ import {
   type ManagerQuickHelpStrategyV2Content,
   type ManagerQuickHelpStrategyV3Content,
   type ManagerAssistantMode,
+  type ManagerCallScriptContent,
+  type ManagerFullScriptBlock,
   type ManagerFullScriptJob,
   type ManagerFullScriptMode,
   type ManagerFullScriptWorkspace,
+  type ManagerObjectionHandling,
   type ManagerFollowupsJob,
   type ManagerFollowupsRecord,
   type ManagerAssistantWorkspace,
@@ -89,23 +80,6 @@ type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue
 
 const BITRIX_DEAL_BASE_URL = 'https://obtorg.bitrix24.ru/crm/deal/details'
 const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
-
-const OUTCOME_LABELS: Record<DealControlTaskOutcome['result_status'], string> = {
-  pending: 'Результат пока не получен',
-  achieved: 'Цель задачи достигнута',
-  partial: 'Получен частичный результат',
-  postponed: 'Клиент перенёс решение',
-  refused: 'Получен отказ',
-  not_applicable: 'Задача потеряла актуальность',
-  needs_rop_review: 'Нужна помощь РОПа',
-}
-
-const CONTACT_LABELS: Record<DealControlTaskOutcome['contact_status'], string> = {
-  not_attempted: 'Действия ещё не было',
-  attempt_no_contact: 'Была попытка, клиент не ответил',
-  confirmed_contact: 'Контакт с клиентом состоялся',
-  unknown: 'Контакт не подтверждён',
-}
 
 const RECOMMENDATION_LABELS: Record<DealControlRecommendationState, string> = {
   not_done: 'Не выполнено',
@@ -372,14 +346,6 @@ function dealMatchesTime(deal: DealControlDeal, view: TimeView) {
   return bucket === view
 }
 
-function bitrixTaskStatus(task: DealControlBitrixTask) {
-  if (task.time_bucket === 'overdue') return 'Bitrix: задача просрочена'
-  if (task.time_bucket === 'today') return 'Bitrix: задача на сегодня'
-  if (task.time_bucket === 'tomorrow') return 'Bitrix: задача на завтра'
-  if (task.time_bucket === 'unscheduled') return 'Bitrix: задача без срока'
-  return 'Bitrix: задача открыта'
-}
-
 function bitrixTaskTone(task: DealControlBitrixTask) {
   if (task.completion_state === 'local' || task.completion_state === 'bitrix') return 'done'
   if (task.time_bucket === 'overdue') return 'overdue'
@@ -393,10 +359,6 @@ function taskPlanTitle(view: TimeView) {
   if (view === 'future') return 'Будущие задачи'
   if (view === 'all') return 'Все задачи'
   return 'План на сегодня'
-}
-
-function textOr(value: string | undefined, fallback: string) {
-  return value?.trim() || fallback
 }
 
 function compactTaskText(value: string, maxLength = 120) {
@@ -427,32 +389,6 @@ function bitrixTaskDeadline(task: DealControlBitrixTask) {
   if (task.time_bucket === 'tomorrow') return { label: 'Завтра', value: time }
   if (task.time_bucket === 'overdue') return { label: 'Просрочено', value: `${date}${time ? `, ${time}` : ''}` }
   return { label: date || 'Срок', value: time }
-}
-
-function outcomeValidationMessage(
-  contact: DealControlTaskOutcome['contact_status'],
-  result: DealControlTaskOutcome['result_status'],
-  note: string,
-  nextStep: string,
-  nextAt: string,
-) {
-  const hasNote = Boolean(note.trim())
-  const hasNextStep = Boolean(nextStep.trim() && nextAt)
-  if (contact === 'not_attempted') return 'Сначала выполни действие или зафиксируй попытку контакта.'
-  if (contact === 'unknown' && !hasNote) return 'Опиши, почему контакт с клиентом не подтверждён.'
-  if (contact === 'attempt_no_contact' && (!hasNote || !hasNextStep)) {
-    return 'Для попытки без ответа укажи, что произошло, следующий шаг и его срок.'
-  }
-  if (contact === 'confirmed_contact' && !hasNote) return 'Кратко зафиксируй подтверждённый ответ клиента.'
-  if (result === 'pending' && !hasNextStep) return 'Для незавершённой задачи укажи следующий шаг и его срок.'
-  if (['achieved', 'partial', 'postponed'].includes(result) && !hasNextStep) {
-    return 'Для этого результата укажи следующий шаг и его срок.'
-  }
-  if (['refused', 'not_applicable'].includes(result) && !hasNote) {
-    return 'Укажи причину отказа или потери актуальности.'
-  }
-  if (result === 'needs_rop_review' && !hasNote) return 'Опиши, какая помощь РОПа требуется.'
-  return ''
 }
 
 const MANAGER_SITUATION_DRAFT_PREFIX = 'rop-assistant:manager-situation:'
@@ -537,24 +473,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [initialIds, setInitialIds] = useState('')
   const [managerIds, setManagerIds] = useState('')
   const [pipelineId, setPipelineId] = useState('15')
-  const [taskText, setTaskText] = useState('')
-  const [touchType, setTouchType] = useState('Звонок')
-  const [expectedResult, setExpectedResult] = useState('')
-  const [dueAt, setDueAt] = useState('')
-  const [rescheduleTask, setRescheduleTask] = useState<DealControlTask | null>(null)
-  const [rescheduleAt, setRescheduleAt] = useState('')
-  const [rescheduleReason, setRescheduleReason] = useState('')
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
   const [analyzingDealId, setAnalyzingDealId] = useState('')
   const [analysisConfirmDeal, setAnalysisConfirmDeal] = useState<DealControlDeal | null>(null)
-  const [guidanceJob, setGuidanceJob] = useState<DealTaskGuidanceJob | null>(null)
-  const [guidanceTaskId, setGuidanceTaskId] = useState<number | null>(null)
-  const [outcomeTask, setOutcomeTask] = useState<DealControlTask | null>(null)
-  const [outcomeContact, setOutcomeContact] = useState<DealControlTaskOutcome['contact_status']>('not_attempted')
-  const [outcomeResult, setOutcomeResult] = useState<DealControlTaskOutcome['result_status']>('pending')
-  const [outcomeNote, setOutcomeNote] = useState('')
-  const [outcomeNextStep, setOutcomeNextStep] = useState('')
-  const [outcomeNextAt, setOutcomeNextAt] = useState('')
   const canOpenRopView = user.role === 'admin' || user.role === 'rop'
   const canOpenManagerView = user.role === 'admin' || user.role === 'manager'
 
@@ -652,37 +573,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }, [analysisJobId, analysisJobStatus, analyzingDealId, reload])
 
-  const guidanceJobId = guidanceJob?.job_id
-  const guidanceJobStatus = guidanceJob?.status
-  useEffect(() => {
-    if (!guidanceJobId || !['queued', 'running'].includes(guidanceJobStatus || '')) return
-    let cancelled = false
-    let terminalHandled = false
-    const poll = async () => {
-      try {
-        const next = await fetchDealTaskGuidanceJob(guidanceJobId)
-        if (cancelled) return
-        setGuidanceJob(next)
-        if (!terminalHandled && next.status === 'done') {
-          terminalHandled = true
-          setNotice('AI-подсказка связана с активной задачей и готова для менеджера.')
-          await reload()
-        } else if (!terminalHandled && next.status === 'error') {
-          terminalHandled = true
-          setError(next.error || 'Не удалось подготовить менеджера')
-        }
-      } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
-      }
-    }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 1200)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [guidanceJobId, guidanceJobStatus, reload])
-
   const managers = useMemo(() => {
     const values = new Map<string, string>()
     data?.deals.forEach((deal) => {
@@ -734,7 +624,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }, [filteredDeals, timeView, view])
 
   const selected = visibleDeals.find((deal) => deal.deal_id === selectedId) || null
-  const selectedTask = selected ? currentTaskOf(selected) : null
 
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const bitrixTasks = filteredDeals
@@ -782,18 +671,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))
     if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals.find((deal) => deal.can_open)?.deal_id || '')
   }, [selectedId, visibleDeals])
-
-  useEffect(() => {
-    const guidanceId = selectedTask?.guidance && !selectedTask.guidance.is_stale
-      ? selectedTask.guidance.id
-      : null
-    if (view !== 'manager' || !selectedTask || !guidanceId) return
-    void recordDealControlTaskEvent(
-      selectedTask.id,
-      'guidance_opened',
-      `guidance_opened:${guidanceId}`,
-    ).catch(() => undefined)
-  }, [selectedTask, view])
 
   useEffect(() => {
     if (!notice) return
@@ -864,64 +741,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }
 
-  async function addTask() {
-    if (!selected?.can_edit) return
-    setError('')
-    try {
-      await createDealControlTask(selected.deal_id, {
-        task_text: taskText.trim(),
-        touch_type: touchType,
-        expected_result: expectedResult.trim() || null,
-        due_at: dueAt,
-      })
-      setTaskText('')
-      setExpectedResult('')
-      setDueAt('')
-      setNotice('Поручение сохранено локально. Менеджеру нужно отразить его в Bitrix вручную.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
-  async function adoptBitrixTask(deal: DealControlDeal, bitrixTask: DealControlBitrixTask) {
-    if (!deal.can_edit) return
-    const expected = 'Зафиксировать подтверждённый результат и следующий шаг'
-    if (!bitrixTask.deadline) {
-      setSelectedId(deal.deal_id)
-      setTaskText(bitrixTask.subject)
-      setTouchType('Задача Bitrix')
-      setExpectedResult(expected)
-      setDueAt('')
-      setNotice('Поручение подготовлено из задачи Bitrix. Укажите срок и сохраните его.')
-      return
-    }
-    setError('')
-    try {
-      await createDealControlTask(deal.deal_id, {
-        task_text: bitrixTask.subject,
-        touch_type: 'Задача Bitrix',
-        expected_result: expected,
-        due_at: bitrixTask.deadline,
-      })
-      setNotice('Задача Bitrix взята под контроль РОПа без создания дубликата в CRM.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
-  async function patchTask(task: DealControlTask, patch: Parameters<typeof updateDealControlTask>[1]) {
-    if (!selected?.can_edit) return
-    setError('')
-    try {
-      await updateDealControlTask(task.id, patch)
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
   async function toggleBitrixCompletion(deal: DealControlDeal, task: DealControlBitrixTask) {
     if (!deal.can_edit) return
     setError('')
@@ -951,31 +770,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }
 
-  async function confirmMatch(task: DealControlTask) {
-    if (!selected?.can_edit) return
-    try {
-      await confirmDealControlTaskCrmMatch(task.id)
-      setNotice('Совпадение с задачей Bitrix подтверждено. Бизнес-результат по-прежнему отмечается отдельно.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
-  async function reviewCrmFact(task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') {
-    if (!selected?.can_edit) return
-    setError('')
-    try {
-      await reviewDealControlCrmFact(task.id, factId, { review_status: reviewStatus })
-      setNotice(reviewStatus === 'confirmed'
-        ? 'CRM-факт подтверждён как относящийся к задаче. Контакт с клиентом по-прежнему учитывается отдельно.'
-        : 'CRM-факт исключён из результата этой задачи.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
   async function copy(text: string, label: string) {
     if (!text.trim()) {
       setNotice(`${label} пока не сформирован: нужен сохранённый анализ сделки.`)
@@ -983,16 +777,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
     try {
       await navigator.clipboard.writeText(text)
-      const guidanceId = selectedTask?.guidance && !selectedTask.guidance.is_stale
-        ? selectedTask.guidance.id
-        : null
-      if (view === 'manager' && selectedTask && guidanceId) {
-        void recordDealControlTaskEvent(
-          selectedTask.id,
-          'guidance_copied',
-          `guidance_copied:${guidanceId}`,
-        ).catch(() => undefined)
-      }
       setNotice(`${label} скопирован. В Bitrix его нужно перенести вручную.`)
     } catch {
       setError('Не удалось скопировать текст. Разрешите браузеру доступ к буферу обмена.')
@@ -1038,85 +822,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     await runAnalyzeDeal(deal)
   }
 
-  async function prepareManager(task: DealControlTask) {
-    if (!selected?.can_run_paid_ai) {
-      setError('AI-действие недоступно для этой роли.')
-      return
-    }
-    if (guidanceJob && ['queued', 'running'].includes(guidanceJob.status)) return
-    setError('')
-    setNotice('')
-    setGuidanceTaskId(task.id)
-    try {
-      const started = await startDealTaskGuidance(task.id)
-      setGuidanceJob(started)
-      setNotice('Готовим менеджера именно к текущей задаче РОПа.')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
-  function beginReschedule(task: DealControlTask) {
-    setRescheduleTask(task)
-    setRescheduleAt(task.due_at.slice(0, 16))
-    setRescheduleReason('')
-  }
-
-  async function applyReschedule() {
-    if (!rescheduleTask || !rescheduleAt) return
-    await patchTask(rescheduleTask, {
-      due_at: rescheduleAt,
-      reschedule_reason: rescheduleReason.trim() || null,
-    })
-    setRescheduleTask(null)
-    setRescheduleAt('')
-    setRescheduleReason('')
-    setNotice('Срок перенесён локально. Обновите соответствующую задачу в Bitrix вручную.')
-  }
-
-  function beginOutcome(task: DealControlTask) {
-    const latest = task.latest_outcome
-    setOutcomeTask(task)
-    setOutcomeContact(latest?.contact_status || 'not_attempted')
-    setOutcomeResult(latest?.result_status || 'pending')
-    setOutcomeNote(latest?.result_note || '')
-    setOutcomeNextStep(latest?.next_step_text || '')
-    setOutcomeNextAt((latest?.next_step_at || '').slice(0, 16))
-  }
-
-  async function applyOutcome() {
-    if (!outcomeTask) return
-    const validationError = outcomeValidationMessage(
-      outcomeContact,
-      outcomeResult,
-      outcomeNote,
-      outcomeNextStep,
-      outcomeNextAt,
-    )
-    if (validationError) {
-      setError(validationError)
-      return
-    }
-    setError('')
-    try {
-      await saveDealControlTaskOutcome(outcomeTask.id, {
-        contact_status: outcomeContact,
-        result_status: outcomeResult,
-        result_note: outcomeNote.trim() || null,
-        next_step_text: outcomeNextStep.trim() || null,
-        next_step_at: outcomeNextAt || null,
-        evidence_kind: outcomeContact === 'confirmed_contact'
-          ? view === 'manager' ? 'manager_confirmation' : 'rop_confirmation'
-          : null,
-      })
-      setOutcomeTask(null)
-      setNotice('Результат сохранён отдельно от отметки Bitrix. РОП увидит контакт, итог и следующий шаг.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
   if (loading && !data) {
     return <main className="dc-shell dc-loading"><span className="dc-spinner" />Загружается контроль сделок…</main>
   }
@@ -1140,13 +845,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }
 
   const copyForView = VIEW_COPY[view]
-  const outcomeError = outcomeValidationMessage(
-    outcomeContact,
-    outcomeResult,
-    outcomeNote,
-    outcomeNextStep,
-    outcomeNextAt,
-  )
 
   return <main className={`dc-shell ${menuOpen ? 'menu-open' : ''}`}>
     <aside className="dc-sidebar">
@@ -1225,7 +923,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
             <span>{view === 'dashboard' ? 'Сначала критичные ›' : 'Фокус дня ›'}</span>
           </div>
           {view === 'dashboard'
-            ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} onSaveFields={saveFields} onReschedule={beginReschedule} />
+            ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} onSaveFields={saveFields} />
             : <TaskTable view={view} deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} />
           }
         </section>
@@ -1234,58 +932,18 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
         <DealDetail
           view={view}
+          userRole={user.role}
           deal={selected}
           onReload={reload}
-          onConfirmMatch={confirmMatch}
-          onReviewFact={reviewCrmFact}
-          onReschedule={beginReschedule}
-          onPrepareManager={prepareManager}
-          onOutcome={beginOutcome}
           onCopy={copy}
-          taskText={taskText}
-          setTaskText={setTaskText}
-          touchType={touchType}
-          setTouchType={setTouchType}
-          expectedResult={expectedResult}
-          setExpectedResult={setExpectedResult}
-          dueAt={dueAt}
-          setDueAt={setDueAt}
-          onAddTask={addTask}
-          onAdoptBitrixTask={adoptBitrixTask}
           onToggleBitrixCompletion={toggleBitrixCompletion}
           onToggleChecklistItem={toggleChecklistItem}
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
-          guidanceJob={guidanceJob}
-          guidanceTaskId={guidanceTaskId}
         />
       </div>
     </section>
-
-    {rescheduleTask ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setRescheduleTask(null) }}>
-      <section className="dc-modal">
-        <h2>Перенести срок задачи</h2>
-        <p>{compactTaskText(rescheduleTask.task_text)}</p>
-        <label>Новая дата и время<input type="datetime-local" value={rescheduleAt} onChange={(event) => setRescheduleAt(event.target.value)} /></label>
-        {view === 'rop' ? <label>Причина переноса<textarea value={rescheduleReason} onChange={(event) => setRescheduleReason(event.target.value)} placeholder="Почему РОП меняет согласованный срок" /></label> : null}
-        <div><button className="dc-button" onClick={() => setRescheduleTask(null)}>Отмена</button><button className="dc-button primary" disabled={!rescheduleAt || (view === 'rop' && !rescheduleReason.trim())} onClick={() => void applyReschedule()}>Перенести</button></div>
-      </section>
-    </div> : null}
-
-    {outcomeTask ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setOutcomeTask(null) }}>
-      <section className="dc-modal dc-outcome-modal">
-        <h2>{view === 'manager' ? 'Зафиксировать результат' : 'Скорректировать результат'}</h2>
-        <p>{compactTaskText(outcomeTask.task_text)}</p>
-        <label>Контакт с клиентом<select value={outcomeContact} onChange={(event) => setOutcomeContact(event.target.value as DealControlTaskOutcome['contact_status'])}>{Object.entries(CONTACT_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-        <label>Результат задачи<select value={outcomeResult} onChange={(event) => setOutcomeResult(event.target.value as DealControlTaskOutcome['result_status'])}>{Object.entries(OUTCOME_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-        <label>Что произошло<textarea value={outcomeNote} onChange={(event) => setOutcomeNote(event.target.value)} placeholder="Коротко зафиксируй ответ клиента или причину отсутствия результата" /></label>
-        <label>Следующий шаг<input value={outcomeNextStep} onChange={(event) => setOutcomeNextStep(event.target.value)} placeholder="Например: отправить уточнённый расчёт" /></label>
-        <label>Срок следующего шага<input type="datetime-local" value={outcomeNextAt} onChange={(event) => setOutcomeNextAt(event.target.value)} /></label>
-        <small className={outcomeError ? 'dc-form-error' : ''}>{outcomeError || 'Контакт, результат и следующий шаг сохраняются отдельно от отметки задачи в Bitrix.'}</small>
-        <div><button className="dc-button" onClick={() => setOutcomeTask(null)}>Отмена</button><button className="dc-button primary" disabled={Boolean(outcomeError)} onClick={() => void applyOutcome()}>{view === 'manager' ? 'Сохранить результат' : 'Сохранить корректировку'}</button></div>
-      </section>
-    </div> : null}
 
     {analysisConfirmDeal ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setAnalysisConfirmDeal(null) }}>
       <section className="dc-modal dc-analysis-confirm">
@@ -1382,7 +1040,6 @@ function DealTable(props: {
     deal: DealControlDeal,
     patch: Partial<Pick<DealControlDeal, 'probability' | 'expected_payment_period' | 'next_control_at'>>,
   ) => Promise<void>
-  onReschedule: (task: DealControlTask) => void
 }) {
   const monthOptions = paymentMonthOptions()
   return <div className="dc-table-wrap">
@@ -1458,35 +1115,6 @@ function ControlTimeChip({ task, bitrixTask }: {
   return <span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span>
 }
 
-function ControlSyncState({ task, bitrixTask, compact = false }: {
-  task: DealControlTask | null
-  bitrixTask: DealControlBitrixTask | null
-  compact?: boolean
-}) {
-  const bitrixLabel = task?.crm_execution_status === 'match_review'
-    ? 'Bitrix: задача найдена — подтвердить связь'
-    : task?.crm_execution_status === 'crm_closed'
-      ? 'Bitrix: задача закрыта'
-      : task?.crm_execution_status === 'crm_open'
-          ? 'Bitrix: задача открыта'
-          : task && bitrixTask
-            ? 'Bitrix: открытая задача есть — не связана'
-            : bitrixTask
-              ? bitrixTaskStatus(bitrixTask)
-          : 'Bitrix: задача не найдена'
-  const bitrixTone = task?.crm_execution_status === 'match_review'
-    ? 'warn'
-    : task?.crm_execution_status === 'not_reflected' && bitrixTask
-      ? 'warn'
-      : bitrixTask || task?.crm_execution_status === 'crm_open' || task?.crm_execution_status === 'crm_closed'
-      ? 'ok'
-      : 'missing'
-  return <div className={`dc-sync-state ${compact ? 'compact' : ''}`}>
-    <span className={task ? 'ok' : 'muted'}>{task ? '✓ Поручение РОПа: сохранено' : 'Поручение РОПа: не добавлено'}</span>
-    <span className={bitrixTone}>{bitrixLabel}</span>
-  </div>
-}
-
 function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunicationsToday | null }) {
   const target = 3
   const available = Boolean(summary?.available)
@@ -1500,36 +1128,16 @@ function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunica
 
 function DealDetail(props: {
   view: DealControlView
+  userRole: AuthUser['role']
   deal: DealControlDeal | null
   onReload: () => Promise<void>
-  onConfirmMatch: (task: DealControlTask) => Promise<void>
-  onReviewFact: (task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') => Promise<void>
-  onReschedule: (task: DealControlTask) => void
-  onPrepareManager: (task: DealControlTask) => Promise<void>
-  onOutcome: (task: DealControlTask) => void
   onCopy: (text: string, label: string) => Promise<void>
-  taskText: string
-  setTaskText: (value: string) => void
-  touchType: string
-  setTouchType: (value: string) => void
-  expectedResult: string
-  setExpectedResult: (value: string) => void
-  dueAt: string
-  setDueAt: (value: string) => void
-  onAddTask: () => Promise<void>
-  onAdoptBitrixTask: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   analysisJob: JobState | null
   analyzingDealId: string
   onAnalyze: (deal: DealControlDeal) => Promise<void>
-  guidanceJob: DealTaskGuidanceJob | null
-  guidanceTaskId: number | null
 }) {
-  const [showAnalysisMarkdown, setShowAnalysisMarkdown] = useState(false)
-  const [analysisMarkdown, setAnalysisMarkdown] = useState<string | null>(null)
-  const [analysisMarkdownError, setAnalysisMarkdownError] = useState('')
-  const [analysisMarkdownLoading, setAnalysisMarkdownLoading] = useState(false)
   const [situationModalOpen, setSituationModalOpen] = useState(false)
   const [situationContext, setSituationContext] = useState('')
   const [situationError, setSituationError] = useState('')
@@ -1544,15 +1152,10 @@ function DealDetail(props: {
   const [freshQuickHelpId, setFreshQuickHelpId] = useState<number | null>(null)
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
-  const detailView = props.view
+  // На дашборде правая панель следует роли: менеджер всегда видит свой экран,
+  // admin/rop — экран РОПа. Вкладка «Мои задачи» по-прежнему открывает экран менеджера для admin.
+  const managerScreen = props.userRole === 'manager' || props.view === 'manager'
   const reloadDetail = props.onReload
-
-  useEffect(() => {
-    setShowAnalysisMarkdown(false)
-    setAnalysisMarkdown(null)
-    setAnalysisMarkdownError('')
-    setAnalysisMarkdownLoading(false)
-  }, [props.deal?.deal_id, activeReportId])
 
   useEffect(() => {
     setSituationModalOpen(false)
@@ -1595,18 +1198,18 @@ function DealDetail(props: {
   }, [activeDealId])
 
   useEffect(() => {
-    if (detailView !== 'manager' || !props.deal || !managerSituationIsConfirmed(managerSituationOf(props.deal))) return
+    if (!managerScreen || !props.deal || !managerSituationIsConfirmed(managerSituationOf(props.deal))) return
     let cancelled = false
     void fetchManagerAssistantWorkspace(activeDealId)
       .then((workspace) => { if (!cancelled) setAssistantWorkspace(workspace) })
       .catch(() => { /* the main situation card already explains why help is unavailable */ })
     return () => { cancelled = true }
-  }, [activeDealId, activeReportId, detailView, props.deal])
+  }, [activeDealId, activeReportId, managerScreen, props.deal])
 
   const situationJobId = situationJob?.job_id
   const situationJobStatus = situationJob?.status
   useEffect(() => {
-    if (detailView !== 'manager' || !situationJobId || !['queued', 'running'].includes(situationJobStatus || '')) return
+    if (!managerScreen || !situationJobId || !['queued', 'running'].includes(situationJobStatus || '')) return
     let cancelled = false
     let terminalHandled = false
     const poll = async () => {
@@ -1635,12 +1238,12 @@ function DealDetail(props: {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeDealId, detailView, reloadDetail, situationJobId, situationJobStatus])
+  }, [activeDealId, managerScreen, reloadDetail, situationJobId, situationJobStatus])
 
   const quickHelpJobId = quickHelpJob?.job_id
   const quickHelpJobStatus = quickHelpJob?.status
   useEffect(() => {
-    if (detailView !== 'manager' || !quickHelpJobId || !['queued', 'running'].includes(quickHelpJobStatus || '')) return
+    if (!managerScreen || !quickHelpJobId || !['queued', 'running'].includes(quickHelpJobStatus || '')) return
     let cancelled = false
     let terminalHandled = false
     const poll = async () => {
@@ -1674,7 +1277,7 @@ function DealDetail(props: {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeDealId, detailView, loadAssistantWorkspace, quickHelpJobId, quickHelpJobStatus])
+  }, [activeDealId, loadAssistantWorkspace, managerScreen, quickHelpJobId, quickHelpJobStatus])
 
   async function confirmSituation() {
     if (!props.deal) return
@@ -1760,29 +1363,6 @@ function DealDetail(props: {
     }
   }
 
-  async function toggleAnalysisMarkdown() {
-    if (showAnalysisMarkdown) {
-      setShowAnalysisMarkdown(false)
-      return
-    }
-    if (!activeReportId) return
-    if (analysisMarkdown) {
-      setShowAnalysisMarkdown(true)
-      return
-    }
-    setAnalysisMarkdownLoading(true)
-    setAnalysisMarkdownError('')
-    try {
-      const response = await fetchReportMarkdown(activeReportId)
-      setAnalysisMarkdown(response.markdown)
-      setShowAnalysisMarkdown(true)
-    } catch (error) {
-      setAnalysisMarkdownError(error instanceof Error ? error.message : 'Markdown-отчёт недоступен')
-    } finally {
-      setAnalysisMarkdownLoading(false)
-    }
-  }
-
   async function transcribeVoice(audio: Blob) {
     if (!props.deal) throw new Error('Сделка не выбрана')
     const response = await transcribeManagerVoice(props.deal.deal_id, audio, true)
@@ -1792,10 +1372,8 @@ function DealDetail(props: {
 
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
-  const task = currentTaskOf(deal)
   const aiRecommendation = neuroRopTaskOf(deal)
   const coaching = deal.coaching
-  const managerView = props.view === 'manager'
   const hasAnalysis = Boolean(coaching.report_id)
   const managerSituation = managerSituationOf(deal)
   const analysisBusy = Boolean(props.analysisJob && ['queued', 'running'].includes(props.analysisJob.status))
@@ -1857,12 +1435,9 @@ function DealDetail(props: {
         {hasAnalysis ? analysisReady : analysisMissing}
       </div>
     </header>
-    {!managerView && analysisRunning && props.analysisJob
-      ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} />
-      : null}
-    {managerView && analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
+    {analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
 
-    {managerView ? <ManagerDealScreen
+    {managerScreen ? <ManagerDealScreen
       deal={deal}
       situation={managerSituation}
       hasAnalysis={hasAnalysis}
@@ -1892,65 +1467,11 @@ function DealDetail(props: {
       onTranscribe={transcribeVoice}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
       onToggleChecklistItem={props.onToggleChecklistItem}
-    /> : props.view === 'rop' ? <RopDealScreen
+    /> : <RopDealScreen
       deal={deal}
       aiRecommendation={aiRecommendation}
       hasAnalysis={hasAnalysis}
-    /> : <>
-    {hasAnalysis ? <DealSituationCard deal={deal} /> : null}
-
-    {hasAnalysis ? <CurrentTask
-      view={props.view}
-      deal={deal}
-      task={task}
-      onConfirmMatch={props.onConfirmMatch}
-      onReviewFact={props.onReviewFact}
-      onReschedule={props.onReschedule}
-      onPrepareManager={props.onPrepareManager}
-      onOutcome={props.onOutcome}
-      guidanceJob={props.guidanceJob}
-      guidanceTaskId={props.guidanceTaskId}
-      hasAnalysis={hasAnalysis}
-      onAdoptBitrixTask={props.onAdoptBitrixTask}
-      onToggleBitrixCompletion={props.onToggleBitrixCompletion}
-    /> : null}
-
-    {hasAnalysis
-      ? <RopGuidance deal={deal} task={task} onCopy={props.onCopy} />
-      : null}
-
-    {hasAnalysis && props.view !== 'manager' && deal.current_task ? <TaskEditor
-      taskText={props.taskText}
-      setTaskText={props.setTaskText}
-      touchType={props.touchType}
-      setTouchType={props.setTouchType}
-      expectedResult={props.expectedResult}
-      setExpectedResult={props.setExpectedResult}
-      dueAt={props.dueAt}
-      setDueAt={props.setDueAt}
-      hint={coaching.rop_task_hint}
-      expectedHint={coaching.expected_crm_update}
-      onAddTask={props.onAddTask}
-    /> : null}
-
-    {hasAnalysis ? <section className="dc-analysis-material">
-      <button
-        className="dc-analysis-material-link"
-        disabled={analysisMarkdownLoading}
-        onClick={() => void toggleAnalysisMarkdown()}
-      >
-        {analysisMarkdownLoading
-          ? 'Открываем материал…'
-          : showAnalysisMarkdown
-            ? 'Скрыть Markdown анализа'
-            : 'Открыть Markdown анализа'}
-      </button>
-      {analysisMarkdownError ? <small>{analysisMarkdownError}</small> : null}
-      {showAnalysisMarkdown && analysisMarkdown
-        ? <pre>{analysisMarkdown}</pre>
-        : null}
-    </section> : null}
-    </>}
+    />}
   </aside>
 }
 
@@ -2172,62 +1693,6 @@ function RopCurrentSummary({ deal, aiRecommendation }: { deal: DealControlDeal; 
   </section>
 }
 
-function DealSituationCard({ deal }: { deal: DealControlDeal }) {
-  const [focusExpanded, setFocusExpanded] = useState(false)
-  const focusText = deal.coaching.what_to_check_now?.trim() || ''
-  const canCollapseFocus = focusText.length > 115
-
-  useEffect(() => {
-    setFocusExpanded(false)
-  }, [deal.deal_id, focusText])
-
-  return <section className="dc-overview-situation">
-    <header className="dc-manager-situation-head">
-      <span className="dc-manager-situation-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none">
-          <path d="M4 15.5h3l2.1-6 3.4 10 2.2-7H20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" opacity=".42" />
-        </svg>
-      </span>
-      <div className="dc-manager-situation-heading">
-        <h3>Текущая ситуация</h3>
-      </div>
-      <span className="dc-manager-situation-status"><i />AI-анализ</span>
-    </header>
-
-    <div className="dc-manager-situation-body">
-      <p className="dc-manager-situation-copy">{deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
-      {focusText ? <div className="dc-manager-situation-focus">
-        <span className="dc-manager-situation-focus-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-            <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </span>
-        <div>
-          <strong>Что проверить сейчас</strong>
-          <p className={`dc-manager-situation-focus-text ${canCollapseFocus && !focusExpanded ? 'collapsed' : ''}`}>{focusText}</p>
-          {canCollapseFocus ? <button
-            className={`dc-manager-situation-focus-toggle ${focusExpanded ? 'open' : ''}`}
-            type="button"
-            onClick={() => setFocusExpanded((value) => !value)}
-          >
-            {focusExpanded ? 'Скрыть' : 'Показать полностью'}
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button> : null}
-        </div>
-      </div> : null}
-    </div>
-
-    <footer className="dc-overview-situation-focus">
-      <small>Фокус РОПа</small>
-      <strong>{textOr(deal.coaching.rop_focus, 'Не сформирован')}</strong>
-    </footer>
-  </section>
-}
-
 function ManagerSituationActions(props: {
   deal: DealControlDeal
   situation: ManagerSituationState
@@ -2398,7 +1863,10 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, on
     <div className="dc-manager-answer-summary">
       <span>◎</span>
       <div>
-        <h4>Понял ситуацию</h4>
+        <div className="dc-manager-answer-title">
+          <h4>Понял ситуацию</h4>
+          {entry.created_at ? <time dateTime={entry.created_at}>{dateTime(entry.created_at)}</time> : null}
+        </div>
         <p>
           <span>{reveal.typedSummary}{reveal.animate && !reveal.summaryReady ? <i className="dc-manager-answer-caret" aria-hidden="true" /> : null}</span>
           {reveal.summaryReady && content.next_action ? <> <strong>{content.next_action}</strong></> : null}
@@ -2558,6 +2026,170 @@ function ManagerStrategyQuickHelpVariants({ content, onCopy, showMessage = true,
   </div>
 }
 
+function callBlockSpeech(block: ManagerFullScriptBlock) {
+  // clarifying_question не показываем: модель не слышит живой звонок, второй пузырь только путает.
+  if ('spoken_text' in block) return block.spoken_text
+  return block.suggested_phrases.filter(Boolean).join('\n')
+}
+
+function CallSpeechIcon() {
+  return <span className="dc-call-script-speech-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24"><path d="M5 6h14v10H9l-4 3V6Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+  </span>
+}
+
+function CallScriptModal(props: {
+  deal: DealControlDeal
+  variantNumber: string
+  discLabel: string
+  script: ManagerCallScriptContent | null
+  objections: ManagerObjectionHandling['items']
+  copyText: string
+  job: ManagerFullScriptJob | null
+  error: string
+  failed: boolean
+  onCopy: (text: string, label: string) => Promise<void>
+  onClose: () => void
+  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+}) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [objectionsOpen, setObjectionsOpen] = useState(false)
+  const [activeObjection, setActiveObjection] = useState(0)
+  const [activeStep, setActiveStep] = useState(0)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const script = props.script
+  const objections = props.objections
+  const selectedObjection = objections[activeObjection] || objections[0] || null
+
+  useEffect(() => {
+    setCollapsed({})
+    setObjectionsOpen(false)
+    setActiveObjection(0)
+    setActiveStep(0)
+  }, [script?.conversation_goal, script?.blocks.length])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root) return
+    const onScroll = () => {
+      const marker = root.getBoundingClientRect().top + 120
+      const stages = [...root.querySelectorAll('[data-call-step]')]
+      let current = 0
+      stages.forEach((node, index) => {
+        if (node.getBoundingClientRect().top <= marker) current = index
+      })
+      setActiveStep(current)
+    }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => root.removeEventListener('scroll', onScroll)
+  }, [script])
+
+  function toggleStage(id: string) {
+    setCollapsed((current) => ({ ...current, [id]: !current[id] }))
+  }
+
+  return <section className="dc-manager-full-script-modal dc-call-script" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
+    <header className="dc-call-script-header">
+      <div className="dc-call-script-heading">
+        <h2 id="manager-full-script-title">Сценарий звонка</h2>
+        <p className="dc-call-script-deal">Сделка #{props.deal.deal_id} · вариант {props.variantNumber}{props.discLabel ? <> · {props.discLabel}</> : null}</p>
+      </div>
+      {script?.conversation_goal ? <div className="dc-call-script-goal" title={script.conversation_goal}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/></svg>
+        <b>Цель:</b><span>{script.conversation_goal}</span>
+      </div> : null}
+      <div className="dc-manager-full-script-header-actions">
+        <button className="dc-button dc-manager-full-script-copy" disabled={!props.copyText} onClick={() => void props.onCopy(props.copyText, 'Сценарий звонка')}>Скопировать</button>
+        <button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button>
+      </div>
+    </header>
+    {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
+    {!script && props.failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div>
+      : !script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div>
+      : <div className="dc-call-script-layout">
+        <section className="dc-call-script-pane">
+          <div className="dc-call-script-scroll" ref={scrollRef}>
+            {script.blocks.map((block, index) => {
+              const speech = callBlockSpeech(block)
+              const isCollapsed = Boolean(collapsed[block.block_id])
+              const extraOpen = Boolean(block.objective?.trim() || block.listen_for.length || block.transition?.trim())
+              return <article className={`dc-call-script-stage ${index === activeStep ? 'active' : ''} ${isCollapsed ? 'collapsed' : ''}`} data-call-step={index} key={block.block_id}>
+                <div className="dc-call-script-stage-number">{index + 1}</div>
+                <div className="dc-call-script-stage-head">
+                  <h3>{block.title}</h3>
+                  <button type="button" aria-label={isCollapsed ? 'Развернуть шаг' : 'Свернуть шаг'} onClick={() => toggleStage(block.block_id)}>{isCollapsed ? '⌄' : '⌃'}</button>
+                </div>
+                {isCollapsed ? null : <div className="dc-call-script-stage-body">
+                  {speech ? <div className="dc-call-script-speech"><CallSpeechIcon />{speech}</div> : null}
+                  {extraOpen ? <details className="dc-call-script-more">
+                    <summary>Подробнее</summary>
+                    {block.objective?.trim() ? <p><b>Цель шага.</b> {block.objective}</p> : null}
+                    {block.listen_for.length ? <p><b>Услышать:</b> {block.listen_for.join(' · ')}</p> : null}
+                    {block.transition?.trim() ? <p><b>Переход:</b> {block.transition}</p> : null}
+                  </details> : null}
+                </div>}
+              </article>
+            })}
+            {script.closing_agreement?.trim() ? <article className={`dc-call-script-stage ${activeStep === script.blocks.length ? 'active' : ''} ${collapsed.__close ? 'collapsed' : ''}`} data-call-step={script.blocks.length}>
+              <div className="dc-call-script-stage-number">{script.blocks.length + 1}</div>
+              <div className="dc-call-script-stage-head">
+                <h3>Резюме и следующий шаг</h3>
+                <button type="button" aria-label={collapsed.__close ? 'Развернуть шаг' : 'Свернуть шаг'} onClick={() => toggleStage('__close')}>{collapsed.__close ? '⌄' : '⌃'}</button>
+              </div>
+              {collapsed.__close ? null : <div className="dc-call-script-stage-body">
+                <div className="dc-call-script-speech"><CallSpeechIcon />{script.closing_agreement}</div>
+              </div>}
+            </article> : null}
+          </div>
+          {objections.length ? <>
+            <button
+              type="button"
+              className={`dc-call-script-objections-trigger ${objectionsOpen ? 'open' : ''}`}
+              aria-expanded={objectionsOpen}
+              onClick={() => setObjectionsOpen((value) => !value)}
+            >
+              <span aria-hidden="true">💬</span>
+              <span>Возражения и отработка</span>
+              <span className="count">{objections.length}</span>
+              <span className="chev" aria-hidden="true">⌃</span>
+            </button>
+            <section className={`dc-call-script-drawer ${objectionsOpen ? 'open' : ''}`} aria-hidden={!objectionsOpen}>
+              <div className="dc-call-script-drawer-head">
+                <h3>Возражения и отработка</h3>
+                <button type="button" onClick={() => setObjectionsOpen(false)} aria-label="Свернуть возражения">×</button>
+              </div>
+              <div className="dc-call-script-ob-tabs" role="tablist" aria-label="Возражения">
+                {objections.map((item, index) => <button
+                  key={item.objection_id || `${item.objection}-${index}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={index === activeObjection}
+                  className={index === activeObjection ? 'active' : ''}
+                  onClick={() => setActiveObjection(index)}
+                >{compactTaskText(item.objection, 36)}</button>)}
+              </div>
+              {selectedObjection ? <div className="dc-call-script-ob-panel">
+                <p className="dc-call-script-ob-caption">{selectedObjection.objection}</p>
+                <div className="dc-call-script-ob-grid">
+                  <section className="answer-card"><div className="ob-label"><span className="dot">●</span>Что сказать</div><p>{selectedObjection.manager_reply}</p></section>
+                  <section className="why-card"><div className="ob-label"><span className="dot">✓</span>Зачем</div><p>{selectedObjection.next_step_goal}</p></section>
+                  <section className="avoid-card"><div className="ob-label"><span className="dot">×</span>Не делать</div><p>{selectedObjection.what_not_to_do || 'Не обещать то, что нельзя подтвердить фактами сделки.'}</p></section>
+                </div>
+                {selectedObjection.follow_up_question?.trim() ? <details className="dc-call-script-ob-extra">
+                  <summary>Уточняющий вопрос</summary>
+                  <p>{selectedObjection.follow_up_question}</p>
+                </details> : null}
+              </div> : null}
+            </section>
+          </> : null}
+        </section>
+        <aside className="dc-call-script-aside">
+          <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} variant="panel" />
+        </aside>
+      </div>}
+  </section>
+}
+
 function ManagerFullScriptModal(props: {
   deal: DealControlDeal
   selectedStrategy: ManagerQuickHelpStrategy
@@ -2593,10 +2225,7 @@ function ManagerFullScriptModal(props: {
           `${index + 1}. ${block.title}`,
           block.objective,
           ...('spoken_text' in block
-            ? [
-                block.spoken_text,
-                block.clarifying_question?.trim() ? `Если нужно уточнить: ${block.clarifying_question}` : '',
-              ]
+            ? [block.spoken_text]
             : block.suggested_phrases.map((phrase) => `— ${phrase}`)),
           block.listen_for.length ? `Услышать: ${block.listen_for.join(' · ')}` : '',
           `Переход: ${block.transition}`,
@@ -2616,6 +2245,24 @@ function ManagerFullScriptModal(props: {
         script.closing,
       ].join('\n\n')
     : ''
+  if (props.scriptMode === 'call') {
+    return createPortal(<div className="dc-manager-full-script-layer">
+      <CallScriptModal
+        deal={props.deal}
+        variantNumber={variantNumber}
+        discLabel={discLabel}
+        script={script && 'script_contract' in script && isCallScriptContent(script) ? script : null}
+        objections={objections}
+        copyText={copyText}
+        job={props.job}
+        error={props.error}
+        failed={failed}
+        onCopy={props.onCopy}
+        onClose={props.onClose}
+        onToggleChecklistItem={props.onToggleChecklistItem}
+      />
+    </div>, document.body)
+  }
   return createPortal(<div className="dc-manager-full-script-layer">
     <section className="dc-manager-full-script-modal" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
       <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}{props.workspace?.disc_profile ? <> · <span className="dc-manager-disc">{discLabel}</span></> : null}</small><h2 id="manager-full-script-title">{title}</h2></div><div className="dc-manager-full-script-header-actions"><button className="dc-button dc-manager-full-script-copy" disabled={!copyText} onClick={() => void props.onCopy(copyText, title)}>Скопировать</button><button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button></div></header>
@@ -2642,10 +2289,11 @@ function ManagerFullScriptModal(props: {
   </div>, document.body)
 }
 
-function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false }: {
+function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false, variant = 'compact' }: {
   deal: DealControlDeal
   onToggle: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   defaultOpen?: boolean
+  variant?: 'compact' | 'panel'
 }) {
   const [pendingItemId, setPendingItemId] = useState<string | null>(null)
   const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
@@ -2670,6 +2318,28 @@ function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false }: {
     }
   }
 
+  const items = checklist.items.length ? <ul>{checklist.items.map((item) => {
+    const label = changeLabel(item.change_kind)
+    return <li className={item.completed ? 'done' : ''} key={item.id}>
+      <button
+        type="button"
+        disabled={Boolean(pendingItemId)}
+        aria-busy={pendingItemId === item.id}
+        aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
+        onClick={() => void toggle(item.id, !item.completed)}
+      >{pendingItemId === item.id ? '…' : item.completed ? '✓' : ''}</button>
+      <span>{item.text}{label ? <small className={`dc-checklist-origin ${item.change_kind}`}>{label}</small> : null}</span>
+    </li>
+  })}</ul> : <p>Чек-лист появится после успешного анализа сделки.</p>
+
+  if (variant === 'panel') {
+    return <section className="dc-call-script-check-panel">
+      <h2>Чек-лист на сегодня</h2>
+      <p className="dc-call-script-check-count"><b>{checklist.completed} из {checklist.total}</b> выполнено</p>
+      <div className="dc-call-script-check-list">{items}</div>
+    </section>
+  }
+
   return <details className="dc-manager-assistant-checklist" open={defaultOpen || undefined}>
     <summary>
       <span className="dc-manager-assistant-checklist-icon">✓</span>
@@ -2684,19 +2354,7 @@ function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false }: {
       </span>
     </summary>
     <div className="dc-manager-assistant-checklist-body">
-      {checklist.items.length ? <ul>{checklist.items.map((item) => {
-        const label = changeLabel(item.change_kind)
-        return <li className={item.completed ? 'done' : ''} key={item.id}>
-          <button
-            type="button"
-            disabled={Boolean(pendingItemId)}
-            aria-busy={pendingItemId === item.id}
-            aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
-            onClick={() => void toggle(item.id, !item.completed)}
-          >{pendingItemId === item.id ? '…' : item.completed ? '✓' : ''}</button>
-          <span>{item.text}{label ? <small className={`dc-checklist-origin ${item.change_kind}`}>{label}</small> : null}</span>
-        </li>
-      })}</ul> : <p>Чек-лист появится после успешного анализа сделки.</p>}
+      {items}
     </div>
   </details>
 }
@@ -2741,6 +2399,10 @@ function ManagerAssistantModal(props: {
         )
       : null)
   const viewingLatest = safeHistoryOffset === 0
+  const generatedAt = visibleEntry?.created_at
+    || visibleTurn?.byMode.push?.created_at
+    || visibleTurn?.byMode.reanimator?.created_at
+    || ''
   const freshEntryId = props.job?.saved_by_mode?.[assistantMode] ?? props.freshEntryId
   const animateAnswer = Boolean(visibleEntry && shouldAnimateQuickHelpAnswer({
     entryId: visibleEntry.id,
@@ -2865,7 +2527,13 @@ function ManagerAssistantModal(props: {
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
             {visibleTurn ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleTurn.key}`}>
               {visibleTurn.origin === 'auto' ? null : (
-                <div className="dc-manager-assistant-user-message"><div className="dc-manager-request-heading"><small>Ваш запрос</small></div><p>{visibleTurn.question}</p></div>
+                <div className="dc-manager-assistant-user-message">
+                  <div className="dc-manager-request-heading">
+                    <small>Ваш запрос</small>
+                    {generatedAt ? <time dateTime={generatedAt}>{dateTime(generatedAt)}</time> : null}
+                  </div>
+                  <p>{visibleTurn.question}</p>
+                </div>
               )}
               {visibleEntry ? <ManagerQuickHelpAnswer
                 deal={props.deal}
@@ -3233,173 +2901,4 @@ function BitrixTaskCard({ deal, task, onToggleCompletion }: {
         : <button className="dc-bitrix-task-btn secondary" type="button" disabled title="Bitrix не передал ID связанной задачи">Открыть в Bitrix24 ↗</button>}
     </footer>
   </section>
-}
-
-function CurrentTask(props: {
-  view: DealControlView
-  deal: DealControlDeal
-  task: DealControlTask | null
-  onConfirmMatch: (task: DealControlTask) => Promise<void>
-  onReviewFact: (task: DealControlTask, factId: number, reviewStatus: 'confirmed' | 'rejected') => Promise<void>
-  onReschedule: (task: DealControlTask) => void
-  onPrepareManager: (task: DealControlTask) => Promise<void>
-  onOutcome: (task: DealControlTask) => void
-  guidanceJob: DealTaskGuidanceJob | null
-  guidanceTaskId: number | null
-  hasAnalysis: boolean
-  onAdoptBitrixTask: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-  onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-}) {
-  const task = props.task
-  const bitrixTask = primaryBitrixTaskOf(props.deal)
-  const currentGuidance = task?.guidance && !task.guidance.is_stale
-  const guidanceRunning = Boolean(
-    task
-    && props.guidanceTaskId === task.id
-    && props.guidanceJob
-    && ['queued', 'running'].includes(props.guidanceJob.status),
-  )
-  if (!task && bitrixTask) {
-    return <>
-      <BitrixTaskCard deal={props.deal} task={bitrixTask} onToggleCompletion={props.onToggleBitrixCompletion} />
-      {props.deal.bitrix_tasks.length > 1 ? <details className="dc-bitrix-task-list">
-        <summary>Другие задачи Bitrix: {props.deal.bitrix_tasks.length - 1}</summary>
-        <ul>{props.deal.bitrix_tasks.slice(1).map((item) => <li key={item.activity_id}><strong>{compactTaskText(item.subject)}</strong><span>{dateTime(item.deadline)}</span></li>)}</ul>
-      </details> : null}
-    </>
-  }
-  return <section className={`dc-current-task ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'}`}>
-    <div className="dc-section-head"><h3>{task ? 'Текущее поручение' : bitrixTask ? 'Текущая задача Bitrix' : 'Текущая задача'}</h3><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div>
-    {task ? <>
-      <div className="dc-task-hero"><span>☎</span><div><h4>{compactTaskText(task.task_text)}</h4><p>{task.expected_result || 'Ожидаемый результат не указан'}</p></div></div>
-      {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробное поручение</summary><p>{task.task_text}</p></details> : null}
-      <p className="dc-task-meta">Срок: {dateTime(task.due_at)} · Касание: {task.touch_type || 'не указано'}</p>
-      <ControlSyncState task={task} bitrixTask={bitrixTask} />
-      <div className="dc-task-actions">
-        {props.view === 'manager'
-          ? <button className="dc-button primary" onClick={() => props.onOutcome(task)}>{task.latest_outcome ? 'Обновить результат' : 'Зафиксировать результат'}</button>
-          : task.latest_outcome
-            ? <button className="dc-button primary" onClick={() => props.onOutcome(task)}>Скорректировать результат</button>
-            : null}
-        <button className="dc-button" disabled={task.local_status !== 'active'} onClick={() => props.onReschedule(task)}>Перенести срок</button>
-      </div>
-      {task.latest_outcome ? <div className="dc-outcome-summary">
-        <div><small>Контакт</small><strong>{CONTACT_LABELS[task.latest_outcome.contact_status]}</strong></div>
-        <div><small>Результат</small><strong>{OUTCOME_LABELS[task.latest_outcome.result_status]}</strong></div>
-        <div><small>Следующий шаг</small><strong>{task.latest_outcome.next_step_text || 'Не назначен'}</strong><span>{dateTime(task.latest_outcome.next_step_at)}</span></div>
-      </div> : <p className="dc-boundary-note">{props.view === 'rop' ? 'Менеджер ещё не зафиксировал результат. Закрытие задачи в Bitrix само по себе не считается ответом клиента.' : 'Результат ещё не зафиксирован. Закрытие задачи в Bitrix само по себе не считается ответом клиента.'}</p>}
-      {task.crm_facts?.length ? <details className="dc-crm-facts"><summary>Что обнаружено после обновления Bitrix: {task.crm_facts.length}</summary><ul>{task.crm_facts.map((fact) => <li key={fact.id}><span>{fact.review_status === 'confirmed' ? '✓' : fact.review_status === 'rejected' ? '×' : '?'}</span><div><strong>{fact.summary || fact.fact_kind}</strong><small>{dateTime(fact.occurred_at)} · {fact.contact_class === 'attempt' ? 'попытка, контакт не доказан' : fact.contact_class === 'deal_progress' ? 'движение сделки' : 'требует проверки'}</small>{fact.review_status === 'candidate' ? <em><button onClick={() => void props.onReviewFact(task, fact.id, 'confirmed')}>Подтвердить факт</button><button onClick={() => void props.onReviewFact(task, fact.id, 'rejected')}>Не относится</button></em> : null}</div></li>)}</ul></details> : null}
-      {task.crm_execution_status === 'match_review' ? <button className="dc-link-button" onClick={() => void props.onConfirmMatch(task)}>Подтвердить совпадение с задачей Bitrix</button> : null}
-      {props.view !== 'manager' ? <div className="dc-guidance-action">
-        <div>
-          <strong>{currentGuidance ? '✓ AI-подсказка готова' : task.guidance?.is_stale ? 'Подсказку нужно обновить' : 'Подготовка менеджера'}</strong>
-          <small>{!props.hasAnalysis
-            ? 'Сначала проведите полный анализ сделки'
-            : currentGuidance
-              ? 'Она соответствует текущей версии задачи и последнему анализу'
-              : 'AI свяжет поручение с фактами сделки, вопросами и готовым текстом'}</small>
-        </div>
-        <button
-          className="dc-button guidance"
-          disabled={!props.hasAnalysis || task.local_status !== 'active' || guidanceRunning}
-          onClick={() => void props.onPrepareManager(task)}
-        >
-          {guidanceRunning
-            ? <><span className="dc-spinner" />Готовим…</>
-            : currentGuidance
-              ? 'Обновить подсказку'
-              : task.guidance?.is_stale
-                ? 'Обновить подсказку'
-                : '✦ Подготовить менеджера'}
-        </button>
-      </div> : null}
-      {props.guidanceJob && props.guidanceTaskId === task.id
-        ? <TaskGuidanceProgress job={props.guidanceJob} />
-        : null}
-      <small className="dc-boundary-note">Выполнение поручения и результат по клиенту учитываются отдельно.</small>
-    </> : <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Это критичное состояние: по сделке не назначен следующий контролируемый шаг.</p><a className="dc-button" href={bitrixDealUrl(props.deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>}
-  </section>
-}
-
-function TaskGuidanceProgress({ job }: { job: DealTaskGuidanceJob }) {
-  const error = job.status === 'error'
-  const done = job.status === 'done'
-  return <div className={`dc-guidance-progress ${error ? 'error' : done ? 'done' : ''}`} role="status" aria-live="polite">
-    <div><strong>{error ? 'Не удалось подготовить подсказку' : done ? 'Подсказка готова' : job.detail}</strong><b>{job.percent}%</b></div>
-    <span><i style={{ width: `${job.percent}%` }} /></span>
-    {error ? <small>{job.error || 'Повторите запуск после проверки ошибки.'}</small> : null}
-  </div>
-}
-
-function RopGuidance({ deal, task, onCopy }: {
-  deal: DealControlDeal
-  task: DealControlTask | null
-  onCopy: (text: string, label: string) => Promise<void>
-}) {
-  const coaching = deal.coaching
-  const guidance = task?.guidance && !task.guidance.is_stale ? task.guidance.content : null
-  return <>
-    {guidance ? <TaskGuidanceContent content={guidance} touchType={task?.touch_type} onCopy={onCopy} ropPreview /> : null}
-    <section className="dc-analysis-section">
-      <div className="dc-section-head"><h3>Сильные и слабые стороны</h3></div>
-      <div className="dc-two-columns">
-        <ListCard tone="good" title="✓ Сильные стороны" items={coaching.strengths} empty="Подтверждённые сильные стороны не выделены." />
-        <ListCard tone="weak" title="✕ Слабые стороны" items={coaching.weaknesses} empty="Риски и пробелы не выделены." />
-      </div>
-    </section>
-    <section className="dc-text-section"><div className="dc-section-head"><h3>Сообщение менеджеру</h3></div><div className="dc-coaching-copy"><strong>Готово к отправке</strong><p>{textOr(coaching.manager_coaching, 'В анализе нет готового сообщения менеджеру.')}</p></div><div className="dc-copy-actions"><button className="dc-button primary" disabled={!coaching.manager_coaching} onClick={() => void onCopy(coaching.manager_coaching || '', 'Текст для менеджера')}>Скопировать менеджеру</button></div></section>
-  </>
-}
-
-function TaskGuidanceContent({ content, touchType, onCopy, ropPreview = false }: {
-  content: DealTaskGuidanceContent
-  touchType?: string | null
-  onCopy: (text: string, label: string) => Promise<void>
-  ropPreview?: boolean
-}) {
-  const isCall = !touchType || touchType.toLocaleLowerCase('ru').includes('звон')
-  return <>
-    <section className="dc-analysis-section dc-task-guidance">
-      <div className="dc-section-head"><h3>{ropPreview ? 'AI-подготовка менеджера' : 'Что известно и чего не хватает'}</h3><span>✦ По текущей задаче</span></div>
-      {ropPreview ? <div className="dc-guidance-summary"><strong>Фокус задачи</strong><p>{content.task_focus}</p><small>Ожидаемый результат: {content.expected_outcome}</small></div> : null}
-      <div className="dc-two-columns">
-        <ListCard tone="good" title="✓ Уже известно" items={content.known_facts} empty="Подтверждённые факты не выделены." />
-        <ListCard tone="weak" title="✕ Нужно выяснить" items={content.missing_facts} empty="Дополнительные факты выяснять не требуется." />
-      </div>
-    </section>
-    <section className="dc-manager-module dc-task-guidance">
-      <div className="dc-section-head"><div><h3>Как выполнить задачу РОПа</h3><p>Подсказка относится только к текущему поручению</p></div><span>✦ Помощник продаж</span></div>
-      <div className="dc-contact-goal"><strong>Цель текущего контакта</strong><p>{content.contact_goal}</p></div>
-      <div className="dc-question-list"><strong>Что обязательно выяснить</strong>{content.contact_questions.length ? <ol>{content.contact_questions.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Дополнительные вопросы не требуются.</p>}</div>
-      <div className="dc-script"><strong>{isCall ? 'Речевой модуль для звонка' : 'Готовый текст для клиента'}</strong><pre>{content.ready_text}</pre><div><button className="dc-button primary" onClick={() => void onCopy(content.ready_text, isCall ? 'Сценарий звонка' : 'Текст сообщения')}>Скопировать {isCall ? 'сценарий звонка' : 'текст сообщения'}</button></div></div>
-      <div className="dc-crm-checklist"><strong>Что зафиксировать в Bitrix после контакта</strong><ul>{content.crm_checklist.map((item) => <li key={item}>{item}</li>)}</ul></div>
-    </section>
-  </>
-}
-
-function ListCard({ tone, title, items, empty }: { tone: 'good' | 'weak'; title: string; items: string[]; empty: string }) {
-  return <article className={tone}><strong>{title}</strong><ul>{items.map((item) => <li key={item}>{item}</li>)}{!items.length ? <li>{empty}</li> : null}</ul></article>
-}
-
-function TaskEditor(props: {
-  taskText: string
-  setTaskText: (value: string) => void
-  touchType: string
-  setTouchType: (value: string) => void
-  expectedResult: string
-  setExpectedResult: (value: string) => void
-  dueAt: string
-  setDueAt: (value: string) => void
-  hint?: string
-  expectedHint?: string
-  onAddTask: () => Promise<void>
-}) {
-  return <details className="dc-task-editor">
-    <summary>Поставить новое поручение менеджеру</summary>
-    <label>Что нужно сделать<textarea value={props.taskText} onChange={(event) => props.setTaskText(event.target.value)} placeholder={props.hint || 'Конкретное действие менеджера'} /></label>
-    <div><label>Касание<select value={props.touchType} onChange={(event) => props.setTouchType(event.target.value)}><option>Звонок</option><option>Email</option><option>Мессенджер</option><option>CRM-задача</option><option>Другое</option></select></label><label>Срок<input type="datetime-local" value={props.dueAt} onChange={(event) => props.setDueAt(event.target.value)} /></label></div>
-    <label>Какой результат должен появиться<input value={props.expectedResult} onChange={(event) => props.setExpectedResult(event.target.value)} placeholder={props.expectedHint || 'Факт клиента или следующий шаг в CRM'} /></label>
-    <button className="dc-button primary" disabled={!props.taskText.trim() || !props.dueAt} onClick={() => void props.onAddTask()}>Сохранить поручение</button>
-    <small>Приложение хранит поручение локально. В Bitrix его нужно создать вручную.</small>
-  </details>
 }

@@ -23,6 +23,55 @@ from setup import BASE_DIR, MSK_TZ
 
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
 
+DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
+    ("deal_manager_assistant_events", "DELETE FROM deal_manager_assistant_events"),
+    ("deal_manager_full_scripts", "DELETE FROM deal_manager_full_scripts"),
+    ("deal_manager_call_scripts", "DELETE FROM deal_manager_call_scripts"),
+    ("deal_manager_email_scripts", "DELETE FROM deal_manager_email_scripts"),
+    ("deal_manager_followups", "DELETE FROM deal_manager_followups"),
+    ("deal_manager_quick_help", "DELETE FROM deal_manager_quick_help"),
+    ("deal_manager_situation_reviews", "DELETE FROM deal_manager_situation_reviews"),
+    ("deal_control_task_reschedules", "DELETE FROM deal_control_task_reschedules"),
+    ("deal_control_task_crm_facts", "DELETE FROM deal_control_task_crm_facts"),
+    ("deal_control_task_guidance", "DELETE FROM deal_control_task_guidance"),
+    ("deal_control_task_baselines", "DELETE FROM deal_control_task_baselines"),
+    ("deal_control_task_outcomes", "DELETE FROM deal_control_task_outcomes"),
+    ("deal_control_task_events", "DELETE FROM deal_control_task_events"),
+    ("deal_control_tasks", "DELETE FROM deal_control_tasks"),
+    ("deal_control_bitrix_task_state", "DELETE FROM deal_control_bitrix_task_state"),
+    ("deal_daily_checklist_events", "DELETE FROM deal_daily_checklist_events"),
+    ("deal_daily_checklist_items", "DELETE FROM deal_daily_checklist_items"),
+    ("deal_daily_checklists", "DELETE FROM deal_daily_checklists"),
+    (
+        "compact_shadow_feedback",
+        "DELETE FROM compact_shadow_feedback WHERE compact_run_id IN "
+        "(SELECT id FROM compact_shadow_runs WHERE entity_type = 'deal')",
+    ),
+    ("compact_shadow_runs", "DELETE FROM compact_shadow_runs WHERE entity_type = 'deal'"),
+    (
+        "rop_decisions",
+        "DELETE FROM rop_decisions WHERE report_id IN "
+        "(SELECT id FROM ui_reports WHERE entity_type = 'deal')",
+    ),
+    (
+        "qualification_reviews",
+        "DELETE FROM qualification_reviews WHERE report_id IN "
+        "(SELECT id FROM ui_reports WHERE entity_type = 'deal')",
+    ),
+    (
+        "outcomes",
+        "DELETE FROM outcomes WHERE report_id IN "
+        "(SELECT id FROM ui_reports WHERE entity_type = 'deal')",
+    ),
+    ("candidate_review_state", "DELETE FROM candidate_review_state WHERE entity_type = 'deal'"),
+    ("daily_summary_items", "DELETE FROM daily_summary_items WHERE entity_type = 'deal'"),
+    ("ui_reports", "DELETE FROM ui_reports WHERE entity_type = 'deal'"),
+    ("mini_recommendations", "DELETE FROM mini_recommendations WHERE entity_type = 'deal'"),
+    ("analysis_runs", "DELETE FROM analysis_runs WHERE entity_type = 'deal'"),
+    ("entity_memory", "DELETE FROM entity_memory WHERE entity_type = 'deal'"),
+    ("entity_state", "DELETE FROM entity_state WHERE entity_type = 'deal'"),
+)
+
 AUTH_ROLES = frozenset({"admin", "rop", "manager"})
 _UNSET = object()
 AUTH_UNSET = _UNSET
@@ -822,6 +871,47 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 (auth_migration_id, utcish_now()),
             )
 
+
+def deal_analysis_purge_counts(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, int]:
+    """Return a content-free preview of local deal analysis state to remove."""
+    with connect(db_path) as conn:
+        counts = {
+            name: int(conn.execute(sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)).fetchone()[0])
+            for name, sql in DEAL_ANALYSIS_PURGE_QUERIES
+        }
+        counts["deal_control_checklist_state"] = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM deal_control_deals "
+                "WHERE checklist_state_json IS NOT NULL AND checklist_state_json <> '{}'"
+            ).fetchone()[0]
+        )
+    return counts
+
+
+def purge_local_deal_analysis_state(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, int]:
+    """Remove all derived deal-analysis and local coaching history in one transaction.
+
+    CRM deal projections, downloaded source material, authentication, preferences,
+    and analysis profiles are deliberately outside this operation.
+    """
+    init_db(db_path)
+    deleted: dict[str, int] = {}
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for name, sql in DEAL_ANALYSIS_PURGE_QUERIES:
+            deleted[name] = int(conn.execute(sql).rowcount)
+        deleted["deal_control_checklist_state"] = int(
+            conn.execute(
+                "UPDATE deal_control_deals SET checklist_state_json = '{}' "
+                "WHERE checklist_state_json IS NOT NULL AND checklist_state_json <> '{}'"
+            ).rowcount
+        )
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                f"Foreign key violations after deal analysis purge: {len(violations)}"
+            )
+    return deleted
 
 def _auth_password_hasher() -> Any:
     """Load the Argon2-backed password helper only when auth is used."""
