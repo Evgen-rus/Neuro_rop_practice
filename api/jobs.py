@@ -662,6 +662,13 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 envelope = None
         analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
         model_metadata = envelope.get("model_metadata") if isinstance(envelope, dict) and isinstance(envelope.get("model_metadata"), dict) else {}
+        analysis_run_id = (
+            int(envelope["analysis_run_id"])
+            if isinstance(envelope, dict)
+            and isinstance(envelope.get("analysis_run_id"), int)
+            and not isinstance(envelope.get("analysis_run_id"), bool)
+            else None
+        )
         key = progress_key(entity_type, entity_id)
         progress = job.entity_progress.get(key) or {}
         if progress.get("status") == "error":
@@ -695,6 +702,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
                 model_context=build_model_context_snapshot(envelope),
                 job_id=job.job_id,
+                analysis_run_id=analysis_run_id,
             )
             if entity_type == "deal":
                 apply_deal_recommendation_feedback(

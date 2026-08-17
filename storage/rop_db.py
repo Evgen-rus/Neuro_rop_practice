@@ -24,6 +24,8 @@ from setup import BASE_DIR, MSK_TZ
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
 
 DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
+    ("manager_trajectory_events", "DELETE FROM manager_trajectory_events WHERE entity_type = 'deal'"),
+    ("manager_trajectory_entity_state", "DELETE FROM manager_trajectory_entity_state WHERE entity_type = 'deal'"),
     ("deal_manager_assistant_events", "DELETE FROM deal_manager_assistant_events"),
     ("deal_manager_full_scripts", "DELETE FROM deal_manager_full_scripts"),
     ("deal_manager_call_scripts", "DELETE FROM deal_manager_call_scripts"),
@@ -73,6 +75,18 @@ DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
 )
 
 AUTH_ROLES = frozenset({"admin", "rop", "manager"})
+MANAGER_TRAJECTORY_ENTITY_TYPES = frozenset({"deal", "lead"})
+MANAGER_TRAJECTORY_EVENT_TYPES = frozenset({
+    "recommendation_generated",
+    "recommendation_shown",
+    "recommendation_viewed",
+    "manager_communication_completed",
+    "crm_activity_observed",
+    "deal_stage_changed",
+    "lead_stage_changed",
+    "outcome_recorded",
+})
+MANAGER_RECOMMENDATION_KINDS = frozenset({"deal_task", "quick_help"})
 _UNSET = object()
 AUTH_UNSET = _UNSET
 
@@ -161,6 +175,10 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 raw_path TEXT,
                 mini_recommendation_path TEXT,
                 decision_reason_json TEXT,
+                model TEXT,
+                prompt_version TEXT,
+                logic_version TEXT,
+                provenance_json TEXT,
                 error TEXT,
                 created_at TEXT NOT NULL
             );
@@ -198,7 +216,9 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 technical_log_json TEXT,
                 model_context_json TEXT,
                 job_id TEXT,
-                share_token TEXT UNIQUE
+                analysis_run_id INTEGER,
+                share_token TEXT UNIQUE,
+                FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id)
             );
 
             CREATE TABLE IF NOT EXISTS rop_decisions (
@@ -804,8 +824,60 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_control_task_events_key
                 ON deal_control_task_events(task_id, event_key)
                 WHERE event_key IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS manager_trajectory_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL CHECK(entity_type IN ('deal', 'lead')),
+                entity_id TEXT NOT NULL,
+                manager_id TEXT,
+                auth_user_id INTEGER,
+                event_type TEXT NOT NULL,
+                recommendation_kind TEXT,
+                recommendation_id TEXT,
+                analysis_run_id INTEGER,
+                report_id INTEGER,
+                source TEXT NOT NULL,
+                source_event_key TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                payload_json TEXT,
+                UNIQUE(source, source_event_key),
+                FOREIGN KEY(auth_user_id) REFERENCES auth_users(id),
+                FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id),
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_manager_trajectory_entity_time
+                ON manager_trajectory_events(entity_type, entity_id, occurred_at);
+
+            CREATE INDEX IF NOT EXISTS idx_manager_trajectory_manager_time
+                ON manager_trajectory_events(manager_id, occurred_at);
+
+            CREATE TABLE IF NOT EXISTS manager_trajectory_collection_state (
+                collection_key TEXT NOT NULL PRIMARY KEY,
+                last_success_at TEXT,
+                last_attempt_at TEXT,
+                last_status TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS manager_trajectory_entity_state (
+                entity_type TEXT NOT NULL CHECK(entity_type IN ('deal', 'lead')),
+                entity_id TEXT NOT NULL,
+                manager_id TEXT,
+                stage_id TEXT,
+                modified_at TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(entity_type, entity_id)
+            );
             """
         )
+        _ensure_column(conn, "analysis_runs", "model", "TEXT")
+        _ensure_column(conn, "analysis_runs", "prompt_version", "TEXT")
+        _ensure_column(conn, "analysis_runs", "logic_version", "TEXT")
+        _ensure_column(conn, "analysis_runs", "provenance_json", "TEXT")
+        _ensure_column(conn, "ui_reports", "analysis_run_id", "INTEGER")
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
         _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
         _ensure_column(conn, "ui_reports", "model_context_json", "TEXT")
@@ -1706,8 +1778,14 @@ def save_analysis_run(
     raw_path: str | None = None,
     mini_recommendation_path: str | None = None,
     decision_reason: dict[str, Any] | list[Any] | None = None,
+    model: str | None = None,
+    prompt_version: str | None = None,
+    logic_version: str | None = None,
+    provenance: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> int:
+    if provenance is not None and not isinstance(provenance, dict):
+        raise ValueError("Provenance должен быть JSON-объектом")
     init_db(db_path)
     with connect(db_path) as conn:
         cursor = conn.execute(
@@ -1722,10 +1800,14 @@ def save_analysis_run(
                 raw_path,
                 mini_recommendation_path,
                 decision_reason_json,
+                model,
+                prompt_version,
+                logic_version,
+                provenance_json,
                 error,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -1737,6 +1819,10 @@ def save_analysis_run(
                 raw_path,
                 mini_recommendation_path,
                 dumps_json(decision_reason) if decision_reason is not None else None,
+                str(model).strip() or None if model is not None else None,
+                str(prompt_version).strip() or None if prompt_version is not None else None,
+                str(logic_version).strip() or None if logic_version is not None else None,
+                dumps_json(provenance) if provenance is not None else None,
                 error,
                 utcish_now(),
             ),
@@ -1861,6 +1947,7 @@ def save_ui_report(
     technical_log: dict[str, Any] | None = None,
     model_context: dict[str, Any] | None = None,
     job_id: str | None = None,
+    analysis_run_id: int | None = None,
 ) -> int:
     init_db(db_path)
     share_token = secrets.token_urlsafe(24)
@@ -1881,9 +1968,10 @@ def save_ui_report(
                 technical_log_json,
                 model_context_json,
                 job_id,
+                analysis_run_id,
                 share_token
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -1899,6 +1987,7 @@ def save_ui_report(
                 dumps_json(technical_log) if technical_log is not None else None,
                 dumps_json(model_context) if model_context is not None else None,
                 job_id,
+                int(analysis_run_id) if analysis_run_id is not None else None,
                 share_token,
             ),
         )
@@ -2489,6 +2578,29 @@ def save_deal_manager_quick_help(
             "SELECT * FROM deal_manager_quick_help WHERE id = ?",
             (int(cursor.lastrowid),),
         ).fetchone()
+        report = conn.execute(
+            "SELECT analysis_run_id FROM ui_reports WHERE id = ?",
+            (int(source_report_id),),
+        ).fetchone()
+        assert row is not None
+        _insert_manager_trajectory_event(
+            conn,
+            entity_type="deal",
+            entity_id=str(deal_id),
+            manager_id=manager_id,
+            event_type="recommendation_generated",
+            recommendation_kind="quick_help",
+            recommendation_id=int(row["id"]),
+            analysis_run_id=(
+                int(report["analysis_run_id"])
+                if report is not None and report["analysis_run_id"] is not None
+                else None
+            ),
+            report_id=int(source_report_id),
+            source="neuro_rop",
+            source_event_key=f"generated:quick_help:{int(row['id'])}",
+            occurred_at=str(row["created_at"]),
+        )
     result = _row_to_deal_manager_quick_help(row)
     assert result is not None
     return result
@@ -5514,7 +5626,7 @@ def materialize_deal_recommendation_from_report(
                 deal = None
         report = conn.execute(
             """
-            SELECT id FROM ui_reports
+            SELECT id, analysis_run_id FROM ui_reports
             WHERE id = ? AND entity_type = 'deal' AND entity_id = ? AND report_json IS NOT NULL
             """,
             (int(source_report_id), str(deal_id)),
@@ -5581,6 +5693,24 @@ def materialize_deal_recommendation_from_report(
         if existing is None:
             return None
         task_id = int(existing["id"])
+        _insert_manager_trajectory_event(
+            conn,
+            entity_type="deal",
+            entity_id=str(deal_id),
+            manager_id=str(deal["manager_id"] or "") or None,
+            event_type="recommendation_generated",
+            recommendation_kind="deal_task",
+            recommendation_id=task_id,
+            analysis_run_id=(
+                int(report["analysis_run_id"])
+                if report["analysis_run_id"] is not None
+                else None
+            ),
+            report_id=int(source_report_id),
+            source="neuro_rop",
+            source_event_key=f"generated:deal_task:{task_id}",
+            occurred_at=str(existing["created_at"] or utcish_now()),
+        )
     return get_deal_control_task(db_path, task_id=task_id)
 
 
@@ -6029,9 +6159,43 @@ def save_deal_control_task_outcome(
                 now,
             ),
         )
+        outcome_id = int(cursor.lastrowid)
+        context = conn.execute(
+            """
+            SELECT deal.manager_id, report.analysis_run_id
+            FROM deal_control_tasks AS task
+            JOIN deal_control_deals AS deal ON deal.deal_id = task.deal_id
+            LEFT JOIN ui_reports AS report ON report.id = task.source_report_id
+            WHERE task.id = ?
+            """,
+            (int(task_id),),
+        ).fetchone()
+        _insert_manager_trajectory_event(
+            conn,
+            entity_type="deal",
+            entity_id=str(task["deal_id"]),
+            manager_id=str(context["manager_id"] or "") or None if context is not None else None,
+            event_type="outcome_recorded",
+            recommendation_kind="deal_task" if str(task["source_kind"] or "") == "neuro_rop" else None,
+            recommendation_id=int(task_id) if str(task["source_kind"] or "") == "neuro_rop" else None,
+            analysis_run_id=(
+                int(context["analysis_run_id"])
+                if context is not None and context["analysis_run_id"] is not None
+                else None
+            ),
+            report_id=int(task["source_report_id"]) if task["source_report_id"] is not None else None,
+            source="local_outcome",
+            source_event_key=f"outcome:{outcome_id}",
+            occurred_at=now,
+            payload={
+                "contact_status": contact_status,
+                "result_status": result_status,
+                "source_role": source_role,
+            },
+        )
         row = conn.execute(
             "SELECT * FROM deal_control_task_outcomes WHERE id = ?",
-            (int(cursor.lastrowid),),
+            (outcome_id,),
         ).fetchone()
     result = dict(row) if row is not None else None
     assert result is not None
@@ -6612,3 +6776,293 @@ def get_deal_control_metrics(db_path: str | Path, *, manager_id: str | None = No
         "cancelled_tasks": cancelled_tasks,
         "note": "Сравнение показывает связь с подготовленной AI-подсказкой, но не доказывает причинность.",
     }
+
+
+def _require_aware_timestamp(value: str, *, field: str) -> str:
+    normalized = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{field} должен быть ISO timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} должен содержать timezone")
+    return parsed.astimezone(MSK_TZ).isoformat(timespec="seconds")
+
+
+def _insert_manager_trajectory_event(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    manager_id: str | None,
+    event_type: str,
+    source: str,
+    source_event_key: str,
+    occurred_at: str,
+    auth_user_id: int | None = None,
+    recommendation_kind: str | None = None,
+    recommendation_id: str | int | None = None,
+    analysis_run_id: int | None = None,
+    report_id: int | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_entity_type = str(entity_type or "").strip()
+    normalized_event_type = str(event_type or "").strip()
+    normalized_source = str(source or "").strip()
+    normalized_key = str(source_event_key or "").strip()
+    normalized_kind = str(recommendation_kind or "").strip() or None
+    if normalized_entity_type not in MANAGER_TRAJECTORY_ENTITY_TYPES:
+        raise ValueError("entity_type должен быть deal или lead")
+    if normalized_event_type not in MANAGER_TRAJECTORY_EVENT_TYPES:
+        raise ValueError("Неизвестный тип trajectory event")
+    if not str(entity_id or "").strip() or not normalized_source or not normalized_key:
+        raise ValueError("entity_id, source и source_event_key обязательны")
+    if normalized_kind is not None and normalized_kind not in MANAGER_RECOMMENDATION_KINDS:
+        raise ValueError("Неизвестный recommendation_kind")
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Payload trajectory event должен быть JSON-объектом")
+    normalized_occurred_at = _require_aware_timestamp(occurred_at, field="occurred_at")
+    recorded_at = utcish_now()
+    conn.execute(
+        """
+        INSERT INTO manager_trajectory_events (
+            entity_type, entity_id, manager_id, auth_user_id, event_type,
+            recommendation_kind, recommendation_id, analysis_run_id, report_id,
+            source, source_event_key, occurred_at, recorded_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, source_event_key) DO NOTHING
+        """,
+        (
+            normalized_entity_type,
+            str(entity_id).strip(),
+            (str(manager_id).strip() or None) if manager_id is not None else None,
+            int(auth_user_id) if auth_user_id is not None else None,
+            normalized_event_type,
+            normalized_kind,
+            str(recommendation_id) if recommendation_id is not None else None,
+            int(analysis_run_id) if analysis_run_id is not None else None,
+            int(report_id) if report_id is not None else None,
+            normalized_source,
+            normalized_key,
+            normalized_occurred_at,
+            recorded_at,
+            dumps_json(payload) if payload is not None else None,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM manager_trajectory_events WHERE source = ? AND source_event_key = ?",
+        (normalized_source, normalized_key),
+    ).fetchone()
+    assert row is not None
+    value = dict(row)
+    value["payload"] = loads_json(value.pop("payload_json", None), None)
+    return value
+
+
+def record_manager_trajectory_event(
+    db_path: str | Path,
+    **event: Any,
+) -> dict[str, Any]:
+    """Append one factual, idempotent event to the manager trajectory."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        return _insert_manager_trajectory_event(conn, **event)
+
+
+def record_recommendation_lifecycle_event(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    recommendation_kind: str,
+    recommendation_id: str | int,
+    event_type: str,
+    auth_user_id: int,
+) -> dict[str, Any]:
+    """Validate recommendation ownership and derive all actor fields server-side."""
+    if event_type not in {"recommendation_shown", "recommendation_viewed"}:
+        raise ValueError("Допустимы только recommendation_shown/recommendation_viewed")
+    if recommendation_kind not in MANAGER_RECOMMENDATION_KINDS:
+        raise ValueError("Неизвестный recommendation_kind")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if recommendation_kind == "deal_task":
+            row = conn.execute(
+                """
+                SELECT task.id, task.deal_id, task.source_report_id, deal.manager_id,
+                       report.analysis_run_id
+                FROM deal_control_tasks AS task
+                JOIN deal_control_deals AS deal ON deal.deal_id = task.deal_id
+                LEFT JOIN ui_reports AS report ON report.id = task.source_report_id
+                WHERE task.id = ? AND task.deal_id = ? AND task.source_kind = 'neuro_rop'
+                """,
+                (int(recommendation_id), str(deal_id)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT quick.id, quick.deal_id, quick.source_report_id, quick.manager_id,
+                       report.analysis_run_id
+                FROM deal_manager_quick_help AS quick
+                LEFT JOIN ui_reports AS report ON report.id = quick.source_report_id
+                WHERE quick.id = ? AND quick.deal_id = ?
+                """,
+                (int(recommendation_id), str(deal_id)),
+            ).fetchone()
+        if row is None:
+            raise ValueError("Рекомендация не найдена для этой сделки")
+        event_name = event_type.removeprefix("recommendation_")
+        return _insert_manager_trajectory_event(
+            conn,
+            entity_type="deal",
+            entity_id=str(deal_id),
+            manager_id=str(row["manager_id"] or "") or None,
+            auth_user_id=int(auth_user_id),
+            event_type=event_type,
+            recommendation_kind=recommendation_kind,
+            recommendation_id=str(row["id"]),
+            analysis_run_id=int(row["analysis_run_id"]) if row["analysis_run_id"] is not None else None,
+            report_id=int(row["source_report_id"]) if row["source_report_id"] is not None else None,
+            source="manager_ui",
+            source_event_key=(
+                f"{event_name}:{recommendation_kind}:{row['id']}:user:{int(auth_user_id)}"
+            ),
+            occurred_at=utcish_now(),
+        )
+
+
+def list_manager_trajectory_events(
+    db_path: str | Path,
+    *,
+    from_at: str,
+    to_at: str,
+    manager_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    start = _require_aware_timestamp(from_at, field="from_at")
+    end = _require_aware_timestamp(to_at, field="to_at")
+    managers = [str(item).strip() for item in (manager_ids or []) if str(item).strip()]
+    clauses = ["occurred_at >= ?", "occurred_at < ?"]
+    params: list[Any] = [start, end]
+    if managers:
+        clauses.append("manager_id IN (" + ",".join("?" for _ in managers) + ")")
+        params.extend(managers)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM manager_trajectory_events WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY occurred_at, id",
+            params,
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["payload"] = loads_json(value.pop("payload_json", None), None)
+        result.append(value)
+    return result
+
+
+def get_manager_trajectory_collection_state(
+    db_path: str | Path,
+    *,
+    collection_key: str = "bitrix_manager_wide",
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM manager_trajectory_collection_state WHERE collection_key = ?",
+            (str(collection_key),),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def save_manager_trajectory_collection_state(
+    db_path: str | Path,
+    *,
+    status: str,
+    successful_through: str | None = None,
+    error: str | None = None,
+    collection_key: str = "bitrix_manager_wide",
+) -> dict[str, Any]:
+    now = utcish_now()
+    normalized_success = (
+        _require_aware_timestamp(successful_through, field="successful_through")
+        if successful_through is not None
+        else None
+    )
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO manager_trajectory_collection_state (
+                collection_key, last_success_at, last_attempt_at, last_status, last_error, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(collection_key) DO UPDATE SET
+                last_success_at = COALESCE(excluded.last_success_at, manager_trajectory_collection_state.last_success_at),
+                last_attempt_at = excluded.last_attempt_at,
+                last_status = excluded.last_status,
+                last_error = excluded.last_error,
+                updated_at = excluded.updated_at
+            """,
+            (str(collection_key), normalized_success, now, str(status), error, now),
+        )
+    result = get_manager_trajectory_collection_state(db_path, collection_key=collection_key)
+    assert result is not None
+    return result
+
+
+def observe_manager_trajectory_entity(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    manager_id: str | None,
+    stage_id: str | None,
+    modified_at: str | None,
+) -> dict[str, Any] | None:
+    """Update the compact CRM snapshot and append a stage-change fact when needed."""
+    if entity_type not in MANAGER_TRAJECTORY_ENTITY_TYPES:
+        raise ValueError("entity_type должен быть deal или lead")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        previous = conn.execute(
+            "SELECT * FROM manager_trajectory_entity_state WHERE entity_type = ? AND entity_id = ?",
+            (entity_type, str(entity_id)),
+        ).fetchone()
+        event = None
+        normalized_modified = (
+            _require_aware_timestamp(modified_at, field="modified_at")
+            if modified_at
+            else utcish_now()
+        )
+        if previous is not None and str(previous["stage_id"] or "") != str(stage_id or ""):
+            event = _insert_manager_trajectory_event(
+                conn,
+                entity_type=entity_type,
+                entity_id=str(entity_id),
+                manager_id=str(manager_id or "") or None,
+                event_type=f"{entity_type}_stage_changed",
+                source="bitrix",
+                source_event_key=(
+                    f"{entity_type}_stage:{entity_id}:{previous['stage_id'] or ''}:{stage_id or ''}:{normalized_modified}"
+                ),
+                occurred_at=normalized_modified,
+                payload={
+                    "from_stage_id": previous["stage_id"],
+                    "to_stage_id": stage_id,
+                    "timestamp_kind": "entity_date_modify",
+                },
+            )
+        conn.execute(
+            """
+            INSERT INTO manager_trajectory_entity_state (
+                entity_type, entity_id, manager_id, stage_id, modified_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                manager_id = excluded.manager_id,
+                stage_id = excluded.stage_id,
+                modified_at = excluded.modified_at,
+                updated_at = excluded.updated_at
+            """,
+            (entity_type, str(entity_id), manager_id, stage_id, normalized_modified, utcish_now()),
+        )
+        return event

@@ -13,6 +13,7 @@ import {
   fetchReportMarkdown,
   fetchJob,
   recordManagerCommunicationCompleted,
+  recordRecommendationEvent,
   saveDealControlScope,
   startAnalyze,
   startManagerQuickHelp,
@@ -629,6 +630,16 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
   const selected = visibleDeals.find((deal) => deal.deal_id === selectedId) || null
 
+  const selectDealExplicitly = useCallback((dealId: string) => {
+    setSelectedId(dealId)
+    const deal = data?.deals.find((item) => item.deal_id === dealId)
+    const recommendation = deal ? neuroRopTaskOf(deal) : null
+    if (deal?.can_open && recommendation) {
+      void recordRecommendationEvent(dealId, 'viewed', 'deal_task', recommendation.id)
+        .catch(() => undefined)
+    }
+  }, [data])
+
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const bitrixTasks = filteredDeals
       .map(primaryBitrixTaskOf)
@@ -927,8 +938,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
             <span>{view === 'dashboard' ? 'Сначала критичные ›' : 'Фокус дня ›'}</span>
           </div>
           {view === 'dashboard'
-            ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} onSaveFields={saveFields} />
-            : <TaskTable view={view} deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={setSelectedId} />
+            ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={selectDealExplicitly} onSaveFields={saveFields} />
+            : <TaskTable view={view} deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={selectDealExplicitly} />
           }
         </section>
 
@@ -1160,6 +1171,17 @@ function DealDetail(props: {
   // admin/rop — экран РОПа. Вкладка «Мои задачи» по-прежнему открывает экран менеджера для admin.
   const managerScreen = props.userRole === 'manager' || props.view === 'manager'
   const reloadDetail = props.onReload
+  const visibleRecommendation = props.deal ? neuroRopTaskOf(props.deal) : null
+
+  useEffect(() => {
+    if (!managerScreen || !props.deal || !visibleRecommendation) return
+    void recordRecommendationEvent(
+      props.deal.deal_id,
+      'shown',
+      'deal_task',
+      visibleRecommendation.id,
+    ).catch(() => undefined)
+  }, [managerScreen, props.deal, visibleRecommendation])
 
   useEffect(() => {
     setSituationModalOpen(false)
@@ -1382,7 +1404,7 @@ function DealDetail(props: {
 
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
-  const aiRecommendation = neuroRopTaskOf(deal)
+  const aiRecommendation = visibleRecommendation
   const coaching = deal.coaching
   const hasAnalysis = Boolean(coaching.report_id)
   const managerSituation = managerSituationOf(deal)
@@ -2439,6 +2461,22 @@ function ManagerAssistantModal(props: {
     if (props.freshEntryId == null) return
     if (busy || view !== 'answer' || !viewingLatest) onFreshAnswerConsumed()
   }, [busy, onFreshAnswerConsumed, props.freshEntryId, view, viewingLatest])
+
+  useEffect(() => {
+    if (view !== 'answer' || !visibleEntry) return
+    void recordRecommendationEvent(
+      props.deal.deal_id,
+      'shown',
+      'quick_help',
+      visibleEntry.id,
+    ).catch(() => undefined)
+    void recordRecommendationEvent(
+      props.deal.deal_id,
+      'viewed',
+      'quick_help',
+      visibleEntry.id,
+    ).catch(() => undefined)
+  }, [props.deal.deal_id, view, visibleEntry])
 
   async function send() {
     if (busy || !props.draft.trim()) return

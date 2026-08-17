@@ -78,6 +78,27 @@ class StorageMigrationTests(unittest.TestCase):
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))
 
+    def test_fresh_database_creates_manager_trajectory_and_provenance_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "fresh.sqlite"
+            init_db(db_path)
+            conn = sqlite3.connect(db_path)
+            try:
+                analysis_columns = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)")}
+                report_columns = {row[1] for row in conn.execute("PRAGMA table_info(ui_reports)")}
+                event_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_trajectory_events)")}
+                indexes = {
+                    row[1]
+                    for row in conn.execute("PRAGMA index_list(manager_trajectory_events)")
+                }
+            finally:
+                conn.close()
+            self.assertTrue({"model", "prompt_version", "logic_version", "provenance_json"} <= analysis_columns)
+            self.assertIn("analysis_run_id", report_columns)
+            self.assertIn("payload_json", event_columns)
+            self.assertIn("idx_manager_trajectory_entity_time", indexes)
+            self.assertIn("idx_manager_trajectory_manager_time", indexes)
+
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))
 

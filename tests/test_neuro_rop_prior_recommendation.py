@@ -263,13 +263,18 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             analysis_path = root / "deal_101_analysis.json"
-            analysis_path.write_text(json.dumps({"analysis": self._analysis()}, ensure_ascii=False), encoding="utf-8")
+            analysis_path.write_text(
+                json.dumps({"analysis_run_id": 73, "analysis": self._analysis()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
             paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
             job = JobState(job_id="job")
             calls: list[str] = []
+            saved_kwargs: dict[str, object] = {}
 
-            def save(*_args, **_kwargs):
+            def save(*_args, **kwargs):
                 calls.append("save")
+                saved_kwargs.update(kwargs)
                 return 42
 
             def materialize(*_args, **_kwargs):
@@ -282,6 +287,7 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
             self.assertEqual(calls, ["save", "apply", "materialize"])
+            self.assertEqual(saved_kwargs["analysis_run_id"], 73)
 
     def test_collect_results_rejects_invalid_deal_recommendation_before_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

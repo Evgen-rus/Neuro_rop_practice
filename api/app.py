@@ -284,6 +284,12 @@ class DealManagerCommunicationCompletedRequest(BaseModel):
     quick_help_id: int = Field(ge=1)
 
 
+class RecommendationEventRequest(BaseModel):
+    event_type: Literal["shown", "viewed"]
+    recommendation_kind: Literal["deal_task", "quick_help"]
+    recommendation_id: int = Field(ge=1)
+
+
 class DealContextLeverPriorityRequest(BaseModel):
     priority: Literal[1, 2, 3] | None = None
 
@@ -1075,6 +1081,27 @@ def deal_manager_assistant_workspace_get(deal_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/deal-control/deals/{deal_id}/recommendation-events")
+def deal_recommendation_event_create(
+    deal_id: str,
+    body: RecommendationEventRequest,
+) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    user = auth_current_user()
+    try:
+        event = storage.record_recommendation_lifecycle_event(
+            DEFAULT_DB_PATH,
+            deal_id=str(deal_id),
+            recommendation_kind=body.recommendation_kind,
+            recommendation_id=body.recommendation_id,
+            event_type=f"recommendation_{body.event_type}",
+            auth_user_id=int(user["id"]),
+        )
+        return {"ok": True, "event_id": int(event["id"])}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.put("/api/deal-control/deals/{deal_id}/context/levers/{lever_id}/priority")
 def deal_context_lever_priority_update(
     deal_id: str,
@@ -1108,6 +1135,35 @@ def deal_manager_assistant_communication_completed(
             deal_id=deal_id,
             quick_help_id=body.quick_help_id,
         )
+        try:
+            quick_help = storage.get_deal_manager_quick_help(
+                DEFAULT_DB_PATH,
+                deal_id=str(deal_id),
+                quick_help_id=body.quick_help_id,
+            )
+            report = (
+                storage.get_ui_report(DEFAULT_DB_PATH, int(quick_help["source_report_id"]))
+                if isinstance(quick_help, dict) and quick_help.get("source_report_id") is not None
+                else None
+            )
+            storage.record_manager_trajectory_event(
+                DEFAULT_DB_PATH,
+                entity_type="deal",
+                entity_id=str(deal_id),
+                manager_id=event.get("manager_id"),
+                auth_user_id=int(auth_current_user()["id"]),
+                event_type="manager_communication_completed",
+                recommendation_kind="quick_help",
+                recommendation_id=body.quick_help_id,
+                analysis_run_id=(report.get("analysis_run_id") if isinstance(report, dict) else None),
+                report_id=(quick_help.get("source_report_id") if isinstance(quick_help, dict) else None),
+                source="manager_ui",
+                source_event_key=f"communication_completed:{int(event['id'])}",
+                occurred_at=str(event["created_at"]),
+            )
+        except Exception:
+            # Telemetry is deliberately non-blocking for the canonical manager action.
+            pass
         return {"ok": True, "event": event}
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур помощника ещё не подключён") from error

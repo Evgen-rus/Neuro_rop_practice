@@ -1487,6 +1487,25 @@ export function recordManagerCommunicationCompleted(dealId: string, quickHelpId:
   )
 }
 
+export function recordRecommendationEvent(
+  dealId: string,
+  eventType: 'shown' | 'viewed',
+  recommendationKind: 'deal_task' | 'quick_help',
+  recommendationId: number,
+) {
+  return api<{ ok: boolean; event_id: number }>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/recommendation-events`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        event_type: eventType,
+        recommendation_kind: recommendationKind,
+        recommendation_id: recommendationId,
+      }),
+    },
+  )
+}
+
 export function updateDealContextLeverPriority(
   dealId: string,
   leverId: string,

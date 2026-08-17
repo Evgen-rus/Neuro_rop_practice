@@ -38,6 +38,7 @@ from openai_api.change_detection.snapshot import (
     load_json,
     save_json,
 )
+from openai_api.change_detection.provenance import analysis_run_provenance
 from setup import BASE_DIR, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -193,7 +194,7 @@ def persist_successful_llm_run(
     decision_status: str,
     paths: dict[str, Path],
     decision_reason: dict[str, Any],
-) -> None:
+) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
     memory_update = analysis.get("memory_update") if isinstance(analysis, dict) else None
@@ -206,7 +207,7 @@ def persist_successful_llm_run(
             memory_update=memory_update,
         )
 
-    save_analysis_run(
+    run_id = save_analysis_run(
         db_path,
         entity_type="lead",
         entity_id=str(args.lead_id),
@@ -216,7 +217,16 @@ def persist_successful_llm_run(
         report_path=str(paths["report"]),
         raw_path=str(paths["raw"]),
         decision_reason=decision_reason,
+        **analysis_run_provenance(
+            payload,
+            fingerprint=fingerprint,
+            decision_reason=decision_reason,
+            prompt_version="neuro-rop:full-lead:v1",
+            model_override=args.model,
+        ),
     )
+    payload["analysis_run_id"] = run_id
+    save_json(paths["analysis"], payload)
     upsert_entity_state(
         db_path,
         entity_type="lead",
@@ -231,6 +241,7 @@ def persist_successful_llm_run(
         last_recommendation=extract_last_recommendation(payload),
         last_analysis_at=utcish_now(),
     )
+    return run_id
 
 
 def persist_skip(
@@ -252,6 +263,13 @@ def persist_skip(
         fingerprint=fingerprint,
         mini_recommendation_path=str(mini_path) if mini_path else None,
         decision_reason=decision_reason,
+        **analysis_run_provenance(
+            {},
+            fingerprint=fingerprint,
+            decision_reason=decision_reason,
+            prompt_version="neuro-rop:full-lead:v1",
+            model_override=args.model,
+        ),
     )
     upsert_entity_state(
         db_path,
@@ -420,6 +438,10 @@ def main() -> None:
                 entity_type="lead",
                 entity_id=str(args.lead_id),
                 status=ERROR,
+                model=args.model,
+                prompt_version="neuro-rop:full-lead:v1",
+                logic_version="change-aware-v1",
+                provenance={"trigger": ERROR},
                 error=str(error),
             )
         except Exception:
