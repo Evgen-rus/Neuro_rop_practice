@@ -634,11 +634,11 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setSelectedId(dealId)
     const deal = data?.deals.find((item) => item.deal_id === dealId)
     const recommendation = deal ? neuroRopTaskOf(deal) : null
-    if (deal?.can_open && recommendation) {
+    if (user.role === 'manager' && deal?.is_own && recommendation) {
       void recordRecommendationEvent(dealId, 'viewed', 'deal_task', recommendation.id)
         .catch(() => undefined)
     }
-  }, [data])
+  }, [data, user.role])
 
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const bitrixTasks = filteredDeals
@@ -1172,16 +1172,23 @@ function DealDetail(props: {
   const managerScreen = props.userRole === 'manager' || props.view === 'manager'
   const reloadDetail = props.onReload
   const visibleRecommendation = props.deal ? neuroRopTaskOf(props.deal) : null
+  const managerTelemetryEnabled = props.userRole === 'manager' && Boolean(props.deal?.is_own)
+
+  const recordQuickHelpLifecycle = useCallback((eventType: 'shown' | 'viewed', recommendationId: number) => {
+    if (!managerTelemetryEnabled || !activeDealId) return
+    void recordRecommendationEvent(activeDealId, eventType, 'quick_help', recommendationId)
+      .catch(() => undefined)
+  }, [activeDealId, managerTelemetryEnabled])
 
   useEffect(() => {
-    if (!managerScreen || !props.deal || !visibleRecommendation) return
+    if (!managerTelemetryEnabled || !props.deal || !visibleRecommendation) return
     void recordRecommendationEvent(
       props.deal.deal_id,
       'shown',
       'deal_task',
       visibleRecommendation.id,
     ).catch(() => undefined)
-  }, [managerScreen, props.deal, visibleRecommendation])
+  }, [managerTelemetryEnabled, props.deal, visibleRecommendation])
 
   useEffect(() => {
     setSituationModalOpen(false)
@@ -1377,6 +1384,13 @@ function DealDetail(props: {
   async function openAssistant() {
     const workspace = await loadAssistantWorkspace(true)
     if (!workspace) return
+    const existingEntry = currentEntryForMode(
+      workspace.entries,
+      'push',
+      workspace.source_report_id,
+      workspace.situation_review_id,
+    )
+    if (existingEntry) recordQuickHelpLifecycle('viewed', existingEntry.id)
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status) && quickHelpAnswerReady(quickHelpJob)) return
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
     if (missingCurrentModes(workspace.current_by_mode).length) {
@@ -1494,6 +1508,7 @@ function DealDetail(props: {
       onCloseAssistant={() => { setAssistantOpen(false); consumeFreshQuickHelp() }}
       freshQuickHelpId={freshQuickHelpId}
       onFreshAnswerConsumed={consumeFreshQuickHelp}
+      onRecommendationEvent={recordQuickHelpLifecycle}
       onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
@@ -1532,6 +1547,7 @@ type ManagerDealScreenProps = {
   onCloseAssistant: () => void
   freshQuickHelpId: number | null
   onFreshAnswerConsumed: () => void
+  onRecommendationEvent: (eventType: 'shown' | 'viewed', recommendationId: number) => void
   onCompleteCommunication: (quickHelpId: number) => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
@@ -1581,6 +1597,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onToggleChecklistItem={props.onToggleChecklistItem}
         freshEntryId={props.freshQuickHelpId}
         onFreshAnswerConsumed={props.onFreshAnswerConsumed}
+        onRecommendationEvent={props.onRecommendationEvent}
       /> : null}
     </> : null}
   </>
@@ -2407,6 +2424,7 @@ function ManagerAssistantModal(props: {
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   freshEntryId: number | null
   onFreshAnswerConsumed: () => void
+  onRecommendationEvent: (eventType: 'shown' | 'viewed', recommendationId: number) => void
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups'>('answer')
   const [assistantMode, setAssistantMode] = useState<ManagerAssistantMode>('push')
@@ -2445,6 +2463,7 @@ function ManagerAssistantModal(props: {
   const task = primaryBitrixTaskOf(props.deal)
   const onClose = props.onClose
   const onFreshAnswerConsumed = props.onFreshAnswerConsumed
+  const onRecommendationEvent = props.onRecommendationEvent
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -2464,19 +2483,8 @@ function ManagerAssistantModal(props: {
 
   useEffect(() => {
     if (view !== 'answer' || !visibleEntry) return
-    void recordRecommendationEvent(
-      props.deal.deal_id,
-      'shown',
-      'quick_help',
-      visibleEntry.id,
-    ).catch(() => undefined)
-    void recordRecommendationEvent(
-      props.deal.deal_id,
-      'viewed',
-      'quick_help',
-      visibleEntry.id,
-    ).catch(() => undefined)
-  }, [props.deal.deal_id, view, visibleEntry])
+    onRecommendationEvent('shown', visibleEntry.id)
+  }, [onRecommendationEvent, view, visibleEntry])
 
   async function send() {
     if (busy || !props.draft.trim()) return
@@ -2487,7 +2495,30 @@ function ManagerAssistantModal(props: {
 
   function switchMode(next: ManagerAssistantMode) {
     if (next === assistantMode) return
+    const nextEntry = entryForTurn(visibleTurn, next)
+      || (viewingLatest
+        ? currentEntryForMode(
+            props.workspace.entries,
+            next,
+            props.workspace.source_report_id,
+            props.workspace.situation_review_id,
+          )
+        : null)
+    if (nextEntry) props.onRecommendationEvent('viewed', nextEntry.id)
     setAssistantMode(next)
+  }
+
+  function navigateHistory(nextOffset: number) {
+    const boundedOffset = Math.min(Math.max(0, nextOffset), Math.max(0, turns.length - 1))
+    const turn = turns[turns.length - 1 - boundedOffset] || null
+    const entry = entryForTurn(turn, assistantMode)
+    if (entry) props.onRecommendationEvent('viewed', entry.id)
+    setHistoryOffset(boundedOffset)
+  }
+
+  function showAnswer() {
+    if (view !== 'answer' && visibleEntry) props.onRecommendationEvent('viewed', visibleEntry.id)
+    setView('answer')
   }
 
   async function generateFollowups() {
@@ -2549,7 +2580,7 @@ function ManagerAssistantModal(props: {
         <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим</strong></div></div>
         <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {props.deal.stage_name || 'этап не указан'}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span><em className="dc-manager-disc">{discProfileLabel(props.workspace.disc_profile)}</em></div>
         <nav>
-          <button className={view === 'answer' ? 'active' : ''} onClick={() => setView('answer')}><span>✦</span>Дожим</button>
+          <button className={view === 'answer' ? 'active' : ''} onClick={showAnswer}><span>✦</span>Дожим</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
           <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
           <button className={view === 'followups' ? 'active' : ''} onClick={() => setView('followups')}><span>↗</span>Фоллоуапы</button>
@@ -2563,7 +2594,7 @@ function ManagerAssistantModal(props: {
             <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
             <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
           </div>
-          {view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => setHistoryOffset((value) => Math.min(turns.length - 1, value + 1))}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => setHistoryOffset((value) => Math.max(0, value - 1))}>Следующий →</button></nav> : null}
+          {view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => navigateHistory(safeHistoryOffset + 1)}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => navigateHistory(safeHistoryOffset - 1)}>Следующий →</button></nav> : null}
           <span className="dc-manager-disc-badge">{discProfileLabel(props.workspace.disc_profile)}</span>
           <span className="dc-manager-context-chip">Контекст учтён</span>
           <button onClick={props.onClose} aria-label="Закрыть">×</button>

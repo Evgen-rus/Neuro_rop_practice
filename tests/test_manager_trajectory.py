@@ -162,6 +162,17 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
                    ) VALUES (1, 'manager-1', 'unused', 'manager', '10', 1, ?, ?)""",
                 (NOW.isoformat(), NOW.isoformat()),
             )
+            conn.executemany(
+                """INSERT INTO auth_users (
+                       id, login, password_hash, role, manager_id, is_active, created_at, updated_at
+                   ) VALUES (?, ?, 'unused', ?, ?, ?, ?, ?)""",
+                [
+                    (2, "manager-2", "manager", "11", 1, NOW.isoformat(), NOW.isoformat()),
+                    (3, "admin", "admin", None, 1, NOW.isoformat(), NOW.isoformat()),
+                    (4, "rop", "rop", None, 1, NOW.isoformat(), NOW.isoformat()),
+                    (5, "inactive-manager", "manager", "10", 0, NOW.isoformat(), NOW.isoformat()),
+                ],
+            )
             conn.commit()
         finally:
             conn.close()
@@ -174,6 +185,11 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
             recommendation_id=task["id"], event_type="recommendation_shown", auth_user_id=1,
         )
         self.assertEqual(shown["id"], repeated["id"])
+        self.assertEqual(shown["payload"], {
+            "actor_verified": True,
+            "actor_role": "manager",
+            "actor_manager_id": "10",
+        })
         events = list_manager_trajectory_events(
             self.db_path, from_at=(NOW - timedelta(days=1)).isoformat(),
             to_at=(NOW + timedelta(days=2)).isoformat(), manager_ids=["10"],
@@ -186,6 +202,13 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
                 self.db_path, deal_id="other", recommendation_kind="deal_task",
                 recommendation_id=task["id"], event_type="recommendation_viewed", auth_user_id=1,
             )
+        for denied_user_id in (2, 3, 4, 5):
+            with self.subTest(auth_user_id=denied_user_id), self.assertRaises(PermissionError):
+                record_recommendation_lifecycle_event(
+                    self.db_path, deal_id="101", recommendation_kind="deal_task",
+                    recommendation_id=task["id"], event_type="recommendation_viewed",
+                    auth_user_id=denied_user_id,
+                )
 
     def test_quick_help_save_creates_generated_event(self) -> None:
         save_deal_control_scope(
@@ -282,6 +305,49 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         self.assertEqual(partial["status"], "partial")
         self.assertEqual(after["last_success_at"], successful_after_stage["last_success_at"])
 
+    def test_report_counts_only_verified_manager_adoption(self) -> None:
+        viewed_at = NOW - timedelta(hours=2)
+        for source_key, payload in (
+            ("verified", {"actor_verified": True, "actor_role": "manager", "actor_manager_id": "10"}),
+            ("legacy", None),
+            ("wrong-actor", {"actor_verified": True, "actor_role": "manager", "actor_manager_id": "77"}),
+        ):
+            record_manager_trajectory_event(
+                self.db_path,
+                entity_type="deal",
+                entity_id="900",
+                manager_id="10",
+                event_type="recommendation_viewed",
+                recommendation_kind="deal_task",
+                recommendation_id=source_key,
+                source="manager_ui",
+                source_event_key=f"viewed:{source_key}",
+                occurred_at=viewed_at.isoformat(),
+                payload=payload,
+            )
+        record_manager_trajectory_event(
+            self.db_path,
+            entity_type="deal",
+            entity_id="900",
+            manager_id="10",
+            event_type="crm_activity_observed",
+            source="bitrix",
+            source_event_key="activity:inside-window",
+            occurred_at=(viewed_at + timedelta(minutes=15)).isoformat(),
+        )
+
+        report = build_manager_trajectory_report(
+            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        manager = report["managers"][0]
+        self.assertEqual(manager["counts"]["recommendation_viewed"], 1)
+        self.assertEqual(manager["excluded_unverified_lifecycle_events"], 2)
+        self.assertEqual(len(manager["viewed_windows_60m"]), 1)
+        self.assertEqual(manager["viewed_windows_60m"][0]["target_entity_events"], 1)
+        self.assertTrue(any("Исключено неподтверждённых" in warning for warning in report["warnings"]))
+        self.assertTrue(any("LAST_UPDATED" in warning for warning in report["warnings"]))
+        self.assertTrue(any("между ручными сборами" in warning for warning in report["warnings"]))
+
 
 class ManagerTrajectoryApiTests(unittest.TestCase):
     def test_endpoint_derives_actor_and_expands_event_type(self) -> None:
@@ -301,6 +367,26 @@ class ManagerTrajectoryApiTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True, "event_id": 7})
         self.assertEqual(record.call_args.kwargs["auth_user_id"], 42)
         self.assertEqual(record.call_args.kwargs["event_type"], "recommendation_viewed")
+
+    def test_endpoint_maps_actor_permission_error_to_403(self) -> None:
+        from api import app as api_app
+
+        with patch.object(api_app, "require_deal"), patch.object(
+            api_app, "auth_current_user", return_value={"id": 7, "role": "admin", "manager_id": None},
+        ), patch.object(
+            api_app.storage,
+            "record_recommendation_lifecycle_event",
+            side_effect=PermissionError("только менеджер"),
+            create=True,
+        ):
+            with self.assertRaises(api_app.HTTPException) as raised:
+                api_app.deal_recommendation_event_create(
+                    "101",
+                    api_app.RecommendationEventRequest(
+                        event_type="shown", recommendation_kind="deal_task", recommendation_id=9,
+                    ),
+                )
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 class ManagerTrajectoryCliTests(unittest.TestCase):

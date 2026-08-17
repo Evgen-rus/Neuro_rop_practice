@@ -58,8 +58,8 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
         print(f"Статус: {payload['status']}")
         print(f"Период: {payload['period']['from']} — {payload['period']['to']}")
         print(f"Менеджеры: {', '.join(payload['manager_ids'])}")
-        print(f"CRM-активности: {payload['counts']['activities']}")
-        print(f"Изменения стадий: {payload['counts']['stage_changes']}")
+        print(f"Версии CRM-активностей, полученные по LAST_UPDATED: {payload['counts']['activities']}")
+        print(f"Изменения стадий между наблюдаемыми срезами: {payload['counts']['stage_changes']}")
         for source, error in payload.get("errors", {}).items():
             print(f"Недоступно {source}: {error}")
         return
@@ -82,12 +82,17 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
             f"{counts.get('recommendation_viewed', 0)}"
         )
         print(f"  CRM-события: {counts.get('crm_activity_observed', 0)}; сущностей: {manager['entities']}")
+        excluded = manager.get("excluded_unverified_lifecycle_events", 0)
+        if excluded:
+            print(f"  Исключено неподтверждённых shown/viewed: {excluded}")
         for window in manager.get("viewed_windows_60m") or []:
             print(
                 f"  После {window['recommendation_kind']} #{window['recommendation_id']}: "
                 f"{window['observation']} (целевая сущность: {window['target_entity_events']}, "
                 f"другие: {window['other_entity_events']})"
             )
+    for warning in payload.get("warnings") or []:
+        print(f"Важно: {warning}")
 
 
 def _candidate_payload(args: argparse.Namespace) -> dict[str, Any]:

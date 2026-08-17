@@ -270,14 +270,28 @@ def build_manager_trajectory_report(
     warnings = [
         "Bitrix responsible_id означает связь активности с менеджером, но не доказывает физического автора.",
         "COMPLETED=Y не доказывает содержательный контакт с клиентом.",
+        "Период отчёта отбирает CRM-факты по occurred_at; запись могла быть получена позже по LAST_UPDATED.",
+        "Смена стадии означает разницу между ручными сборами, а не полную историю переходов Bitrix.",
     ]
+    excluded_unverified_total = 0
     for manager_id in managers:
         rows = [item for item in events if str(item.get("manager_id") or "") == manager_id]
+        unverified_lifecycle = [
+            item for item in rows
+            if item.get("event_type") in {"recommendation_shown", "recommendation_viewed"}
+            and not _verified_manager_actor(item, manager_id)
+        ]
+        excluded_unverified_total += len(unverified_lifecycle)
+        counted_rows = [
+            item for item in rows
+            if item.get("event_type") not in {"recommendation_shown", "recommendation_viewed"}
+            or _verified_manager_actor(item, manager_id)
+        ]
         counts: dict[str, int] = {}
-        for item in rows:
+        for item in counted_rows:
             event_type = str(item.get("event_type") or "")
             counts[event_type] = counts.get(event_type, 0) + 1
-        viewed = [item for item in rows if item.get("event_type") == "recommendation_viewed"]
+        viewed = [item for item in counted_rows if item.get("event_type") == "recommendation_viewed"]
         windows: list[dict[str, Any]] = []
         for event in viewed:
             viewed_at = datetime.fromisoformat(str(event["occurred_at"]).replace("Z", "+00:00"))
@@ -305,6 +319,7 @@ def build_manager_trajectory_report(
             "manager_id": manager_id,
             "counts": counts,
             "entities": len({(item.get("entity_type"), item.get("entity_id")) for item in rows}),
+            "excluded_unverified_lifecycle_events": len(unverified_lifecycle),
             "quick_help_generated": sum(
                 item.get("event_type") == "recommendation_generated"
                 and item.get("recommendation_kind") == "quick_help"
@@ -312,9 +327,24 @@ def build_manager_trajectory_report(
             ),
             "viewed_windows_60m": windows,
         })
+    if excluded_unverified_total:
+        warnings.append(
+            f"Исключено неподтверждённых shown/viewed событий: {excluded_unverified_total}. "
+            "Они не считаются использованием рекомендации менеджером."
+        )
     return {
         "period": {"from": _iso(start), "to": _iso(end), "timezone": "Europe/Moscow"},
         "collection_status": get_manager_trajectory_collection_state(db_path, collection_key=COLLECTION_KEY),
         "managers": grouped,
         "warnings": warnings,
     }
+
+
+def _verified_manager_actor(event: dict[str, Any], manager_id: str) -> bool:
+    payload = event.get("payload")
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("actor_verified") is True
+        and payload.get("actor_role") == "manager"
+        and str(payload.get("actor_manager_id") or "") == str(manager_id)
+    )

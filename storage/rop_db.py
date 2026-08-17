@@ -6885,6 +6885,14 @@ def record_recommendation_lifecycle_event(
         raise ValueError("Неизвестный recommendation_kind")
     init_db(db_path)
     with connect(db_path) as conn:
+        auth_user = _get_auth_user_row(conn, user_id=int(auth_user_id))
+        if (
+            auth_user is None
+            or not bool(auth_user["is_active"])
+            or str(auth_user["role"] or "") != "manager"
+            or not str(auth_user["manager_id"] or "").strip()
+        ):
+            raise PermissionError("Событие использования может записать только активный менеджер")
         if recommendation_kind == "deal_task":
             row = conn.execute(
                 """
@@ -6910,12 +6918,16 @@ def record_recommendation_lifecycle_event(
             ).fetchone()
         if row is None:
             raise ValueError("Рекомендация не найдена для этой сделки")
+        manager_id = str(row["manager_id"] or "").strip()
+        actor_manager_id = str(auth_user["manager_id"] or "").strip()
+        if not manager_id or actor_manager_id != manager_id:
+            raise PermissionError("Менеджер может записать событие только для своей сделки")
         event_name = event_type.removeprefix("recommendation_")
         return _insert_manager_trajectory_event(
             conn,
             entity_type="deal",
             entity_id=str(deal_id),
-            manager_id=str(row["manager_id"] or "") or None,
+            manager_id=manager_id,
             auth_user_id=int(auth_user_id),
             event_type=event_type,
             recommendation_kind=recommendation_kind,
@@ -6927,6 +6939,11 @@ def record_recommendation_lifecycle_event(
                 f"{event_name}:{recommendation_kind}:{row['id']}:user:{int(auth_user_id)}"
             ),
             occurred_at=utcish_now(),
+            payload={
+                "actor_verified": True,
+                "actor_role": "manager",
+                "actor_manager_id": actor_manager_id,
+            },
         )
 
 

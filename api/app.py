@@ -1098,6 +1098,8 @@ def deal_recommendation_event_create(
             auth_user_id=int(user["id"]),
         )
         return {"ok": True, "event_id": int(event["id"])}
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
