@@ -1611,8 +1611,8 @@ function RopDealScreen({ deal, aiRecommendation, hasAnalysis }: {
   return <>
     {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
     <DailyCommunicationWidget summary={deal.communications_today} />
-    {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
     {hasAnalysis && deal.coaching.communication_quality_audit ? <CommunicationQualityAuditCard deal={deal} /> : null}
+    {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
   </>
 }
 
@@ -1726,12 +1726,13 @@ function RopCurrentSummary({ deal, aiRecommendation }: { deal: DealControlDeal; 
   const analysisTime = deal.coaching.analysis_created_at
     ? formatMoscowDateTime(deal.coaching.analysis_created_at, { hour: '2-digit', minute: '2-digit' })
     : ''
-  return <section className="dc-rop-current-summary">
-    <header>
+  return <details className="dc-rop-current-summary">
+    <summary>
       <span>AI</span>
-      <div><h3>{analysisTime ? `Итог на ${analysisTime}` : 'Текущий итог'}</h3><p>Срез сформирован из последнего сохранённого анализа и чек-листа</p></div>
+      <h3>{analysisTime ? `Итог на ${analysisTime}` : 'Текущий итог'}</h3>
       <strong>{deal.coaching.report_id ? 'Последний анализ' : 'Нет анализа'}</strong>
-    </header>
+      <i aria-hidden="true">⌄</i>
+    </summary>
     <div>
       <p>{deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
       {completed.length ? <p><b>Менеджер закрыл:</b> {completed.join(' ')}</p> : null}
@@ -1739,7 +1740,7 @@ function RopCurrentSummary({ deal, aiRecommendation }: { deal: DealControlDeal; 
       <aside><b>Вывод для РОПа</b><span>{deal.coaching.rop_focus || deal.coaching.what_to_check_now || 'Управленческий вывод появится после анализа сделки.'}</span></aside>
     </div>
     <AiRecommendationCard task={aiRecommendation} />
-  </section>
+  </details>
 }
 
 function ManagerSituationActions(props: {
