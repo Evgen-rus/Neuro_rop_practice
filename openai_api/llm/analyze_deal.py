@@ -296,22 +296,37 @@ def build_prompt(
 Сформируй deal_context как описательную живую карту сделки. Этот блок пока не является
 инструкцией для дожима, фоллоуапов или клиентских текстов и не должен сам по себе менять
 остальные рекомендации.
+Не дублируй qualification_assessment.bant, money_path_diagnosis, payment_blocker и
+competitor_defense_checklist внутри deal_context: они уже считаются отдельно и попадут
+на карту из этих блоков.
+- deal_card — переменные карточки из CRM-контекста: компания, оборудование (модель, если
+  есть, иначе тип), срок изготовления, сумма, ответственный. Не выдумывай модель, сумму
+  или ФИО; если поля нет, так и напиши.
 - current_truth — только актуальный срез, без длинной хронологии.
+- decision_path — ЛПР, влияющие лица, путь согласования и кто сейчас владеет шагом.
+  Неподтверждённый ЛПР помечай needs_confirmation или inferred, не выдавай догадку за факт.
+- commitments — обещания сторон и их статус. Пустой список допустим, если обещаний нет.
 - critical_facts — до 10 фактов, потеря которых может изменить решение по сделке: точные
   сроки, бюджет, технические ограничения, ЛПР, путь согласования, доставка/монтаж,
   конкурент и подтверждённые обещания. Не ослабляй точный смысл: «должно работать к дате»
   не заменяй на «отгрузить к дате».
 - turning_points — до 8 событий, которые действительно изменили состояние сделки, а не
   все коммуникации подряд.
+- journey — хронология трансформации для таймлайна: при наличии исходного лида начни с
+  конвертации лид→сделка, дальше стадии и важные точки. На каждом шаге укажи, что узнали
+  и чего не хватило. Это не повтор всех коммуникаций и не дубль BANT.
 - pain_points — до 6 клиентских или операционных проблем с текущим состоянием решения.
-- pressure_levers — до 6 коммерческих рычагов. Рычагом может быть срок, бюджет,
-  операционное последствие, техническое ограничение, ЛПР, конкурент или доверие, но не
-  личная уязвимость и не чрезвычайная ситуация сама по себе. Для каждого рычага отделяй
-  подтверждённое основание от вывода, сохраняй business_consequence и назначай уникальный
-  ai_priority 1, 2 или 3 только трём самым важным активным рычагам; остальным ставь null.
+- pressure_levers — от 2 до 6 коммерческих рычагов, лучше 3. Рычагом может быть срок,
+  бюджет, операционное последствие, техническое ограничение, ЛПР, конкурент или доверие,
+  но не личная уязвимость и не чрезвычайная ситуация сама по себе. Если второй и третий
+  рычаг слабее первого, оставь их с basis_status=inferred или needs_confirmation, не
+  выдавай гипотезу за подтверждённый факт. Для каждого рычага отделяй подтверждённое
+  основание от вывода, сохраняй business_consequence и назначай уникальный ai_priority
+  1, 2 или 3 только трём самым важным активным рычагам; остальным ставь null.
 - manager_comment и internal_context допустимы как основание для контроля, но не как слова
   клиента. Если важный факт подтверждён только ими, ставь needs_confirmation.
-- open_questions — только вопросы, ответ на которые способен изменить движение сделки.
+- open_questions — пробелы, которые ещё можно закрыть вопросом клиенту; только вопросы,
+  ответ на которые способен изменить движение сделки.
 - source_conflicts — явные противоречия источников; не выбирай удобную версию молча.
 - У всех элементов должны быть стабильные короткие ID латиницей, пригодные для ручной
   приоритизации в интерфейсе. Для одного и того же смысла сохраняй тот же ID между анализами.
@@ -549,6 +564,13 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
     "commercial_fit": {{"new_equipment_budget_status": "sufficient|below_minimum|unknown", "confirmed_budget_rub": "число или null", "new_equipment_minimum_rub": 1000000, "reason_code": "budget_below_new_equipment_minimum|unknown|null", "evidence": []}}
   }},
   "deal_context": {{
+    "deal_card": {{
+      "company": "компания клиента или «не указана»",
+      "equipment": "модель или тип оборудования",
+      "manufacturing_days": "срок изготовления из CRM или null",
+      "amount": "сумма сделки или null",
+      "responsible": "ответственный менеджер или «не указан»"
+    }},
     "current_truth": {{
       "client_profile": "кто клиент и какова его подтверждённая роль",
       "current_need": "актуальная потребность клиента",
@@ -558,6 +580,25 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
       "next_checkpoint": "ближайшая контрольная дата/событие или null",
       "next_step_owner": "manager|client|rop|finance|leasing|unknown"
     }},
+    "decision_path": {{
+      "decision_maker": "ЛПР или «не подтверждён»",
+      "influencers": ["до 4 влияющих лиц"],
+      "approval_path": "как согласовывается решение",
+      "current_step_owner": "manager|client|rop|finance|leasing|unknown",
+      "basis_status": "confirmed|needs_confirmation|inferred",
+      "evidence": ["1-5 кратких оснований"]
+    }},
+    "commitments": [
+      {{
+        "commitment_id": "stable_commitment_id",
+        "party": "client|company|manager",
+        "promise": "что обещано",
+        "due_at": "ISO-дата/время или null",
+        "status": "open|done|broken|unknown",
+        "basis_status": "confirmed|needs_confirmation|inferred",
+        "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
     "critical_facts": [
       {{
         "fact_id": "stable_fact_id",
@@ -579,6 +620,17 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
         "impact": "что изменилось в сделке",
         "status": "active|resolved|superseded",
         "evidence": ["1-5 кратких оснований"]
+      }}
+    ],
+    "journey": [
+      {{
+        "entry_id": "stable_journey_id",
+        "occurred_at": "ISO-дата/время или null",
+        "title": "лид, стадия или точка изменения",
+        "what_happened": "что произошло на этом шаге",
+        "learned": ["что выяснили"],
+        "missing": ["чего не хватило"],
+        "status": "past|current"
       }}
     ],
     "pain_points": [
@@ -979,6 +1031,8 @@ def render_report(
         if not isinstance(value, dict) or not value:
             return "## Живая карта сделки\n\nНет данных"
         truth = value.get("current_truth") if isinstance(value.get("current_truth"), dict) else {}
+        card = value.get("deal_card") if isinstance(value.get("deal_card"), dict) else {}
+        decision = value.get("decision_path") if isinstance(value.get("decision_path"), dict) else {}
 
         def evidence_text(item: dict[str, Any]) -> str:
             evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
@@ -1048,7 +1102,38 @@ def render_report(
                 f"   - Что проверить: {item.get('next_check', 'не указано')}"
             ),
         )
+        commitments = cards(
+            "Обещания сторон",
+            value.get("commitments"),
+            lambda index, item, evidence: (
+                f"{index}. **{item.get('promise', 'не указано')}**\n"
+                f"   - Сторона / статус: {item.get('party', 'unknown')} / {item.get('status', 'unknown')}\n"
+                f"   - Срок: {human_value(item.get('due_at'))}\n"
+                f"   - Достоверность: {item.get('basis_status', 'unknown')}\n"
+                f"   - Основание: {evidence}"
+            ),
+        )
+        journey = cards(
+            "История сделки",
+            value.get("journey"),
+            lambda index, item, _evidence: (
+                f"{index}. **{item.get('title', 'не указано')}** — {item.get('what_happened', 'не указано')}\n"
+                f"   - Когда: {human_value(item.get('occurred_at'))}\n"
+                f"   - Узнали: {'; '.join(str(entry) for entry in item.get('learned', []) if str(entry).strip()) or 'нет данных'}\n"
+                f"   - Не хватило: {'; '.join(str(entry) for entry in item.get('missing', []) if str(entry).strip()) or 'нет данных'}\n"
+                f"   - Статус: {item.get('status', 'unknown')}"
+            ),
+        )
+        influencers = decision.get("influencers") if isinstance(decision.get("influencers"), list) else []
         return f"""## Живая карта сделки
+
+### Карточка сделки
+
+- Компания: {human_value(card.get('company'))}
+- Оборудование: {human_value(card.get('equipment'))}
+- Срок изготовления: {human_value(card.get('manufacturing_days'))}
+- Сумма: {human_value(card.get('amount'))}
+- Ответственный: {human_value(card.get('responsible'))}
 
 ### Текущая истина
 
@@ -1060,7 +1145,17 @@ def render_report(
 - Следующая контрольная точка: {human_value(truth.get('next_checkpoint'))}
 - Владелец следующего шага: {truth.get('next_step_owner', 'unknown')}
 
+### Маршрут решения
+
+- ЛПР: {human_value(decision.get('decision_maker'))}
+- Влияющие лица: {'; '.join(str(entry) for entry in influencers if str(entry).strip()) or 'не указаны'}
+- Путь согласования: {human_value(decision.get('approval_path'))}
+- Кто владеет шагом: {human_value(decision.get('current_step_owner'))}
+- Достоверность: {human_value(decision.get('basis_status'))}
+
 {facts}
+
+{commitments}
 
 {turning_points}
 
@@ -1071,6 +1166,8 @@ def render_report(
 ### Важные неизвестные
 
 {bullet_list(value.get('open_questions'))}
+
+{journey}
 
 {conflicts}"""
 

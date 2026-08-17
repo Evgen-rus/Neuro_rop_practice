@@ -471,6 +471,44 @@ def _main_risk(analysis: dict[str, Any], situation: dict[str, Any]) -> str:
     return str(situation.get("what_blocks_progress") or "").strip()
 
 
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _public_deal_card(
+    deal: dict[str, Any],
+    analysis: dict[str, Any],
+    raw_card: Any,
+) -> dict[str, Any]:
+    """Собрать карточку сделки: CRM-поля надёжнее, модель дополняет пробелы."""
+    card = _dict(raw_card)
+    deal_state = _dict(analysis.get("deal_state"))
+    assessment = _dict(analysis.get("qualification_assessment"))
+    solution = _dict(assessment.get("solution_fit"))
+    commercial = _dict(assessment.get("commercial_fit"))
+    equipment = str(card.get("equipment") or "").strip()
+    if not equipment:
+        equipment_type = str(solution.get("equipment_type") or "").strip()
+        equipment = equipment_type if equipment_type and equipment_type != "unknown" else ""
+    amount = deal.get("amount")
+    if amount in (None, ""):
+        amount = card.get("amount")
+    if amount in (None, ""):
+        amount = deal_state.get("amount")
+    if amount in (None, "") and commercial.get("confirmed_budget_rub") is not None:
+        amount = commercial.get("confirmed_budget_rub")
+    return {
+        "title": str(deal.get("title") or "").strip(),
+        "company": str(card.get("company") or "").strip(),
+        "equipment": equipment,
+        "manufacturing_days": card.get("manufacturing_days"),
+        "amount": amount,
+        "currency_id": deal.get("currency_id"),
+        "responsible": str(deal.get("manager_name") or card.get("responsible") or "").strip(),
+        "stage": str(deal.get("stage_name") or deal_state.get("stage") or "").strip(),
+    }
+
+
 def _fallback_deal_context(
     analysis: dict[str, Any],
     situation: dict[str, Any],
@@ -580,6 +618,23 @@ def _fallback_deal_context(
         "pressure_levers": levers,
         "open_questions": open_questions,
         "source_conflicts": [],
+        "deal_card": {
+            "company": "Не указана",
+            "equipment": "Не указано",
+            "manufacturing_days": None,
+            "amount": deal.get("amount") or deal_state.get("amount"),
+            "responsible": str(deal.get("manager_name") or "Не указан"),
+        },
+        "decision_path": {
+            "decision_maker": "Не подтверждён",
+            "influencers": [],
+            "approval_path": "Недостаточно данных для маршрута согласования",
+            "current_step_owner": str(money.get("current_owner_of_next_step") or "unknown"),
+            "basis_status": "needs_confirmation",
+            "evidence": ["В старом отчёте нет отдельного маршрута решения."],
+        },
+        "commitments": [],
+        "journey": [],
     }
 
 
@@ -602,6 +657,19 @@ def _public_deal_context(
         lever["manual_priority"] = manual.get(lever_id)
         levers.append(lever)
     context["pressure_levers"] = levers
+    context["deal_card"] = _public_deal_card(deal, analysis, context.get("deal_card"))
+    context.setdefault("decision_path", None)
+    context.setdefault("commitments", [])
+    context.setdefault("journey", [])
+    # BANT, путь к деньгам и конкурент уже посчитаны в полном анализе — не просим модель дублировать их.
+    assessment = _dict(analysis.get("qualification_assessment"))
+    context["bant"] = _dict(assessment.get("bant")) or None
+    context["solution_fit"] = _dict(assessment.get("solution_fit")) or None
+    context["commercial_fit"] = _dict(assessment.get("commercial_fit")) or None
+    context["money_path"] = _dict(analysis.get("money_path_diagnosis")) or None
+    payment = _dict(analysis.get("payment_blocker"))
+    context["payment_blocker"] = payment or None
+    context["competitor"] = _dict(analysis.get("competitor_defense_checklist")) or None
     return context
 
 

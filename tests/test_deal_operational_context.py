@@ -190,6 +190,27 @@ class DealOperationalContextTests(unittest.TestCase):
             ],
         )
 
+    def test_stage_history_keeps_more_than_six_days(self) -> None:
+        items = []
+        lookup = {}
+        for index in range(8):
+            stage_id = str(index)
+            items.append({
+                "ID": stage_id,
+                "CREATED_TIME": f"2026-07-{10 + index:02d}T12:00:00+03:00",
+                "STAGE_ID": stage_id,
+            })
+            lookup[stage_id] = {"stage": {"name": f"Стадия {index}"}}
+        bundle = {
+            "deal": {"item": {}},
+            "stage_history": {"ok": True, "items": items},
+            "stage_history_lookup": lookup,
+        }
+        rows = context.stage_history_rows(bundle)
+        self.assertEqual(len(rows), 8)
+        self.assertIn("Стадия 0", rows[0])
+        self.assertIn("Стадия 7", rows[-1])
+
     def test_nested_customer_history_operational_context_is_supported(self) -> None:
         nested = {"bundle_type": "customer_history_bundle", "deal_operational_context": self.fixture()}
 

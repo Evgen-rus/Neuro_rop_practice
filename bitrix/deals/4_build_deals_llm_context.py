@@ -32,6 +32,7 @@ DEFAULT_INPUT_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEFAULT_WORKSPACE_ROOT = BASE_DIR / "reports" / "rop_assistant" / "deals"
 
 logger = get_logger(__file__)
+STAGE_HISTORY_DAY_LIMIT = 20
 
 
 def load_deal_report_module() -> Any:
@@ -283,7 +284,7 @@ def stage_history_rows(bundle: dict[str, Any]) -> list[str]:
         day = format_moscow_datetime(item.get("CREATED_TIME")).split(" ", 1)[0]
         if not grouped[day] or grouped[day][-1] != stage_name:
             grouped[day].append(stage_name)
-    days = list(grouped.items())[-6:]
+    days = list(grouped.items())[-STAGE_HISTORY_DAY_LIMIT:]
     return [
         f"- {day}: {' → '.join(stages)}"
         for day, stages in days

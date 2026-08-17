@@ -979,7 +979,58 @@ export type DealContextPressureLever = {
   evidence: string[]
 }
 
+export type DealContextDealCard = {
+  title?: string
+  company?: string
+  equipment?: string
+  manufacturing_days?: string | number | null
+  amount?: string | number | null
+  currency_id?: string | null
+  responsible?: string
+  stage?: string
+}
+
+export type DealContextDecisionPath = {
+  decision_maker: string
+  influencers: string[]
+  approval_path: string
+  current_step_owner: string
+  basis_status: string
+  evidence: string[]
+}
+
+export type DealContextCommitment = {
+  commitment_id: string
+  party: string
+  promise: string
+  due_at?: string | null
+  status: string
+  basis_status: string
+  evidence: string[]
+}
+
+export type DealContextJourneyEntry = {
+  entry_id: string
+  occurred_at?: string | null
+  title: string
+  what_happened: string
+  learned: string[]
+  missing: string[]
+  status: string
+}
+
+export type DealContextBantItem = {
+  status?: string
+  evidence?: string[]
+  missing_facts?: string[]
+  decision_timing?: string | null
+  decision_timing_status?: string
+  need_or_launch_timing?: string | null
+  need_or_launch_timing_status?: string
+}
+
 export type DealContextSnapshot = {
+  deal_card?: DealContextDealCard | null
   current_truth: {
     client_profile: string
     current_need: string
@@ -989,12 +1040,48 @@ export type DealContextSnapshot = {
     next_checkpoint?: string | null
     next_step_owner: string
   }
+  decision_path?: DealContextDecisionPath | null
+  commitments?: DealContextCommitment[]
   critical_facts: DealContextCriticalFact[]
   turning_points: DealContextTurningPoint[]
+  journey?: DealContextJourneyEntry[]
   pain_points: DealContextPainPoint[]
   pressure_levers: DealContextPressureLever[]
   open_questions: string[]
   source_conflicts: Array<{ description: string; sources: string[]; next_check: string }>
+  bant?: {
+    budget?: DealContextBantItem
+    authority?: DealContextBantItem
+    need?: DealContextBantItem
+    timeframe?: DealContextBantItem
+    overall_status?: string
+    missing_facts?: string[]
+    next_question?: string | null
+  } | null
+  solution_fit?: { equipment_type?: string; status?: string; missing_facts?: string[] } | null
+  commercial_fit?: { confirmed_budget_rub?: number | null; new_equipment_budget_status?: string } | null
+  money_path?: {
+    stuck_point?: string
+    why_money_is_at_risk?: string
+    current_owner_of_next_step?: string
+    next_required_fact?: string
+    evidence?: string[]
+  } | null
+  payment_blocker?: {
+    applicable?: boolean
+    blocker_type?: string
+    payer?: string
+    current_status?: string
+    missing_confirmation?: string[]
+    next_actions?: string[]
+  } | null
+  competitor?: {
+    applicable?: boolean
+    competitor_type?: string
+    defense_points?: string[]
+    questions_to_client?: string[]
+    risk_if_not_defended?: string
+  } | null
 }
 
 export type ManagerAssistantWorkspace = {

@@ -7,6 +7,13 @@ from openai_api.llm.validation import _validate_deal_context
 
 def deal_context() -> dict:
     return {
+        "deal_card": {
+            "company": "Завод",
+            "equipment": "Этикетировщик ЭН00.05",
+            "manufacturing_days": "25",
+            "amount": "240000",
+            "responsible": "Иванов",
+        },
         "current_truth": {
             "client_profile": "Директор принимает решение",
             "current_need": "Оборудование для производства",
@@ -16,6 +23,23 @@ def deal_context() -> dict:
             "next_checkpoint": "2026-08-17",
             "next_step_owner": "client",
         },
+        "decision_path": {
+            "decision_maker": "Директор",
+            "influencers": ["Главный инженер"],
+            "approval_path": "Инженер проверяет, директор утверждает",
+            "current_step_owner": "client",
+            "basis_status": "needs_confirmation",
+            "evidence": ["Комментарий менеджера про директора"],
+        },
+        "commitments": [{
+            "commitment_id": "quote_review",
+            "party": "client",
+            "promise": "Директор рассмотрит КП до пятницы",
+            "due_at": "2026-08-15",
+            "status": "open",
+            "basis_status": "needs_confirmation",
+            "evidence": ["Сообщение клиента"],
+        }],
         "critical_facts": [{
             "fact_id": "launch_deadline",
             "category": "deadline",
@@ -34,6 +58,15 @@ def deal_context() -> dict:
             "impact": "Следующий шаг перешёл к директору",
             "status": "active",
             "evidence": ["Подтверждение клиента"],
+        }],
+        "journey": [{
+            "entry_id": "lead_converted",
+            "occurred_at": "2026-07-01",
+            "title": "Лид стал сделкой",
+            "what_happened": "После квалификации создана сделка",
+            "learned": ["Нужен этикетировщик"],
+            "missing": ["ЛПР не подтверждён"],
+            "status": "past",
         }],
         "pain_points": [{
             "pain_id": "decision_delay",
@@ -54,6 +87,17 @@ def deal_context() -> dict:
             "status": "active",
             "ai_priority": 1,
             "evidence": ["Комментарий CRM"],
+        }, {
+            "lever_id": "director_approval",
+            "type": "authority",
+            "title": "Решение директора",
+            "fact": "КП лежит у директора",
+            "why_important": "Без ЛПР сделка не двинется к договору",
+            "business_consequence": "Потеря окна запуска",
+            "basis_status": "inferred",
+            "status": "active",
+            "ai_priority": 2,
+            "evidence": ["Статус согласования в CRM"],
         }],
         "open_questions": ["Сохранился ли срок запуска?"],
         "source_conflicts": [],
@@ -76,6 +120,13 @@ class DealContextSnapshotTests(unittest.TestCase):
         errors: list[str] = []
         _validate_deal_context(value, errors)
         self.assertTrue(any("duplicate ai_priority 1" in error for error in errors))
+
+    def test_single_lever_is_rejected(self) -> None:
+        value = deal_context()
+        value["pressure_levers"] = value["pressure_levers"][:1]
+        errors: list[str] = []
+        _validate_deal_context(value, errors)
+        self.assertTrue(any("at least 2 items" in error for error in errors))
 
 
 if __name__ == "__main__":

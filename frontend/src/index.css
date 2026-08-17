@@ -7231,6 +7231,7 @@ ul.facts.bad li:before {
 .dc-deal-context-columns article small { color: #6b7e94; }
 .dc-deal-context-columns ul { margin: 0; padding-left: 18px; font-size: 10.5px; line-height: 1.5; }
 .dc-deal-context-timeline { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.dc-deal-context-timeline-scroll { max-height: 420px; overflow: auto; padding-right: 4px; }
 .dc-deal-context-timeline > li { display: grid; grid-template-columns: 115px 1fr; gap: 10px; }
 .dc-deal-context-timeline time { color: #70849b; font-size: 9.5px; }
 .dc-deal-context-timeline > li > div { display: grid; gap: 4px; padding: 9px 10px; border-left: 3px solid #8bb3d8; border-radius: 0 8px 8px 0; background: #f7fbff; }

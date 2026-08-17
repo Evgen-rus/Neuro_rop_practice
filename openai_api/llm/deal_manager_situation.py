@@ -28,10 +28,12 @@ _ANALYSIS_FIELDS = (
     "deal_control_brief",
     "client_communication_profile",
     "qualification_assessment",
+    "deal_context",
     "deal_mode",
     "main_risk",
     "payment_blocker",
     "money_path_diagnosis",
+    "competitor_defense_checklist",
     "manager_action_block",
     "rop_manager_message_block",
     "price_comparability_check",
@@ -95,7 +97,7 @@ def _compact_value(value: Any, *, depth: int = 0) -> Any:
             for key, item in list(value.items())[:24]
         }
     if isinstance(value, list):
-        return [_compact_value(item, depth=depth + 1) for item in value[:8]]
+        return [_compact_value(item, depth=depth + 1) for item in value[:12]]
     return str(value)[:1200]
 
 

@@ -2631,6 +2631,8 @@ function ManagerAssistantModal(props: {
           </section> : null}
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <ManagerDealContextView
+            deal={props.deal}
+            onToggleChecklistItem={props.onToggleChecklistItem}
             dealId={props.deal.deal_id}
             context={props.workspace.context.deal_context || null}
             stage={props.workspace.context.stage}
@@ -2659,15 +2661,26 @@ function contextStatusLabel(value: string) {
     needs_confirmation: 'Нужно подтвердить',
     conflicted: 'Есть противоречие',
     outdated: 'Устарело',
-    inferred: 'Вывод',
+    inferred: 'Гипотеза',
+    missing: 'Не выяснено',
     active: 'Активно',
     weakened: 'Ослабло',
     resolved: 'Решено',
     partially_resolved: 'Частично решено',
     superseded: 'Заменено новым',
     unknown: 'Неизвестно',
+    open: 'Открыто',
+    done: 'Выполнено',
+    broken: 'Нарушено',
+    past: 'Прошло',
+    current: 'Сейчас',
   }
   return labels[value] || value || 'Неизвестно'
+}
+
+function contextDisplay(value: unknown) {
+  if (value === null || value === undefined || value === '') return 'Не указано'
+  return String(value)
 }
 
 function ContextEvidence({ values }: { values: string[] }) {
@@ -2675,6 +2688,8 @@ function ContextEvidence({ values }: { values: string[] }) {
 }
 
 function ManagerDealContextView(props: {
+  deal: DealControlDeal
+  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   dealId: string
   context: DealContextSnapshot | null
   stage: string
@@ -2692,6 +2707,7 @@ function ManagerDealContextView(props: {
   const [markdownLoading, setMarkdownLoading] = useState(false)
   const [markdownError, setMarkdownError] = useState('')
   const context = props.context
+  const checklist = <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
 
   useEffect(() => {
     const next: Record<string, 1 | 2 | 3 | null> = {}
@@ -2739,22 +2755,62 @@ function ManagerDealContextView(props: {
     }
   }
 
-  if (!context) return <section className="dc-manager-assistant-context-grid">
-    <div><small>Этап</small><strong>{props.stage || 'Не указан'}</strong></div>
-    <div><small>Текущая задача</small><strong>{props.currentTask || 'Нет открытой задачи'}</strong></div>
-    <div><small>Последняя коммуникация</small><strong>{props.lastCommunication ? `${dateTime(props.lastCommunication.occurred_at)} · ${props.lastCommunication.text}` : 'Нет доступных данных'}</strong></div>
-    <div><small>Главный риск</small><strong>{props.mainRisk || 'Не выделен'}</strong></div>
-    <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
+  if (!context) return <section className="dc-deal-context">
+    {checklist}
+    <section className="dc-manager-assistant-context-grid">
+      <div><small>Этап</small><strong>{props.stage || 'Не указан'}</strong></div>
+      <div><small>Текущая задача</small><strong>{props.currentTask || 'Нет открытой задачи'}</strong></div>
+      <div><small>Последняя коммуникация</small><strong>{props.lastCommunication ? `${dateTime(props.lastCommunication.occurred_at)} · ${props.lastCommunication.text}` : 'Нет доступных данных'}</strong></div>
+      <div><small>Главный риск</small><strong>{props.mainRisk || 'Не выделен'}</strong></div>
+      <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
+    </section>
   </section>
 
   const truth = context.current_truth
+  const card = context.deal_card
+  const bant = context.bant
+  const decision = context.decision_path
+  const commitments = context.commitments || []
+  const journey = context.journey || []
+  const timeline = journey.length ? journey : context.turning_points
   const levers = [...context.pressure_levers].sort((left, right) => {
     const leftPriority = priorities[left.lever_id] ?? left.ai_priority ?? 9
     const rightPriority = priorities[right.lever_id] ?? right.ai_priority ?? 9
     return leftPriority - rightPriority
   })
+  const bantFields: Array<[string, string, { status?: string; evidence?: string[] } | undefined]> = [
+    ['budget', 'Бюджет', bant?.budget],
+    ['authority', 'Полномочия', bant?.authority],
+    ['need', 'Потребность', bant?.need],
+    ['timeframe', 'Срок', bant?.timeframe],
+  ]
+  const amountText = card?.amount != null && card.amount !== ''
+    ? `${card.amount}${card.currency_id ? ` ${card.currency_id}` : ''}`
+    : 'Не указана'
+  const equipmentLabels: Record<string, string> = { labeler: 'Этикетировщик', filling_line: 'Линия розлива', block: 'Блок', unknown: 'Не определено' }
+  const competitorLabels: Record<string, string> = {
+    china: 'Китай / аналог',
+    direct_competitor: 'Прямой конкурент',
+    alternative_supplier: 'Другой поставщик',
+    internal_solution: 'Внутреннее решение',
+    unknown: 'Не уточнён',
+    not_applicable: 'Не заявлен',
+  }
+
   return <section className="dc-deal-context">
+    {checklist}
     <header className="dc-deal-context-heading"><div><h3>Живая карта сделки</h3><p>Информационный срез последнего полного анализа. Выбранные рычаги пока не влияют на дожим и фоллоуапы.</p></div><span>Отчёт #{props.report?.report_id || '—'}</span></header>
+
+    <section className="dc-deal-context-truth">
+      <h4>Карточка сделки</h4>
+      <div><small>Название</small><strong>{contextDisplay(card?.title || props.deal.title)}</strong></div>
+      <div><small>Сумма</small><strong>{amountText}</strong></div>
+      <div><small>Ответственный</small><strong>{contextDisplay(card?.responsible)}</strong></div>
+      <div><small>Компания</small><strong>{contextDisplay(card?.company)}</strong></div>
+      <div><small>Оборудование</small><strong>{contextDisplay(card?.equipment || equipmentLabels[context.solution_fit?.equipment_type || ''] || context.solution_fit?.equipment_type)}</strong></div>
+      <div><small>Срок изготовления</small><strong>{contextDisplay(card?.manufacturing_days)}</strong></div>
+    </section>
+
     <section className="dc-deal-context-truth">
       <h4>Текущая истина</h4>
       <div><small>Клиент и роль</small><strong>{truth.client_profile}</strong></div>
@@ -2765,16 +2821,71 @@ function ManagerDealContextView(props: {
       <div><small>Контрольная точка</small><strong>{truth.next_checkpoint ? dateTime(truth.next_checkpoint) : 'Не назначена'} · {truth.next_step_owner}</strong></div>
     </section>
 
+    {bant ? <section className="dc-deal-context-section">
+      <h4>BANT</h4>
+      <p className="dc-deal-context-note">Тот же расчёт, что в квалификации отчёта. Общий статус: {contextStatusLabel(bant.overall_status || 'unknown')}</p>
+      <div className="dc-deal-context-cards">{bantFields.map(([key, label, item]) => <article key={key}><header><span>{label}</span><em className={item?.status || 'unknown'}>{item?.status === 'confirmed' ? 'Выяснено' : item?.status === 'missing' ? 'Не выяснено' : contextStatusLabel(item?.status || 'unknown')}</em></header><strong>{item?.evidence?.[0] || (item?.status === 'missing' ? 'Ещё не выяснено' : 'Нет формулировки')}</strong>{key === 'timeframe' && bant.timeframe ? <small>Решение: {contextDisplay(bant.timeframe.decision_timing)} · Запуск: {contextDisplay(bant.timeframe.need_or_launch_timing)}</small> : null}</article>)}</div>
+      {bant.next_question ? <p className="dc-deal-context-note">Следующий вопрос: {bant.next_question}</p> : null}
+    </section> : null}
+
+    {decision ? <section className="dc-deal-context-section">
+      <h4>Маршрут решения</h4>
+      <div className="dc-deal-context-truth">
+        <div><small>ЛПР</small><strong>{decision.decision_maker}</strong></div>
+        <div><small>Кто владеет шагом</small><strong>{decision.current_step_owner}</strong></div>
+        <div><small>Путь согласования</small><strong>{decision.approval_path}</strong></div>
+        <div><small>Достоверность</small><strong>{contextStatusLabel(decision.basis_status)}</strong></div>
+      </div>
+      {decision.influencers?.length ? <p className="dc-deal-context-note">Влияют: {decision.influencers.join(', ')}</p> : null}
+      <ContextEvidence values={decision.evidence || []} />
+    </section> : null}
+
+    {context.money_path ? <section className="dc-deal-context-section">
+      <h4>Путь к деньгам</h4>
+      <div className="dc-deal-context-truth">
+        <div><small>Где застряли</small><strong>{context.money_path.stuck_point || 'Не указано'}</strong></div>
+        <div><small>Кто должен сделать шаг</small><strong>{context.money_path.current_owner_of_next_step || 'unknown'}</strong></div>
+        <div><small>Почему деньги под риском</small><strong>{contextDisplay(context.money_path.why_money_is_at_risk)}</strong></div>
+        <div><small>Какой факт нужен</small><strong>{contextDisplay(context.money_path.next_required_fact)}</strong></div>
+      </div>
+      <ContextEvidence values={context.money_path.evidence || []} />
+      {context.payment_blocker?.applicable ? <p className="dc-deal-context-note">Блокер оплаты: {context.payment_blocker.blocker_type || 'не указан'} · {context.payment_blocker.current_status || 'статус не указан'}</p> : null}
+    </section> : null}
+
+    {context.competitor?.applicable ? <section className="dc-deal-context-section">
+      <h4>Конкурент / альтернатива</h4>
+      <article><header><span>{competitorLabels[context.competitor.competitor_type || ''] || context.competitor.competitor_type}</span></header><strong>{contextDisplay(context.competitor.risk_if_not_defended)}</strong>{context.competitor.defense_points?.length ? <small>{context.competitor.defense_points.join(' · ')}</small> : null}</article>
+    </section> : null}
+
     <section className="dc-deal-context-section"><h4>Критические факты</h4><div className="dc-deal-context-cards">{context.critical_facts.length ? context.critical_facts.map((fact) => <article key={fact.fact_id}><header><span>{fact.category}</span><em className={fact.status}>{contextStatusLabel(fact.status)}</em></header><strong>{fact.fact}</strong><small>Важность: {fact.importance} · Источник: {fact.source_type}</small><ContextEvidence values={fact.evidence} /></article>) : <p>Критические факты пока не выделены.</p>}</div></section>
 
-    <section className="dc-deal-context-section"><h4>Рычаги сделки</h4><p className="dc-deal-context-note">Ручной приоритет сохраняется отдельно от отчёта. Один номер может быть назначен только одному рычагу.</p>{priorityError ? <small className="dc-manager-error">{priorityError}</small> : null}<div className="dc-deal-context-levers">{levers.length ? levers.map((lever) => <article key={lever.lever_id}><header><div><span>{lever.type}</span><strong>{lever.title}</strong></div><label>Приоритет<select value={priorities[lever.lever_id] ?? ''} disabled={priorityBusy === lever.lever_id} onChange={(event) => void savePriority(lever.lever_id, event.target.value)}><option value="">—</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></header><p>{lever.fact}</p><dl><div><dt>Почему важно</dt><dd>{lever.why_important}</dd></div><div><dt>Последствие</dt><dd>{lever.business_consequence}</dd></div></dl><footer><span>{contextStatusLabel(lever.basis_status)}</span><small>Приоритет ИИ: {lever.ai_priority || '—'}</small></footer><ContextEvidence values={lever.evidence} /></article>) : <p>Рычаги пока не выделены.</p>}</div></section>
+    <section className="dc-deal-context-section"><h4>Рычаги сделки</h4><p className="dc-deal-context-note">Нужны минимум два рычага. Ручной приоритет сохраняется отдельно от отчёта. Один номер может быть назначен только одному рычагу.</p>{priorityError ? <small className="dc-manager-error">{priorityError}</small> : null}<div className="dc-deal-context-levers">{levers.length ? levers.map((lever) => <article key={lever.lever_id}><header><div><span>{lever.type}</span><strong>{lever.title}</strong></div><label>Приоритет<select value={priorities[lever.lever_id] ?? ''} disabled={priorityBusy === lever.lever_id} onChange={(event) => void savePriority(lever.lever_id, event.target.value)}><option value="">—</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label></header><p>{lever.fact}</p><dl><div><dt>Почему важно</dt><dd>{lever.why_important}</dd></div><div><dt>Последствие</dt><dd>{lever.business_consequence}</dd></div></dl><footer><span>{contextStatusLabel(lever.basis_status)}</span><small>Приоритет ИИ: {lever.ai_priority || '—'}</small></footer><ContextEvidence values={lever.evidence} /></article>) : <p>Рычаги пока не выделены.</p>}</div></section>
+
+    {commitments.length ? <section className="dc-deal-context-section"><h4>Обещания сторон</h4><div className="dc-deal-context-cards">{commitments.map((item) => <article key={item.commitment_id}><header><span>{item.party}</span><em className={item.status}>{contextStatusLabel(item.status)}</em></header><strong>{item.promise}</strong><small>{item.due_at ? dateTime(item.due_at) : 'Срок не указан'} · {contextStatusLabel(item.basis_status)}</small><ContextEvidence values={item.evidence} /></article>)}</div></section> : null}
 
     <section className="dc-deal-context-columns">
       <div><h4>Боли и ограничения</h4>{context.pain_points.length ? context.pain_points.map((pain) => <article key={pain.pain_id}><header><strong>{pain.title}</strong><span>{contextStatusLabel(pain.status)}</span></header><p>{pain.description}</p><small>{pain.impact}</small><ContextEvidence values={pain.evidence} /></article>) : <p>Не выделены.</p>}</div>
-      <div><h4>Важные неизвестные</h4>{context.open_questions.length ? <ul>{context.open_questions.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Нет зафиксированных вопросов.</p>}</div>
+      <div><h4>Что ещё можно узнать</h4>{context.open_questions.length ? <ul>{context.open_questions.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Нет зафиксированных вопросов.</p>}</div>
     </section>
 
-    <section className="dc-deal-context-section"><h4>Переломные моменты</h4><ol className="dc-deal-context-timeline">{context.turning_points.length ? context.turning_points.map((point) => <li key={point.turning_point_id}><time>{point.occurred_at ? dateTime(point.occurred_at) : 'Дата не указана'}</time><div><header><strong>{point.title}</strong><span>{contextStatusLabel(point.status)}</span></header><p>{point.what_happened}</p><small>{point.impact}</small><ContextEvidence values={point.evidence} /></div></li>) : <li><div><p>Переломные моменты пока не выделены.</p></div></li>}</ol></section>
+    <section className="dc-deal-context-section">
+      <h4>История сделки</h4>
+      <p className="dc-deal-context-note">Таймлайн от лида к текущей стадии: что узнали и чего не хватило на каждом шаге.</p>
+      <ol className="dc-deal-context-timeline dc-deal-context-timeline-scroll">{timeline.length ? timeline.map((point) => {
+        const journeyPoint = 'entry_id' in point ? point : null
+        const turningPoint = 'turning_point_id' in point ? point : null
+        const key = journeyPoint?.entry_id || turningPoint?.turning_point_id || point.title
+        return <li key={key}>
+          <time>{point.occurred_at ? dateTime(point.occurred_at) : 'Дата не указана'}</time>
+          <div>
+            <header><strong>{point.title}</strong><span>{contextStatusLabel(point.status)}</span></header>
+            <p>{journeyPoint?.what_happened || turningPoint?.what_happened}</p>
+            {journeyPoint ? <small>Узнали: {(journeyPoint.learned || []).join('; ') || 'нет данных'}. Не хватило: {(journeyPoint.missing || []).join('; ') || 'нет данных'}.</small> : <small>{turningPoint?.impact}</small>}
+            {turningPoint ? <ContextEvidence values={turningPoint.evidence} /> : null}
+          </div>
+        </li>
+      }) : <li><div><p>История пока не выделена. Появится после следующего полного анализа.</p></div></li>}</ol>
+    </section>
 
     {context.source_conflicts.length ? <section className="dc-deal-context-section warning"><h4>Противоречия источников</h4>{context.source_conflicts.map((conflict, index) => <article key={`${index}:${conflict.description}`}><strong>{conflict.description}</strong><p>{conflict.sources.join(' · ')}</p><small>Проверить: {conflict.next_check}</small></article>)}</section> : null}
 

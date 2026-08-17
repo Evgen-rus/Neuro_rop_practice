@@ -108,6 +108,7 @@ class DealManagerSituationTests(unittest.TestCase):
     def test_prompt_is_sectioned_and_analysis_is_allow_listed(self) -> None:
         projection = compact_analysis_projection(REPORT["report_json"])
         self.assertEqual(projection["priority_recommendation"]["priority"], "high")
+        self.assertNotIn("private_extra", projection)
         prompt = build_situation_prompt(
             analysis_projection=projection,
             deal=DEAL,

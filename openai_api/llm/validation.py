@@ -104,8 +104,11 @@ MAX_LIST_LIMITS = {
     "deal_context.turning_points": 8,
     "deal_context.pain_points": 6,
     "deal_context.pressure_levers": 6,
+    "deal_context.commitments": 6,
+    "deal_context.journey": 12,
     "deal_context.open_questions": 7,
     "deal_context.source_conflicts": 5,
+    "deal_context.decision_path.influencers": 4,
 }
 
 
@@ -1412,10 +1415,33 @@ def _validate_deal_context(value: Any, errors: list[str]) -> None:
         return
     _require_fields(
         context,
-        {"current_truth", "critical_facts", "turning_points", "pain_points", "pressure_levers", "open_questions", "source_conflicts"},
+        {
+            "deal_card", "current_truth", "decision_path", "commitments", "critical_facts",
+            "turning_points", "journey", "pain_points", "pressure_levers", "open_questions",
+            "source_conflicts",
+        },
         path,
         errors,
     )
+    card = _expect_dict(context.get("deal_card"), f"{path}.deal_card", errors)
+    if card:
+        _require_fields(
+            card,
+            {"company", "equipment", "manufacturing_days", "amount", "responsible"},
+            f"{path}.deal_card",
+            errors,
+        )
+        for field in ("company", "equipment", "responsible"):
+            _expect_non_empty_string(card.get(field), f"{path}.deal_card.{field}", errors)
+        for field in ("manufacturing_days", "amount"):
+            value = card.get(field)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                errors.append(f"expected {path}.deal_card.{field} to be a string, number or null")
+            elif isinstance(value, str) and not value.strip():
+                errors.append(f"expected {path}.deal_card.{field} to be a string, number or null")
+
     truth = _expect_dict(context.get("current_truth"), f"{path}.current_truth", errors)
     if truth:
         required_truth = {
@@ -1430,6 +1456,29 @@ def _validate_deal_context(value: Any, errors: list[str]) -> None:
             truth.get("next_step_owner"), f"{path}.current_truth.next_step_owner",
             {"manager", "client", "rop", "finance", "leasing", "unknown"}, errors,
         )
+
+    decision = _expect_dict(context.get("decision_path"), f"{path}.decision_path", errors)
+    if decision:
+        _require_fields(
+            decision,
+            {"decision_maker", "influencers", "approval_path", "current_step_owner", "basis_status", "evidence"},
+            f"{path}.decision_path",
+            errors,
+        )
+        for field in ("decision_maker", "approval_path"):
+            _expect_non_empty_string(decision.get(field), f"{path}.decision_path.{field}", errors)
+        _expect_enum(
+            decision.get("current_step_owner"), f"{path}.decision_path.current_step_owner",
+            {"manager", "client", "rop", "finance", "leasing", "unknown"}, errors,
+        )
+        _expect_enum(
+            decision.get("basis_status"), f"{path}.decision_path.basis_status",
+            {"confirmed", "needs_confirmation", "inferred"}, errors,
+        )
+        _validate_short_text_list(decision.get("influencers"), f"{path}.decision_path.influencers", 4, errors)
+        evidence = _validate_short_text_list(decision.get("evidence"), f"{path}.decision_path.evidence", 5, errors)
+        if not evidence:
+            errors.append(f"{path}.decision_path.evidence must not be empty")
 
     def validate_evidence(item: dict[str, Any], item_path: str) -> None:
         evidence = _validate_short_text_list(item.get("evidence"), f"{item_path}.evidence", 5, errors)
@@ -1465,6 +1514,40 @@ def _validate_deal_context(value: Any, errors: list[str]) -> None:
         _expect_enum(item.get("status"), f"{item_path}.status", {"active", "resolved", "superseded"}, errors)
         validate_evidence(item, item_path)
 
+    commitments = _expect_max_list_length(context.get("commitments"), f"{path}.commitments", 6, errors)
+    for index, raw in enumerate(commitments):
+        item_path = f"{path}.commitments[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(
+            item,
+            {"commitment_id", "party", "promise", "due_at", "status", "basis_status", "evidence"},
+            item_path,
+            errors,
+        )
+        for field in ("commitment_id", "promise"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _expect_enum(item.get("party"), f"{item_path}.party", {"client", "company", "manager"}, errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"open", "done", "broken", "unknown"}, errors)
+        _expect_enum(item.get("basis_status"), f"{item_path}.basis_status", {"confirmed", "needs_confirmation", "inferred"}, errors)
+        _validate_optional_question(item.get("due_at"), f"{item_path}.due_at", errors)
+        validate_evidence(item, item_path)
+
+    journey = _expect_max_list_length(context.get("journey"), f"{path}.journey", 12, errors)
+    for index, raw in enumerate(journey):
+        item_path = f"{path}.journey[{index}]"
+        item = _expect_dict(raw, item_path, errors)
+        if not item:
+            continue
+        _require_fields(item, {"entry_id", "occurred_at", "title", "what_happened", "learned", "missing", "status"}, item_path, errors)
+        for field in ("entry_id", "title", "what_happened"):
+            _expect_non_empty_string(item.get(field), f"{item_path}.{field}", errors)
+        _validate_optional_question(item.get("occurred_at"), f"{item_path}.occurred_at", errors)
+        _expect_enum(item.get("status"), f"{item_path}.status", {"past", "current"}, errors)
+        _validate_short_text_list(item.get("learned"), f"{item_path}.learned", 4, errors)
+        _validate_short_text_list(item.get("missing"), f"{item_path}.missing", 4, errors)
+
     pain_points = _expect_max_list_length(context.get("pain_points"), f"{path}.pain_points", 6, errors)
     for index, raw in enumerate(pain_points):
         item_path = f"{path}.pain_points[{index}]"
@@ -1499,6 +1582,8 @@ def _validate_deal_context(value: Any, errors: list[str]) -> None:
             else:
                 used_priorities.add(priority)
         validate_evidence(item, item_path)
+    if len(levers) < 2:
+        errors.append(f"{path}.pressure_levers must contain at least 2 items")
 
     _validate_short_text_list(context.get("open_questions"), f"{path}.open_questions", 7, errors)
     conflicts = _expect_max_list_length(context.get("source_conflicts"), f"{path}.source_conflicts", 5, errors)

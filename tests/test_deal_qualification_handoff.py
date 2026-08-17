@@ -94,6 +94,8 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertIn('"deal_context"', prompt)
         self.assertIn('"pressure_levers"', prompt)
         self.assertIn("описательную живую карту сделки", prompt)
+        self.assertIn("Не дублируй qualification_assessment.bant", prompt)
+        self.assertIn("journey", prompt)
         self.assertIn("Красавчик", prompt)
         self.assertIn("без канцелярита и мата", prompt)
         self.assertIn("История стадий Bitrix подтверждает движение карточки", prompt)
@@ -105,6 +107,13 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
             "deal_id": "18827",
             "deal_state": {"client": "Клиент", "amount": "240000", "stage": "КП", "summary": "КП отправлено"},
             "deal_context": {
+                "deal_card": {
+                    "company": "Завод",
+                    "equipment": "Этикетировщик",
+                    "manufacturing_days": "25",
+                    "amount": "240000",
+                    "responsible": "Иванов",
+                },
                 "current_truth": {
                     "client_profile": "Директор участвует в решении",
                     "current_need": "Оборудование для производства",
@@ -114,12 +123,22 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
                     "next_checkpoint": "2026-08-17",
                     "next_step_owner": "client",
                 },
+                "decision_path": {
+                    "decision_maker": "Директор",
+                    "influencers": [],
+                    "approval_path": "Директор утверждает КП",
+                    "current_step_owner": "client",
+                    "basis_status": "needs_confirmation",
+                    "evidence": ["Комментарий CRM"],
+                },
+                "commitments": [],
                 "critical_facts": [{
                     "fact_id": "launch_deadline", "category": "deadline", "fact": "С 1 сентября оборудование должно работать",
                     "status": "needs_confirmation", "importance": "high", "observed_at": None,
                     "source_type": "manager_comment", "evidence": ["Комментарий CRM"],
                 }],
                 "turning_points": [],
+                "journey": [],
                 "pain_points": [],
                 "pressure_levers": [{
                     "lever_id": "launch_deadline", "type": "deadline", "title": "Срок запуска",
@@ -132,6 +151,9 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
             },
         })
         self.assertIn("## Живая карта сделки", markdown)
+        self.assertIn("### Карточка сделки", markdown)
+        self.assertIn("Завод", markdown)
+        self.assertIn("### Маршрут решения", markdown)
         self.assertIn("### Рычаги сделки", markdown)
         self.assertIn("С 1 сентября оборудование должно работать", markdown)
 

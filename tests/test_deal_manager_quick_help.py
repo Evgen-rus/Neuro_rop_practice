@@ -619,6 +619,49 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(result["event_type"], "communication_completed")
         self.assertEqual(calls[0][1]["quick_help_id"], 31)
 
+    def test_public_deal_context_projects_existing_qualification_blocks(self) -> None:
+        analysis = {
+            **CONTEXT["analysis_projection"],
+            "qualification_assessment": {
+                "bant": {
+                    "budget": {"status": "missing"},
+                    "need": {"status": "confirmed"},
+                    "overall_status": "incomplete",
+                    "missing_facts": ["Бюджет"],
+                    "next_question": "Какой бюджет?",
+                },
+                "solution_fit": {"equipment_type": "labeler", "status": "needs_technical_data"},
+                "commercial_fit": {"confirmed_budget_rub": None},
+            },
+            "money_path_diagnosis": {
+                "stuck_point": "next_step",
+                "why_money_is_at_risk": "Нет даты решения",
+                "current_owner_of_next_step": "client",
+                "next_required_fact": "Дата решения",
+                "evidence": ["КП без ответа"],
+            },
+            "competitor_defense_checklist": {
+                "applicable": False,
+                "competitor_type": "not_applicable",
+                "defense_points": [],
+                "questions_to_client": [],
+                "risk_if_not_defended": "Конкурент не заявлен",
+            },
+        }
+        public = quick_help._public_deal_context(
+            analysis,
+            CONTEXT["situation_projection"],
+            DEAL,
+            CONTEXT["current_bitrix_task"],
+            [],
+        )
+        self.assertEqual(public["bant"]["overall_status"], "incomplete")
+        self.assertEqual(public["solution_fit"]["equipment_type"], "labeler")
+        self.assertEqual(public["money_path"]["stuck_point"], "next_step")
+        self.assertEqual(public["competitor"]["applicable"], False)
+        self.assertEqual(public["deal_card"]["title"], "Тестовая сделка")
+        self.assertEqual(public["journey"], [])
+
     def test_assistant_workspace_routes_are_present(self) -> None:
         from api.app import app
 
