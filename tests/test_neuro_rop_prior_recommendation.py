@@ -282,12 +282,33 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
                 return {"id": 9}
 
             with patch.object(jobs, "analysis_paths", return_value=paths), \
+                 patch.object(jobs, "get_ui_report_by_analysis_run_id", return_value=None), \
                  patch.object(jobs, "save_ui_report", side_effect=save), \
                  patch.object(jobs, "apply_deal_recommendation_feedback", side_effect=lambda *_args, **_kwargs: calls.append("apply")), \
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
             self.assertEqual(calls, ["save", "apply", "materialize"])
             self.assertEqual(saved_kwargs["analysis_run_id"], 73)
+
+    def test_collect_results_reuses_existing_report_for_same_analysis_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "deal_101_analysis.json"
+            analysis_path.write_text(
+                json.dumps({"analysis_run_id": 73, "analysis": self._analysis()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
+            job = JobState(job_id="job")
+            with patch.object(jobs, "analysis_paths", return_value=paths), \
+                 patch.object(jobs, "get_ui_report_by_analysis_run_id", return_value={"id": 15}), \
+                 patch.object(jobs, "save_ui_report") as save, \
+                 patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
+                jobs._collect_results(job, "deal", ["101"])
+            save.assert_not_called()
+            materialize.assert_not_called()
+            self.assertEqual(job.report_ids, [15])
+            self.assertEqual(job.results[0]["report_id"], 15)
 
     def test_collect_results_rejects_invalid_deal_recommendation_before_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -4,6 +4,7 @@ Logging setup shared across project scripts.
 
 import logging
 import re
+import sys
 import time
 from datetime import datetime, time as dt_time, timedelta
 from logging.handlers import TimedRotatingFileHandler
@@ -91,6 +92,19 @@ def _normalize_script_name(script_name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", stem)
 
 
+def configure_console() -> None:
+    """Keep Cyrillic readable in Windows/Cursor terminals and Docker stdout."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def get_logger(script_name: str) -> logging.Logger:
     normalized_name = _normalize_script_name(script_name)
     logger = logging.getLogger(f"leads_to_b24.{normalized_name}")
@@ -98,6 +112,7 @@ def get_logger(script_name: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
+    configure_console()
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
@@ -110,7 +125,7 @@ def get_logger(script_name: str) -> logging.Logger:
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(LOG_LEVEL)
     console_handler.setFormatter(formatter)
 

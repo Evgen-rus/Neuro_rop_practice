@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from progress_events import emit_progress
-from setup import BASE_DIR
+from setup import BASE_DIR, configure_console
 
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
@@ -47,13 +47,6 @@ class AnalysisFailure:
     entity_type: str
     entity_id: str
     returncode: int
-
-
-def configure_console() -> None:
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def python_executable() -> str:

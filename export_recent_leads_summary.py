@@ -23,19 +23,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required
 from openai_api.bitrix_links import bitrix_entity_url
-from setup import MSK_TZ, get_logger
+from setup import MSK_TZ, configure_console, get_logger
 
 
 logger = get_logger(__file__)
 DEFAULT_OUTPUT = PROJECT_ROOT / "leads_last_30_days_summary.md"
 PAGE_SIZE = 50
-
-
-def configure_console() -> None:
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def parse_args() -> argparse.Namespace:

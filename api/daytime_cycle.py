@@ -1,0 +1,433 @@
+"""Server-side 30-minute Bitrix cycle: sync, CRM facts, then existing FULL/MINI/skip."""
+
+from __future__ import annotations
+
+import os
+import sys
+import threading
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from typing import Any, Callable
+
+from openai_api.change_detection.decision_engine import (
+    FIRST_FULL_ANALYSIS,
+    FULL_LLM_ANALYSIS,
+    MINI_RECOMMENDATION_NO_LLM,
+    SKIPPED_NO_CHANGES,
+)
+from openai_api.config import read_bool_env
+from setup import MSK_TZ, get_logger
+from storage.rop_db import (
+    DEFAULT_DB_PATH,
+    get_deal_control_scope,
+    list_analysis_runs,
+    list_deal_control_deals,
+    utcish_now,
+)
+
+
+CYCLE_INTERVAL = timedelta(minutes=30)
+WORKDAY_START = time(8, 0)
+WORKDAY_END = time(18, 0)
+PLANNING_PREP_TIME = time(15, 50)
+WEEKDAY_MONDAY = 0
+WEEKDAY_FRIDAY = 4
+ANALYZE_JOB_TIMEOUT_SECONDS = 50 * 60
+FULL_STATUSES = {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS}
+MINI_STATUSES = {MINI_RECOMMENDATION_NO_LLM}
+SKIP_STATUSES = {SKIPPED_NO_CHANGES}
+
+logger = get_logger(__file__)
+
+_stop_event = threading.Event()
+_run_lock = threading.Lock()
+_state_lock = threading.Lock()
+_thread: threading.Thread | None = None
+_last_cycle: dict[str, Any] | None = None
+_next_at: str | None = None
+
+
+def _running_under_unittest() -> bool:
+    return any("unittest" in str(item) for item in sys.argv)
+
+
+def daytime_cycle_enabled() -> bool:
+    """Production default is on; unit tests stay off unless the env flag is set."""
+    value = os.getenv("DAYTIME_CYCLE_ENABLED")
+    if value is not None and value.strip():
+        return read_bool_env("DAYTIME_CYCLE_ENABLED", True)
+    return not _running_under_unittest()
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=MSK_TZ)
+
+
+def _iso(value: datetime) -> str:
+    return _aware(value).astimezone(MSK_TZ).isoformat(timespec="seconds")
+
+
+def _is_workday(day: date) -> bool:
+    return WEEKDAY_MONDAY <= day.weekday() <= WEEKDAY_FRIDAY
+
+
+def slot_times_for_day() -> list[time]:
+    """Weekday slots from 08:00 to 18:00 MSK every 30 minutes, plus 15:50 before planning."""
+    slots: list[time] = []
+    cursor = datetime.combine(date.min, WORKDAY_START)
+    last = datetime.combine(date.min, WORKDAY_END)
+    while cursor <= last:
+        slots.append(cursor.time())
+        cursor += CYCLE_INTERVAL
+    slots.append(PLANNING_PREP_TIME)
+    return sorted(set(slots))
+
+
+def next_scheduled_at(now: datetime | None = None) -> datetime:
+    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    slots = slot_times_for_day()
+    # Friday after 18:00 must jump to Monday, so look several days ahead.
+    for offset in range(0, 8):
+        day = current.date() + timedelta(days=offset)
+        if not _is_workday(day):
+            continue
+        for slot in slots:
+            candidate = datetime.combine(day, slot, tzinfo=MSK_TZ)
+            if candidate > current:
+                return candidate
+    raise RuntimeError("Не удалось вычислить следующий слот дневного цикла")
+
+
+def daytime_cycle_status() -> dict[str, Any]:
+    with _state_lock:
+        last = dict(_last_cycle) if _last_cycle else None
+        next_at = _next_at
+    if last is not None:
+        last = {
+            "status": last.get("status"),
+            "trigger": last.get("trigger"),
+            "started_at": last.get("started_at"),
+            "finished_at": last.get("finished_at"),
+            "checked": (last.get("decisions") or {}).get("checked"),
+            "changed": (last.get("decisions") or {}).get("changed"),
+            "full": (last.get("decisions") or {}).get("full"),
+            "mini": (last.get("decisions") or {}).get("mini"),
+            "skip": (last.get("decisions") or {}).get("skip"),
+            "error": (last.get("decisions") or {}).get("error"),
+            "has_errors": bool(last.get("errors")),
+        }
+    return {
+        "enabled": daytime_cycle_enabled(),
+        "running": _thread is not None and _thread.is_alive(),
+        "interval_minutes": int(CYCLE_INTERVAL.total_seconds() // 60),
+        "workdays": "mon-fri",
+        "work_hours": "08:00-18:00",
+        "planning_prep_at": "15:50",
+        "timezone": "Europe/Moscow",
+        "next_at": next_at,
+        "last": last,
+    }
+
+
+def _store_cycle_result(payload: dict[str, Any]) -> dict[str, Any]:
+    global _last_cycle
+    with _state_lock:
+        _last_cycle = dict(payload)
+    return payload
+
+
+def _empty_decision_counts() -> dict[str, int]:
+    return {"checked": 0, "changed": 0, "full": 0, "mini": 0, "skip": 0, "error": 0}
+
+
+def _summarize_decisions(
+    *,
+    db_path: str | Path,
+    deal_ids: list[str],
+    created_at_from: str,
+) -> dict[str, int]:
+    counts = _empty_decision_counts()
+    counts["checked"] = len(deal_ids)
+    if not deal_ids:
+        return counts
+    runs = list_analysis_runs(
+        db_path,
+        entity_type="deal",
+        entity_ids=deal_ids,
+        created_at_from=created_at_from,
+    )
+    latest_by_entity: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        latest_by_entity[str(run.get("entity_id") or "")] = run
+    seen_ids = set()
+    for entity_id, run in latest_by_entity.items():
+        if not entity_id:
+            continue
+        seen_ids.add(entity_id)
+        status = str(run.get("status") or "")
+        if status in FULL_STATUSES:
+            counts["full"] += 1
+        elif status in MINI_STATUSES:
+            counts["mini"] += 1
+        elif status in SKIP_STATUSES:
+            counts["skip"] += 1
+        else:
+            counts["error"] += 1
+    missing = [entity_id for entity_id in deal_ids if entity_id not in seen_ids]
+    counts["error"] += len(missing)
+    counts["changed"] = counts["full"] + counts["mini"]
+    return counts
+
+
+def _analyze_work_pool(
+    *,
+    db_path: str | Path,
+    deal_ids: list[str],
+    started_at: str,
+) -> dict[str, Any]:
+    from api.jobs import AnalyzeOptions, busy_analyze_entity_ids, start_analyze_job, wait_for_job
+
+    if not deal_ids:
+        return {"status": "skipped_empty", "job_id": None, "busy_ids": [], "counts": _empty_decision_counts()}
+
+    busy = busy_analyze_entity_ids("deal")
+    ready_ids = [entity_id for entity_id in deal_ids if entity_id not in busy]
+    skipped_busy = [entity_id for entity_id in deal_ids if entity_id in busy]
+    if skipped_busy:
+        logger.info(
+            "Пропуск анализа для сделок с уже запущенным job: %s",
+            ", ".join(skipped_busy),
+        )
+    if not ready_ids:
+        counts = _empty_decision_counts()
+        counts["checked"] = len(deal_ids)
+        return {
+            "status": "skipped_busy",
+            "job_id": None,
+            "busy_ids": skipped_busy,
+            "counts": counts,
+        }
+
+    job = start_analyze_job(
+        AnalyzeOptions(
+            entity_type="deal",
+            ids=ready_ids,
+            force_llm=False,
+            analyze=True,
+            download_audio=True,
+            transcribe_audio=True,
+            transcript_mode="all",
+        )
+    )
+    job_id = str(job.get("job_id") or "")
+    finished = wait_for_job(job_id, timeout_seconds=ANALYZE_JOB_TIMEOUT_SECONDS)
+    counts = _summarize_decisions(db_path=db_path, deal_ids=ready_ids, created_at_from=started_at)
+    if skipped_busy:
+        counts["checked"] = len(deal_ids)
+    return {
+        "status": str(finished.get("status") or "error"),
+        "job_id": job_id,
+        "busy_ids": skipped_busy,
+        "error": finished.get("error"),
+        "counts": counts,
+    }
+
+
+def run_daytime_cycle(
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+    trigger: str = "scheduled",
+    refresh_fn: Callable[..., dict[str, Any]] | None = None,
+    collect_fn: Callable[..., dict[str, Any]] | None = None,
+    analyze_fn: Callable[..., dict[str, Any]] | None = None,
+    make_client_fn: Callable[[], Any] | None = None,
+) -> dict[str, Any]:
+    """One cycle: dashboard sync → manager-trajectory facts → change-aware analysis.
+
+    The clock tick itself is not an LLM trigger. FULL/MINI/skip stay in the
+    existing decision engine. CRM facts are stored as facts, not interpretations.
+    """
+    if not _run_lock.acquire(blocking=False):
+        logger.warning("Пропуск дневного цикла: предыдущий запуск ещё выполняется (%s).", trigger)
+        return _store_cycle_result(
+            {
+                "status": "skipped_locked",
+                "trigger": trigger,
+                "started_at": utcish_now(),
+                "finished_at": utcish_now(),
+            }
+        )
+
+    started = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    started_at = _iso(started)
+    errors: list[str] = []
+    sync_payload: dict[str, Any] | None = None
+    trajectory_payload: dict[str, Any] | None = None
+    analysis_payload: dict[str, Any] | None = None
+    deal_ids: list[str] = []
+    logger.info("Начало дневного цикла (%s) в %s МСК.", trigger, started_at)
+    try:
+        scope = get_deal_control_scope(db_path)
+        if not scope.get("configured"):
+            payload = {
+                "status": "skipped_unconfigured",
+                "trigger": trigger,
+                "started_at": started_at,
+                "finished_at": utcish_now(),
+                "message": "Выборка сделок deal-control ещё не настроена.",
+            }
+            logger.info("Дневной цикл пропущен: %s", payload["message"])
+            return _store_cycle_result(payload)
+
+        from api.candidates import make_client
+        from api.deal_control import refresh_deal_control
+        from api.manager_trajectory import collect_manager_trajectory
+
+        client_factory = make_client_fn or make_client
+        refresh = refresh_fn or refresh_deal_control
+        collect = collect_fn or collect_manager_trajectory
+        analyze = analyze_fn or (
+            lambda **kwargs: _analyze_work_pool(
+                db_path=kwargs["db_path"],
+                deal_ids=kwargs["deal_ids"],
+                started_at=kwargs["started_at"],
+            )
+        )
+
+        try:
+            logger.info("Bitrix sync рабочего пула сделок.")
+            sync_payload = refresh(db_path=db_path, client=client_factory(), now=started)
+            sync_errors = list(sync_payload.get("sync_errors") or []) if isinstance(sync_payload, dict) else []
+            errors.extend(str(item) for item in sync_errors if item)
+            logger.info(
+                "Bitrix sync завершён: %s",
+                (sync_payload or {}).get("sync_message") or "CRM обновлена",
+            )
+        except Exception as error:  # noqa: BLE001 - keep later steps and the next tick alive
+            message = f"Bitrix sync: {error}"
+            errors.append(message)
+            logger.error("%s", message)
+
+        deal_ids = [
+            str(item["deal_id"])
+            for item in list_deal_control_deals(db_path, active_only=True)
+            if str(item.get("deal_id") or "").strip()
+        ]
+        logger.info("Рабочий пул после sync: %s сделок.", len(deal_ids))
+
+        try:
+            logger.info("Сбор CRM-фактов manager trajectory.")
+            trajectory_payload = collect(client_factory(), db_path=db_path)
+            counts = (trajectory_payload or {}).get("counts") or {}
+            logger.info(
+                "Manager trajectory: status=%s, activities=%s, stage_changes=%s",
+                (trajectory_payload or {}).get("status"),
+                counts.get("activities"),
+                counts.get("stage_changes"),
+            )
+            for source, error in ((trajectory_payload or {}).get("errors") or {}).items():
+                errors.append(f"trajectory {source}: {error}")
+        except Exception as error:  # noqa: BLE001 - analysis can still use already synced workspaces
+            message = f"Manager trajectory: {error}"
+            errors.append(message)
+            logger.error("%s", message)
+
+        try:
+            logger.info("Change detection / decision engine для %s сделок.", len(deal_ids))
+            analysis_payload = analyze(db_path=db_path, deal_ids=deal_ids, started_at=started_at)
+            counts = (analysis_payload or {}).get("counts") or _empty_decision_counts()
+            logger.info(
+                "Решения: проверено=%s, изменилось=%s, FULL=%s, MINI=%s, skip=%s, ошибки=%s",
+                counts.get("checked"),
+                counts.get("changed"),
+                counts.get("full"),
+                counts.get("mini"),
+                counts.get("skip"),
+                counts.get("error"),
+            )
+            if analysis_payload and analysis_payload.get("error"):
+                errors.append(f"analysis: {analysis_payload['error']}")
+        except Exception as error:  # noqa: BLE001 - the next scheduled tick must still run
+            message = f"Analysis: {error}"
+            errors.append(message)
+            logger.error("%s", message)
+            analysis_payload = {
+                "status": "error",
+                "error": str(error),
+                "counts": _empty_decision_counts() | {"checked": len(deal_ids), "error": len(deal_ids)},
+            }
+
+        status = "success" if not errors else "partial" if (sync_payload or trajectory_payload or analysis_payload) else "error"
+        counts = (analysis_payload or {}).get("counts") or _empty_decision_counts()
+        payload = {
+            "status": status,
+            "trigger": trigger,
+            "started_at": started_at,
+            "finished_at": utcish_now(),
+            "deal_ids": deal_ids,
+            "sync_message": (sync_payload or {}).get("sync_message") if isinstance(sync_payload, dict) else None,
+            "trajectory": {
+                "status": (trajectory_payload or {}).get("status"),
+                "counts": (trajectory_payload or {}).get("counts") or {},
+            },
+            "decisions": counts,
+            "analysis_job_id": (analysis_payload or {}).get("job_id"),
+            "busy_ids": (analysis_payload or {}).get("busy_ids") or [],
+            "errors": errors,
+        }
+        if errors:
+            logger.warning("Дневной цикл завершён с ошибками: %s", "; ".join(errors))
+        else:
+            logger.info("Дневной цикл завершён без ошибок.")
+        return _store_cycle_result(payload)
+    finally:
+        _run_lock.release()
+
+
+def _set_next_at(value: datetime | None) -> None:
+    global _next_at
+    with _state_lock:
+        _next_at = _iso(value) if value is not None else None
+
+
+def _scheduler_loop() -> None:
+    logger.info("Планировщик дневного цикла: будни 08:00–18:00 МСК каждые 30 минут и слот 15:50.")
+    while not _stop_event.is_set():
+        due = next_scheduled_at()
+        _set_next_at(due)
+        wait_seconds = max(0.0, (due - datetime.now(MSK_TZ)).total_seconds())
+        logger.info("Следующий дневной цикл: %s МСК.", _iso(due))
+        if _stop_event.wait(timeout=wait_seconds):
+            break
+        trigger = "planning_prep" if due.hour == 15 and due.minute == 50 else "interval_30m"
+        try:
+            run_daytime_cycle(trigger=trigger, now=due)
+        except Exception:  # noqa: BLE001 - a failed tick must not kill the loop
+            logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
+    _set_next_at(None)
+    logger.info("Планировщик дневного цикла остановлен.")
+
+
+def start_daytime_cycle() -> None:
+    global _thread
+    if not daytime_cycle_enabled():
+        logger.info("Дневной цикл Bitrix отключён.")
+        return
+    if _thread is not None and _thread.is_alive():
+        return
+    _stop_event.clear()
+    _thread = threading.Thread(target=_scheduler_loop, name="neuro-rop-daytime-cycle", daemon=True)
+    _thread.start()
+    logger.info("Дневной цикл Bitrix запущен в процессе API.")
+
+
+def stop_daytime_cycle(*, timeout: float = 2.0) -> None:
+    global _thread
+    _stop_event.set()
+    thread = _thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)
+    if thread is not None and not thread.is_alive():
+        _thread = None
+    _set_next_at(None)

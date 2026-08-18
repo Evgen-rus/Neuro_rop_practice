@@ -1830,6 +1830,41 @@ def save_analysis_run(
         return int(cursor.lastrowid)
 
 
+def list_analysis_runs(
+    db_path: str | Path,
+    *,
+    entity_type: str | None = None,
+    entity_ids: list[str] | None = None,
+    created_at_from: str | None = None,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """Return recent analysis runs for scheduler summaries. Does not decode JSON blobs."""
+    init_db(db_path)
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    if entity_type:
+        clauses.append("entity_type = ?")
+        params.append(str(entity_type))
+    ids = [str(item).strip() for item in (entity_ids or []) if str(item).strip()]
+    if ids:
+        placeholders = ", ".join("?" for _ in ids)
+        clauses.append(f"entity_id IN ({placeholders})")
+        params.extend(ids)
+    if created_at_from:
+        clauses.append("created_at >= ?")
+        params.append(str(created_at_from))
+    params.append(int(limit))
+    query = (
+        "SELECT id, entity_type, entity_id, status, fingerprint, error, created_at "
+        "FROM analysis_runs WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY id ASC LIMIT ?"
+    )
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_entity_memory(db_path: str | Path, entity_type: str, entity_id: str) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:
@@ -2031,6 +2066,22 @@ def get_latest_ui_report(
             LIMIT 1
             """,
             (str(entity_type), str(entity_id)),
+        ).fetchone()
+    return _row_to_ui_report(row)
+
+
+def get_ui_report_by_analysis_run_id(db_path: str | Path, analysis_run_id: int) -> dict[str, Any] | None:
+    """Reuse the existing UI report for one AnalysisRun instead of saving a duplicate."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM ui_reports
+            WHERE analysis_run_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (int(analysis_run_id),),
         ).fetchone()
     return _row_to_ui_report(row)
 

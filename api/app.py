@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
@@ -97,6 +98,7 @@ from api.deal_manager_situation import (
     start_situation_refine_job,
 )
 from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
+from api.daytime_cycle import daytime_cycle_status, start_daytime_cycle, stop_daytime_cycle
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
@@ -143,7 +145,15 @@ from storage.rop_db import (
 load_dotenv(BASE_DIR / ".env")
 init_db(DEFAULT_DB_PATH)
 
-app = FastAPI(title="Помощник РОПа API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    start_daytime_cycle()
+    yield
+    stop_daytime_cycle()
+
+
+app = FastAPI(title="Помощник РОПа API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -700,6 +710,7 @@ def health() -> dict[str, Any]:
         "ok": True,
         "service": "rop-assistant-api",
         "db_path": str(DEFAULT_DB_PATH),
+        "daytime_cycle": daytime_cycle_status(),
     }
 
 

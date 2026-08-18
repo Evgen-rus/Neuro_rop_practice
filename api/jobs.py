@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -26,6 +27,7 @@ from storage.rop_db import (
     apply_deal_daily_checklist_update,
     apply_deal_recommendation_feedback,
     complete_daily_summary_item,
+    get_ui_report_by_analysis_run_id,
     materialize_deal_recommendation_from_report,
     register_daily_summary_job,
     record_daily_summary_actual_cost,
@@ -139,6 +141,36 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     with _LOCK:
         job = _JOBS.get(job_id)
         return asdict(job) if job else None
+
+
+def wait_for_job(job_id: str, *, timeout_seconds: float = 3000, poll_seconds: float = 1.0) -> dict[str, Any]:
+    """Block until an in-memory analyze job finishes. Used by the daytime scheduler."""
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    pause = max(0.05, float(poll_seconds))
+    while True:
+        job = get_job(job_id)
+        if job is None:
+            raise RuntimeError(f"Задание {job_id} не найдено")
+        if job.get("status") in {"done", "error"}:
+            return job
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Задание {job_id} не завершилось за {timeout_seconds:.0f} с")
+        time.sleep(pause)
+
+
+def busy_analyze_entity_ids(entity_type: str) -> set[str]:
+    """Entity IDs already queued or running, so a scheduler must not start a second pipeline."""
+    with _LOCK:
+        busy: set[str] = set()
+        for job in _JOBS.values():
+            if job.status not in {"queued", "running"}:
+                continue
+            options = job.options or {}
+            job_type = str(options.get("entity_type") or "")
+            if job_type not in {entity_type, "auto"}:
+                continue
+            busy.update(str(item) for item in options.get("ids") or [] if str(item).strip())
+        return busy
 
 
 def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
@@ -683,57 +715,68 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
         summary = extract_summary_fields(analysis or {}, entity_type)
         report_id = None
         if analysis is not None:
-            if entity_type == "deal":
-                # Validate the fields consumed by the canonical task materializer
-                # before the immutable UI report is saved.
-                validate_deal_recommendation_materialization(analysis)
-            report_id = save_ui_report(
-                DEFAULT_DB_PATH,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                risk_level=summary.get("risk_level"),
-                attention_reason=summary.get("attention_reason"),
-                recommended_action=summary.get("recommended_action"),
-                analysis_path=str(paths["analysis_json"]) if paths["analysis_json"].exists() else None,
-                report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
-                # Store unwrapped analysis so UI history works without extra mapping.
-                report_json=analysis,
-                report_meta=build_lead_report_meta(entity_id) if entity_type == "lead" else None,
-                technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
-                model_context=build_model_context_snapshot(envelope),
-                job_id=job.job_id,
-                analysis_run_id=analysis_run_id,
+            existing_report = (
+                get_ui_report_by_analysis_run_id(DEFAULT_DB_PATH, analysis_run_id)
+                if analysis_run_id is not None
+                else None
             )
-            if entity_type == "deal":
-                apply_deal_recommendation_feedback(
+            if existing_report is not None:
+                # Skip/MINI leave the previous analysis file in place. Reusing the
+                # existing UI report keeps recommendation_id and trajectory events stable.
+                report_id = int(existing_report["id"])
+                job.report_ids.append(report_id)
+            else:
+                if entity_type == "deal":
+                    # Validate the fields consumed by the canonical task materializer
+                    # before the immutable UI report is saved.
+                    validate_deal_recommendation_materialization(analysis)
+                report_id = save_ui_report(
                     DEFAULT_DB_PATH,
-                    entity_id,
-                    analysis.get("recommendation_feedback"),
-                    report_id,
-                    analysis,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    risk_level=summary.get("risk_level"),
+                    attention_reason=summary.get("attention_reason"),
+                    recommended_action=summary.get("recommended_action"),
+                    analysis_path=str(paths["analysis_json"]) if paths["analysis_json"].exists() else None,
+                    report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
+                    # Store unwrapped analysis so UI history works without extra mapping.
+                    report_json=analysis,
+                    report_meta=build_lead_report_meta(entity_id) if entity_type == "lead" else None,
+                    technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
+                    model_context=build_model_context_snapshot(envelope),
+                    job_id=job.job_id,
+                    analysis_run_id=analysis_run_id,
                 )
-                manager_action = analysis.get("manager_action_block")
-                fallback_checklist = manager_action.get("manager_checklist") if isinstance(manager_action, dict) else []
-                apply_deal_daily_checklist_update(
-                    DEFAULT_DB_PATH,
-                    deal_id=entity_id,
-                    source_report_id=report_id,
-                    update=analysis.get("daily_checklist_update"),
-                    fallback_items=[
-                        {"text": str(text), "source": "crm"}
-                        for text in (fallback_checklist or [])
-                        if str(text).strip()
-                    ],
-                )
-                materialized_task = materialize_deal_recommendation_from_report(
-                    DEFAULT_DB_PATH,
-                    entity_id,
-                    report_id,
-                    analysis,
-                )
-                if materialized_task is None:
-                    raise RuntimeError("Deal recommendation was saved but could not be materialized")
-            job.report_ids.append(report_id)
+                if entity_type == "deal":
+                    apply_deal_recommendation_feedback(
+                        DEFAULT_DB_PATH,
+                        entity_id,
+                        analysis.get("recommendation_feedback"),
+                        report_id,
+                        analysis,
+                    )
+                    manager_action = analysis.get("manager_action_block")
+                    fallback_checklist = manager_action.get("manager_checklist") if isinstance(manager_action, dict) else []
+                    apply_deal_daily_checklist_update(
+                        DEFAULT_DB_PATH,
+                        deal_id=entity_id,
+                        source_report_id=report_id,
+                        update=analysis.get("daily_checklist_update"),
+                        fallback_items=[
+                            {"text": str(text), "source": "crm"}
+                            for text in (fallback_checklist or [])
+                            if str(text).strip()
+                        ],
+                    )
+                    materialized_task = materialize_deal_recommendation_from_report(
+                        DEFAULT_DB_PATH,
+                        entity_id,
+                        report_id,
+                        analysis,
+                    )
+                    if materialized_task is None:
+                        raise RuntimeError("Deal recommendation was saved but could not be materialized")
+                job.report_ids.append(report_id)
         job.results.append(
             {
                 "entity_type": entity_type,

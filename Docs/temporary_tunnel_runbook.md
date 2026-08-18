@@ -141,6 +141,14 @@ git pull --ff-only origin main
 - проверяет API health, Nginx и состояние контейнеров;
 - выводит новую HTTPS-ссылку Cloudflare.
 
+После старта `neuro-rop-api` в будни с 08:00 до 18:00 МСК каждые 30 минут
+и в 15:50 МСК синхронизирует Bitrix, копит CRM-факты manager trajectory
+и запускает существующий FULL/MINI/skip. Ночью и в выходные слотов нет.
+Браузер для этого не нужен. Отключить цикл можно флагом
+`DAYTIME_CYCLE_ENABLED=false` в `runtime/.env`. Состояние слота видно в
+`/api/health` без ID сделок. Подробности цикла — в `logs/daytime_cycle.log`
+внутри контейнера API и в stdout Docker.
+
 Новая ссылка Cloudflare создаётся при каждом перезапуске. Логин — `rop`.
 Пароль сохраняется прежним и находится только на VPS:
 

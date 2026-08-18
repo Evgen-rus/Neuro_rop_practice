@@ -1,4 +1,8 @@
-"""Agent-first CLI for manual manager telemetry collection and retrospectives."""
+"""Agent-first CLI for manager telemetry collection and retrospectives.
+
+`collect` uses the same `api.manager_trajectory.collect_manager_trajectory`
+helper as the server daytime cycle; it does not start LLM analysis.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api.candidates import custom_period_bounds, make_client, profile_candidates_preview
 from api.manager_trajectory import build_manager_trajectory_report, collect_manager_trajectory
-from setup import BASE_DIR, MSK_TZ
+from setup import BASE_DIR, MSK_TZ, configure_console
 from storage.rop_db import DEFAULT_DB_PATH, get_analysis_profile, get_last_analysis_profile
 
 
@@ -155,15 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _configure_console() -> None:
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-
-
 def main(argv: list[str] | None = None) -> int:
-    _configure_console()
+    configure_console()
     args = build_parser().parse_args(argv)
     load_dotenv(BASE_DIR / ".env")
     try:
