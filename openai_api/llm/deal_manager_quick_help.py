@@ -18,7 +18,7 @@ from openai_api.llm.deal_manager_situation import (
     project_bitrix_task,
     project_deal,
 )
-from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
+from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.manager_tactics import load_manager_tactics, manager_tactic_ids
 
 
@@ -472,5 +472,7 @@ def generate_deal_manager_quick_help(
         call_type=f"deal_manager_quick_help_{mode}",
         prompt_cache_key=cache_key,
         cache_prefixes=[knowledge_prefix, deal_prefix],
+        trace_entity_type="deal",
+        trace_entity_id=deal_trace_id(deal),
     )
     return validate_quick_help(result, allowed_tactic_ids=tactic_ids, expected_mode=mode), metadata

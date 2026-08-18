@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
-from openai_api.llm.llm_client import call_structured_output_json, prompt_prefix_before
+from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.deal_manager_quick_help import (
     project_locked_move,
     project_quick_help_for_material,
@@ -250,6 +250,8 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         log_title="deal manager full script prompt", call_type=f"deal_manager_full_script_{script_mode}",
         prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:{cache_version}",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
+        trace_entity_type="deal",
+        trace_entity_id=deal_trace_id(kwargs.get("deal")),
     )
     return validate_full_script(
         result, selected_strategy=selected_strategy, script_mode=script_mode,

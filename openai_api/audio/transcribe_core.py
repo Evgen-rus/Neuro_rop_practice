@@ -37,11 +37,28 @@ SAFE_CHUNK_SECONDS = 420
 CHUNK_OVERLAP_SECONDS = 5
 
 
+def _record_transcription_spend(*, duration_seconds: float | None, entity_type: str | None, entity_id: str | None) -> None:
+    try:
+        from openai_api.spend_diary import record_transcription_spend
+
+        record_transcription_spend(
+            duration_seconds=duration_seconds,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            kind="transcription",
+            model=TRANSCRIPTION_MODEL,
+        )
+    except Exception:  # noqa: BLE001 - diary must not fail transcription
+        logger.warning("Не удалось записать трату транскрибации сегмента")
+
+
 async def transcribe_file_async(
     filepath: str,
     max_segment_concurrency: int = 1,
     chunk_overlap_seconds: int = CHUNK_OVERLAP_SECONDS,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
 ) -> str:
     """
     Асинхронно транскрибирует аудиофайл.
@@ -183,6 +200,11 @@ async def transcribe_file_async(
                     language="ru",
                     retry_callback=segment_retry_callback,
                 )
+            _record_transcription_spend(
+                duration_seconds=chunk_duration_sec,
+                entity_type=entity_type,
+                entity_id=entity_id,
+            )
         except Exception as e:  # noqa: BLE001 — хотим залогировать и продолжить другие сегменты
             logger.error(f"Ошибка при транскрибации сегмента {idx + 1}: {e}")
             return

@@ -211,6 +211,8 @@ def main() -> None:
                 str(transcribed_audio_path),
                 max_segment_concurrency=args.max_segment_concurrency,
                 progress_callback=transcription_progress,
+                entity_type=entity_type,
+                entity_id=str(entity_id) if entity_id else None,
             )
         )
     except Exception as e:

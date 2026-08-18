@@ -129,6 +129,28 @@ def daytime_cycle_status() -> dict[str, Any]:
     }
 
 
+def _write_spend_diary(
+    payload: dict[str, Any],
+    *,
+    started: datetime,
+    analysis_payload: dict[str, Any] | None,
+) -> None:
+    try:
+        from openai_api.spend_diary import load_batch_events, write_cycle_block
+
+        write_cycle_block(
+            started=started,
+            counts=(analysis_payload or {}).get("counts") or payload.get("decisions") or {},
+            events=load_batch_events((analysis_payload or {}).get("spend_batch_path")),
+            busy_ids=payload.get("busy_ids") or [],
+            status=str(payload.get("status") or ""),
+            message=payload.get("message"),
+            now=started,
+        )
+    except Exception as error:  # noqa: BLE001 - diary must not break the cycle
+        logger.warning("Дневник трат не записан: %s", type(error).__name__)
+
+
 def _store_cycle_result(payload: dict[str, Any]) -> dict[str, Any]:
     global _last_cycle
     with _state_lock:
@@ -145,9 +167,11 @@ def _summarize_decisions(
     db_path: str | Path,
     deal_ids: list[str],
     created_at_from: str,
-) -> dict[str, int]:
-    counts = _empty_decision_counts()
+) -> dict[str, Any]:
+    counts: dict[str, Any] = _empty_decision_counts()
     counts["checked"] = len(deal_ids)
+    counts["full_ids"] = []
+    counts["mini_ids"] = []
     if not deal_ids:
         return counts
     runs = list_analysis_runs(
@@ -167,8 +191,10 @@ def _summarize_decisions(
         status = str(run.get("status") or "")
         if status in FULL_STATUSES:
             counts["full"] += 1
+            counts["full_ids"].append(entity_id)
         elif status in MINI_STATUSES:
             counts["mini"] += 1
+            counts["mini_ids"].append(entity_id)
         elif status in SKIP_STATUSES:
             counts["skip"] += 1
         else:
@@ -188,7 +214,13 @@ def _analyze_work_pool(
     from api.jobs import AnalyzeOptions, busy_analyze_entity_ids, start_analyze_job, wait_for_job
 
     if not deal_ids:
-        return {"status": "skipped_empty", "job_id": None, "busy_ids": [], "counts": _empty_decision_counts()}
+        return {
+            "status": "skipped_empty",
+            "job_id": None,
+            "busy_ids": [],
+            "counts": _empty_decision_counts() | {"full_ids": [], "mini_ids": []},
+            "spend_batch_path": None,
+        }
 
     busy = busy_analyze_entity_ids("deal")
     ready_ids = [entity_id for entity_id in deal_ids if entity_id not in busy]
@@ -201,13 +233,20 @@ def _analyze_work_pool(
     if not ready_ids:
         counts = _empty_decision_counts()
         counts["checked"] = len(deal_ids)
+        counts["full_ids"] = []
+        counts["mini_ids"] = []
         return {
             "status": "skipped_busy",
             "job_id": None,
             "busy_ids": skipped_busy,
             "counts": counts,
+            "spend_batch_path": None,
         }
 
+    from openai_api.spend_diary import BATCH_ENV, new_cycle_batch_path
+
+    started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    batch_path = new_cycle_batch_path(started)
     job = start_analyze_job(
         AnalyzeOptions(
             entity_type="deal",
@@ -217,6 +256,7 @@ def _analyze_work_pool(
             download_audio=True,
             transcribe_audio=True,
             transcript_mode="all",
+            extra_env={BATCH_ENV: str(batch_path)},
         )
     )
     job_id = str(job.get("job_id") or "")
@@ -230,6 +270,7 @@ def _analyze_work_pool(
         "busy_ids": skipped_busy,
         "error": finished.get("error"),
         "counts": counts,
+        "spend_batch_path": str(batch_path),
     }
 
 
@@ -278,6 +319,7 @@ def run_daytime_cycle(
                 "message": "Выборка сделок deal-control ещё не настроена.",
             }
             logger.info("Дневной цикл пропущен: %s", payload["message"])
+            _write_spend_diary(payload, started=started, analysis_payload=None)
             return _store_cycle_result(payload)
 
         from api.candidates import make_client
@@ -380,6 +422,7 @@ def run_daytime_cycle(
             logger.warning("Дневной цикл завершён с ошибками: %s", "; ".join(errors))
         else:
             logger.info("Дневной цикл завершён без ошибок.")
+        _write_spend_diary(payload, started=started, analysis_payload=analysis_payload)
         return _store_cycle_result(payload)
     finally:
         _run_lock.release()

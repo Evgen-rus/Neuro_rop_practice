@@ -22,7 +22,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Дополнительный CRM-контекст полного анализа сделки | `bitrix/deals/1_fetch_deals_context.py`, `bitrix/deals/4_build_deals_llm_context.py`, `openai_api/llm/analyze_deal.py` |
 | Транскрибация | `openai_api/audio/*` |
 | Полный LLM-анализ и его рендеринг | `openai_api/llm/analyze_lead.py`, `openai_api/llm/analyze_deal.py` |
-| LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py` |
+| LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py`, человеческий дневник — `openai_api/spend_diary.py` |
 | Change detection | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py` |
 | Контроль сделки, живая карта контекста и приоритеты рычагов, дневной чек-лист менеджера, исходы задач, дневные коммуникации, Quick Help и полный скрипт разговора | `openai_api/llm/analyze_deal.py`, `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `storage/rop_db.py` |
 | Developer/admin telemetry использования рекомендаций и manager-wide CRM-фактов | `api/manager_trajectory.py`, `scripts/manager_trajectory.py`, `storage/rop_db.py`; UI-события — `api/app.py`, `frontend/src/DealControl.tsx` |
@@ -86,7 +86,7 @@ Lead и deal preparation scripts получают raw context, подготав�
 
 После успешной транскрибации `run_rop_assistant.py` повторно подготавливает workspace, чтобы скопировать актуальный audio manifest, затем обновляет diagnostics; для сделки также пересобирается компактный LLM context. Анализ не должен продолжаться по устаревшей workspace-копии manifest или контекста.
 
-`analyze_lead.py` и `analyze_deal.py` формируют разные prompts, вызывают общий Responses API wrapper, нормализуют и валидируют JSON, затем записывают JSON, raw output и Markdown в workspace. Полный deal-анализ в том же JSON-ответе формирует `deal_context`: карточку сделки, текущую истину, маршрут решения, обещания, важные факты, переломные моменты, историю трансформации, боли, рычаги, открытые вопросы и противоречия; renderer включает эту карту в тот же Markdown. Deal context builder компактно добавляет движение по стадиям за последние 20 дней со сменой стадии, до трёх ближайших открытых задач, не более двух содержательных сообщений из чата каждой выбранной задачи и доступные поля модели оборудования/срока изготовления. Пустые разделы не создаются; внутренние CRM-факты явно отделяются от клиентского evidence. `llm_client.py` считает usage; `pricing.py` формирует локальную оценку стоимости. Вызовы OpenAI и транскрибация требуют ключа и могут создавать стоимость.
+`analyze_lead.py` и `analyze_deal.py` формируют разные prompts, вызывают общий Responses API wrapper, нормализуют и валидируют JSON, затем записывают JSON, raw output и Markdown в workspace. Полный deal-анализ в том же JSON-ответе формирует `deal_context`: карточку сделки, текущую истину, маршрут решения, обещания, важные факты, переломные моменты, историю трансформации, боли, рычаги, открытые вопросы и противоречия; renderer включает эту карту в тот же Markdown. Deal context builder компактно добавляет движение по стадиям за последние 20 дней со сменой стадии, до трёх ближайших открытых задач, не более двух содержательных сообщений из чата каждой выбранной задачи и доступные поля модели оборудования/срока изготовления. Пустые разделы не создаются; внутренние CRM-факты явно отделяются от клиентского evidence. `llm_client.py` считает usage; `pricing.py` формирует локальную оценку стоимости. Каждый успешный платный вызов (включая semantic retry и транскрибацию) дополнительно попадает в человеческий дневник `logs/daily_spend/YYYY-MM-DD.txt`: один файл на московский день, цикл пишет короткий блок FULL/MINI/skip, разовые вызовы UI — одну строку. Это оценка по тарифу проекта, не счёт OpenAI; технический JSONL `logs/openai_usage.jsonl` не заменяется. Вызовы OpenAI и транскрибация требуют ключа и могут создавать стоимость.
 
 ### 4. Change detection
 
@@ -126,7 +126,7 @@ Compact run доступен только для уже сохранённых f
 | История стадий, открытые задачи, чаты задач или технические поля в полном deal-анализе | `bitrix/deals/1_fetch_deals_context.py`, `bitrix/deals/4_build_deals_llm_context.py` | `openai_api/llm/analyze_deal.py` и deal tests |
 | Транскрибация и short-call policy | `openai_api/audio/*` | diagnostics и tests транскриптов |
 | Prompt, JSON contract, validation или renderer | нужный `analyze_lead.py` либо `analyze_deal.py`, `validation.py` | второй контур проверить на несовместимость, но не менять автоматически |
-| Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py` | progress events и tests retry/validation |
+| Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py`, человеческий дневник — `openai_api/spend_diary.py` | progress events и tests retry/validation |
 | Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
 | Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, auth tests |
@@ -143,6 +143,7 @@ Compact run доступен только для уже сохранённых f
 
 - Bitrix webhook и `OPENAI_API_KEY` читаются из окружения. Не выводи их значение и не помещай в тестовые фикстуры.
 - Каждая физическая попытка Bitrix REST фиксируется одной privacy-safe JSONL-строкой в `logs/bitrix_usage_daily/YYYY-MM-DD.jsonl`; trace содержит только метод, форму запроса без значений, длительность и технический результат, но не URL/webhook, CRM ID, payload, тексты ошибок или содержимое ответа.
+- Человеческий дневник оценки OpenAI пишется в `logs/daily_spend/YYYY-MM-DD.txt` (и соседний events JSONL); в нём допустимы ID сделки/лида и сумма, но не промпты, транскрипты и CRM-тексты.
 - `reports/` содержит локальные CRM exports, аудио, transcripts, analysis, Markdown и SQLite; это runtime data, не исходный код.
 - Тексты задач и выбранных сообщений их чатов могут входить в локальный deal context; вложения задач/чатов не скачиваются и не передаются в полный анализ.
 - `crm_pipeline_map.json` также является локальной CRM-выгрузкой и не должен пополняться персональными данными вручную.

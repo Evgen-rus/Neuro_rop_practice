@@ -137,6 +137,25 @@ def build_usage_trace_event(
     }
 
 
+def _record_spend_diary(event: dict[str, Any]) -> None:
+    """Human daily diary; a write failure must not fail the model call."""
+    if event.get("estimated_cost_rub") is None and event.get("estimated_cost_usd") is None:
+        return
+    try:
+        from openai_api.spend_diary import record_paid_call
+
+        record_paid_call(
+            kind=str(event.get("call_type") or "openai"),
+            estimated_cost_rub=event.get("estimated_cost_rub"),
+            estimated_cost_usd=event.get("estimated_cost_usd"),
+            entity_type=event.get("entity_type"),
+            entity_id=event.get("entity_id"),
+            model=event.get("model"),
+        )
+    except Exception as error:  # noqa: BLE001 - diary is best-effort
+        logger.warning("Unable to append spend diary: %s", type(error).__name__)
+
+
 def append_usage_trace(
     metadata: dict[str, Any],
     *,
@@ -146,16 +165,16 @@ def append_usage_trace(
     error_type: str | None = None,
 ) -> None:
     """Append one sanitized event; trace failures never fail the model call."""
+    event = build_usage_trace_event(
+        metadata,
+        status=status,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        error_type=error_type,
+    )
     try:
         path = usage_trace_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        event = build_usage_trace_event(
-            metadata,
-            status=status,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            error_type=error_type,
-        )
         with path.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
         daily_filename, daily_line = build_daily_usage_line(event)
@@ -165,3 +184,4 @@ def append_usage_trace(
             stream.write(daily_line + "\n")
     except (OSError, TypeError, ValueError) as error:
         logger.warning("Unable to append OpenAI usage trace: %s", type(error).__name__)
+    _record_spend_diary(event)

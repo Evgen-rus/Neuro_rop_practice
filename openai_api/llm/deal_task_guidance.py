@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from openai_api.config import ANALYSIS_MODEL
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id
 
 
 MAX_GUIDANCE_OUTPUT_TOKENS = 5000
@@ -139,4 +139,6 @@ def generate_deal_task_guidance(
         log_title="deal task guidance prompt",
         call_type="deal_task_guidance",
         disable_implicit_cache=True,
+        trace_entity_type="deal",
+        trace_entity_id=deal_trace_id(deal),
     )

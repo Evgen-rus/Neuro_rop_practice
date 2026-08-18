@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import unittest
@@ -108,9 +109,16 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.db_path = Path(self.temp.name) / "cycle.sqlite"
         init_db(self.db_path)
         _scope(self.db_path)
+        self.spend_env = patch.dict(
+            os.environ,
+            {"SPEND_DIARY_DIR": str(Path(self.temp.name) / "spend")},
+            clear=False,
+        )
+        self.spend_env.start()
 
     def tearDown(self) -> None:
         stop_daytime_cycle()
+        self.spend_env.stop()
         self.temp.cleanup()
 
     def test_cycle_goes_sync_then_trajectory_then_change_detection_without_force_llm(self) -> None:
@@ -147,6 +155,9 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["decisions"]["skip"], 1)
         self.assertEqual(result["decisions"]["full"], 0)
+        diary = (Path(self.temp.name) / "spend" / f"{NOW.date().isoformat()}.txt").read_text(encoding="utf-8")
+        self.assertIn("1 — без изменений, LLM не вызывался", diary)
+        self.assertIn("За этот запуск: ~0 ₽", diary)
 
     def test_error_in_sync_does_not_block_trajectory_or_next_logic(self) -> None:
         calls: list[str] = []
@@ -277,6 +288,7 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertIsInstance(options, AnalyzeOptions)
         self.assertFalse(options.force_llm)
         self.assertTrue(options.analyze)
+        self.assertTrue(options.extra_env and "SPEND_DIARY_BATCH_PATH" in options.extra_env)
         self.assertEqual(payload["job_id"], "abc")
 
     def test_analyze_work_pool_skips_deals_with_running_jobs(self) -> None:

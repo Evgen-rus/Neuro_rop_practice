@@ -68,7 +68,11 @@ class UsageTraceTests(unittest.TestCase):
             daily_dir = Path(directory) / "daily"
             with patch.dict(
                 os.environ,
-                {"OPENAI_USAGE_TRACE_PATH": str(path), "OPENAI_USAGE_DAILY_DIR": str(daily_dir)},
+                {
+                    "OPENAI_USAGE_TRACE_PATH": str(path),
+                    "OPENAI_USAGE_DAILY_DIR": str(daily_dir),
+                    "SPEND_DIARY_DIR": str(Path(directory) / "spend"),
+                },
             ):
                 append_usage_trace(self.metadata(), entity_type="deal", entity_id="123")
 

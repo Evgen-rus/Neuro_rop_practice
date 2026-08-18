@@ -27,6 +27,7 @@ import subprocess
 from fastapi import UploadFile
 
 from openai_api.audio.audio_handler import transcribe_voice
+from openai_api.spend_diary import record_transcription_spend
 
 
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -209,11 +210,17 @@ async def transcribe_manager_voice(
             language=normalized_language,
         )
         # ffprobe is synchronous but receives bytes through stdin only.
-        await asyncio.to_thread(_probe_duration_seconds, data)
+        duration_seconds = await asyncio.to_thread(_probe_duration_seconds, data)
         text = await transcribe_voice(
             data,
             file_name=f"manager_voice{_CONTENT_TYPE_SUFFIXES[normalized_type]}",
             language=normalized_language,
+        )
+        record_transcription_spend(
+            duration_seconds=duration_seconds,
+            entity_type="deal",
+            entity_id=str(deal_id).strip(),
+            kind="transcription_voice",
         )
         return {"text": str(text)}
     finally:

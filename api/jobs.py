@@ -5,6 +5,7 @@ Background analyze jobs that wrap existing CLI orchestration.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -56,6 +57,7 @@ class AnalyzeOptions:
     force_llm: bool = False
     transcript_mode: str = "all"
     daily_summary_run_id: int | None = None
+    extra_env: dict[str, str] | None = None
 
 
 @dataclass
@@ -632,7 +634,15 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
     }
 
 
-def run_command(command: list[str], on_line: Callable[[str], None] | None = None) -> None:
+def run_command(
+    command: list[str],
+    on_line: Callable[[str], None] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> None:
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
     process = subprocess.Popen(
         command,
         cwd=str(PROJECT_ROOT),
@@ -641,6 +651,7 @@ def run_command(command: list[str], on_line: Callable[[str], None] | None = None
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     assert process.stdout is not None
     for line in process.stdout:
@@ -905,7 +916,7 @@ def _run_job(job_id: str) -> None:
                     f"ids={', '.join(ids)}",
                 )
             command = build_cli_command(options, entity_type, ids)
-            run_command(command, on_line=log_line)
+            run_command(command, on_line=log_line, extra_env=options.extra_env)
             with _LOCK:
                 _set_stage(_JOBS[job_id], stage_key, f"Pipeline {entity_type}", "done")
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "running")

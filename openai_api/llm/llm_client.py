@@ -134,6 +134,14 @@ def prompt_prefix_before(prompt: str, marker: str) -> str:
     return prompt[:index]
 
 
+def deal_trace_id(deal: Any) -> str | None:
+    """Return the CRM deal id for usage/spend traces. Never returns CRM text."""
+    if not isinstance(deal, dict):
+        return None
+    value = str(deal.get("deal_id") or "").strip()
+    return value or None
+
+
 def _request_fingerprint(
     prompt: str,
     stable_prefix: str | None,
