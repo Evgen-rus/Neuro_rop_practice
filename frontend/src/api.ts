@@ -675,7 +675,7 @@ export type DealControlDeal = {
 }
 
 export type DealControlDashboard = {
-  scope: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string; configured: boolean; updated_at?: string }
+  scope: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string; pipeline_ids?: string[]; configured: boolean; updated_at?: string }
   generated_at: string
   sync_message?: string | null
   sync_errors: string[]
@@ -1611,7 +1611,7 @@ export function syncDealControl() {
   return api<DealControlDashboard>('/api/deal-control/sync', { method: 'POST' }).then(normalizeDealControlDashboard)
 }
 
-export function saveDealControlScope(body: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id: string }) {
+export function saveDealControlScope(body: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id?: string; pipeline_ids?: string[] }) {
   return api<{ ok: boolean; scope: DealControlDashboard['scope'] }>('/api/deal-control/scope', {
     method: 'PUT', body: JSON.stringify(body),
   })

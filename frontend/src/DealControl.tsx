@@ -477,7 +477,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const [initialIds, setInitialIds] = useState('')
   const [managerIds, setManagerIds] = useState('')
-  const [pipelineId, setPipelineId] = useState('15')
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
   const [analyzingDealId, setAnalyzingDealId] = useState('')
   const [analysisConfirmDeal, setAnalysisConfirmDeal] = useState<DealControlDeal | null>(null)
@@ -512,7 +511,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       setData(response)
       setInitialIds(response.scope.initial_deal_ids.join('\n'))
       setManagerIds(response.scope.manager_ids.join('\n'))
-      setPipelineId(response.scope.pipeline_id || '15')
       setSelectedId((current) => {
         if (current && response.deals.some((deal) => deal.deal_id === current && deal.can_open)) return current
         return response.deals.find((deal) => deal.can_open)?.deal_id || ''
@@ -727,7 +725,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       await saveDealControlScope({
         initial_deal_ids: splitIds(initialIds),
         manager_ids: splitIds(managerIds),
-        pipeline_id: pipelineId.trim(),
+        pipeline_id: '15',
+        pipeline_ids: ['15', '17', '47'],
       })
       await reload()
       setNotice('Выборка сохранена. Теперь обновите данные из Bitrix.')
@@ -852,7 +851,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <p>Сохраняем локальную выборку. Bitrix используется только для чтения.</p>
         <label>Стартовые ID сделок<textarea value={initialIds} onChange={(event) => setInitialIds(event.target.value)} /></label>
         <label>ID ответственных для новых сделок<textarea value={managerIds} onChange={(event) => setManagerIds(event.target.value)} /></label>
-        <label>Воронка Bitrix<input value={pipelineId} onChange={(event) => setPipelineId(event.target.value)} /></label>
+        <p>Рабочие воронки уже заданы: 15 «Новые клиенты - Оборудование» (все открытые этапы), 17 «Повторные клиенты - Оборудование» с этапа «Потребность выявлена», 47 «Отдел продаж 2» с этапа «Вышли на ЛПР».</p>
         <div><button className="dc-button primary" onClick={() => void saveScope()}>Сохранить выборку</button>{onExit ? <button className="dc-button" onClick={onExit}>Назад</button> : null}</div>
         {error ? <p className="dc-alert error">{error}</p> : null}
       </section>

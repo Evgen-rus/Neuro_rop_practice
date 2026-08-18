@@ -66,6 +66,37 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
 DAILY_COMMUNICATION_TARGET = 3
 CHECKLIST_LIMIT = 5
 
+# Рабочий срез контроля сделок. Воронка 15 без отсечки по этапам — как сейчас.
+# 17: с «Потребность выявлена», без закрытых. 47: с «Вышли на ЛПР», без закрытых.
+# None = все открытые этапы этой воронки.
+DEAL_CONTROL_PIPELINE_STAGE_IDS: dict[str, frozenset[str] | None] = {
+    "15": None,
+    "17": frozenset(
+        {
+            "C17:UC_3KRF2B",
+            "C17:UC_QXDZOT",
+            "C17:UC_U9TY5N",
+            "C17:PREPAYMENT_INVOIC",
+            "C17:EXECUTING",
+            "C17:FINAL_INVOICE",
+            "C17:UC_2QLXKE",
+            "C17:UC_E16VYL",
+            "C17:UC_9AXBMJ",
+            "C17:UC_21L51H",
+            "C17:UC_7KDUQ6",
+            "C17:UC_ER3LNF",
+            "C17:UC_9YB4R5",
+        }
+    ),
+    "47": frozenset(
+        {
+            "C47:EXECUTING",
+            "C47:UC_W9WXD3",
+            "C47:FINAL_INVOICE",
+        }
+    ),
+}
+
 
 def _tokens(value: Any) -> set[str]:
     return set(TOKEN_RE.findall(str(value or "").lower()))
@@ -344,6 +375,42 @@ def _deal_row(deal: dict[str, Any], *, source: str, stage_names: dict[str, str],
     }
 
 
+def _stage_allowed(pipeline_id: str, stage_id: str) -> bool:
+    """Воронка 15 и неизвестные воронки — все открытые этапы. 17/47 — только рабочий срез."""
+    allowed = DEAL_CONTROL_PIPELINE_STAGE_IDS.get(str(pipeline_id))
+    if allowed is None:
+        return True
+    return str(stage_id) in allowed
+
+
+def _fetch_pipeline_deals(client: Any, *, pipeline_ids: list[str], manager_ids: set[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pipeline_id in pipeline_ids:
+        batch = client.list_all(
+            "crm.deal.list",
+            {
+                "order": {"DATE_CREATE": "DESC", "ID": "DESC"},
+                "filter": {"CATEGORY_ID": pipeline_id, "CLOSED": "N"},
+                "select": DEAL_SELECT,
+            },
+        )
+        for row in batch:
+            deal_id = str(row.get("ID") or "")
+            if not deal_id or deal_id in seen:
+                continue
+            if str(row.get("ASSIGNED_BY_ID") or "") not in manager_ids:
+                continue
+            if str(row.get("CLOSED") or "").upper() == "Y":
+                continue
+            row_pipeline = str(row.get("CATEGORY_ID") or pipeline_id)
+            if not _stage_allowed(row_pipeline, str(row.get("STAGE_ID") or "")):
+                continue
+            seen.add(deal_id)
+            rows.append(row)
+    return rows
+
+
 def _fetch_initial_deals(client: Any, deal_ids: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
     ids = list(dict.fromkeys(str(item).strip() for item in deal_ids if str(item).strip()))
     if not ids:
@@ -374,14 +441,8 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     stage_names = load_pipeline_stage_names()
     initial, errors = _fetch_initial_deals(crm, scope["initial_deal_ids"])
     manager_ids = {str(value) for value in scope["manager_ids"]}
-    pipeline_rows = crm.list_all(
-        "crm.deal.list",
-        {"order": {"DATE_CREATE": "DESC", "ID": "DESC"}, "filter": {"CATEGORY_ID": scope["pipeline_id"], "CLOSED": "N"}, "select": DEAL_SELECT},
-    )
-    pipeline_rows = [
-        row for row in pipeline_rows
-        if str(row.get("ASSIGNED_BY_ID") or "") in manager_ids and str(row.get("CLOSED") or "").upper() != "Y"
-    ]
+    pipeline_ids = [str(item) for item in (scope.get("pipeline_ids") or [scope["pipeline_id"]]) if str(item).strip()]
+    pipeline_rows = _fetch_pipeline_deals(crm, pipeline_ids=pipeline_ids, manager_ids=manager_ids)
     initial_ids = {str(value) for value in scope["initial_deal_ids"]}
     seen_pipeline_ids = {str(row.get("ID") or "") for row in pipeline_rows}
     saved_before = list_deal_control_deals(db_path, active_only=False)
@@ -889,8 +950,21 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     }
 
 
-def save_scope(*, db_path: str | Path, initial_deal_ids: list[str], manager_ids: list[str], pipeline_id: str) -> dict[str, Any]:
-    return save_deal_control_scope(db_path, initial_deal_ids=initial_deal_ids, manager_ids=manager_ids, pipeline_id=pipeline_id)
+def save_scope(
+    *,
+    db_path: str | Path,
+    initial_deal_ids: list[str],
+    manager_ids: list[str],
+    pipeline_id: str,
+    pipeline_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    return save_deal_control_scope(
+        db_path,
+        initial_deal_ids=initial_deal_ids,
+        manager_ids=manager_ids,
+        pipeline_id=pipeline_id,
+        pipeline_ids=pipeline_ids,
+    )
 
 
 def save_deal_fields(*, db_path: str | Path, deal_id: str, probability: int | None,

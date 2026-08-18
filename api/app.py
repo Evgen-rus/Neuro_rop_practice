@@ -104,6 +104,7 @@ from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    DEFAULT_DEAL_CONTROL_PIPELINE_IDS,
     attach_job_to_daily_summary,
     complete_daily_summary_item,
     create_daily_summary_run,
@@ -229,6 +230,7 @@ class DealControlScopeRequest(BaseModel):
     initial_deal_ids: list[str] = Field(default_factory=list, max_length=200)
     manager_ids: list[str] = Field(default_factory=list, max_length=30)
     pipeline_id: str = Field(default="15", min_length=1, max_length=40)
+    pipeline_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class DealControlFieldsRequest(BaseModel):
@@ -724,11 +726,13 @@ def deal_control_dashboard() -> dict[str, Any]:
 def deal_control_scope_put(body: DealControlScopeRequest) -> dict[str, Any]:
     _require_roles("admin")
     try:
+        pipeline_ids = [str(item).strip() for item in body.pipeline_ids if str(item).strip()]
         scope = save_deal_control_scope(
             db_path=DEFAULT_DB_PATH,
             initial_deal_ids=body.initial_deal_ids,
             manager_ids=body.manager_ids,
             pipeline_id=body.pipeline_id,
+            pipeline_ids=pipeline_ids or list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS),
         )
         return {"ok": True, "scope": scope}
     except ValueError as error:

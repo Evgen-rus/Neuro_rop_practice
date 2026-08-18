@@ -51,10 +51,16 @@ class FakeBitrixClient:
     def list_all(self, method, payload=None):
         self.calls.append((method, payload or {}))
         if method == "crm.deal.list":
-            ids = ((payload or {}).get("filter") or {}).get("ID")
+            deal_filter = (payload or {}).get("filter") or {}
+            ids = deal_filter.get("ID")
             if ids:
                 return [self.initial[item] for item in ids if item in self.initial]
-            return list(self.pipeline)
+            rows = list(self.pipeline)
+            category_id = deal_filter.get("CATEGORY_ID")
+            if category_id is not None:
+                wanted = {str(item) for item in category_id} if isinstance(category_id, list) else {str(category_id)}
+                rows = [item for item in rows if str(item.get("CATEGORY_ID") or "") in wanted]
+            return rows
         if method == "user.get":
             return [
                 {"ID": "10", "LAST_NAME": "Иванов", "NAME": "Иван"},
@@ -84,13 +90,20 @@ class FakeBitrixClient:
         return {"ok": True, "items": result}
 
 
-def deal(deal_id: str, *, manager_id: str, closed: str = "N") -> dict:
+def deal(
+    deal_id: str,
+    *,
+    manager_id: str,
+    closed: str = "N",
+    category_id: str = "15",
+    stage_id: str = "C15:NEW",
+) -> dict:
     return {
         "ID": deal_id,
         "TITLE": f"Сделка {deal_id}",
         "ASSIGNED_BY_ID": manager_id,
-        "CATEGORY_ID": "15",
-        "STAGE_ID": "C15:NEW",
+        "CATEGORY_ID": category_id,
+        "STAGE_ID": stage_id,
         "CLOSED": closed,
         "OPPORTUNITY": "120000",
         "CURRENCY_ID": "RUB",
@@ -439,6 +452,8 @@ class DealControlTests(unittest.TestCase):
             )
             self.assertEqual(scope["initial_deal_ids"], ["101", "102"])
             self.assertEqual(scope["manager_ids"], ["10"])
+            self.assertEqual(scope["pipeline_id"], "15")
+            self.assertEqual(scope["pipeline_ids"], ["15"])
 
     def test_sync_keeps_initial_deals_and_adds_only_target_manager_from_pipeline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -460,6 +475,68 @@ class DealControlTests(unittest.TestCase):
             deal_list_calls = [call for call in client.calls if call[0] == "crm.deal.list"]
             self.assertEqual(len(deal_list_calls), 2)
             self.assertEqual(deal_list_calls[0][1]["filter"]["ID"], ["101"])
+
+    def test_legacy_scope_pipeline_15_migrates_to_three_pipelines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "legacy.sqlite"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE deal_control_scope (
+                        scope_key TEXT NOT NULL PRIMARY KEY,
+                        initial_deal_ids_json TEXT NOT NULL,
+                        manager_ids_json TEXT NOT NULL,
+                        pipeline_id TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO deal_control_scope (
+                        scope_key, initial_deal_ids_json, manager_ids_json, pipeline_id, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("active", "[]", '["10"]', "15", "2026-08-01T00:00:00+00:00"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            scope = get_deal_control_scope(db_path)
+            self.assertEqual(scope["pipeline_id"], "15")
+            self.assertEqual(scope["pipeline_ids"], ["15", "17", "47"])
+
+    def test_sync_adds_allowed_17_47_stages_and_keeps_pipeline_15(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(
+                db_path,
+                initial_deal_ids=["101"],
+                manager_ids=["10"],
+                pipeline_id="15",
+                pipeline_ids=["15", "17", "47"],
+            )
+            client = FakeBitrixClient(
+                initial={"101": deal("101", manager_id="20")},
+                pipeline=[
+                    deal("201", manager_id="10"),
+                    deal("301", manager_id="10", category_id="17", stage_id="C17:NEW"),
+                    deal("302", manager_id="10", category_id="17", stage_id="C17:UC_3KRF2B"),
+                    deal("303", manager_id="10", category_id="17", stage_id="C17:EXECUTING"),
+                    deal("401", manager_id="10", category_id="47", stage_id="C47:PREPARATION"),
+                    deal("402", manager_id="10", category_id="47", stage_id="C47:PREPAYMENT_INVOIC"),
+                    deal("403", manager_id="10", category_id="47", stage_id="C47:EXECUTING"),
+                    deal("404", manager_id="20", category_id="47", stage_id="C47:EXECUTING"),
+                ],
+            )
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                result = refresh_deal_control(
+                    db_path=db_path, client=client, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
+                )
+            active_ids = {item["deal_id"] for item in result["deals"]}
+            self.assertEqual(active_ids, {"101", "201", "302", "303", "403"})
+            self.assertTrue(all(item["is_active"] for item in result["deals"]))
 
     def test_sync_fetches_activities_only_for_active_deals_and_includes_reactivated_deals(self):
         with tempfile.TemporaryDirectory() as directory:

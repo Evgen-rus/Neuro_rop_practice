@@ -22,6 +22,8 @@ from setup import BASE_DIR, MSK_TZ
 
 
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
+DEFAULT_DEAL_CONTROL_PIPELINE_ID = "15"
+DEFAULT_DEAL_CONTROL_PIPELINE_IDS = ["15", "17", "47"]
 
 DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
     ("manager_trajectory_events", "DELETE FROM manager_trajectory_events WHERE entity_type = 'deal'"),
@@ -470,6 +472,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 initial_deal_ids_json TEXT NOT NULL,
                 manager_ids_json TEXT NOT NULL,
                 pipeline_id TEXT NOT NULL,
+                pipeline_ids_json TEXT,
                 updated_at TEXT NOT NULL
             );
 
@@ -956,6 +959,34 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             conn.execute(
                 "INSERT INTO local_migrations (migration_id, applied_at) VALUES (?, ?)",
                 (auth_migration_id, utcish_now()),
+            )
+
+        _ensure_column(conn, "deal_control_scope", "pipeline_ids_json", "TEXT")
+        pipeline_migration_id = "2026-08-18-deal-control-pipelines-17-47"
+        if conn.execute(
+            "SELECT 1 FROM local_migrations WHERE migration_id = ?",
+            (pipeline_migration_id,),
+        ).fetchone() is None:
+            for row in conn.execute(
+                "SELECT scope_key, pipeline_id, pipeline_ids_json FROM deal_control_scope"
+            ).fetchall():
+                stored = loads_json(row["pipeline_ids_json"], [])
+                if isinstance(stored, list) and any(str(item).strip() for item in stored):
+                    continue
+                pipeline_id = str(row["pipeline_id"] or "").strip()
+                if pipeline_id == DEFAULT_DEAL_CONTROL_PIPELINE_ID:
+                    payload = list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS)
+                elif pipeline_id:
+                    payload = [pipeline_id]
+                else:
+                    payload = list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS)
+                conn.execute(
+                    "UPDATE deal_control_scope SET pipeline_ids_json = ? WHERE scope_key = ?",
+                    (dumps_json(payload), row["scope_key"]),
+                )
+            conn.execute(
+                "INSERT INTO local_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (pipeline_migration_id, utcish_now()),
             )
 
 
@@ -4662,6 +4693,25 @@ def daily_paid_capacity_used(db_path: str | Path, *, day_prefix: str) -> int:
 DEAL_CONTROL_SCOPE_KEY = "active"
 
 
+def _normalize_pipeline_id_list(values: Any) -> list[str]:
+    result: list[str] = []
+    if not isinstance(values, list):
+        return result
+    for item in values:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _scope_pipeline_ids(row: sqlite3.Row | dict[str, Any]) -> list[str]:
+    stored = _normalize_pipeline_id_list(loads_json(row["pipeline_ids_json"] if "pipeline_ids_json" in row.keys() else None, []))
+    if stored:
+        return stored
+    pipeline_id = str(row["pipeline_id"] or "").strip()
+    return [pipeline_id] if pipeline_id else list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS)
+
+
 def _normalize_deal_control_bitrix_tasks(value: Any) -> list[dict[str, Any]]:
     """Accept list or legacy `{tasks, scheduled_activities}` wrapper from DB."""
     if isinstance(value, dict):
@@ -4691,13 +4741,20 @@ def get_deal_control_scope(db_path: str | Path) -> dict[str, Any]:
     with connect(db_path) as conn:
         row = conn.execute("SELECT * FROM deal_control_scope WHERE scope_key = ?", (DEAL_CONTROL_SCOPE_KEY,)).fetchone()
     if row is None:
-        return {"initial_deal_ids": [], "manager_ids": [], "pipeline_id": "15", "configured": False}
-    value = dict(row)
+        return {
+            "initial_deal_ids": [],
+            "manager_ids": [],
+            "pipeline_id": DEFAULT_DEAL_CONTROL_PIPELINE_ID,
+            "pipeline_ids": list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS),
+            "configured": False,
+        }
+    pipeline_ids = _scope_pipeline_ids(row)
     return {
-        "initial_deal_ids": loads_json(value.get("initial_deal_ids_json"), []),
-        "manager_ids": loads_json(value.get("manager_ids_json"), []),
-        "pipeline_id": str(value.get("pipeline_id") or "15"),
-        "updated_at": value.get("updated_at"),
+        "initial_deal_ids": loads_json(row["initial_deal_ids_json"], []),
+        "manager_ids": loads_json(row["manager_ids_json"], []),
+        "pipeline_id": pipeline_ids[0] if pipeline_ids else DEFAULT_DEAL_CONTROL_PIPELINE_ID,
+        "pipeline_ids": pipeline_ids,
+        "updated_at": row["updated_at"],
         "configured": True,
     }
 
@@ -4708,24 +4765,39 @@ def save_deal_control_scope(
     initial_deal_ids: list[str],
     manager_ids: list[str],
     pipeline_id: str,
+    pipeline_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
     deals = list(dict.fromkeys(str(value).strip() for value in initial_deal_ids if str(value).strip()))
     managers = list(dict.fromkeys(str(value).strip() for value in manager_ids if str(value).strip()))
     if not deals and not managers:
         raise ValueError("Нужен хотя бы один ID сделки или ответственного")
+    normalized_pipelines = _normalize_pipeline_id_list(pipeline_ids)
+    if not normalized_pipelines:
+        normalized_pipelines = [str(pipeline_id).strip() or DEFAULT_DEAL_CONTROL_PIPELINE_ID]
+    primary_pipeline = normalized_pipelines[0]
     with connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO deal_control_scope (scope_key, initial_deal_ids_json, manager_ids_json, pipeline_id, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO deal_control_scope (
+                scope_key, initial_deal_ids_json, manager_ids_json, pipeline_id, pipeline_ids_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(scope_key) DO UPDATE SET
                 initial_deal_ids_json = excluded.initial_deal_ids_json,
                 manager_ids_json = excluded.manager_ids_json,
                 pipeline_id = excluded.pipeline_id,
+                pipeline_ids_json = excluded.pipeline_ids_json,
                 updated_at = excluded.updated_at
             """,
-            (DEAL_CONTROL_SCOPE_KEY, dumps_json(deals), dumps_json(managers), str(pipeline_id).strip() or "15", utcish_now()),
+            (
+                DEAL_CONTROL_SCOPE_KEY,
+                dumps_json(deals),
+                dumps_json(managers),
+                primary_pipeline,
+                dumps_json(normalized_pipelines),
+                utcish_now(),
+            ),
         )
     return get_deal_control_scope(db_path)
 
@@ -5666,10 +5738,11 @@ def materialize_deal_recommendation_from_report(
         if deal is not None and scope is not None:
             initial_ids = loads_json(scope["initial_deal_ids_json"], [])
             manager_ids = loads_json(scope["manager_ids_json"], [])
+            pipeline_ids = _scope_pipeline_ids(scope)
             in_scope = (
                 str(deal_id) in {str(item) for item in initial_ids}
                 or (
-                    str(deal["pipeline_id"] or "") == str(scope["pipeline_id"] or "")
+                    str(deal["pipeline_id"] or "") in set(pipeline_ids)
                     and str(deal["manager_id"] or "") in {str(item) for item in manager_ids}
                 )
             )
