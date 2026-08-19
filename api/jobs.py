@@ -21,18 +21,30 @@ from typing import Any, Callable
 from bitrix.customer_history import build_normalized_communications
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.llm.validation import validate_deal_recommendation_materialization
-from progress_events import PROGRESS_PREFIX, progress_key
+from progress_events import (
+    DECISION_STATUS_ERROR,
+    DECISION_STATUS_FULL,
+    DECISION_STATUS_MINI,
+    DECISION_STATUS_SKIP,
+    PROGRESS_PREFIX,
+    compact_decision_status,
+    progress_key,
+)
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     apply_deal_daily_checklist_update,
     apply_deal_recommendation_feedback,
     complete_daily_summary_item,
+    get_automatic_analysis_item,
+    get_latest_ui_report,
+    get_or_create_ui_report_for_analysis_run,
     get_ui_report_by_analysis_run_id,
     materialize_deal_recommendation_from_report,
     register_daily_summary_job,
     record_daily_summary_actual_cost,
     save_ui_report,
+    update_automatic_analysis_item,
     update_daily_summary_item_progress,
 )
 
@@ -57,6 +69,7 @@ class AnalyzeOptions:
     force_llm: bool = False
     transcript_mode: str = "all"
     daily_summary_run_id: int | None = None
+    automatic_analysis_run_id: int | None = None
     extra_env: dict[str, str] | None = None
 
 
@@ -693,26 +706,291 @@ def build_cli_command(options: AnalyzeOptions, entity_type: str, ids: list[str])
     return command
 
 
-def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
-    for entity_id in ids:
-        paths = analysis_paths(entity_type, entity_id)
-        envelope: dict[str, Any] | None = None
-        if paths["analysis_json"].exists():
-            try:
-                loaded = json.loads(paths["analysis_json"].read_text(encoding="utf-8"))
-                envelope = loaded if isinstance(loaded, dict) else None
-            except (OSError, json.JSONDecodeError):
-                envelope = None
-        analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
-        model_metadata = envelope.get("model_metadata") if isinstance(envelope, dict) and isinstance(envelope.get("model_metadata"), dict) else {}
-        analysis_run_id = (
-            int(envelope["analysis_run_id"])
-            if isinstance(envelope, dict)
-            and isinstance(envelope.get("analysis_run_id"), int)
-            and not isinstance(envelope.get("analysis_run_id"), bool)
-            else None
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_publish_error(error: BaseException) -> str:
+    return f"Ошибка публикации: {type(error).__name__}"
+
+
+def _upsert_job_result(job: JobState, result: dict[str, Any]) -> None:
+    entity_type = str(result.get("entity_type") or "")
+    entity_id = str(result.get("entity_id") or "")
+    replaced = False
+    for index, existing in enumerate(job.results):
+        if str(existing.get("entity_type") or "") == entity_type and str(existing.get("entity_id") or "") == entity_id:
+            job.results[index] = result
+            replaced = True
+            break
+    if not replaced:
+        job.results.append(result)
+    report_id = result.get("report_id")
+    if isinstance(report_id, int) and report_id not in job.report_ids:
+        job.report_ids.append(report_id)
+    _touch(job)
+
+
+def _load_analysis_envelope(
+    entity_type: str,
+    entity_id: str,
+) -> tuple[dict[str, Path], dict[str, Any] | None, dict[str, Any]]:
+    paths = analysis_paths(entity_type, entity_id)
+    envelope: dict[str, Any] | None = None
+    if paths["analysis_json"].exists():
+        try:
+            loaded = json.loads(paths["analysis_json"].read_text(encoding="utf-8"))
+            envelope = loaded if isinstance(loaded, dict) else None
+        except (OSError, json.JSONDecodeError):
+            envelope = None
+    model_metadata = (
+        envelope.get("model_metadata")
+        if isinstance(envelope, dict) and isinstance(envelope.get("model_metadata"), dict)
+        else {}
+    )
+    return paths, envelope, model_metadata
+
+
+def _apply_deal_control_projections(entity_id: str, report_id: int, analysis: dict[str, Any]) -> None:
+    apply_deal_recommendation_feedback(
+        DEFAULT_DB_PATH,
+        entity_id,
+        analysis.get("recommendation_feedback"),
+        report_id,
+        analysis,
+    )
+    manager_action = analysis.get("manager_action_block")
+    fallback_checklist = manager_action.get("manager_checklist") if isinstance(manager_action, dict) else []
+    apply_deal_daily_checklist_update(
+        DEFAULT_DB_PATH,
+        deal_id=entity_id,
+        source_report_id=report_id,
+        update=analysis.get("daily_checklist_update"),
+        fallback_items=[
+            {"text": str(text), "source": "crm"}
+            for text in (fallback_checklist or [])
+            if str(text).strip()
+        ],
+    )
+    materialized_task = materialize_deal_recommendation_from_report(
+        DEFAULT_DB_PATH,
+        entity_id,
+        report_id,
+        analysis,
+    )
+    if materialized_task is None:
+        raise RuntimeError("Deal recommendation was saved but could not be materialized")
+
+
+def _sync_automatic_analysis_item(
+    run_id: int | None,
+    *,
+    entity_id: str,
+    stage: str | None,
+    decision_status: str | None = None,
+    analysis_run_id: int | None = None,
+    report_id: int | None = None,
+    error: str | None = None,
+    publication_status: str | None = None,
+) -> None:
+    if run_id is None:
+        return
+    update_automatic_analysis_item(
+        DEFAULT_DB_PATH,
+        int(run_id),
+        entity_type="deal",
+        entity_id=str(entity_id),
+        stage=stage,
+        decision_status=decision_status,
+        analysis_run_id=analysis_run_id,
+        report_id=report_id,
+        error=error,
+        publication_status=publication_status,
+        current_stage=stage,
+    )
+
+
+def _finish_daily_summary_item(
+    job: JobState,
+    *,
+    entity_type: str,
+    entity_id: str,
+    report_id: int | None,
+    progress: dict[str, Any],
+    analysis: dict[str, Any] | None,
+    model_metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    run_id = job.options.get("daily_summary_run_id")
+    actual_cost = None
+    if progress.get("attempt") and model_metadata:
+        actual_cost = {
+            "estimated_cost_usd": model_metadata.get("estimated_cost_usd"),
+            "estimated_cost_rub": model_metadata.get("estimated_cost_rub"),
+            "semantic_attempt_count": model_metadata.get("semantic_attempt_count", 1),
+        }
+        if run_id:
+            record_daily_summary_actual_cost(
+                DEFAULT_DB_PATH,
+                int(run_id),
+                entity_type=entity_type,
+                entity_id=entity_id,
+                cost=actual_cost,
+            )
+    if run_id:
+        progress_error = progress.get("error") if progress.get("status") == "error" else None
+        if analysis is None and not progress_error:
+            progress_error = "Анализ не сформирован"
+        complete_daily_summary_item(
+            DEFAULT_DB_PATH,
+            int(run_id),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            report_id=report_id,
+            error=str(progress_error) if progress_error else None,
         )
-        key = progress_key(entity_type, entity_id)
+    return actual_cost
+
+
+def _publish_deal_result(job: JobState, entity_id: str, *, allow_raise: bool = True) -> None:
+    """Publish one deal from a terminal progress event. A stale analysis file is not treated as FULL."""
+    key = progress_key("deal", entity_id)
+    progress = dict(job.entity_progress.get(key) or {})
+    automatic_run_id = _int_or_none(job.options.get("automatic_analysis_run_id"))
+    publish_ready = progress.get("publish_ready") is True
+    decision = compact_decision_status(str(progress.get("decision_status") or ""))
+    if not decision and str(progress.get("status") or "") == "error":
+        decision = DECISION_STATUS_ERROR
+    event_run_id = _int_or_none(progress.get("analysis_run_id"))
+    paths, envelope, model_metadata = _load_analysis_envelope("deal", entity_id)
+    if str(progress.get("status") or "") == "error" and paths["error_json"].exists():
+        try:
+            error_payload = json.loads(paths["error_json"].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            error_payload = {}
+        if isinstance(error_payload.get("model_metadata"), dict):
+            model_metadata = error_payload["model_metadata"]
+
+    analysis: dict[str, Any] | None = None
+    report_id: int | None = None
+    publication_status = "pending"
+    item_error: str | None = None
+
+    try:
+        if not publish_ready:
+            if decision == DECISION_STATUS_ERROR or str(progress.get("status") or "") == "error":
+                publication_status = "error"
+                item_error = str(progress.get("error") or "Анализ не сформирован")
+            else:
+                publication_status = "pending"
+        elif decision == DECISION_STATUS_FULL:
+            if event_run_id is None:
+                raise RuntimeError("FULL publish_ready without analysis_run_id")
+            analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
+            if analysis is None:
+                raise RuntimeError("FULL analysis file is missing after publish_ready")
+            validate_deal_recommendation_materialization(analysis)
+            summary = extract_summary_fields(analysis, "deal")
+            report, created = get_or_create_ui_report_for_analysis_run(
+                DEFAULT_DB_PATH,
+                entity_type="deal",
+                entity_id=entity_id,
+                analysis_run_id=event_run_id,
+                risk_level=summary.get("risk_level"),
+                attention_reason=summary.get("attention_reason"),
+                recommended_action=summary.get("recommended_action"),
+                analysis_path=str(paths["analysis_json"]) if paths["analysis_json"].exists() else None,
+                report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
+                report_json=analysis,
+                technical_log=build_technical_log_snapshot(job, "deal", entity_id),
+                model_context=build_model_context_snapshot(envelope),
+                job_id=job.job_id,
+            )
+            report_id = int(report["id"])
+            pending = False
+            if automatic_run_id is not None:
+                item = get_automatic_analysis_item(
+                    DEFAULT_DB_PATH,
+                    automatic_run_id,
+                    entity_type="deal",
+                    entity_id=entity_id,
+                )
+                pending = str((item or {}).get("publication_status") or "") == "pending"
+            if created or pending:
+                _apply_deal_control_projections(entity_id, report_id, analysis)
+            publication_status = "published"
+        elif decision in {DECISION_STATUS_MINI, DECISION_STATUS_SKIP}:
+            existing_report = get_latest_ui_report(DEFAULT_DB_PATH, entity_type="deal", entity_id=entity_id)
+            if existing_report is not None:
+                report_id = int(existing_report["id"])
+                stored = existing_report.get("report_json")
+                analysis = unwrap_analysis_payload(stored if isinstance(stored, dict) else None) or None
+            publication_status = "not_applicable"
+        else:
+            publication_status = "error"
+            item_error = str(progress.get("error") or "Анализ не сформирован")
+    except Exception as error:
+        if allow_raise:
+            raise
+        publication_status = "pending" if decision == DECISION_STATUS_FULL else "error"
+        item_error = _safe_publish_error(error)
+        if analysis is None and envelope is not None:
+            analysis = unwrap_analysis_payload(envelope) or None
+
+    summary = extract_summary_fields(analysis or {}, "deal")
+    result = {
+        "entity_type": "deal",
+        "entity_id": entity_id,
+        "report_id": report_id,
+        "has_analysis": analysis is not None,
+        "has_markdown": paths["report_md"].exists(),
+        "risk_level": summary.get("risk_level"),
+        "attention_reason": summary.get("attention_reason"),
+        "recommended_action": summary.get("recommended_action"),
+        "lead_category": summary.get("lead_category"),
+        "lead_route_status": summary.get("lead_route_status"),
+        "lead_qualification": summary.get("lead_qualification"),
+        "bitrix_url": bitrix_entity_url("deal", entity_id),
+        "analysis": analysis,
+    }
+    result["actual_cost"] = _finish_daily_summary_item(
+        job,
+        entity_type="deal",
+        entity_id=entity_id,
+        report_id=report_id,
+        progress=progress,
+        analysis=analysis,
+        model_metadata=model_metadata,
+    )
+    with _LOCK:
+        _upsert_job_result(job, result)
+    stored_error = item_error
+    if stored_error and entity_id in stored_error:
+        stored_error = _safe_publish_error(RuntimeError(stored_error))
+    _sync_automatic_analysis_item(
+        automatic_run_id,
+        entity_id=entity_id,
+        stage=str(progress.get("stage") or ("error" if publication_status == "error" else "done")),
+        decision_status=decision or None,
+        analysis_run_id=event_run_id,
+        report_id=report_id,
+        error=stored_error or "",
+        publication_status=publication_status,
+    )
+
+
+def _collect_lead_results(job: JobState, ids: list[str]) -> None:
+    for entity_id in ids:
+        paths, envelope, model_metadata = _load_analysis_envelope("lead", entity_id)
+        analysis = unwrap_analysis_payload(envelope) if envelope is not None else None
+        analysis_run_id = _int_or_none(envelope.get("analysis_run_id") if isinstance(envelope, dict) else None)
+        key = progress_key("lead", entity_id)
         progress = job.entity_progress.get(key) or {}
         if progress.get("status") == "error":
             analysis = None
@@ -723,7 +1001,7 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                     error_payload = {}
                 if isinstance(error_payload.get("model_metadata"), dict):
                     model_metadata = error_payload["model_metadata"]
-        summary = extract_summary_fields(analysis or {}, entity_type)
+        summary = extract_summary_fields(analysis or {}, "lead")
         report_id = None
         if analysis is not None:
             existing_report = (
@@ -732,108 +1010,58 @@ def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
                 else None
             )
             if existing_report is not None:
-                # Skip/MINI leave the previous analysis file in place. Reusing the
-                # existing UI report keeps recommendation_id and trajectory events stable.
                 report_id = int(existing_report["id"])
-                job.report_ids.append(report_id)
             else:
-                if entity_type == "deal":
-                    # Validate the fields consumed by the canonical task materializer
-                    # before the immutable UI report is saved.
-                    validate_deal_recommendation_materialization(analysis)
                 report_id = save_ui_report(
                     DEFAULT_DB_PATH,
-                    entity_type=entity_type,
+                    entity_type="lead",
                     entity_id=entity_id,
                     risk_level=summary.get("risk_level"),
                     attention_reason=summary.get("attention_reason"),
                     recommended_action=summary.get("recommended_action"),
                     analysis_path=str(paths["analysis_json"]) if paths["analysis_json"].exists() else None,
                     report_path=str(paths["report_md"]) if paths["report_md"].exists() else None,
-                    # Store unwrapped analysis so UI history works without extra mapping.
                     report_json=analysis,
-                    report_meta=build_lead_report_meta(entity_id) if entity_type == "lead" else None,
-                    technical_log=build_technical_log_snapshot(job, entity_type, entity_id),
+                    report_meta=build_lead_report_meta(entity_id),
+                    technical_log=build_technical_log_snapshot(job, "lead", entity_id),
                     model_context=build_model_context_snapshot(envelope),
                     job_id=job.job_id,
                     analysis_run_id=analysis_run_id,
                 )
-                if entity_type == "deal":
-                    apply_deal_recommendation_feedback(
-                        DEFAULT_DB_PATH,
-                        entity_id,
-                        analysis.get("recommendation_feedback"),
-                        report_id,
-                        analysis,
-                    )
-                    manager_action = analysis.get("manager_action_block")
-                    fallback_checklist = manager_action.get("manager_checklist") if isinstance(manager_action, dict) else []
-                    apply_deal_daily_checklist_update(
-                        DEFAULT_DB_PATH,
-                        deal_id=entity_id,
-                        source_report_id=report_id,
-                        update=analysis.get("daily_checklist_update"),
-                        fallback_items=[
-                            {"text": str(text), "source": "crm"}
-                            for text in (fallback_checklist or [])
-                            if str(text).strip()
-                        ],
-                    )
-                    materialized_task = materialize_deal_recommendation_from_report(
-                        DEFAULT_DB_PATH,
-                        entity_id,
-                        report_id,
-                        analysis,
-                    )
-                    if materialized_task is None:
-                        raise RuntimeError("Deal recommendation was saved but could not be materialized")
-                job.report_ids.append(report_id)
-        job.results.append(
-            {
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "report_id": report_id,
-                "has_analysis": analysis is not None,
-                "has_markdown": paths["report_md"].exists(),
-                "risk_level": summary.get("risk_level"),
-                "attention_reason": summary.get("attention_reason"),
-                "recommended_action": summary.get("recommended_action"),
-                "lead_category": summary.get("lead_category"),
-                "lead_route_status": summary.get("lead_route_status"),
-                "lead_qualification": summary.get("lead_qualification"),
-                "bitrix_url": bitrix_entity_url(entity_type, entity_id),
-                "analysis": analysis,
-            }
+        result = {
+            "entity_type": "lead",
+            "entity_id": entity_id,
+            "report_id": report_id,
+            "has_analysis": analysis is not None,
+            "has_markdown": paths["report_md"].exists(),
+            "risk_level": summary.get("risk_level"),
+            "attention_reason": summary.get("attention_reason"),
+            "recommended_action": summary.get("recommended_action"),
+            "lead_category": summary.get("lead_category"),
+            "lead_route_status": summary.get("lead_route_status"),
+            "lead_qualification": summary.get("lead_qualification"),
+            "bitrix_url": bitrix_entity_url("lead", entity_id),
+            "analysis": analysis,
+        }
+        result["actual_cost"] = _finish_daily_summary_item(
+            job,
+            entity_type="lead",
+            entity_id=entity_id,
+            report_id=report_id,
+            progress=progress,
+            analysis=analysis,
+            model_metadata=model_metadata,
         )
-        run_id = job.options.get("daily_summary_run_id")
-        actual_cost = None
-        if progress.get("attempt") and model_metadata:
-            actual_cost = {
-                "estimated_cost_usd": model_metadata.get("estimated_cost_usd"),
-                "estimated_cost_rub": model_metadata.get("estimated_cost_rub"),
-                "semantic_attempt_count": model_metadata.get("semantic_attempt_count", 1),
-            }
-            if run_id:
-                record_daily_summary_actual_cost(
-                    DEFAULT_DB_PATH,
-                    int(run_id),
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    cost=actual_cost,
-                )
-        if run_id:
-            progress_error = progress.get("error") if progress.get("status") == "error" else None
-            if analysis is None and not progress_error:
-                progress_error = "Анализ не сформирован"
-            complete_daily_summary_item(
-                DEFAULT_DB_PATH,
-                int(run_id),
-                entity_type=entity_type,
-                entity_id=entity_id,
-                report_id=report_id,
-                error=str(progress_error) if progress_error else None,
-            )
-        job.results[-1]["actual_cost"] = actual_cost
+        with _LOCK:
+            _upsert_job_result(job, result)
+
+
+def _collect_results(job: JobState, entity_type: str, ids: list[str]) -> None:
+    if entity_type == "deal":
+        for entity_id in ids:
+            _publish_deal_result(job, entity_id, allow_raise=True)
+        return
+    _collect_lead_results(job, ids)
 
 
 def _converted_lead_handoffs(lead_ids: list[str]) -> dict[str, str]:
@@ -865,25 +1093,57 @@ def _run_job(job_id: str) -> None:
         options = AnalyzeOptions(**job.options)
 
     def log_line(text: str) -> None:
+        publish_entity_id: str | None = None
+        stage_event: dict[str, str] | None = None
+        daily_progress: dict[str, Any] | None = None
+        daily_run_id: int | None = None
+        automatic_run_id: int | None = None
         with _LOCK:
             current = _JOBS[job_id]
             progress_event = parse_progress_event(text)
             if progress_event is not None:
                 _apply_progress_event(current, progress_event)
-                run_id = current.options.get("daily_summary_run_id")
-                if run_id:
-                    merged_progress = current.entity_progress.get(
-                        progress_key(str(progress_event.get("entity_type")), str(progress_event.get("entity_id")))
-                    ) or progress_event
-                    update_daily_summary_item_progress(DEFAULT_DB_PATH, int(run_id), merged_progress)
+                daily_run_id = _int_or_none(current.options.get("daily_summary_run_id"))
+                automatic_run_id = _int_or_none(current.options.get("automatic_analysis_run_id"))
+                merged_progress = current.entity_progress.get(
+                    progress_key(str(progress_event.get("entity_type")), str(progress_event.get("entity_id")))
+                ) or progress_event
+                if daily_run_id:
+                    daily_progress = dict(merged_progress)
+                entity_type = str(progress_event.get("entity_type") or "")
+                entity_id = str(progress_event.get("entity_id") or "")
+                if progress_event.get("publish_ready") is True and entity_type == "deal" and entity_id:
+                    publish_entity_id = entity_id
+                elif automatic_run_id is not None and entity_type == "deal" and entity_id:
+                    stage_event = {"entity_id": entity_id, "stage": str(progress_event.get("stage") or "")}
+            else:
+                current.logs.append(text[-MAX_JOB_LOG_LINE_CHARS:])
+                if len(current.logs) > MAX_JOB_LOG_LINES:
+                    del current.logs[:-MAX_JOB_LOG_LINES]
+                if current.stages:
+                    current.stages[-1]["detail"] = text[-300:]
+                _touch(current)
                 return
-            current.logs.append(text[-MAX_JOB_LOG_LINE_CHARS:])
-            if len(current.logs) > MAX_JOB_LOG_LINES:
-                del current.logs[:-MAX_JOB_LOG_LINES]
-            # Keep last detail on current stage.
-            if current.stages:
-                current.stages[-1]["detail"] = text[-300:]
-            _touch(current)
+        if daily_run_id and daily_progress is not None:
+            update_daily_summary_item_progress(DEFAULT_DB_PATH, int(daily_run_id), daily_progress)
+        if publish_entity_id:
+            try:
+                _publish_deal_result(_JOBS[job_id], publish_entity_id, allow_raise=False)
+            except Exception as publish_error:  # noqa: BLE001 - keep reading stdout
+                _sync_automatic_analysis_item(
+                    automatic_run_id,
+                    entity_id=publish_entity_id,
+                    stage="error",
+                    error=_safe_publish_error(publish_error),
+                    publication_status="pending",
+                )
+            return
+        if automatic_run_id is not None and stage_event is not None:
+            _sync_automatic_analysis_item(
+                automatic_run_id,
+                entity_id=stage_event["entity_id"],
+                stage=stage_event["stage"] or None,
+            )
 
     groups: dict[str, list[str]] = {"lead": [], "deal": []}
     collected_groups: set[str] = set()
@@ -920,7 +1180,8 @@ def _run_job(job_id: str) -> None:
             with _LOCK:
                 _set_stage(_JOBS[job_id], stage_key, f"Pipeline {entity_type}", "done")
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "running")
-                _collect_group_results(_JOBS[job_id], entity_type, ids)
+            _collect_group_results(_JOBS[job_id], entity_type, ids)
+            with _LOCK:
                 collected_groups.add(entity_type)
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
@@ -930,14 +1191,14 @@ def _run_job(job_id: str) -> None:
             _set_stage(job, "done", "Отчёт готов", "done")
             _touch(job)
     except Exception as error:  # noqa: BLE001 - surface to UI
-        with _LOCK:
-            job = _JOBS[job_id]
-            for entity_type, ids in groups.items():
-                if not ids or entity_type in collected_groups:
-                    continue
-                try:
-                    _collect_group_results(job, entity_type, ids)
-                except Exception as collection_error:  # noqa: BLE001 - keep the original job failure visible
+        job = _JOBS[job_id]
+        for entity_type, ids in groups.items():
+            if not ids or entity_type in collected_groups:
+                continue
+            try:
+                _collect_group_results(job, entity_type, ids)
+            except Exception as collection_error:  # noqa: BLE001 - keep the original job failure visible
+                with _LOCK:
                     _set_stage(
                         job,
                         f"collect_{entity_type}",
@@ -945,7 +1206,8 @@ def _run_job(job_id: str) -> None:
                         "error",
                         f"Не удалось собрать частичные результаты: {collection_error}",
                     )
-                else:
+            else:
+                with _LOCK:
                     _set_stage(
                         job,
                         f"collect_{entity_type}",
@@ -953,6 +1215,8 @@ def _run_job(job_id: str) -> None:
                         "done",
                         "Собраны результаты, созданные до ошибки пакетного запуска.",
                     )
+        with _LOCK:
+            job = _JOBS[job_id]
             job.status = "error"
             job.error = str(error)
             run_id = job.options.get("daily_summary_run_id")

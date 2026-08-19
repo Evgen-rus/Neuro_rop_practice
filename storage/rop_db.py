@@ -874,6 +874,42 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(entity_type, entity_id)
             );
+
+            CREATE TABLE IF NOT EXISTS automatic_analysis_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_date TEXT NOT NULL,
+                trigger TEXT NOT NULL,
+                job_id TEXT,
+                status TEXT NOT NULL,
+                current_stage TEXT,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_automatic_analysis_runs_started
+                ON automatic_analysis_runs(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS automatic_analysis_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                stage TEXT,
+                decision_status TEXT,
+                analysis_run_id INTEGER,
+                report_id INTEGER,
+                error TEXT,
+                publication_status TEXT NOT NULL DEFAULT 'pending',
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, entity_type, entity_id),
+                FOREIGN KEY(run_id) REFERENCES automatic_analysis_runs(id),
+                FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(id),
+                FOREIGN KEY(report_id) REFERENCES ui_reports(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_automatic_analysis_items_run
+                ON automatic_analysis_items(run_id, entity_type, entity_id);
             """
         )
         _ensure_column(conn, "analysis_runs", "model", "TEXT")
@@ -2016,48 +2052,23 @@ def save_ui_report(
     analysis_run_id: int | None = None,
 ) -> int:
     init_db(db_path)
-    share_token = secrets.token_urlsafe(24)
     with connect(db_path) as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO ui_reports (
-                entity_type,
-                entity_id,
-                created_at,
-                risk_level,
-                attention_reason,
-                recommended_action,
-                analysis_path,
-                report_path,
-                report_json,
-                report_meta_json,
-                technical_log_json,
-                model_context_json,
-                job_id,
-                analysis_run_id,
-                share_token
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                entity_type,
-                str(entity_id),
-                utcish_now(),
-                risk_level,
-                attention_reason,
-                recommended_action,
-                analysis_path,
-                report_path,
-                dumps_json(report_json) if report_json is not None else None,
-                dumps_json(report_meta) if report_meta is not None else None,
-                dumps_json(technical_log) if technical_log is not None else None,
-                dumps_json(model_context) if model_context is not None else None,
-                job_id,
-                int(analysis_run_id) if analysis_run_id is not None else None,
-                share_token,
-            ),
+        return _insert_ui_report(
+            conn,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            risk_level=risk_level,
+            attention_reason=attention_reason,
+            recommended_action=recommended_action,
+            analysis_path=analysis_path,
+            report_path=report_path,
+            report_json=report_json,
+            report_meta=report_meta,
+            technical_log=technical_log,
+            model_context=model_context,
+            job_id=job_id,
+            analysis_run_id=analysis_run_id,
         )
-        return int(cursor.lastrowid)
 
 
 def list_ui_reports(db_path: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -2115,6 +2126,389 @@ def get_ui_report_by_analysis_run_id(db_path: str | Path, analysis_run_id: int) 
             (int(analysis_run_id),),
         ).fetchone()
     return _row_to_ui_report(row)
+
+
+def _insert_ui_report(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    risk_level: str | None,
+    attention_reason: str | None,
+    recommended_action: str | None,
+    analysis_path: str | None,
+    report_path: str | None,
+    report_json: dict[str, Any] | None,
+    report_meta: dict[str, Any] | None,
+    technical_log: dict[str, Any] | None,
+    model_context: dict[str, Any] | None,
+    job_id: str | None,
+    analysis_run_id: int | None,
+) -> int:
+    share_token = secrets.token_urlsafe(24)
+    cursor = conn.execute(
+        """
+        INSERT INTO ui_reports (
+            entity_type,
+            entity_id,
+            created_at,
+            risk_level,
+            attention_reason,
+            recommended_action,
+            analysis_path,
+            report_path,
+            report_json,
+            report_meta_json,
+            technical_log_json,
+            model_context_json,
+            job_id,
+            analysis_run_id,
+            share_token
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            entity_type,
+            str(entity_id),
+            utcish_now(),
+            risk_level,
+            attention_reason,
+            recommended_action,
+            analysis_path,
+            report_path,
+            dumps_json(report_json) if report_json is not None else None,
+            dumps_json(report_meta) if report_meta is not None else None,
+            dumps_json(technical_log) if technical_log is not None else None,
+            dumps_json(model_context) if model_context is not None else None,
+            job_id,
+            int(analysis_run_id) if analysis_run_id is not None else None,
+            share_token,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def get_or_create_ui_report_for_analysis_run(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    analysis_run_id: int,
+    risk_level: str | None = None,
+    attention_reason: str | None = None,
+    recommended_action: str | None = None,
+    analysis_path: str | None = None,
+    report_path: str | None = None,
+    report_json: dict[str, Any] | None = None,
+    report_meta: dict[str, Any] | None = None,
+    technical_log: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
+    job_id: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Atomically reuse or insert the UI report for one analysis_run_id."""
+    run_id = int(analysis_run_id)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        previous_isolation = conn.isolation_level
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM ui_reports
+                WHERE analysis_run_id = ?
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is not None:
+                conn.execute("COMMIT")
+                report = _row_to_ui_report(row)
+                if report is None:
+                    raise RuntimeError("Existing UI report could not be loaded")
+                return report, False
+            report_id = _insert_ui_report(
+                conn,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                risk_level=risk_level,
+                attention_reason=attention_reason,
+                recommended_action=recommended_action,
+                analysis_path=analysis_path,
+                report_path=report_path,
+                report_json=report_json,
+                report_meta=report_meta,
+                technical_log=technical_log,
+                model_context=model_context,
+                job_id=job_id,
+                analysis_run_id=run_id,
+            )
+            created_row = conn.execute(
+                "SELECT * FROM ui_reports WHERE id = ?",
+                (report_id,),
+            ).fetchone()
+            conn.execute("COMMIT")
+            report = _row_to_ui_report(created_row)
+            if report is None:
+                raise RuntimeError("Created UI report could not be loaded")
+            return report, True
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.isolation_level = previous_isolation
+
+
+def _row_to_automatic_analysis_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _row_to_automatic_analysis_item(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def create_automatic_analysis_run(
+    db_path: str | Path,
+    *,
+    trigger: str,
+    entity_ids: list[str] | tuple[str, ...] = (),
+    entity_type: str = "deal",
+    job_id: str | None = None,
+    status: str = "running",
+    current_stage: str | None = "queued",
+    business_date: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    date_value = str(business_date or datetime.now(MSK_TZ).date().isoformat())
+    finished_at = None if status == "running" else now
+    ids = [str(item) for item in entity_ids if str(item).strip()]
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO automatic_analysis_runs (
+                business_date, trigger, job_id, status, current_stage,
+                started_at, updated_at, finished_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (date_value, str(trigger), job_id, str(status), current_stage, now, now, finished_at),
+        )
+        run_id = int(cursor.lastrowid)
+        for entity_id in ids:
+            conn.execute(
+                """
+                INSERT INTO automatic_analysis_items (
+                    run_id, entity_type, entity_id, stage, decision_status,
+                    analysis_run_id, report_id, error, publication_status, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    str(entity_type),
+                    str(entity_id),
+                    "queued",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "pending",
+                    now,
+                ),
+            )
+        row = conn.execute(
+            "SELECT * FROM automatic_analysis_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    run = _row_to_automatic_analysis_run(row)
+    if run is None:
+        raise RuntimeError("Automatic analysis run was not created")
+    return run
+
+
+def attach_automatic_analysis_job_id(
+    db_path: str | Path,
+    run_id: int,
+    job_id: str,
+) -> None:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE automatic_analysis_runs
+            SET job_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (str(job_id), now, int(run_id)),
+        )
+
+
+def finish_automatic_analysis_run(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    status: str,
+    current_stage: str | None = None,
+) -> None:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        if current_stage is None:
+            conn.execute(
+                """
+                UPDATE automatic_analysis_runs
+                SET status = ?, finished_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (str(status), now, now, int(run_id)),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE automatic_analysis_runs
+            SET status = ?, current_stage = ?, finished_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (str(status), str(current_stage), now, now, int(run_id)),
+        )
+
+
+def interrupt_running_automatic_analysis_runs(db_path: str | Path = DEFAULT_DB_PATH) -> int:
+    """Mark leftover running runs as interrupted after an API restart. Do not resume subprocesses."""
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE automatic_analysis_runs
+            SET status = 'interrupted', finished_at = ?, updated_at = ?
+            WHERE status = 'running'
+            """,
+            (now, now),
+        )
+        return int(cursor.rowcount or 0)
+
+
+def get_latest_automatic_analysis_run(db_path: str | Path) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM automatic_analysis_runs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    return _row_to_automatic_analysis_run(row)
+
+
+def list_automatic_analysis_items(
+    db_path: str | Path,
+    run_id: int,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM automatic_analysis_items
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (int(run_id),),
+        ).fetchall()
+    return [item for item in (_row_to_automatic_analysis_item(row) for row in rows) if item is not None]
+
+
+def get_automatic_analysis_item(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    entity_type: str,
+    entity_id: str,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM automatic_analysis_items
+            WHERE run_id = ? AND entity_type = ? AND entity_id = ?
+            """,
+            (int(run_id), str(entity_type), str(entity_id)),
+        ).fetchone()
+    return _row_to_automatic_analysis_item(row)
+
+
+def update_automatic_analysis_item(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    entity_type: str,
+    entity_id: str,
+    stage: str | None = None,
+    decision_status: str | None = None,
+    analysis_run_id: int | None = None,
+    report_id: int | None = None,
+    error: str | None = None,
+    publication_status: str | None = None,
+    current_stage: str | None = None,
+) -> None:
+    init_db(db_path)
+    now = utcish_now()
+    assignments: list[str] = ["updated_at = ?"]
+    values: list[Any] = [now]
+    if stage is not None:
+        assignments.append("stage = ?")
+        values.append(str(stage))
+    if decision_status is not None:
+        assignments.append("decision_status = ?")
+        values.append(str(decision_status))
+    if analysis_run_id is not None:
+        assignments.append("analysis_run_id = ?")
+        values.append(int(analysis_run_id))
+    if report_id is not None:
+        assignments.append("report_id = ?")
+        values.append(int(report_id))
+    if error is not None:
+        assignments.append("error = ?")
+        values.append(str(error).strip() or None)
+    if publication_status is not None:
+        assignments.append("publication_status = ?")
+        values.append(str(publication_status))
+    values.extend([int(run_id), str(entity_type), str(entity_id)])
+    with connect(db_path) as conn:
+        conn.execute(
+            f"""
+            UPDATE automatic_analysis_items
+            SET {", ".join(assignments)}
+            WHERE run_id = ? AND entity_type = ? AND entity_id = ?
+            """,
+            values,
+        )
+        if current_stage is not None:
+            conn.execute(
+                """
+                UPDATE automatic_analysis_runs
+                SET current_stage = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (str(current_stage), now, int(run_id)),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE automatic_analysis_runs
+                SET updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, int(run_id)),
+            )
 
 
 def _row_to_deal_manager_situation_review(row: sqlite3.Row | None) -> dict[str, Any] | None:

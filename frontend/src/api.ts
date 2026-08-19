@@ -1816,6 +1816,27 @@ export function fetchJob(jobId: string) {
   return api<JobState>(`/api/jobs/${jobId}`)
 }
 
+export type AutomaticAnalysisLatest = {
+  business_date: string | null
+  status: string
+  processed: number
+  total: number
+  succeeded: number
+  errors: number
+  skipped: number
+  full: number
+  mini: number
+  reports_published: number
+  current_stage: string | null
+  started_at: string | null
+  updated_at: string | null
+  finished_at: string | null
+}
+
+export function fetchAutomaticAnalysisLatest() {
+  return api<{ latest: AutomaticAnalysisLatest | null }>('/api/automatic-analysis/latest')
+}
+
 export function fetchReports(limit = 50) {
   return api<{ items: UiReportListItem[] }>(`/api/reports?limit=${limit}`)
 }

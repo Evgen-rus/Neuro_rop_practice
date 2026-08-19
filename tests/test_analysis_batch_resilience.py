@@ -84,6 +84,26 @@ class AnalysisBatchResilienceTests(unittest.TestCase):
         finally:
             _JOBS.pop(job_id, None)
 
+    def test_deal_publish_error_does_not_hide_already_collected_result(self) -> None:
+        from api.jobs import _publish_deal_result
+
+        job = JobState(job_id="keep-published")
+        job.results = [{"entity_type": "deal", "entity_id": "101", "report_id": 15}]
+        job.report_ids = [15]
+        job.entity_progress["deal:202"] = {
+            "entity_type": "deal",
+            "entity_id": "202",
+            "publish_ready": True,
+            "decision_status": "error",
+            "status": "error",
+            "stage": "error",
+        }
+        _publish_deal_result(job, "202", allow_raise=False)
+        by_id = {item["entity_id"]: item for item in job.results}
+        self.assertEqual(by_id["101"]["report_id"], 15)
+        self.assertIsNone(by_id["202"]["report_id"])
+        self.assertEqual(job.report_ids, [15])
+
 
 if __name__ == "__main__":
     unittest.main()

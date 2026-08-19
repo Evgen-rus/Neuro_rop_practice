@@ -11,9 +11,40 @@ from setup import MSK_TZ
 
 PROGRESS_PREFIX = "@@ROP_PROGRESS@@"
 
+DECISION_STATUS_FULL = "full"
+DECISION_STATUS_MINI = "mini"
+DECISION_STATUS_SKIP = "skip"
+DECISION_STATUS_ERROR = "error"
+COMPACT_DECISION_STATUSES = frozenset(
+    {
+        DECISION_STATUS_FULL,
+        DECISION_STATUS_MINI,
+        DECISION_STATUS_SKIP,
+        DECISION_STATUS_ERROR,
+    }
+)
+_ENGINE_TO_COMPACT_DECISION = {
+    "FIRST_FULL_ANALYSIS": DECISION_STATUS_FULL,
+    "FULL_LLM_ANALYSIS": DECISION_STATUS_FULL,
+    "MINI_RECOMMENDATION_NO_LLM": DECISION_STATUS_MINI,
+    "SKIPPED_NO_CHANGES": DECISION_STATUS_SKIP,
+    "ERROR": DECISION_STATUS_ERROR,
+}
+
 
 def progress_key(entity_type: str, entity_id: str) -> str:
     return f"{entity_type}:{entity_id}"
+
+
+def compact_decision_status(engine_status: str | None) -> str:
+    raw = str(engine_status or "").strip()
+    mapped = _ENGINE_TO_COMPACT_DECISION.get(raw)
+    if mapped:
+        return mapped
+    normalized = raw.lower()
+    if normalized in COMPACT_DECISION_STATUSES:
+        return normalized
+    return DECISION_STATUS_ERROR if raw else ""
 
 
 def emit_progress(
@@ -28,8 +59,11 @@ def emit_progress(
     attempt: int | None = None,
     max_attempts: int | None = None,
     error: str | None = None,
+    publish_ready: bool = False,
+    analysis_run_id: int | None = None,
+    decision_status: str | None = None,
 ) -> dict[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "entity_type": str(entity_type),
         "entity_id": str(entity_id),
         "stage": str(stage),
@@ -42,6 +76,15 @@ def emit_progress(
         "error": error,
         "updated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
     }
+    # Не записываем false/пустое значение: поздний `done` не должен затирать
+    # уже полученный publish_ready при слиянии progress в JobState.
+    if publish_ready:
+        payload["publish_ready"] = True
+    if analysis_run_id is not None:
+        payload["analysis_run_id"] = int(analysis_run_id)
+    compact = compact_decision_status(decision_status)
+    if compact:
+        payload["decision_status"] = compact
     # Машинная строка должна переживать Windows-консоли с любой системной кодировкой.
     # JSON-парсер восстановит исходный Unicode из ASCII-safe escape-последовательностей.
     print(PROGRESS_PREFIX + json.dumps(payload, ensure_ascii=True, separators=(",", ":")), flush=True)

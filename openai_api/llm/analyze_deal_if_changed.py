@@ -44,6 +44,7 @@ from openai_api.change_detection.snapshot import (
     save_json,
 )
 from openai_api.change_detection.provenance import analysis_run_provenance
+from progress_events import compact_decision_status, emit_progress
 from setup import BASE_DIR, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -254,6 +255,34 @@ def persist_successful_llm_run(
     return run_id
 
 
+def emit_deal_publish_ready(
+    deal_id: str,
+    *,
+    analysis_run_id: int | None,
+    engine_status: str,
+    error: str | None = None,
+) -> None:
+    """Terminal event after SQLite and files are written. Inner analyze_deal `done` is not enough."""
+    compact = compact_decision_status(engine_status) or "error"
+    details = {
+        "full": "FULL-анализ сохранён",
+        "mini": "MINI-рекомендация сохранена",
+        "skip": "Изменений нет, анализ пропущен",
+        "error": "Анализ не сформирован",
+    }
+    emit_progress(
+        "deal",
+        str(deal_id),
+        "error" if compact == "error" else "done",
+        status="error" if compact == "error" else "done",
+        detail=details.get(compact, details["error"]),
+        error=error,
+        publish_ready=True,
+        analysis_run_id=analysis_run_id,
+        decision_status=compact,
+    )
+
+
 def persist_skip(
     *,
     db_path: Path,
@@ -264,8 +293,8 @@ def persist_skip(
     previous_state: dict[str, Any] | None,
     decision_reason: dict[str, Any],
     mini_path: Path | None = None,
-) -> None:
-    save_analysis_run(
+) -> int:
+    run_id = save_analysis_run(
         db_path,
         entity_type="deal",
         entity_id=str(args.deal_id),
@@ -295,6 +324,7 @@ def persist_skip(
         last_recommendation=(previous_state or {}).get("last_recommendation"),
         last_analysis_at=(previous_state or {}).get("last_analysis_at"),
     )
+    return run_id
 
 
 def filter_today_mini_triggers(db_path: Path, deal_id: str, triggers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -353,7 +383,7 @@ def main() -> None:
 
         if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS}:
             run_existing_analyzer(args, analyzer_transcript_arg)
-            persist_successful_llm_run(
+            run_id = persist_successful_llm_run(
                 db_path=db_path,
                 args=args,
                 fingerprint=fingerprint,
@@ -361,6 +391,11 @@ def main() -> None:
                 decision_status=decision.status,
                 paths=paths,
                 decision_reason=decision.as_dict(),
+            )
+            emit_deal_publish_ready(
+                str(args.deal_id),
+                analysis_run_id=run_id,
+                engine_status=decision.status,
             )
             print(f"{decision.status}: LLM analysis completed for deal {args.deal_id}")
             print(f"Analysis saved: {paths['analysis']}")
@@ -378,7 +413,7 @@ def main() -> None:
                     triggers=decision.triggers,
                     diff=decision.diff,
                 )
-                persist_skip(
+                run_id = persist_skip(
                     db_path=db_path,
                     args=args,
                     status=suppressed_decision.status,
@@ -386,6 +421,11 @@ def main() -> None:
                     snapshot=snapshot,
                     previous_state=previous_state,
                     decision_reason=suppressed_decision.as_dict(),
+                )
+                emit_deal_publish_ready(
+                    str(args.deal_id),
+                    analysis_run_id=run_id,
+                    engine_status=suppressed_decision.status,
                 )
                 print(f"{SKIPPED_NO_CHANGES}: mini triggers suppressed by daily anti-spam for deal {args.deal_id}")
                 return
@@ -412,7 +452,7 @@ def main() -> None:
                     recommendation_md_path=str(paths["mini"]),
                     fingerprint=fingerprint,
                 )
-            persist_skip(
+            run_id = persist_skip(
                 db_path=db_path,
                 args=args,
                 status=decision.status,
@@ -422,11 +462,16 @@ def main() -> None:
                 decision_reason=decision.as_dict(),
                 mini_path=paths["mini"],
             )
+            emit_deal_publish_ready(
+                str(args.deal_id),
+                analysis_run_id=run_id,
+                engine_status=decision.status,
+            )
             print(f"{decision.status}: mini recommendation saved: {paths['mini']}")
             return
 
         if decision.status == SKIPPED_NO_CHANGES:
-            persist_skip(
+            run_id = persist_skip(
                 db_path=db_path,
                 args=args,
                 status=decision.status,
@@ -435,6 +480,11 @@ def main() -> None:
                 previous_state=previous_state,
                 decision_reason=decision.as_dict(),
             )
+            emit_deal_publish_ready(
+                str(args.deal_id),
+                analysis_run_id=run_id,
+                engine_status=decision.status,
+            )
             print(f"{decision.status}: deal {args.deal_id} skipped")
             return
 
@@ -442,8 +492,9 @@ def main() -> None:
 
     except Exception as error:
         logger.exception("Deal change-detection analysis failed")
+        error_run_id = None
         try:
-            save_analysis_run(
+            error_run_id = save_analysis_run(
                 db_path,
                 entity_type="deal",
                 entity_id=str(args.deal_id),
@@ -456,6 +507,12 @@ def main() -> None:
             )
         except Exception:
             logger.exception("Could not persist ERROR run")
+        emit_deal_publish_ready(
+            str(args.deal_id),
+            analysis_run_id=error_run_id,
+            engine_status=ERROR,
+            error=str(error),
+        )
         print(f"{ERROR}: {error}")
         raise
 

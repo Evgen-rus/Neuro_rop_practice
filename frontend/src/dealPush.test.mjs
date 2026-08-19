@@ -10,6 +10,7 @@ import {
   isAutoOrigin,
   missingCurrentModes,
   pressureLever,
+  assistantAnswerPane,
   quickHelpAnswerReady,
   sharedTurns,
   strategyLabel,
@@ -138,4 +139,12 @@ test('mode class names keep push warm and reanimator cool', () => {
 test('quick help answer is ready after the first saved mode', () => {
   assert.equal(quickHelpAnswerReady({ saved_by_mode: {} }), false)
   assert.equal(quickHelpAnswerReady({ saved_by_mode: { push: 31 } }), true)
+})
+
+test('empty assistant pane stays out of a ready answer', () => {
+  assert.equal(assistantAnswerPane({ hasTurn: true, busy: false, error: 'старая ошибка' }), 'thread')
+  assert.equal(assistantAnswerPane({ hasTurn: true, busy: true, error: '' }), 'thread')
+  assert.equal(assistantAnswerPane({ hasTurn: false, busy: true, error: '' }), 'loading')
+  assert.equal(assistantAnswerPane({ hasTurn: false, busy: false, error: 'Ответ модели оборвался. Нажмите «Повторить».' }), 'error')
+  assert.equal(assistantAnswerPane({ hasTurn: false, busy: false, error: '' }), 'empty')
 })

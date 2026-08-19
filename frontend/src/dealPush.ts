@@ -134,3 +134,17 @@ export function workspaceModeClassName(mode: AssistantMode): string {
 export function quickHelpAnswerReady(job: { saved_by_mode?: Partial<Record<string, number>> } | null | undefined): boolean {
   return Object.values(job?.saved_by_mode || {}).some((value) => Number(value) >= 1)
 }
+
+export type AssistantAnswerPane = 'thread' | 'loading' | 'empty' | 'error'
+
+/** Empty/error/loading only when there is no saved turn. A ready answer stays 'thread'. */
+export function assistantAnswerPane(args: {
+  hasTurn: boolean
+  busy: boolean
+  error?: string | null
+}): AssistantAnswerPane {
+  if (args.hasTurn) return 'thread'
+  if (args.busy) return 'loading'
+  if (String(args.error || '').trim()) return 'error'
+  return 'empty'
+}

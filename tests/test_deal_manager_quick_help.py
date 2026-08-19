@@ -15,6 +15,7 @@ from openai_api.llm.deal_manager_quick_help import (
     quick_help_schema,
     validate_quick_help,
 )
+from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
 
 
 DEAL = {
@@ -618,6 +619,51 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         load.assert_called_once_with(Path("state.sqlite"), "101", require_confirmed_situation=True)
         self.assertEqual(result["event_type"], "communication_completed")
         self.assertEqual(calls[0][1]["quick_help_id"], 31)
+
+    def test_public_quick_help_error_hides_internal_details(self) -> None:
+        incomplete = ModelResponseIncompleteError(
+            "Structured output is incomplete: max_output_tokens",
+            "секретный черновик",
+            {"output_tokens": 4000},
+        )
+        parsed = ModelJsonParseError("Invalid JSON object", "{", {})
+        self.assertEqual(quick_help.public_quick_help_error(incomplete), quick_help.INCOMPLETE_QUICK_HELP_ERROR)
+        self.assertEqual(quick_help.public_quick_help_error(parsed), quick_help.FORMAT_QUICK_HELP_ERROR)
+        self.assertEqual(
+            quick_help.public_quick_help_error(ValueError("Сначала подтвердите текущую ситуацию сделки")),
+            "Сначала подтвердите текущую ситуацию сделки",
+        )
+        paid = quick_help.public_quick_help_error(ValueError("Подтвердите платный AI-вызов для quick help"))
+        self.assertEqual(paid, quick_help.GENERIC_QUICK_HELP_ERROR)
+        self.assertNotIn("платн", paid.casefold())
+        hidden = quick_help.public_quick_help_error(RuntimeError("Traceback secret key"))
+        self.assertEqual(hidden, quick_help.GENERIC_QUICK_HELP_ERROR)
+        self.assertNotIn("Traceback", hidden)
+        self.assertNotIn("RuntimeError", hidden)
+
+    def test_failed_quick_help_job_returns_human_error(self) -> None:
+        incomplete = ModelResponseIncompleteError(
+            "Structured output is incomplete: max_output_tokens",
+            "",
+            {},
+        )
+        with self.assertLogs(quick_help.logger, level="ERROR"), \
+             patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_current_for_mode", return_value=None), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", side_effect=incomplete), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            started = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="",
+                confirm_paid=True,
+            )
+        job = quick_help.get_quick_help_job(started["job_id"])
+        self.assertEqual(job["status"], "error")
+        self.assertEqual(job["error"], quick_help.INCOMPLETE_QUICK_HELP_ERROR)
+        self.assertNotIn("ModelResponseIncompleteError", job["error"])
+        self.assertNotIn("max_output_tokens", job["error"])
 
     def test_public_deal_context_projects_existing_qualification_blocks(self) -> None:
         analysis = {

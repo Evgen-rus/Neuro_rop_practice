@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import FOLLOWUPS_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 
 
 FOLLOWUPS_CONTRACT = "followup_plan_v1"
-MAX_FOLLOWUPS_OUTPUT_TOKENS = 3600
 _BASIS = ("confirmed", "inferred", "generic")
 _FORMATS = ("video", "article", "checklist", "email", "case", "news", "useful_tip", "other")
 
@@ -97,7 +97,7 @@ def generate_deal_manager_followups(**kwargs: Any) -> tuple[dict[str, Any], dict
     prompt = build_followups_prompt(**kwargs)
     result, metadata = call_structured_output_json(
         prompt, schema=followups_schema(), schema_name="deal_manager_followups", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_FOLLOWUPS_OUTPUT_TOKENS,
+        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=FOLLOWUPS_MAX_OUTPUT_TOKENS,
         log_title="deal manager followups prompt", call_type="deal_manager_followups",
         prompt_cache_key="neuro-rop:deal-manager-followups:v1",
         stable_prefix=prompt_prefix_before(prompt, "COMMUNICATION_PATTERN_CONTEXT:"),

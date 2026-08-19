@@ -28,12 +28,14 @@ from api.candidates import (
 )
 from api.access import (
     actor_source_role,
+    automatic_analysis_latest_payload,
     can_view_job,
     deal_access,
     get_deal,
     require_deal,
     require_report,
     require_task,
+    scoped_automatic_analysis_items,
     scoped_deal_metrics,
     scoped_dashboard,
 )
@@ -81,6 +83,7 @@ from api.deal_manager_quick_help import (
     get_manager_assistant_workspace,
     get_quick_help_job,
     list_quick_help_history,
+    public_quick_help_error,
     record_manager_communication_completed,
     set_deal_context_lever_priority,
     start_quick_help_job,
@@ -115,6 +118,7 @@ from storage.rop_db import (
     get_daily_summary_run,
     get_last_analysis_profile,
     get_latest_ui_report,
+    get_latest_automatic_analysis_run,
     get_candidate_filter,
     get_candidate_review_states,
     get_lead_workflow_state,
@@ -123,8 +127,10 @@ from storage.rop_db import (
     get_ui_report,
     get_ui_report_by_share_token,
     init_db,
+    interrupt_running_automatic_analysis_runs,
     list_analysis_profiles,
     list_daily_summary_runs,
+    list_automatic_analysis_items,
     list_outcomes,
     list_qualification_reviews,
     list_rop_decisions,
@@ -149,6 +155,7 @@ init_db(DEFAULT_DB_PATH)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    interrupt_running_automatic_analysis_runs(DEFAULT_DB_PATH)
     start_daytime_cycle()
     yield
     stop_daytime_cycle()
@@ -716,6 +723,17 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/automatic-analysis/latest")
+def automatic_analysis_latest() -> dict[str, Any]:
+    user = auth_current_user()
+    run = get_latest_automatic_analysis_run(DEFAULT_DB_PATH)
+    if run is None:
+        return {"latest": None}
+    items = list_automatic_analysis_items(DEFAULT_DB_PATH, int(run["id"]))
+    visible = scoped_automatic_analysis_items(items, user)
+    return {"latest": automatic_analysis_latest_payload(run, visible)}
+
+
 @app.get("/api/deal-control")
 def deal_control_dashboard() -> dict[str, Any]:
     user = auth_current_user()
@@ -961,7 +979,7 @@ def deal_manager_quick_help_start(
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(status_code=400, detail=public_quick_help_error(error)) from error
 
 
 @app.get("/api/deal-control/quick-help-jobs/{job_id}")

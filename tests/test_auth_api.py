@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -311,6 +312,46 @@ class AuthMiddlewareTests(unittest.TestCase):
                     204,
                 )
                 self.assertIn(api_app._is_public_path("/api/review/share-token"), {True})
+
+
+class AutomaticAnalysisAccessTests(unittest.TestCase):
+    def test_manager_aggregate_includes_only_own_deals_without_crm_ids(self) -> None:
+        manager = _user("manager", manager_id="10", user_id=10)
+        items = [
+            {"entity_id": "101", "decision_status": "full", "publication_status": "published"},
+            {"entity_id": "202", "decision_status": "mini", "publication_status": "not_applicable"},
+        ]
+        with patch.object(access, "get_deal", side_effect=lambda deal_id, **_kwargs: _deal(str(deal_id), "10" if str(deal_id) == "101" else "77")):
+            visible = access.scoped_automatic_analysis_items(items, manager)
+        payload = access.automatic_analysis_latest_payload(
+            {
+                "business_date": "2026-08-18",
+                "status": "running",
+                "current_stage": "llm_analysis",
+                "started_at": "2026-08-18T12:00:00+03:00",
+                "updated_at": "2026-08-18T12:05:00+03:00",
+                "finished_at": None,
+            },
+            visible,
+        )
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["full"], 1)
+        self.assertEqual(payload["mini"], 0)
+        self.assertEqual(payload["succeeded"], 1)
+        self.assertEqual(payload["reports_published"], 1)
+        dumped = json.dumps(payload)
+        self.assertNotIn("entity_id", dumped)
+        self.assertNotIn("101", dumped)
+        self.assertNotIn("Deal 101", dumped)
+
+    def test_latest_endpoint_requires_authentication(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from api import app as api_app
+
+        with patch.object(api_app, "authenticate_request", return_value=None):
+            with TestClient(api_app.app) as client:
+                self.assertEqual(client.get("/api/automatic-analysis/latest").status_code, 401)
 
 
 if __name__ == "__main__":

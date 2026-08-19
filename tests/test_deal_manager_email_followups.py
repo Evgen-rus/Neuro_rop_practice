@@ -6,8 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api import deal_manager_followups as followups_api
+from openai_api.config import FOLLOWUPS_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_email import build_email_prompt, validate_email
-from openai_api.llm.deal_manager_followups import build_followups_prompt, validate_followups
+from openai_api.llm.deal_manager_followups import (
+    build_followups_prompt,
+    generate_deal_manager_followups,
+    validate_followups,
+)
 from storage.rop_db import (
     get_deal_manager_email_script,
     get_deal_manager_followups,
@@ -83,6 +88,20 @@ class DealManagerEmailFollowupsTests(unittest.TestCase):
         self.assertEqual(validate_followups(FOLLOWUPS), FOLLOWUPS)
         with self.assertRaisesRegex(ValueError, "от 3 до 5"):
             validate_followups({**FOLLOWUPS, "items": FOLLOWUPS["items"][:2]})
+
+    def test_followups_use_configured_output_token_limit(self) -> None:
+        with patch(
+            "openai_api.llm.deal_manager_followups.call_structured_output_json",
+            return_value=(FOLLOWUPS, {}),
+        ) as call:
+            generate_deal_manager_followups(
+                analysis_projection=CONTEXT["analysis_projection"],
+                situation_projection=CONTEXT["situation_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                communication_pattern_context=COMMUNICATION_CONTEXT,
+            )
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], FOLLOWUPS_MAX_OUTPUT_TOKENS)
 
     def test_storage_is_exact_context_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

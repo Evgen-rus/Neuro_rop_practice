@@ -14,6 +14,7 @@ The API never reads or writes a previous quick-help answer into a new prompt.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -34,7 +35,25 @@ from api.deal_manager_situation import (
     public_disc_profile,
 )
 from openai_api.llm.deal_manager_quick_help import ASSISTANT_MODES, generate_deal_manager_quick_help
+from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
 from setup import MSK_TZ
+
+logger = logging.getLogger(__name__)
+
+INCOMPLETE_QUICK_HELP_ERROR = "Ответ модели оборвался. Нажмите «Повторить»."
+FORMAT_QUICK_HELP_ERROR = "Модель вернула ответ в неверном формате. Можно повторить."
+VALIDATION_QUICK_HELP_ERROR = "Ответ модели не прошёл проверку. Нажмите «Повторить»."
+UNAVAILABLE_QUICK_HELP_ERROR = "Сервис ответа сейчас недоступен. Попробуйте ещё раз."
+GENERIC_QUICK_HELP_ERROR = "Не удалось подготовить дожим. Попробуйте ещё раз."
+
+_KEEP_QUICK_HELP_ERRORS = (
+    "Вопрос должен содержать от 1 до 4000 знаков",
+    "Сначала подтвердите текущую ситуацию сделки",
+    "Сначала проведите полный анализ сделки",
+    "У полного анализа сделки отсутствует идентификатор",
+    "У текущей ситуации отсутствует идентификатор",
+    "Сделка не найдена в локальном контуре контроля",
+)
 
 
 MAX_QUESTION_CHARS = 4000
@@ -45,6 +64,30 @@ AUTO_QUESTIONS = {
     "push": "Сформируй текущий дожим сделки",
     "reanimator": "Сформируй текущую рекомендацию по восстановлению коммуникации",
 }
+
+
+def public_quick_help_error(error: BaseException) -> str:
+    """Human job/HTTP error without class names, traces, prompts or cost."""
+    if isinstance(error, ModelResponseIncompleteError):
+        return INCOMPLETE_QUICK_HELP_ERROR
+    if isinstance(error, ModelJsonParseError):
+        return FORMAT_QUICK_HELP_ERROR
+    text = str(error or "").strip()
+    lowered = text.casefold()
+    for known in _KEEP_QUICK_HELP_ERRORS:
+        if known.casefold() in lowered:
+            return known
+    if "платный" in lowered or "confirm_paid" in lowered:
+        return GENERIC_QUICK_HELP_ERROR
+    if "incomplete" in lowered:
+        return INCOMPLETE_QUICK_HELP_ERROR
+    if "invalid json" in lowered or "json-объект" in lowered:
+        return FORMAT_QUICK_HELP_ERROR
+    if any(marker in lowered for marker in ("quick help", "lifehacks", "pressure_lever", "tactic_id", "answer_contract")):
+        return VALIDATION_QUICK_HELP_ERROR
+    if any(marker in lowered for marker in ("timeout", "connection", "api key", "openai")):
+        return UNAVAILABLE_QUICK_HELP_ERROR
+    return GENERIC_QUICK_HELP_ERROR
 
 
 def _now() -> str:
@@ -204,9 +247,10 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
             job.status = "done"
         _touch(job, stage="done", detail="Пакет рекомендации готов", percent=100)
     except Exception as error:  # noqa: BLE001 - never return model content in a job error
+        logger.exception("Quick help job %s failed for deal %s", job_id, job.deal_id)
         with _QUICK_HELP_LOCK:
             job.status = "error"
-            job.error = f"{error.__class__.__name__}: операция не выполнена"
+            job.error = public_quick_help_error(error)
         _touch(job, stage="error", detail="Не удалось подготовить ответ", percent=100)
 
 

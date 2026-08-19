@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from 'react-dom'
 import {
   confirmManagerSituation,
+  fetchAutomaticAnalysisLatest,
   fetchDealControl,
   fetchManagerAssistantWorkspace,
   fetchManagerFullScript,
@@ -28,6 +29,7 @@ import {
   updateDealContextLeverPriority,
   type DealControlDashboard,
   type DealControlBitrixTask,
+  type AutomaticAnalysisLatest,
   type DealControlCommunicationsToday,
   type DealControlDeal,
   type DealControlTask,
@@ -61,6 +63,14 @@ import {
 } from './api'
 import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
 import {
+  AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
+  automaticAnalysisCountersText,
+  automaticAnalysisPollInterval,
+  automaticAnalysisStageLabel,
+  automaticAnalysisStatusLabel,
+  shouldReloadAfterReportsPublished,
+} from './automaticAnalysis'
+import {
   freshQuickHelpIdFromJob,
   latestQuickHelpEntryId,
   revealClassName,
@@ -69,6 +79,7 @@ import {
 import { useQuickHelpReveal } from './useQuickHelpReveal'
 import {
   answerModeClassName,
+  assistantAnswerPane,
   currentEntryForMode,
   entryForTurn,
   missingCurrentModes,
@@ -453,6 +464,62 @@ function NoticeToast({ message, onClose }: { message: string; onClose: () => voi
       <button type="button" className="dc-toast-close" aria-label="Закрыть уведомление" onClick={onClose}>×</button>
     </div>,
     document.body,
+  )
+}
+
+function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: () => void }) {
+  const [snapshot, setSnapshot] = useState<AutomaticAnalysisLatest | null>(null)
+  const publishedRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer = 0
+    const poll = async () => {
+      try {
+        const payload = await fetchAutomaticAnalysisLatest()
+        if (cancelled) return
+        const latest = payload.latest
+        setSnapshot(latest)
+        const published = latest?.reports_published ?? 0
+        if (publishedRef.current === null) {
+          publishedRef.current = latest ? published : null
+        } else if (shouldReloadAfterReportsPublished(publishedRef.current, published)) {
+          publishedRef.current = published
+          onReportsPublished()
+        } else if (latest) {
+          publishedRef.current = published
+        }
+        window.clearTimeout(timer)
+        timer = window.setTimeout(() => void poll(), automaticAnalysisPollInterval(latest?.status))
+      } catch {
+        if (cancelled) return
+        window.clearTimeout(timer)
+        timer = window.setTimeout(() => void poll(), AUTOMATIC_ANALYSIS_IDLE_POLL_MS)
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [onReportsPublished])
+
+  if (!snapshot) return null
+  const stage = automaticAnalysisStageLabel(snapshot.current_stage)
+  const updated = snapshot.updated_at || snapshot.started_at
+  return (
+    <div className={`dc-auto-analysis ${snapshot.status}`} role="status">
+      {snapshot.status === 'running' ? <span className="dc-spinner" /> : null}
+      <div>
+        <strong>{automaticAnalysisStatusLabel(snapshot.status)}</strong>
+        <small>
+          {snapshot.business_date ? `${snapshot.business_date} · ` : ''}
+          {automaticAnalysisCountersText(snapshot)}
+          {stage ? ` · этап: ${stage}` : ''}
+          {updated ? ` · обновлено ${dateTime(updated)}` : ''}
+        </small>
+      </div>
+    </div>
   )
 }
 
@@ -891,6 +958,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           </button>
         </div>
       </header>
+      <AutomaticAnalysisStatus onReportsPublished={() => { void reload() }} />
 
       {error ? <div className="dc-alert error">{error}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
@@ -1296,6 +1364,7 @@ function DealDetail(props: {
         if (next.status === 'done') {
           terminalHandled = true
           if (!cancelled) {
+            setQuickHelpError('')
             const knownId = freshQuickHelpIdFromJob(next)
             if (knownId) setFreshQuickHelpId(knownId)
             await loadAssistantWorkspace(true, Boolean(lastSavedKey))
@@ -2449,6 +2518,11 @@ function ManagerAssistantModal(props: {
         )
       : null)
   const viewingLatest = safeHistoryOffset === 0
+  const answerPane = assistantAnswerPane({
+    hasTurn: Boolean(visibleTurn),
+    busy,
+    error: props.error,
+  })
   const generatedAt = visibleEntry?.created_at
     || visibleTurn?.byMode.push?.created_at
     || visibleTurn?.byMode.reanimator?.created_at
@@ -2604,6 +2678,14 @@ function ManagerAssistantModal(props: {
             <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
           </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
+            {answerPane === 'empty' ? <div className="dc-manager-assistant-empty">
+              <p>Рекомендация по этой сделке ещё не сформирована.</p>
+              <button type="button" className="dc-button primary" onClick={() => void props.onRequest('')}>Сформировать</button>
+            </div> : null}
+            {answerPane === 'error' ? <div className="dc-manager-assistant-empty is-error">
+              <p>{props.error}</p>
+              <button type="button" className="dc-button primary" onClick={() => void props.onRequest('')}>Повторить</button>
+            </div> : null}
             {visibleTurn ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleTurn.key}`}>
               {visibleTurn.origin === 'auto' ? null : (
                 <div className="dc-manager-assistant-user-message">
@@ -2648,7 +2730,7 @@ function ManagerAssistantModal(props: {
           <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
           <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Уточните рычаг, тон или что уже пробовали..." aria-label="Уточнение рекомендации" />
           <button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void send()}>{busy ? <span className="dc-spinner" /> : 'Отправить'}</button>
-          {props.error ? <small className="dc-manager-error">{props.error}</small> : null}
+          {props.error && visibleTurn ? <small className="dc-manager-error">{props.error}</small> : null}
         </footer>
       </main>
     </section>

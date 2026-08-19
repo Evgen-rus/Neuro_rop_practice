@@ -5,6 +5,8 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
+from unittest.mock import patch
+
 from api.jobs import JobState, _apply_progress_event, parse_progress_event
 from progress_events import PROGRESS_PREFIX, emit_progress
 
@@ -55,6 +57,43 @@ class JobProgressEventTests(unittest.TestCase):
         self.assertTrue(line.isascii())
         self.assertIn("\\u0421", line)
         self.assertEqual(parse_progress_event(line)["detail"], "\u0421\u043e\u0431\u0438\u0440\u0430\u0435\u0442 CRM")
+
+    def test_parses_publish_ready_contract(self) -> None:
+        payload = {
+            "entity_type": "deal",
+            "entity_id": "101",
+            "stage": "done",
+            "status": "done",
+            "publish_ready": True,
+            "analysis_run_id": 73,
+            "decision_status": "full",
+            "updated_at": "2026-08-18T12:00:00+03:00",
+        }
+        event = parse_progress_event(PROGRESS_PREFIX + json.dumps(payload, ensure_ascii=True))
+        self.assertEqual(event["publish_ready"], True)
+        self.assertEqual(event["analysis_run_id"], 73)
+        self.assertEqual(event["decision_status"], "full")
+
+    def test_early_done_without_publish_ready_does_not_create_report(self) -> None:
+        from api.jobs import JobState, _publish_deal_result
+
+        job = JobState(job_id="job")
+        job.entity_progress["deal:101"] = {
+            "entity_type": "deal",
+            "entity_id": "101",
+            "stage": "done",
+            "status": "done",
+        }
+        with patch("api.jobs.get_or_create_ui_report_for_analysis_run") as create, \
+             patch("api.jobs.analysis_paths") as paths:
+            paths.return_value = {
+                "analysis_json": type("P", (), {"exists": lambda self: False})(),
+                "report_md": type("P", (), {"exists": lambda self: False})(),
+                "error_json": type("P", (), {"exists": lambda self: False})(),
+            }
+            _publish_deal_result(job, "101", allow_raise=True)
+        create.assert_not_called()
+        self.assertIsNone(job.results[0]["report_id"])
 
 
 if __name__ == "__main__":

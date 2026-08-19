@@ -19,6 +19,9 @@ from openai_api.config import read_bool_env
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    attach_automatic_analysis_job_id,
+    create_automatic_analysis_run,
+    finish_automatic_analysis_run,
     get_deal_control_scope,
     list_analysis_runs,
     list_deal_control_deals,
@@ -205,15 +208,42 @@ def _summarize_decisions(
     return counts
 
 
+def _persist_skipped_automatic_run(
+    db_path: str | Path,
+    *,
+    trigger: str,
+    status: str,
+    started_at: str,
+    entity_ids: list[str] | tuple[str, ...] = (),
+) -> None:
+    started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    business_date = started.astimezone(MSK_TZ).date().isoformat()
+    create_automatic_analysis_run(
+        db_path,
+        trigger=trigger,
+        entity_ids=list(entity_ids),
+        status=status,
+        current_stage=status,
+        business_date=business_date,
+    )
+
+
 def _analyze_work_pool(
     *,
     db_path: str | Path,
     deal_ids: list[str],
     started_at: str,
+    trigger: str = "scheduled",
 ) -> dict[str, Any]:
     from api.jobs import AnalyzeOptions, busy_analyze_entity_ids, start_analyze_job, wait_for_job
 
     if not deal_ids:
+        _persist_skipped_automatic_run(
+            db_path,
+            trigger=trigger,
+            status="skipped_empty",
+            started_at=started_at,
+        )
         return {
             "status": "skipped_empty",
             "job_id": None,
@@ -235,6 +265,13 @@ def _analyze_work_pool(
         counts["checked"] = len(deal_ids)
         counts["full_ids"] = []
         counts["mini_ids"] = []
+        _persist_skipped_automatic_run(
+            db_path,
+            trigger=trigger,
+            status="skipped_busy",
+            started_at=started_at,
+            entity_ids=deal_ids,
+        )
         return {
             "status": "skipped_busy",
             "job_id": None,
@@ -247,6 +284,16 @@ def _analyze_work_pool(
 
     started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
     batch_path = new_cycle_batch_path(started)
+    business_date = started.astimezone(MSK_TZ).date().isoformat()
+    automatic_run = create_automatic_analysis_run(
+        db_path,
+        trigger=trigger,
+        entity_ids=ready_ids,
+        status="running",
+        current_stage="queued",
+        business_date=business_date,
+    )
+    automatic_run_id = int(automatic_run["id"])
     job = start_analyze_job(
         AnalyzeOptions(
             entity_type="deal",
@@ -256,21 +303,35 @@ def _analyze_work_pool(
             download_audio=True,
             transcribe_audio=True,
             transcript_mode="all",
+            automatic_analysis_run_id=automatic_run_id,
             extra_env={BATCH_ENV: str(batch_path)},
         )
     )
     job_id = str(job.get("job_id") or "")
-    finished = wait_for_job(job_id, timeout_seconds=ANALYZE_JOB_TIMEOUT_SECONDS)
+    attach_automatic_analysis_job_id(db_path, automatic_run_id, job_id)
+    try:
+        finished = wait_for_job(job_id, timeout_seconds=ANALYZE_JOB_TIMEOUT_SECONDS)
+    except Exception:
+        finish_automatic_analysis_run(db_path, automatic_run_id, status="error", current_stage="error")
+        raise
+    job_status = str(finished.get("status") or "error")
+    finish_automatic_analysis_run(
+        db_path,
+        automatic_run_id,
+        status="done" if job_status == "done" else "error",
+        current_stage="done" if job_status == "done" else "error",
+    )
     counts = _summarize_decisions(db_path=db_path, deal_ids=ready_ids, created_at_from=started_at)
     if skipped_busy:
         counts["checked"] = len(deal_ids)
     return {
-        "status": str(finished.get("status") or "error"),
+        "status": job_status,
         "job_id": job_id,
         "busy_ids": skipped_busy,
         "error": finished.get("error"),
         "counts": counts,
         "spend_batch_path": str(batch_path),
+        "automatic_analysis_run_id": automatic_run_id,
     }
 
 
@@ -319,6 +380,12 @@ def run_daytime_cycle(
                 "message": "Выборка сделок deal-control ещё не настроена.",
             }
             logger.info("Дневной цикл пропущен: %s", payload["message"])
+            _persist_skipped_automatic_run(
+                db_path,
+                trigger=trigger,
+                status="skipped_unconfigured",
+                started_at=started_at,
+            )
             _write_spend_diary(payload, started=started, analysis_payload=None)
             return _store_cycle_result(payload)
 
@@ -334,6 +401,7 @@ def run_daytime_cycle(
                 db_path=kwargs["db_path"],
                 deal_ids=kwargs["deal_ids"],
                 started_at=kwargs["started_at"],
+                trigger=kwargs.get("trigger") or trigger,
             )
         )
 
@@ -377,7 +445,12 @@ def run_daytime_cycle(
 
         try:
             logger.info("Change detection / decision engine для %s сделок.", len(deal_ids))
-            analysis_payload = analyze(db_path=db_path, deal_ids=deal_ids, started_at=started_at)
+            analysis_payload = analyze(
+                db_path=db_path,
+                deal_ids=deal_ids,
+                started_at=started_at,
+                trigger=trigger,
+            )
             counts = (analysis_payload or {}).get("counts") or _empty_decision_counts()
             logger.info(
                 "Решения: проверено=%s, изменилось=%s, FULL=%s, MINI=%s, skip=%s, ошибки=%s",

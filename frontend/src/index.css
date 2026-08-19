@@ -637,6 +637,45 @@ textarea {
   white-space: nowrap;
 }
 
+.dc-auto-analysis {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--dc-line);
+  border-radius: 12px;
+  background: #f7f9fc;
+  color: var(--dc-text);
+}
+
+.dc-auto-analysis.running {
+  border-color: rgba(23, 104, 242, 0.28);
+  background: rgba(23, 104, 242, 0.06);
+}
+
+.dc-auto-analysis.error,
+.dc-auto-analysis.interrupted {
+  border-color: rgba(176, 70, 70, 0.28);
+  background: rgba(176, 70, 70, 0.06);
+}
+
+.dc-auto-analysis div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dc-auto-analysis strong {
+  font-size: 13px;
+}
+
+.dc-auto-analysis small {
+  color: var(--dc-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .dc-button {
   display: inline-flex;
   min-height: 40px;
@@ -3440,6 +3479,14 @@ textarea {
 
   .dc-refresh {
     justify-content: space-between;
+  }
+
+  .dc-auto-analysis {
+    align-items: flex-start;
+  }
+
+  .dc-auto-analysis small {
+    white-space: normal;
   }
 
   .dc-kpis {
@@ -7128,6 +7175,10 @@ ul.facts.bad li:before {
 
 .dc-manager-assistant-thread { display: grid; gap: 10px; }
 .dc-manager-assistant-missing-mode { margin: 0; padding: 12px 14px; border: 1px dashed #d2dfec; border-radius: 10px; color: #5a6e84; font-size: 12.5px; }
+.dc-manager-assistant-empty { display: grid; gap: 12px; justify-items: start; margin: 28px auto 12px; max-width: 420px; padding: 16px; border: 1px dashed #d2dfec; border-radius: 12px; background: #f8fbff; }
+.dc-manager-assistant-empty p { margin: 0; color: #3d5670; font-size: 13px; line-height: 1.5; }
+.dc-manager-assistant-empty.is-error { border-color: #ecc4c4; background: #fff7f7; }
+.dc-manager-assistant-empty.is-error p { color: #8a2f2f; }
 .dc-manager-assistant-turn { display: grid; gap: 8px; }
 .dc-manager-assistant-user-message { justify-self: end; width: min(68%, 720px); padding: 7px 11px; border-radius: 12px 12px 3px 12px; background: #dceaff; }
 .dc-manager-assistant-user-message small { display: block; margin-bottom: 2px; color: #55708e; font-size: 10.5px; font-weight: 700; }

@@ -91,6 +91,7 @@ class StorageMigrationTests(unittest.TestCase):
                     row[1]
                     for row in conn.execute("PRAGMA index_list(manager_trajectory_events)")
                 }
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             finally:
                 conn.close()
             self.assertTrue({"model", "prompt_version", "logic_version", "provenance_json"} <= analysis_columns)
@@ -98,6 +99,8 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("payload_json", event_columns)
             self.assertIn("idx_manager_trajectory_entity_time", indexes)
             self.assertIn("idx_manager_trajectory_manager_time", indexes)
+            self.assertIn("automatic_analysis_runs", tables)
+            self.assertIn("automatic_analysis_items", tables)
 
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))

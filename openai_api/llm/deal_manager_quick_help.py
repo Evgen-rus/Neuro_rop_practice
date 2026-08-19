@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import QUICK_HELP_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import (
     MANAGER_MODEL,
     MANAGER_REASONING_EFFORT,
@@ -21,8 +22,6 @@ from openai_api.llm.deal_manager_situation import (
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.manager_tactics import load_manager_tactics, manager_tactic_ids
 
-
-MAX_QUICK_HELP_OUTPUT_TOKENS = 4000
 ASSISTANT_MODES = ("push", "reanimator")
 _STRATEGIES = ("primary", "alternative", "pattern_break")
 _ANSWER_CONTRACT = "strategy_v3"
@@ -467,7 +466,7 @@ def generate_deal_manager_quick_help(
         schema_name="deal_manager_quick_help",
         model=model,
         reasoning_effort=reasoning_effort,
-        max_output_tokens=MAX_QUICK_HELP_OUTPUT_TOKENS,
+        max_output_tokens=QUICK_HELP_MAX_OUTPUT_TOKENS,
         log_title=f"deal manager {mode} prompt",
         call_type=f"deal_manager_quick_help_{mode}",
         prompt_cache_key=cache_key,

@@ -376,3 +376,60 @@ def can_view_job(job: dict[str, Any], user: dict[str, Any]) -> bool:
         if deal is None or not deal_access(user, deal).can_open:
             return False
     return True
+
+
+def scoped_automatic_analysis_items(
+    items: list[dict[str, Any]],
+    user: dict[str, Any],
+) -> list[dict[str, Any]]:
+    role = str(user.get("role") or "")
+    if role == "admin":
+        return list(items)
+    visible: list[dict[str, Any]] = []
+    for item in items:
+        deal = get_deal(str(item.get("entity_id") or ""))
+        if deal is None:
+            continue
+        if deal_access(user, deal).can_open:
+            visible.append(item)
+    return visible
+
+
+def automatic_analysis_latest_payload(
+    run: dict[str, Any] | None,
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    full = mini = skip = errors = processed = published = 0
+    for item in items:
+        decision = str(item.get("decision_status") or "")
+        publication = str(item.get("publication_status") or "")
+        if decision in {"full", "mini", "skip", "error"}:
+            processed += 1
+        if decision == "full":
+            full += 1
+        elif decision == "mini":
+            mini += 1
+        elif decision == "skip":
+            skip += 1
+        if decision == "error" or (not decision and publication == "error"):
+            errors += 1
+        if publication == "published" and decision == "full":
+            published += 1
+    return {
+        "business_date": run.get("business_date"),
+        "status": run.get("status"),
+        "processed": processed,
+        "total": len(items),
+        "succeeded": full + mini,
+        "errors": errors,
+        "skipped": skip,
+        "full": full,
+        "mini": mini,
+        "reports_published": published,
+        "current_stage": run.get("current_stage"),
+        "started_at": run.get("started_at"),
+        "updated_at": run.get("updated_at"),
+        "finished_at": run.get("finished_at"),
+    }

@@ -288,6 +288,7 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertIsInstance(options, AnalyzeOptions)
         self.assertFalse(options.force_llm)
         self.assertTrue(options.analyze)
+        self.assertIsNotNone(options.automatic_analysis_run_id)
         self.assertTrue(options.extra_env and "SPEND_DIARY_BATCH_PATH" in options.extra_env)
         self.assertEqual(payload["job_id"], "abc")
 
@@ -304,6 +305,48 @@ class DaytimeCycleRunTests(unittest.TestCase):
         start.assert_not_called()
         self.assertEqual(payload["status"], "skipped_busy")
         self.assertEqual(payload["busy_ids"], ["101"])
+
+    def test_locked_cycle_does_not_create_a_new_automatic_run(self) -> None:
+        from storage.rop_db import get_latest_automatic_analysis_run
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_refresh(**_kwargs):
+            started.set()
+            self.assertTrue(release.wait(timeout=2))
+            return {"sync_message": "CRM обновлена", "sync_errors": []}
+
+        def noop_collect(*_args, **_kwargs):
+            return {"status": "success", "counts": {}, "errors": {}}
+
+        def noop_analyze(**_kwargs):
+            return {"status": "done", "counts": {"checked": 1, "changed": 0, "full": 0, "mini": 0, "skip": 1, "error": 0}}
+
+        worker = threading.Thread(
+            target=lambda: run_daytime_cycle(
+                db_path=self.db_path,
+                now=NOW,
+                refresh_fn=slow_refresh,
+                collect_fn=noop_collect,
+                analyze_fn=noop_analyze,
+                make_client_fn=lambda: object(),
+            )
+        )
+        worker.start()
+        self.assertTrue(started.wait(timeout=2))
+        second = run_daytime_cycle(
+            db_path=self.db_path,
+            now=NOW,
+            refresh_fn=lambda **_kwargs: self.fail("second run must not sync"),
+            collect_fn=lambda *_args, **_kwargs: self.fail("second run must not collect"),
+            analyze_fn=lambda **_kwargs: self.fail("second run must not analyze"),
+        )
+        self.assertEqual(second["status"], "skipped_locked")
+        self.assertIsNone(get_latest_automatic_analysis_run(self.db_path))
+        release.set()
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
 
     def test_decision_summary_uses_latest_run_and_does_not_treat_skip_as_full(self) -> None:
         from api.daytime_cycle import _summarize_decisions

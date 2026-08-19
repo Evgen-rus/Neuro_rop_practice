@@ -259,6 +259,17 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
         self.assertNotIn("quick_help", prompt)
         self.assertIn("## PRIOR_NEURO_ROP_RECOMMENDATION\n\nnull", build_prompt("101", "", "", "", [], {}))
 
+    def _full_ready(self, job: JobState, entity_id: str = "101", run_id: int = 73) -> None:
+        job.entity_progress[f"deal:{entity_id}"] = {
+            "entity_type": "deal",
+            "entity_id": entity_id,
+            "publish_ready": True,
+            "analysis_run_id": run_id,
+            "decision_status": "full",
+            "status": "done",
+            "stage": "done",
+        }
+
     def test_collect_results_materializes_only_after_successful_deal_save(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -269,22 +280,24 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             )
             paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
             job = JobState(job_id="job")
+            self._full_ready(job)
             calls: list[str] = []
             saved_kwargs: dict[str, object] = {}
 
             def save(*_args, **kwargs):
                 calls.append("save")
                 saved_kwargs.update(kwargs)
-                return 42
+                return {"id": 42}, True
 
             def materialize(*_args, **_kwargs):
                 calls.append("materialize")
                 return {"id": 9}
 
             with patch.object(jobs, "analysis_paths", return_value=paths), \
-                 patch.object(jobs, "get_ui_report_by_analysis_run_id", return_value=None), \
-                 patch.object(jobs, "save_ui_report", side_effect=save), \
+                 patch.object(jobs, "get_or_create_ui_report_for_analysis_run", side_effect=save), \
+                 patch.object(jobs, "get_automatic_analysis_item", return_value=None), \
                  patch.object(jobs, "apply_deal_recommendation_feedback", side_effect=lambda *_args, **_kwargs: calls.append("apply")), \
+                 patch.object(jobs, "apply_deal_daily_checklist_update"), \
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
             self.assertEqual(calls, ["save", "apply", "materialize"])
@@ -300,8 +313,10 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             )
             paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
             job = JobState(job_id="job")
+            self._full_ready(job)
             with patch.object(jobs, "analysis_paths", return_value=paths), \
-                 patch.object(jobs, "get_ui_report_by_analysis_run_id", return_value={"id": 15}), \
+                 patch.object(jobs, "get_or_create_ui_report_for_analysis_run", return_value=({"id": 15}, False)), \
+                 patch.object(jobs, "get_automatic_analysis_item", return_value=None), \
                  patch.object(jobs, "save_ui_report") as save, \
                  patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
                 jobs._collect_results(job, "deal", ["101"])
@@ -319,8 +334,9 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             analysis_path.write_text(json.dumps({"analysis": invalid}, ensure_ascii=False), encoding="utf-8")
             paths = {"analysis_json": analysis_path, "report_md": root / "deal_101.md", "error_json": root / "error.json"}
             job = JobState(job_id="job")
+            self._full_ready(job)
             with patch.object(jobs, "analysis_paths", return_value=paths), \
-                 patch.object(jobs, "save_ui_report") as save, \
+                 patch.object(jobs, "get_or_create_ui_report_for_analysis_run") as save, \
                  patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
                 with self.assertRaises(ValueError):
                     jobs._collect_results(job, "deal", ["101"])
@@ -334,9 +350,11 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             job = JobState(job_id="job")
             with patch.object(jobs, "analysis_paths", return_value=paths), \
                  patch.object(jobs, "save_ui_report") as save, \
+                 patch.object(jobs, "get_or_create_ui_report_for_analysis_run") as create, \
                  patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
                 jobs._collect_results(job, "deal", ["101"])
             save.assert_not_called()
+            create.assert_not_called()
             materialize.assert_not_called()
 
             paths["analysis_json"].write_text(json.dumps({"analysis": {"lead_state": {}}}), encoding="utf-8")
@@ -348,8 +366,9 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
             materialize.assert_not_called()
 
             paths["analysis_json"].write_text(json.dumps({"analysis": self._analysis()}), encoding="utf-8")
+            self._full_ready(job)
             with patch.object(jobs, "analysis_paths", return_value=paths), \
-                 patch.object(jobs, "save_ui_report", side_effect=RuntimeError("save failed")), \
+                 patch.object(jobs, "get_or_create_ui_report_for_analysis_run", side_effect=RuntimeError("save failed")), \
                  patch.object(jobs, "materialize_deal_recommendation_from_report") as materialize:
                 with self.assertRaises(RuntimeError):
                     jobs._collect_results(job, "deal", ["101"])
