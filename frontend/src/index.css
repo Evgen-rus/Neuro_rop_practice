@@ -6509,6 +6509,75 @@ ul.facts.bad li:before {
   opacity: 1;
 }
 
+.dc-manager-context-persist {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: center;
+  padding: 9px 10px 10px;
+  border-top: 1px solid #cfe4d8;
+  background: #f3fbf6;
+  animation: dc-persist-in .22s ease;
+}
+
+.dc-manager-context-persist.used {
+  border-top-color: #dcece2;
+  background: #f7fbf8;
+}
+
+.dc-manager-context-persist > p {
+  margin: 0;
+  color: #2f5a43;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.dc-manager-context-persist > p[role="alert"] {
+  color: #b82f2f;
+}
+
+.dc-manager-context-persist strong {
+  font-weight: 800;
+}
+
+.dc-manager-context-persist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dc-manager-context-persist .dc-button {
+  min-height: 32px;
+  width: auto;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 900;
+}
+
+.dc-manager-context-persist .dc-button.persist-cta {
+  border-color: var(--dc-blue);
+  color: #fff;
+  background: var(--dc-blue);
+  box-shadow: 0 4px 12px rgba(23, 104, 242, .2);
+}
+
+.dc-manager-context-persist .dc-button.persist-cta:hover:not(:disabled) {
+  box-shadow: 0 7px 16px rgba(23, 104, 242, .28);
+}
+
+@keyframes dc-persist-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-manager-context-persist { animation: none; }
+}
+
 .dc-overview-situation-focus {
   display: grid;
   gap: 2px;
@@ -7414,6 +7483,9 @@ ul.facts.bad li:before {
   .dc-manager-answer-heading { display: grid; }
   .dc-manager-situation-actions .dc-button,
   .dc-manager-quick-help-actions .dc-button { width: 100%; }
+  .dc-manager-context-persist { grid-template-columns: 1fr; }
+  .dc-manager-context-persist-actions { justify-content: flex-start; }
+  .dc-manager-context-persist-actions .dc-button { width: auto; max-width: 100%; }
   .dc-manager-quick-help-actions { align-items: stretch; }
   .dc-manager-assistant-layer { padding: 0; }
   .dc-manager-assistant-modal { grid-template-columns: 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; }

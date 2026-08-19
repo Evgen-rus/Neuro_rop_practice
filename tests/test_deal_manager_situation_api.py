@@ -16,7 +16,7 @@ from openai_api.llm.deal_manager_situation import (
     generate_deal_manager_situation,
     situation_schema,
 )
-from openai_api.llm.llm_client import call_structured_output_json
+from openai_api.llm.llm_client import ModelResponseIncompleteError, call_structured_output_json
 from storage import rop_db as storage
 
 
@@ -63,6 +63,14 @@ DEAL = {
         "completed": False,
         "description": "Получить решение",
     },
+}
+CONTEXT = {
+    "deal": DEAL,
+    "analysis_projection": {},
+    "current_bitrix_task": DEAL["primary_bitrix_task"],
+    "situation_projection": {"current_situation": "КП отправлено"},
+    "source_report_id": 17,
+    "situation_id": 21,
 }
 
 
@@ -295,6 +303,42 @@ class DealManagerSituationTests(unittest.TestCase):
                 db_path=Path("state.sqlite"), deal_id="101", context="Новый контекст", confirm_paid=True
             )
         self.assertEqual(result["job_id"], "active")
+
+    def test_failed_refine_job_returns_human_error(self) -> None:
+        situation._SITUATION_JOBS.clear()
+        incomplete = ModelResponseIncompleteError(
+            "Structured output is incomplete: max_output_tokens",
+            "секретный черновик",
+            {"output_tokens": 2400},
+        )
+        with self.assertLogs(situation.logger, level="ERROR"), \
+             patch.object(situation, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(situation, "generate_deal_manager_situation", side_effect=incomplete), \
+             patch.object(situation.threading, "Thread", ImmediateThread):
+            started = situation.start_situation_refine_job(
+                db_path=Path("state.sqlite"),
+                deal_id="102",
+                context="Клиент попросил вернуться после согласования",
+                confirm_paid=True,
+            )
+        job = situation.get_situation_job(started["job_id"])
+        self.assertEqual(job["status"], "error")
+        self.assertEqual(job["error"], situation.INCOMPLETE_SITUATION_ERROR)
+        self.assertNotIn("ModelResponseIncompleteError", job["error"])
+        self.assertNotIn("max_output_tokens", job["error"])
+        self.assertNotIn("секретный черновик", job["error"])
+
+    def test_public_situation_error_hides_internal_details(self) -> None:
+        incomplete = ModelResponseIncompleteError(
+            "Structured output is incomplete: max_output_tokens",
+            "секретный черновик",
+            {},
+        )
+        self.assertEqual(situation.public_situation_error(incomplete), situation.INCOMPLETE_SITUATION_ERROR)
+        hidden = situation.public_situation_error(RuntimeError("Traceback secret key"))
+        self.assertEqual(hidden, situation.GENERIC_SITUATION_ERROR)
+        self.assertNotIn("Traceback", hidden)
+        self.assertNotIn("RuntimeError", hidden)
 
     def test_structured_client_forwards_manager_reasoning_effort(self) -> None:
         response = SimpleNamespace(

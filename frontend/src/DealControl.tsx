@@ -90,6 +90,7 @@ import {
   visibleLifehack,
   workspaceModeClassName,
 } from './dealPush'
+import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
 
 type DealControlView = 'dashboard' | 'rop' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -1018,6 +1019,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           deal={selected}
           onReload={reload}
           onCopy={copy}
+          onNotice={(message) => { setError(''); setNotice(message) }}
           onToggleBitrixCompletion={toggleBitrixCompletion}
           onToggleChecklistItem={toggleChecklistItem}
           analysisJob={analysisJob}
@@ -1214,6 +1216,7 @@ function DealDetail(props: {
   deal: DealControlDeal | null
   onReload: () => Promise<void>
   onCopy: (text: string, label: string) => Promise<void>
+  onNotice: (message: string) => void
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   analysisJob: JobState | null
@@ -1224,6 +1227,10 @@ function DealDetail(props: {
   const [situationContext, setSituationContext] = useState('')
   const [situationError, setSituationError] = useState('')
   const [situationJob, setSituationJob] = useState<ManagerSituationJob | null>(null)
+  const pendingSituationContextRef = useRef('')
+  const [savedContextForBitrix, setSavedContextForBitrix] = useState('')
+  const [contextCopyFailed, setContextCopyFailed] = useState(false)
+  const [contextPersistUsed, setContextPersistUsed] = useState(false)
   const [quickHelpDraft, setQuickHelpDraft] = useState('')
   const [quickHelpError, setQuickHelpError] = useState('')
   const [quickHelpJob, setQuickHelpJob] = useState<ManagerQuickHelpJob | null>(null)
@@ -1272,6 +1279,13 @@ function DealDetail(props: {
   }, [activeDealId, activeReportId])
 
   useEffect(() => {
+    pendingSituationContextRef.current = ''
+    setSavedContextForBitrix('')
+    setContextCopyFailed(false)
+    setContextPersistUsed(false)
+  }, [activeDealId])
+
+  useEffect(() => {
     writeDealDraft(MANAGER_SITUATION_DRAFT_PREFIX, activeDealId, situationContext)
   }, [activeDealId, situationContext])
 
@@ -1308,6 +1322,14 @@ function DealDetail(props: {
 
   const situationJobId = situationJob?.job_id
   const situationJobStatus = situationJob?.status
+  const markContextSaved = useCallback((text: string) => {
+    setSavedContextForBitrix(text.trim())
+    setContextCopyFailed(false)
+    setContextPersistUsed(false)
+    setSituationModalOpen(false)
+    setSituationContext('')
+    setSituationError('')
+  }, [])
   useEffect(() => {
     if (!managerScreen || !situationJobId || !['queued', 'running'].includes(situationJobStatus || '')) return
     let cancelled = false
@@ -1320,9 +1342,7 @@ function DealDetail(props: {
         if (terminalHandled) return
         if (next.status === 'done') {
           terminalHandled = true
-          setSituationModalOpen(false)
-          setSituationContext('')
-          setSituationError('')
+          markContextSaved(pendingSituationContextRef.current)
           await reloadDetail()
         } else if (next.status === 'error') {
           terminalHandled = true
@@ -1338,7 +1358,7 @@ function DealDetail(props: {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeDealId, managerScreen, reloadDetail, situationJobId, situationJobStatus])
+  }, [activeDealId, managerScreen, markContextSaved, reloadDetail, situationJobId, situationJobStatus])
 
   const quickHelpJobId = quickHelpJob?.job_id
   const quickHelpJobStatus = quickHelpJob?.status
@@ -1406,18 +1426,36 @@ function DealDetail(props: {
     }
     if (situationJob && ['queued', 'running'].includes(situationJob.status)) return
     setSituationError('')
+    pendingSituationContextRef.current = context
     try {
       const started = await startManagerSituationRefinement(props.deal.deal_id, context, true)
       setSituationJob(started)
       if (started.status === 'error') setSituationError(started.error || 'Не удалось пересобрать текущую ситуацию')
       if (started.status === 'done') {
-        setSituationModalOpen(false)
-        setSituationContext('')
+        markContextSaved(context)
         await props.onReload()
       }
     } catch (reason) {
       setSituationError(reason instanceof Error ? reason.message : String(reason))
     }
+  }
+
+  async function persistSavedContextToBitrix() {
+    const text = savedContextForBitrix
+    if (!text || !props.deal) return
+    setContextPersistUsed(true)
+    const result = await persistTextAndOpenUrl(text, bitrixDealUrl(props.deal.deal_id), {
+      copy: copyTextToClipboard,
+      open: (url) => Boolean(window.open(url, '_blank', 'noopener,noreferrer')),
+    })
+    setContextCopyFailed(!result.copied)
+    if (result.copied) props.onNotice('Контекст скопирован. Вставьте его в комментарий Bitrix.')
+  }
+
+  async function copySavedContextAgain() {
+    const copied = await copyTextToClipboard(savedContextForBitrix)
+    setContextCopyFailed(!copied)
+    if (copied) props.onNotice('Контекст скопирован. Вставьте его в комментарий Bitrix.')
   }
 
   async function requestQuickHelp(question: string, mode?: ManagerAssistantMode) {
@@ -1559,6 +1597,9 @@ function DealDetail(props: {
       situationContext={situationContext}
       situationError={situationError}
       situationJob={situationJob}
+      savedContextForBitrix={savedContextForBitrix}
+      contextCopyFailed={contextCopyFailed}
+      contextPersistUsed={contextPersistUsed}
       quickHelpDraft={quickHelpDraft}
       quickHelpError={quickHelpError}
       quickHelpJob={quickHelpJob}
@@ -1570,6 +1611,8 @@ function DealDetail(props: {
       onSituationContext={setSituationContext}
       onConfirmSituation={() => void confirmSituation()}
       onRefineSituation={() => void refineSituation()}
+      onPersistContextToBitrix={() => void persistSavedContextToBitrix()}
+      onCopySavedContext={() => void copySavedContextAgain()}
       onQuickHelpDraft={setQuickHelpDraft}
       onQuickHelp={requestQuickHelp}
       onOpenAssistant={() => void openAssistant()}
@@ -1598,6 +1641,9 @@ type ManagerDealScreenProps = {
   situationContext: string
   situationError: string
   situationJob: ManagerSituationJob | null
+  savedContextForBitrix: string
+  contextCopyFailed: boolean
+  contextPersistUsed: boolean
   quickHelpDraft: string
   quickHelpError: string
   quickHelpJob: ManagerQuickHelpJob | null
@@ -1609,6 +1655,8 @@ type ManagerDealScreenProps = {
   onSituationContext: (value: string) => void
   onConfirmSituation: () => void
   onRefineSituation: () => void
+  onPersistContextToBitrix: () => void
+  onCopySavedContext: () => void
   onQuickHelpDraft: (value: string) => void
   onQuickHelp: (question: string, mode?: ManagerAssistantMode) => Promise<void>
   onOpenAssistant: () => void
@@ -1633,11 +1681,16 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       context={props.situationContext}
       error={props.situationError}
       job={props.situationJob}
+      savedContext={props.savedContextForBitrix}
+      copyFailed={props.contextCopyFailed}
+      persistUsed={props.contextPersistUsed}
       onOpenModal={props.onOpenSituation}
       onCloseModal={props.onCloseSituation}
       onContext={props.onSituationContext}
       onConfirm={props.onConfirmSituation}
       onRefine={props.onRefineSituation}
+      onPersistToBitrix={props.onPersistContextToBitrix}
+      onCopySavedContext={props.onCopySavedContext}
       onTranscribe={props.onTranscribe}
     /> : null}
     {confirmed ? <>
@@ -1818,11 +1871,16 @@ function ManagerSituationActions(props: {
   context: string
   error: string
   job: ManagerSituationJob | null
+  savedContext: string
+  copyFailed: boolean
+  persistUsed: boolean
   onOpenModal: () => void
   onCloseModal: () => void
   onContext: (value: string) => void
   onConfirm: () => void
   onRefine: () => void
+  onPersistToBitrix: () => void
+  onCopySavedContext: () => void
   onTranscribe: (audio: Blob) => Promise<string>
 }) {
   const confirmed = managerSituationIsConfirmed(props.situation)
@@ -1860,6 +1918,32 @@ function ManagerSituationActions(props: {
           {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}
         </button>
       </footer>
+      {props.savedContext && !busy ? (
+        <div className={`dc-manager-context-persist${props.persistUsed ? ' used' : ''}`}>
+          <p role={props.copyFailed ? 'alert' : undefined}>
+            <strong>✓ Контекст учтён.</strong>
+            {props.copyFailed
+              ? ' Текст не скопировался — вставьте его в Bitrix вручную.'
+              : props.persistUsed
+                ? ' Вставьте скопированный текст комментарием в Bitrix.'
+                : ' Чтобы он попал в следующие анализы — сохраните в Bitrix.'}
+          </p>
+          <div className="dc-manager-context-persist-actions">
+            <button
+              type="button"
+              className={`dc-button${props.persistUsed ? '' : ' persist-cta'}`}
+              onClick={props.onPersistToBitrix}
+            >
+              {props.persistUsed ? 'Открыть ещё раз →' : 'Сохранить в Bitrix →'}
+            </button>
+            {props.copyFailed ? (
+              <button type="button" className="dc-button persist-cta" onClick={props.onCopySavedContext}>
+                Скопировать текст
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
     {props.modalOpen ? createPortal(<div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
       <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">

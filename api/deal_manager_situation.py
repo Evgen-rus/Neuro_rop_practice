@@ -17,6 +17,7 @@ Canonical storage functions:
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -33,11 +34,20 @@ from openai_api.llm.deal_manager_situation import (
     project_manager_projection,
     unwrap_analysis,
 )
+from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
 from setup import MSK_TZ
 from storage import rop_db as storage
 
 
 DEFAULT_DB_PATH = storage.DEFAULT_DB_PATH
+logger = logging.getLogger(__name__)
+
+INCOMPLETE_SITUATION_ERROR = "Ответ модели оборвался. Нажмите «Пересобрать ситуацию» ещё раз."
+FORMAT_SITUATION_ERROR = "Модель вернула ответ в неверном формате. Можно повторить."
+GENERIC_SITUATION_ERROR = "Не удалось уточнить ситуацию. Попробуйте ещё раз."
+_KEEP_SITUATION_ERRORS = (
+    "Контекст менеджера должен содержать от 1 до 4000 знаков",
+)
 
 
 class StorageContractUnavailable(RuntimeError):
@@ -82,6 +92,28 @@ def _safe_model_meta(metadata: dict[str, Any] | None) -> dict[str, Any]:
         "semantic_attempt_count",
     }
     return {key: metadata[key] for key in allowed if metadata and key in metadata}
+
+
+def public_situation_error(error: BaseException) -> str:
+    """Human job/HTTP error without class names, traces, prompts or cost."""
+    if isinstance(error, ModelResponseIncompleteError):
+        return INCOMPLETE_SITUATION_ERROR
+    if isinstance(error, ModelJsonParseError):
+        return FORMAT_SITUATION_ERROR
+    text = str(error or "").strip()
+    lowered = text.casefold()
+    for known in _KEEP_SITUATION_ERRORS:
+        if known.casefold() in lowered:
+            return known
+    if "платный" in lowered or "confirm_paid" in lowered:
+        return GENERIC_SITUATION_ERROR
+    if "incomplete" in lowered:
+        return INCOMPLETE_SITUATION_ERROR
+    if "invalid json" in lowered or "json-объект" in lowered:
+        return FORMAT_SITUATION_ERROR
+    if any(marker in lowered for marker in ("timeout", "connection", "api key", "openai")):
+        return "Сервис ответа сейчас недоступен. Попробуйте ещё раз."
+    return GENERIC_SITUATION_ERROR
 
 
 def public_disc_profile(analysis_projection: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -381,10 +413,11 @@ def _run_situation_job(job_id: str, db_path: str | Path) -> None:
             job.situation_id = _situation_id(saved)
             job.status = "done"
         _touch(job, stage="done", detail="Ситуация уточнена и подтверждена", percent=100)
-    except Exception as error:  # noqa: BLE001 - job state is returned to the local UI
+    except Exception as error:  # noqa: BLE001 - never return model content in a job error
+        logger.exception("Situation refine job %s failed for deal %s", job_id, job.deal_id)
         with _SITUATION_LOCK:
             job.status = "error"
-            job.error = f"{error.__class__.__name__}: операция не выполнена"
+            job.error = public_situation_error(error)
         _touch(job, stage="error", detail="Не удалось уточнить ситуацию", percent=100)
 
 

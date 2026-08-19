@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test:reveal": "node --test src/quickHelpReveal.test.mjs",
-    "test:ui": "node --test src/quickHelpReveal.test.mjs src/dealPush.test.mjs src/automaticAnalysis.test.mjs",
+    "test:ui": "node --test src/quickHelpReveal.test.mjs src/dealPush.test.mjs src/automaticAnalysis.test.mjs src/contextPersist.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
