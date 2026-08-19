@@ -20,8 +20,17 @@
 в `/opt/Neuro_rop_practice/runtime/access.txt` с правами только для root. Его можно
 сменить, удалив этот файл и повторно запустив скрипт.
 
-После запуска скрипт проверяет `/api/health`, конфигурацию Nginx, состояние всех
-трёх контейнеров и только затем сообщает новую временную HTTPS-ссылку.
+После запуска скрипт проверяет `/api/health`, конфигурацию Nginx и состояние
+всех трёх контейнеров. Обычное обновление пересобирает только `neuro-rop-api` и
+`neuro-rop-web`. Живой `neuro-rop-tunnel` не останавливается и не пересоздаётся,
+поэтому текущий `trycloudflare.com` URL сохраняется. Скрипт сообщает этот URL;
+если туннель пришлось запустить впервые или после остановки, ссылка будет новой.
+
+Текущий URL без перезапуска туннеля:
+
+```bash
+./deploy/temporary-tunnel.sh --show-url
+```
 
 ## Автоматическое обновление из main
 
@@ -29,7 +38,8 @@ Workflow `.github/workflows/deploy-main.yml` запускается после p
 `main`. Сначала он выполняет Python unit tests, frontend lint и production build.
 Только после успешных проверок workflow подключается к VPS по SSH, проверяет
 чистоту checkout и наличие runtime-данных, делает fast-forward до проверенного
-commit и запускает этот же `temporary-tunnel.sh`.
+commit и запускает этот же `temporary-tunnel.sh`. Workflow не вызывает
+`docker compose down` и не перезапускает `neuro-rop-tunnel`.
 
 Workflow не передаёт на GitHub application-секреты. `.env`, отчёты, SQLite,
 knowledge, карта воронок и пароль Basic Auth остаются только в `runtime/` на VPS.

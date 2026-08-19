@@ -85,7 +85,7 @@ jobs:
           printf '%s\n' "${VPS_KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
           chmod 600 "${HOME}/.ssh/deploy_key" "${HOME}/.ssh/known_hosts"
 
-      - name: Fast-forward and restart current Docker stand
+      - name: Fast-forward and update application containers
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -144,6 +144,8 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "${deploy_sha}" ]] \
             || fail "VPS HEAD does not match the tested commit"
 
+          # Updates neuro-rop-api and neuro-rop-web only.
+          # The script must not stop, recreate, or restart a running neuro-rop-tunnel.
           ./deploy/temporary-tunnel.sh
           REMOTE
 
@@ -153,9 +155,9 @@ jobs:
             echo
             echo "- Commit: \`${GITHUB_SHA}\`"
             if [[ -n "${deploy_url}" ]]; then
-              echo "- Temporary URL: ${deploy_url}"
+              echo "- Tunnel URL: ${deploy_url}"
             else
-              echo "- Temporary URL: see deploy step output"
+              echo "- Tunnel URL: see deploy step output or \`./deploy/temporary-tunnel.sh --show-url\` on the VPS"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 

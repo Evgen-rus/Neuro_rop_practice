@@ -33,7 +33,7 @@ Python unit tests + frontend lint/build
 → preflight checkout и runtime
 → fast-forward до проверенного commit
 → ./deploy/temporary-tunnel.sh
-→ health-check и новая Cloudflare-ссылка
+→ health-check api/web, живой Quick Tunnel не трогается
 ```
 
 Deploy-job зависит от job с проверками. Если тест, lint или build завершился
@@ -81,8 +81,11 @@ read-only deploy key для `git fetch`. Приватный ключ GitHub Acti
 - возможность только fast-forward обновления.
 
 Workflow не использует `git reset`, `git checkout -- .` или `git clean`.
-После запуска он проверяет API health, Nginx и состояние трёх контейнеров. Новая
-Cloudflare-ссылка появляется в логе deploy step и GitHub Actions Summary.
+После запуска он проверяет API health, Nginx и состояние трёх контейнеров.
+Обычный деплой пересобирает и пересоздаёт только `neuro-rop-api` и
+`neuro-rop-web`. Живой `neuro-rop-tunnel` не останавливается и не
+пересоздаётся, поэтому текущий `trycloudflare.com` URL сохраняется. Ссылка из
+логов туннеля появляется в логе deploy step и GitHub Actions Summary.
 
 ## Ручное обновление стенда
 
@@ -135,11 +138,12 @@ git pull --ff-only origin main
 Скрипт:
 
 - пересобирает образы API и frontend;
-- перезапускает только `neuro-rop-api`, `neuro-rop-web` и
+- пересоздаёт только `neuro-rop-api` и `neuro-rop-web`;
+- не останавливает, не пересоздаёт и не перезапускает живой
   `neuro-rop-tunnel`;
 - оставляет `runtime/`, отчёты, SQLite и `.env` на месте;
 - проверяет API health, Nginx и состояние контейнеров;
-- выводит новую HTTPS-ссылку Cloudflare.
+- выводит текущую HTTPS-ссылку Cloudflare из логов туннеля.
 
 После старта `neuro-rop-api` в будни с 08:00 до 18:00 МСК каждые 30 минут
 и в 15:50 МСК синхронизирует Bitrix, копит CRM-факты manager trajectory
@@ -149,8 +153,12 @@ git pull --ff-only origin main
 `/api/health` без ID сделок. Подробности цикла — в `logs/daytime_cycle.log`
 внутри контейнера API и в stdout Docker.
 
-Новая ссылка Cloudflare создаётся при каждом перезапуске. Логин — `rop`.
-Пароль сохраняется прежним и находится только на VPS:
+Контейнер `neuro-rop-tunnel` по-прежнему имеет `restart: unless-stopped`:
+после перезагрузки VPS или Docker он поднимается сам. Если cloudflared
+реально перезапустился (падение процесса, `docker stop`, ручное удаление),
+Quick Tunnel получит новый URL — это ограничение Cloudflare, а не деплоя.
+
+Логин — `rop`. Пароль сохраняется прежним и находится только на VPS:
 
 ```bash
 cat /opt/Neuro_rop_practice/runtime/access.txt
@@ -166,9 +174,20 @@ cat /opt/Neuro_rop_practice/runtime/access.txt
 docker ps --filter name=neuro-rop
 ```
 
-Затем открой ссылку, которую вывел скрипт, и войди под `rop`. Для быстрой
-проверки достаточно открыть страницу и запустить один контролируемый анализ
-из интерфейса.
+Текущий Quick Tunnel URL можно посмотреть без перезапуска контейнера:
+
+```bash
+./deploy/temporary-tunnel.sh --show-url
+```
+
+или напрямую из логов:
+
+```bash
+docker logs neuro-rop-tunnel 2>&1 | grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' | tail -n 1
+```
+
+Затем открой эту ссылку и войди под `rop`. Для быстрой проверки достаточно
+открыть страницу и запустить один контролируемый анализ из интерфейса.
 
 ## Если стенд не открылся
 
@@ -180,11 +199,10 @@ docker logs --tail 100 neuro-rop-web
 docker logs --tail 100 neuro-rop-api
 ```
 
-Если новая ссылка не появилась в выводе скрипта, обычно её можно найти в:
-
-```bash
-docker logs neuro-rop-tunnel
-```
+Если ссылка не появилась в выводе скрипта, возьми её через
+`./deploy/temporary-tunnel.sh --show-url` или из `docker logs neuro-rop-tunnel`.
+Не перезапускай `neuro-rop-tunnel` ради «обновления ссылки»: Quick Tunnel после
+перезапуска получит другой URL.
 
 Не перезапускай cron и не удаляй Docker-образы других проектов для исправления
 этой проблемы.
@@ -198,9 +216,10 @@ GitHub Actions Summary и логи deploy-job. Для возврата к пре
 
 ## Место на диске и старые Docker-образы
 
-Каждый повторный запуск `./deploy/temporary-tunnel.sh` пересобирает образы.
-После нескольких обновлений Docker может оставить неиспользуемые образы с
-именем `<none>`. Они не нужны работающему стенду, но занимают место на диске.
+Каждый повторный запуск `./deploy/temporary-tunnel.sh` пересобирает образы
+api и web. После нескольких обновлений Docker может оставить неиспользуемые
+образы с именем `<none>`. Они не нужны работающему стенду, но занимают место
+на диске.
 
 Сначала только проверь состояние:
 
@@ -245,7 +264,11 @@ docker network rm neuro-rop-practice-net
 git clean -fdx
 rm -rf runtime
 docker system prune -a
+docker compose down
+docker restart neuro-rop-tunnel
+docker rm --force neuro-rop-tunnel
 ```
 
-Они могут удалить данные стенда или затронуть контейнеры и образы других
-проектов на VPS.
+Они могут удалить данные стенда, сбить текущий Quick Tunnel URL или затронуть
+контейнеры и образы других проектов на VPS. Обычное обновление приложения
+делает только `./deploy/temporary-tunnel.sh`.
