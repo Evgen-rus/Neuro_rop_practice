@@ -151,6 +151,7 @@ def _record_spend_diary(event: dict[str, Any]) -> None:
             entity_type=event.get("entity_type"),
             entity_id=event.get("entity_id"),
             model=event.get("model"),
+            now=_requested_at_msk(event.get("requested_at")),
         )
     except Exception as error:  # noqa: BLE001 - diary is best-effort
         logger.warning("Unable to append spend diary: %s", type(error).__name__)

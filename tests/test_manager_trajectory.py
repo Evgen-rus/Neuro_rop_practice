@@ -32,6 +32,13 @@ from storage.rop_db import (
 NOW = datetime(2026, 8, 16, 20, 0, tzinfo=MSK_TZ)
 
 
+def _recent_event_range() -> tuple[str, str]:
+    """Окно включает и фикстуру NOW, и фактический utcish_now() при записи события."""
+    start = (NOW - timedelta(days=2)).isoformat()
+    end = (max(NOW, datetime.now(MSK_TZ)) + timedelta(days=1)).isoformat()
+    return start, end
+
+
 class FakeBitrixClient:
     def __init__(self, *, activity_ok: bool = True, stage: str = "NEW") -> None:
         self.activity_ok = activity_ok
@@ -190,9 +197,9 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
             "actor_role": "manager",
             "actor_manager_id": "10",
         })
+        from_at, to_at = _recent_event_range()
         events = list_manager_trajectory_events(
-            self.db_path, from_at=(NOW - timedelta(days=1)).isoformat(),
-            to_at=(NOW + timedelta(days=2)).isoformat(), manager_ids=["10"],
+            self.db_path, from_at=from_at, to_at=to_at, manager_ids=["10"],
         )
         generated = next(item for item in events if item["event_type"] == "recommendation_generated")
         self.assertEqual(generated["analysis_run_id"], run_id)
@@ -231,9 +238,9 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
             situation_review_id=review["id"], question="Что сказать?",
             answer_json={"next_action": "Позвонить"}, mode="push",
         )
+        from_at, to_at = _recent_event_range()
         events = list_manager_trajectory_events(
-            self.db_path, from_at=(NOW - timedelta(days=2)).isoformat(),
-            to_at=(NOW + timedelta(days=2)).isoformat(), manager_ids=["10"],
+            self.db_path, from_at=from_at, to_at=to_at, manager_ids=["10"],
         )
         self.assertTrue(any(
             item["event_type"] == "recommendation_generated"
