@@ -16,6 +16,48 @@ TUNNEL_CONTAINER="neuro-rop-tunnel"
 API_IMAGE="neuro-rop-practice-api:temporary"
 WEB_IMAGE="neuro-rop-practice-web:temporary"
 
+# Quick Tunnel выдаёт новый URL при любом реальном перезапуске cloudflared.
+# Поэтому обычный деплой обновляет только api/web и не трогает живой туннель.
+container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+container_is_running() {
+    [[ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+extract_tunnel_url() {
+    docker logs "${TUNNEL_CONTAINER}" 2>&1 \
+        | grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' \
+        | tail -n 1 || true
+}
+
+print_tunnel_url() {
+    local url
+    url="$(extract_tunnel_url)"
+    if [[ -z "${url}" ]]; then
+        echo "URL туннеля не найден. Проверьте: docker logs ${TUNNEL_CONTAINER}" >&2
+        exit 1
+    fi
+    printf '%s\n' "${url}"
+}
+
+if [[ "${1:-}" == "--show-url" ]]; then
+    print_tunnel_url
+    exit 0
+fi
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'EOF'
+Запуск/обновление временного стенда.
+
+  ./deploy/temporary-tunnel.sh           пересобрать api/web, не трогая живой cloudflared
+  ./deploy/temporary-tunnel.sh --show-url
+                                        показать текущий Quick Tunnel URL из логов
+EOF
+    exit 0
+fi
+
 require_file() {
     if [[ ! -f "$1" ]]; then
         echo "Не найден обязательный файл: $1" >&2
@@ -28,6 +70,19 @@ require_directory() {
         echo "Не найдена обязательная папка: $1" >&2
         exit 1
     fi
+}
+
+wait_for_tunnel_url() {
+    local url=""
+    for _ in $(seq 1 30); do
+        url="$(extract_tunnel_url)"
+        if [[ -n "${url}" ]]; then
+            printf '%s' "${url}"
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
 }
 
 require_file "${RUNTIME_DIR}/.env"
@@ -54,10 +109,25 @@ chmod 600 "${ACCESS_FILE}"
 
 docker network inspect "${NETWORK}" >/dev/null 2>&1 || docker network create "${NETWORK}" >/dev/null
 
+# Если сеть когда-то пересоздали, живой туннель нужно снова подключить к ней.
+# Если он уже в этой сети, команда вернёт ошибку — это нормально и игнорируется.
+if container_exists "${TUNNEL_CONTAINER}"; then
+    docker network connect "${NETWORK}" "${TUNNEL_CONTAINER}" >/dev/null 2>&1 || true
+fi
+
 docker build --tag "${API_IMAGE}" --file "${PROJECT_ROOT}/Dockerfile.api" "${PROJECT_ROOT}"
 docker build --tag "${WEB_IMAGE}" --file "${PROJECT_ROOT}/Dockerfile.web" "${PROJECT_ROOT}"
 
-docker rm --force "${TUNNEL_CONTAINER}" "${WEB_CONTAINER}" "${API_CONTAINER}" >/dev/null 2>&1 || true
+preserved_tunnel_id=""
+preserved_tunnel_started_at=""
+if container_is_running "${TUNNEL_CONTAINER}"; then
+    preserved_tunnel_id="$(docker inspect --format '{{.Id}}' "${TUNNEL_CONTAINER}")"
+    preserved_tunnel_started_at="$(docker inspect --format '{{.State.StartedAt}}' "${TUNNEL_CONTAINER}")"
+    echo "Найден работающий ${TUNNEL_CONTAINER}: оставляю его без перезапуска."
+fi
+
+# Не включать сюда ${TUNNEL_CONTAINER}: force-remove сбрасывает Quick Tunnel URL.
+docker rm --force "${WEB_CONTAINER}" "${API_CONTAINER}" >/dev/null 2>&1 || true
 
 chown -R 10001:10001 "${REPORTS_DIR}"
 
@@ -104,22 +174,22 @@ if ! docker exec "${WEB_CONTAINER}" nginx -t >/dev/null 2>&1; then
     exit 1
 fi
 
-docker run --detach \
-    --name "${TUNNEL_CONTAINER}" \
-    --network "${NETWORK}" \
-    --restart unless-stopped \
-    --security-opt no-new-privileges \
-    cloudflare/cloudflared:latest tunnel --no-autoupdate --url "http://${WEB_CONTAINER}:80" >/dev/null
+if container_is_running "${TUNNEL_CONTAINER}"; then
+    echo "Quick Tunnel уже работает, новый контейнер не создаю."
+elif container_exists "${TUNNEL_CONTAINER}"; then
+    echo "Контейнер ${TUNNEL_CONTAINER} остановлен. Запускаю его без пересоздания."
+    docker start "${TUNNEL_CONTAINER}" >/dev/null
+else
+    docker run --detach \
+        --name "${TUNNEL_CONTAINER}" \
+        --network "${NETWORK}" \
+        --restart unless-stopped \
+        --security-opt no-new-privileges \
+        cloudflare/cloudflared:latest tunnel --no-autoupdate --url "http://${WEB_CONTAINER}:80" >/dev/null
+fi
 
-for _ in $(seq 1 30); do
-    url="$(docker logs "${TUNNEL_CONTAINER}" 2>&1 | grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' | tail -n 1 || true)"
-    if [[ -n "${url}" ]]; then
-        break
-    fi
-    sleep 1
-done
-
-if [[ -z "${url:-}" ]]; then
+url="$(wait_for_tunnel_url || true)"
+if [[ -z "${url}" ]]; then
     echo "Контейнеры запущены, но ссылка ещё не получена. Проверьте: docker logs ${TUNNEL_CONTAINER}" >&2
     exit 1
 fi
@@ -131,7 +201,22 @@ for container in "${API_CONTAINER}" "${WEB_CONTAINER}" "${TUNNEL_CONTAINER}"; do
     fi
 done
 
+if [[ -n "${preserved_tunnel_id}" ]]; then
+    current_tunnel_id="$(docker inspect --format '{{.Id}}' "${TUNNEL_CONTAINER}" 2>/dev/null || true)"
+    if [[ "${current_tunnel_id}" != "${preserved_tunnel_id}" ]]; then
+        echo "Контейнер ${TUNNEL_CONTAINER} был пересоздан во время деплоя, хотя этого нельзя делать." >&2
+        exit 1
+    fi
+    current_tunnel_started_at="$(docker inspect --format '{{.State.StartedAt}}' "${TUNNEL_CONTAINER}")"
+    if [[ "${current_tunnel_started_at}" != "${preserved_tunnel_started_at}" ]]; then
+        echo "Внимание: ${TUNNEL_CONTAINER} перезапустился сам во время деплоя. URL Quick Tunnel мог измениться."
+    else
+        echo "Контейнер ${TUNNEL_CONTAINER} не перезапускался, текущий URL сохранён."
+    fi
+fi
+
 echo
 echo "Временная HTTPS-ссылка: ${url}"
 echo "Логин: rop"
 echo "Пароль находится только в ${ACCESS_FILE}"
+echo "Текущий URL туннеля: ./deploy/temporary-tunnel.sh --show-url"
