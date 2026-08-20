@@ -278,6 +278,8 @@ class DealManagerSituationTests(unittest.TestCase):
                 return [DEAL]
             if name == "get_deal_manager_situation_state":
                 return {"status": "pending", "state": "pending", "is_current": False}
+            if name == "get_latest_deal_manager_situation_review":
+                return None
             if name == "save_deal_manager_situation_refined_projection":
                 return {"id": 23, "action": "context_added", "deal_id": "101"}
             raise AssertionError(name)

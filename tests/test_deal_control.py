@@ -404,6 +404,11 @@ class DealControlTests(unittest.TestCase):
                         "manager_coaching": "Уточни дату решения комиссии и зафиксируй её в CRM.",
                         "call_script": "Добрый день, сверю статус.",
                     },
+                    "main_risk": {
+                        "risk_level": "medium",
+                        "risk_type": "decision_delay",
+                        "description": "Решение зависло у юриста, срок договора сгорает 25.08.",
+                    },
                     "communication_quality_audit": {
                         "status": "assessed",
                         "scope_summary": "Учтён звонок.",
@@ -431,6 +436,7 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(review["quality"]["criteria"]["next_action"]["score"], 0)
             self.assertEqual(review["status"], "yellow")
             self.assertEqual(review["ai_context"]["current_situation"], "Клиент получил КП.")
+            self.assertEqual(review["attention_reason"], "Решение зависло у юриста, срок договора сгорает 25.08.")
             self.assertEqual(review["checklist"]["completed"], deal["checklist"]["completed"])
             self.assertEqual(review["checklist"]["total"], deal["checklist"]["total"])
             self.assertFalse(review["communications_today"].get("content_available"))

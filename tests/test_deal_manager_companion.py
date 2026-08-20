@@ -70,7 +70,23 @@ class CompanionContractTests(unittest.TestCase):
         self.assertIn("Нельзя придумывать факты", prompt)
         self.assertIn("LAST_CONTACT", prompt)
         self.assertNotIn("3–5 действительно разных вариантов", prompt)
+        self.assertNotIn("MANAGER_NOTE", prompt)
         self.assertEqual(validate_companion(COMPANION)["message_text"], COMPANION["message_text"])
+
+    def test_rewrite_note_is_in_prompt_and_does_not_invent_facts(self) -> None:
+        prompt = build_companion_prompt(
+            analysis_projection=CONTEXT["analysis_projection"],
+            situation_projection=CONTEXT["situation_projection"],
+            deal=DEAL,
+            current_bitrix_task=CONTEXT["current_bitrix_task"],
+            last_contact=companion_api._prompt_last_contact(LAST_CONTACT),
+            previous_message=COMPANION["message_text"],
+            manager_note="Не пиши про вторник. Клиент сам наберёт.",
+        )
+        self.assertIn("MANAGER_NOTE", prompt)
+        self.assertIn("Не пиши про вторник", prompt)
+        self.assertIn("PREVIOUS_MESSAGE", prompt)
+        self.assertIn("перепиши PREVIOUS_MESSAGE", prompt)
 
     def test_insufficient_clears_message(self) -> None:
         result = validate_companion({
@@ -255,6 +271,34 @@ class CompanionJobTests(unittest.TestCase):
         self.assertNotIn("text", last_contact)
         self.assertNotIn("transcript", last_contact)
         self.assertEqual(result["missing_reason"], "Нет данных")
+
+    def test_manager_note_rewrites_without_starting_analyze_job(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_generate(**kwargs):
+            captured["note"] = kwargs["manager_note"]
+            captured["previous"] = kwargs["previous_message"]
+            return (COMPANION, {"model": "test"})
+
+        with patch.object(companion_api, "find_last_contact", return_value=LAST_CONTACT), \
+             patch.object(companion_api, "start_analyze_job") as analyze, \
+             patch.object(companion_api, "_load_context", return_value=CONTEXT), \
+             patch.object(companion_api, "_cached", return_value={"id": 9, "content": COMPANION}), \
+             patch.object(companion_api.threading, "Thread", ImmediateThread), \
+             patch.object(companion_api, "generate_deal_manager_companion", side_effect=fake_generate), \
+             patch.object(companion_api, "_storage_call", return_value={"id": 10}):
+            result = companion_api.start_companion_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                confirm_paid=True,
+                regenerate=True,
+                manager_note="Не пиши про вторник. Клиент сам наберёт.",
+            )
+        self.assertEqual(result["status"], "done")
+        self.assertFalse(result["analysis_started"])
+        analyze.assert_not_called()
+        self.assertEqual(captured["note"], "Не пиши про вторник. Клиент сам наберёт.")
+        self.assertIn("Илья, спасибо за разговор", str(captured["previous"]))
 
     def test_storage_is_keyed_by_event_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

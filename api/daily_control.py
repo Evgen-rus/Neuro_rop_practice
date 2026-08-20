@@ -403,6 +403,7 @@ def build_direct_manager_question(deal: dict[str, Any]) -> str:
 def _attention_reason(deal: dict[str, Any], quality: dict[str, Any]) -> str:
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
     for value in (
+        coaching.get("main_risk_description"),
         coaching.get("current_situation"),
         quality.get("summary_for_rop"),
         coaching.get("what_to_check_now"),

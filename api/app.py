@@ -308,6 +308,7 @@ class DealManagerFollowupsRequest(BaseModel):
 class DealManagerCompanionRequest(BaseModel):
     confirm_paid: bool = False
     regenerate: bool = False
+    manager_note: str = Field(default="", max_length=4000)
 
 
 class DealManagerCommunicationCompletedRequest(BaseModel):
@@ -1125,6 +1126,7 @@ def deal_manager_companion_start(deal_id: str, body: DealManagerCompanionRequest
             deal_id=deal_id,
             confirm_paid=body.confirm_paid,
             regenerate=body.regenerate,
+            manager_note=body.manager_note,
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур сопроводительного текста ещё не подключён") from error

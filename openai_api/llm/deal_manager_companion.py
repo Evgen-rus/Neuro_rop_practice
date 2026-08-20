@@ -76,8 +76,9 @@ def _section(name: str, value: Any) -> str:
 
 
 def build_companion_prompt(**kwargs: Any) -> str:
-    return "\n\n".join([
-        "SYSTEM_RULES:\nТы пишешь короткое сопроводительное сообщение клиенту после уже состоявшегося разговора или переписки. Это не Дожим и не идеи фоллоуапов.",
+    manager_note = str(kwargs.get("manager_note") or "").strip()[:4000]
+    previous_message = str(kwargs.get("previous_message") or "").strip()[:1200]
+    rules = (
         "RULES:\n"
         "- Сначала по старому снимку сделки и последней коммуникации пойми, что изменилось, подтвердилось, отменилось и кто владеет следующим шагом.\n"
         "- Затем напиши готовое сообщение в WhatsApp / Max / Telegram: 3–7 коротких смысловых строк, не сплошной абзац.\n"
@@ -88,13 +89,28 @@ def build_companion_prompt(**kwargs: Any) -> str:
         "- Если LAST_CONTACT.content_available=false, не выдумывай текст письма или транскрипт. Бери только метаданные касания и факты из ANALYSIS_CONTEXT / SITUATION_CONTEXT.\n"
         "- Если подтверждённого результата разговора нет, верни insufficient_reason и пустой message_text. Не пиши правдоподобное сообщение.\n"
         "- understood — 1–3 коротких тезиса, что система поняла, для контроля менеджера, не для клиента.\n"
-        "- Без эмодзи, без канцелярита, без поручений менеджеру. Обращайся к клиенту по имени, если имя есть в контексте. Верни только JSON по схеме на русском языке.",
+        "- Без эмодзи, без канцелярита, без поручений менеджеру. Обращайся к клиенту по имени, если имя есть в контексте. Верни только JSON по схеме на русском языке."
+    )
+    if manager_note:
+        rules += (
+            "\n- Есть MANAGER_NOTE: перепиши PREVIOUS_MESSAGE по просьбе менеджера. "
+            "Не добавляй факты, даты и обещания, которых нет в контексте. "
+            "Если менеджер просит убрать дату, обещание или следующий шаг — убери."
+        )
+    parts = [
+        "SYSTEM_RULES:\nТы пишешь короткое сопроводительное сообщение клиенту после уже состоявшегося разговора или переписки. Это не Дожим и не идеи фоллоуапов.",
+        rules,
         _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
         _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
         _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
         _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
         _section("LAST_CONTACT", kwargs["last_contact"]),
-    ])
+    ]
+    if previous_message:
+        parts.append(_section("PREVIOUS_MESSAGE", previous_message))
+    if manager_note:
+        parts.append(_section("MANAGER_NOTE", manager_note))
+    return "\n\n".join(parts)
 
 
 def generate_deal_manager_companion(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:

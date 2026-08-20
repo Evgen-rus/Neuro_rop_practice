@@ -255,19 +255,24 @@ def _finish_missing(job: DealManagerCompanionJob, reason: str) -> None:
     _touch(job, "done", reason, 100)
 
 
-def _run(job_id: str, db_path: str | Path, regenerate: bool) -> None:
+def _run(job_id: str, db_path: str | Path, regenerate: bool, manager_note: str) -> None:
     with _COMPANION_LOCK:
         job = _COMPANION_JOBS[job_id]
         job.status = "running"
+    note = str(manager_note or "").strip()[:4000]
+    rewrite_only = bool(note)
     try:
-        _touch(job, "bitrix", "Обновляем данные из Bitrix", 12)
-        analyze_job, started = _run_analyze(job.deal_id)
-        with _COMPANION_LOCK:
-            job.analysis_started = started
-            job.analysis_decision = _analysis_decision(analyze_job, job.deal_id)
-        if analyze_job.get("status") == "error":
-            raise RuntimeError(analyze_job.get("error") or "Анализ сделки не завершился")
-        _touch(job, "contact", "Ищем последнюю коммуникацию", 48)
+        if rewrite_only:
+            _touch(job, "llm", "Переписываем сообщение по уточнению менеджера", 28)
+        else:
+            _touch(job, "bitrix", "Обновляем данные из Bitrix", 12)
+            analyze_job, started = _run_analyze(job.deal_id)
+            with _COMPANION_LOCK:
+                job.analysis_started = started
+                job.analysis_decision = _analysis_decision(analyze_job, job.deal_id)
+            if analyze_job.get("status") == "error":
+                raise RuntimeError(analyze_job.get("error") or "Анализ сделки не завершился")
+            _touch(job, "contact", "Ищем последнюю коммуникацию", 48)
         last_contact = find_last_contact(job.deal_id)
         if not last_contact or not last_contact.get("event_id"):
             _finish_missing(job, MISSING_CONTACT)
@@ -278,19 +283,26 @@ def _run(job_id: str, db_path: str | Path, regenerate: bool) -> None:
             return
         source_report_id = int(context["source_report_id"])
         last_event_id = str(last_contact.get("event_id") or "")
-        existing = None if regenerate else _cached(db_path, job.deal_id, source_report_id, last_event_id)
+        cached = _cached(db_path, job.deal_id, source_report_id, last_event_id)
+        existing = None if regenerate or rewrite_only else cached
         if isinstance(existing, dict):
             with _COMPANION_LOCK:
                 job.companion_id, job.reused, job.status = int(existing["id"]), True, "done"
             _touch(job, "done", "Открываем сохранённый сопроводительный текст", 100)
             return
-        _touch(job, "llm", "Формируем сообщение клиенту", 72)
+        previous_message = ""
+        if isinstance(cached, dict):
+            content = cached.get("content") if isinstance(cached.get("content"), dict) else {}
+            previous_message = str(content.get("message_text") or "").strip()
+        _touch(job, "llm", "Формируем сообщение клиенту" if not rewrite_only else "Переписываем сообщение клиенту", 72)
         companion, metadata = generate_deal_manager_companion(
             analysis_projection=context["analysis_projection"],
             situation_projection=context["situation_projection"],
             deal=context["deal"],
             current_bitrix_task=context["current_bitrix_task"],
             last_contact=_prompt_last_contact(last_contact),
+            manager_note=note,
+            previous_message=previous_message,
         )
         _touch(job, "saving", "Сохраняем проверенный текст", 90)
         saved = _storage_call(
@@ -320,6 +332,7 @@ def start_companion_job(
     deal_id: str,
     confirm_paid: bool,
     regenerate: bool = False,
+    manager_note: str = "",
 ) -> dict[str, Any]:
     if not confirm_paid:
         raise ValueError("Подтвердите платный AI-вызов для сопроводительного текста")
@@ -332,5 +345,9 @@ def start_companion_job(
             return asdict(active)
         job = DealManagerCompanionJob(uuid.uuid4().hex, str(deal_id))
         _COMPANION_JOBS[job.job_id] = job
-    threading.Thread(target=_run, args=(job.job_id, db_path, regenerate), daemon=True).start()
+    threading.Thread(
+        target=_run,
+        args=(job.job_id, db_path, regenerate, str(manager_note or "")),
+        daemon=True,
+    ).start()
     return asdict(job)

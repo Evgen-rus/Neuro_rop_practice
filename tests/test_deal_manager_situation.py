@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from api.deal_control import _analysis_coaching, build_deal_control_dashboard
@@ -129,10 +130,127 @@ class DealManagerSituationTests(unittest.TestCase):
                 columns,
                 {
                     "id", "deal_id", "manager_id", "source_report_id", "revision", "action",
-                    "manager_context", "refined_coaching_json", "model_meta_json", "created_at",
+                    "manager_context", "refined_coaching_json", "model_meta_json", "business_date",
+                    "created_at",
                 },
             )
             self.assertEqual(count, 2)
+
+    def test_pre_feature_reviews_are_immediately_pending_after_schema_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            _seed_deal(db_path)
+            report_id = save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json=_base_analysis(),
+            )
+            review = save_deal_manager_situation_confirmation(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                business_date="2026-08-20",
+            )
+            with connect(db_path) as conn:
+                conn.execute(
+                    "UPDATE deal_manager_situation_reviews SET business_date = NULL WHERE id = ?",
+                    (review["id"],),
+                )
+
+            state = get_deal_manager_situation_state(
+                db_path,
+                deal_id="101",
+                business_date="2026-08-20",
+            )
+
+            self.assertEqual(state["status"], "pending")
+            self.assertFalse(state["is_current"])
+            self.assertIsNone(state["review_id"])
+            self.assertIsNone(state["last_confirmation_business_date"])
+            self.assertEqual(len(list_deal_manager_situation_review_history(db_path, deal_id="101")), 1)
+
+    def test_new_moscow_day_requires_confirmation_and_preserves_refined_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            _seed_deal(db_path)
+            report_id = save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json=_base_analysis(),
+            )
+            refined = save_deal_manager_situation_refined_projection(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                manager_context="Клиент попросил вернуться после совещания",
+                refined_coaching={"current_situation": "Клиент ждёт внутреннее совещание"},
+                business_date="2026-08-19",
+            )
+
+            stale = get_deal_manager_situation_state(
+                db_path,
+                deal_id="101",
+                business_date="2026-08-20",
+            )
+            self.assertEqual(stale["status"], "pending")
+            self.assertFalse(stale["is_current"])
+            self.assertIsNone(stale["review_id"])
+            self.assertEqual(stale["last_confirmation_business_date"], "2026-08-19")
+
+            confirmed = save_deal_manager_situation_confirmation(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                business_date="2026-08-20",
+            )
+            current = get_deal_manager_situation_state(
+                db_path,
+                deal_id="101",
+                business_date="2026-08-20",
+            )
+
+            self.assertEqual(confirmed["revision"], refined["revision"] + 1)
+            self.assertEqual(confirmed["business_date"], "2026-08-20")
+            self.assertEqual(confirmed["manager_context"], "Клиент попросил вернуться после совещания")
+            self.assertEqual(
+                confirmed["refined_coaching"],
+                {"current_situation": "Клиент ждёт внутреннее совещание"},
+            )
+            self.assertEqual(current["status"], "confirmed")
+            self.assertTrue(current["is_current"])
+            self.assertEqual(current["review_id"], confirmed["id"])
+            self.assertEqual(current["business_date"], "2026-08-20")
+            self.assertEqual(_analysis_coaching(db_path, "101")["current_situation"], "Клиент ждёт внутреннее совещание")
+
+    def test_confirmation_business_date_uses_moscow_timezone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            _seed_deal(db_path)
+            report_id = save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json=_base_analysis(),
+            )
+            utc_evening = datetime.fromisoformat("2026-08-19T21:30:00+00:00")
+            review = save_deal_manager_situation_confirmation(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                business_date=utc_evening,
+            )
+
+            state = get_deal_manager_situation_state(
+                db_path,
+                deal_id="101",
+                business_date=utc_evening,
+            )
+
+            self.assertEqual(review["business_date"], "2026-08-20")
+            self.assertEqual(state["business_date"], "2026-08-20")
+            self.assertTrue(state["is_current"])
 
     def test_latest_report_invalidates_old_review_without_deleting_history(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1841,7 +1841,7 @@ function ManagerSituationActions(props: {
   const confirmed = managerSituationIsConfirmed(props.situation)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   const stateLabel = !props.situation.is_current || props.situation.state === 'pending'
-    ? 'Требует проверки'
+    ? 'Требует подтверждения на сегодня'
     : props.situation.state === 'refined' ? 'Уточнена менеджером' : 'Подтверждена'
 
   return <>
@@ -1855,6 +1855,7 @@ function ManagerSituationActions(props: {
         </span>
         <div className="dc-manager-situation-heading">
           <h3>Текущая ситуация</h3>
+          {!confirmed ? <p>Проверьте, актуальна ли ситуация сейчас</p> : null}
         </div>
         <span className="dc-manager-situation-status"><i />{stateLabel}</span>
       </header>
@@ -1867,7 +1868,7 @@ function ManagerSituationActions(props: {
 
       <footer className="dc-manager-situation-actions">
         <button className="dc-button primary" disabled={busy || confirmed} onClick={props.onConfirm}>
-          {confirmed ? '✓ Ситуация подтверждена' : 'Подтвердить ситуацию'}
+          {confirmed ? '✓ Ситуация подтверждена' : 'Подтвердить на сегодня'}
         </button>
         <button className="dc-button" disabled={busy} onClick={props.onOpenModal}>
           {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}
@@ -2546,6 +2547,9 @@ function ManagerAssistantModal(props: {
   const [historyOffset, setHistoryOffset] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const companionBusy = Boolean(companionJob && ['queued', 'running'].includes(companionJob.status))
+  const footerBusy = view === 'companion' ? companionBusy : busy
+  const companionMessage = String(companion?.content.message_text || '').trim()
   const turns = sharedTurns(props.workspace.entries)
   const latestTurn = turns.length ? turns[turns.length - 1] : null
   const safeHistoryOffset = Math.min(historyOffset, Math.max(0, turns.length - 1))
@@ -2604,6 +2608,16 @@ function ManagerAssistantModal(props: {
   }, [onRecommendationEvent, view, visibleEntry])
 
   async function send() {
+    if (view === 'companion') {
+      if (companionBusy || !props.draft.trim()) return
+      if (!companionMessage) {
+        setCompanionError('Сначала сформируйте сопроводительный текст')
+        return
+      }
+      await generateCompanion(true, props.draft)
+      props.onDraft('')
+      return
+    }
     if (busy || !props.draft.trim()) return
     setView('answer')
     setHistoryOffset(0)
@@ -2649,10 +2663,10 @@ function ManagerAssistantModal(props: {
     }
   }
 
-  async function generateCompanion(regenerate = false) {
+  async function generateCompanion(regenerate = false, managerNote = '') {
     setCompanionError('')
     try {
-      const started = await startManagerCompanion(props.deal.deal_id, true, regenerate)
+      const started = await startManagerCompanion(props.deal.deal_id, true, regenerate, managerNote)
       setCompanionJob(started)
       if (started.status === 'done') {
         const payload = await fetchManagerCompanion(props.deal.deal_id)
@@ -2831,10 +2845,11 @@ function ManagerAssistantModal(props: {
           /> : null}
         </div>
         <footer>
-          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
-          <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Уточните рычаг, тон или что уже пробовали..." aria-label="Уточнение рекомендации" />
-          <button className="dc-button primary" disabled={busy || !props.draft.trim()} onClick={() => void send()}>{busy ? <span className="dc-spinner" /> : 'Отправить'}</button>
-          {props.error && visibleTurn ? <small className="dc-manager-error">{props.error}</small> : null}
+          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+          <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={view === 'companion' ? 'Как переписать: короче, без даты, клиент сам наберёт…' : 'Уточните рычаг, тон или что уже пробовали...'} aria-label={view === 'companion' ? 'Уточнение сопроводительного текста' : 'Уточнение рекомендации'} />
+          <button className="dc-button primary" disabled={footerBusy || !props.draft.trim() || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
+          {view === 'companion' && props.draft.trim() && !companionMessage ? <small className="dc-manager-error">Сначала сформируйте сопроводительный текст</small> : null}
+          {props.error && visibleTurn && view !== 'companion' ? <small className="dc-manager-error">{props.error}</small> : null}
         </footer>
       </main>
     </section>

@@ -112,6 +112,17 @@ def utcish_now() -> str:
     return datetime.now(MSK_TZ).isoformat(timespec="seconds")
 
 
+def _moscow_business_date(value: date | datetime | str | None = None) -> str:
+    if isinstance(value, str):
+        return date.fromisoformat(value).isoformat()
+    if isinstance(value, datetime):
+        current = value if value.tzinfo else value.replace(tzinfo=MSK_TZ)
+        return current.astimezone(MSK_TZ).date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return datetime.now(MSK_TZ).date().isoformat()
+
+
 def dumps_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
@@ -567,6 +578,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 manager_context TEXT,
                 refined_coaching_json TEXT,
                 model_meta_json TEXT,
+                business_date TEXT,
                 created_at TEXT NOT NULL,
                 UNIQUE(deal_id, source_report_id, revision),
                 FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
@@ -984,6 +996,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_control_task_crm_facts", "contact_class", "TEXT NOT NULL DEFAULT 'unknown'")
         _ensure_column(conn, "deal_control_task_crm_facts", "review_status", "TEXT NOT NULL DEFAULT 'candidate'")
         _ensure_column(conn, "deal_control_task_crm_facts", "fact_key", "TEXT")
+        _ensure_column(conn, "deal_manager_situation_reviews", "business_date", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "mode", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "origin", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "turn_id", "TEXT")
@@ -2821,6 +2834,7 @@ def _append_deal_manager_situation_review(
     manager_context: str | None,
     refined_coaching: dict[str, Any] | None,
     model_meta: dict[str, Any] | None,
+    business_date: date | datetime | str | None,
 ) -> dict[str, Any]:
     if action not in {"confirmed", "context_added"}:
         raise ValueError("Неизвестное действие подтверждения manager situation")
@@ -2829,6 +2843,7 @@ def _append_deal_manager_situation_review(
     if model_meta is not None and not isinstance(model_meta, dict):
         raise ValueError("Метаданные модели должны быть JSON-объектом")
     normalized_context = None if manager_context is None else str(manager_context).strip() or None
+    normalized_business_date = _moscow_business_date(business_date)
     init_db(db_path)
     now = utcish_now()
     with connect(db_path) as conn:
@@ -2848,13 +2863,27 @@ def _append_deal_manager_situation_review(
             """,
             (str(deal_id), int(source_report_id)),
         ).fetchone()[0])
+        if action == "confirmed" and refined_coaching is None:
+            previous = conn.execute(
+                """
+                SELECT manager_context, refined_coaching_json
+                FROM deal_manager_situation_reviews
+                WHERE deal_id = ? AND source_report_id = ?
+                ORDER BY revision DESC, id DESC LIMIT 1
+                """,
+                (str(deal_id), int(source_report_id)),
+            ).fetchone()
+            if previous is not None and previous["refined_coaching_json"]:
+                refined_coaching = loads_json(previous["refined_coaching_json"], None)
+                if normalized_context is None:
+                    normalized_context = str(previous["manager_context"] or "").strip() or None
         cursor = conn.execute(
             """
             INSERT INTO deal_manager_situation_reviews (
                 deal_id, manager_id, source_report_id, revision, action,
-                manager_context, refined_coaching_json, model_meta_json, created_at
+                manager_context, refined_coaching_json, model_meta_json, business_date, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(deal_id),
@@ -2865,6 +2894,7 @@ def _append_deal_manager_situation_review(
                 normalized_context,
                 dumps_json(refined_coaching) if refined_coaching is not None else None,
                 dumps_json(model_meta) if model_meta is not None else None,
+                normalized_business_date,
                 now,
             ),
         )
@@ -2886,6 +2916,7 @@ def save_deal_manager_situation_review(
     manager_context: str | None = None,
     refined_coaching: dict[str, Any] | None = None,
     model_meta: dict[str, Any] | None = None,
+    business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
     """Append one manager-provided review for a saved deal analysis."""
     return _append_deal_manager_situation_review(
@@ -2896,6 +2927,7 @@ def save_deal_manager_situation_review(
         manager_context=manager_context,
         refined_coaching=refined_coaching,
         model_meta=model_meta,
+        business_date=business_date,
     )
 
 
@@ -2906,8 +2938,9 @@ def save_deal_manager_situation_confirmation(
     source_report_id: int,
     manager_context: str | None = None,
     model_meta: dict[str, Any] | None = None,
+    business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Append a plain confirmation without changing the AI coaching."""
+    """Append a confirmation while retaining refined coaching for the same report."""
     return _append_deal_manager_situation_review(
         db_path,
         deal_id=deal_id,
@@ -2916,6 +2949,7 @@ def save_deal_manager_situation_confirmation(
         manager_context=manager_context,
         refined_coaching=None,
         model_meta=model_meta,
+        business_date=business_date,
     )
 
 
@@ -2926,6 +2960,7 @@ def save_deal_manager_situation_confirmed(
     source_report_id: int,
     manager_context: str | None = None,
     model_meta: dict[str, Any] | None = None,
+    business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
     """Alias for ``save_deal_manager_situation_confirmation``."""
     return save_deal_manager_situation_confirmation(
@@ -2934,6 +2969,7 @@ def save_deal_manager_situation_confirmed(
         source_report_id=source_report_id,
         manager_context=manager_context,
         model_meta=model_meta,
+        business_date=business_date,
     )
 
 
@@ -2945,6 +2981,7 @@ def save_deal_manager_situation_refined_projection(
     refined_coaching: dict[str, Any],
     manager_context: str | None = None,
     model_meta: dict[str, Any] | None = None,
+    business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
     """Append a manager-provided refined projection for the saved analysis."""
     return _append_deal_manager_situation_review(
@@ -2955,6 +2992,7 @@ def save_deal_manager_situation_refined_projection(
         manager_context=manager_context,
         refined_coaching=refined_coaching,
         model_meta=model_meta,
+        business_date=business_date,
     )
 
 
@@ -2966,6 +3004,7 @@ def save_deal_manager_situation_refined(
     refined_coaching: dict[str, Any],
     manager_context: str | None = None,
     model_meta: dict[str, Any] | None = None,
+    business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
     """Short alias for ``save_deal_manager_situation_refined_projection``."""
     return save_deal_manager_situation_refined_projection(
@@ -2975,6 +3014,7 @@ def save_deal_manager_situation_refined(
         refined_coaching=refined_coaching,
         manager_context=manager_context,
         model_meta=model_meta,
+        business_date=business_date,
     )
 
 
@@ -3033,8 +3073,14 @@ def get_deal_manager_situation_review_history(
     )
 
 
-def get_deal_manager_situation_state(db_path: str | Path, *, deal_id: str) -> dict[str, Any]:
+def get_deal_manager_situation_state(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    business_date: date | datetime | str | None = None,
+) -> dict[str, Any]:
     """Project the current manager-situation state without mutating history."""
+    current_business_date = _moscow_business_date(business_date)
     report = get_latest_ui_report(db_path, entity_type="deal", entity_id=str(deal_id))
     source_report_id = int(report["id"]) if report is not None else None
     review = (
@@ -3048,17 +3094,21 @@ def get_deal_manager_situation_state(db_path: str | Path, *, deal_id: str) -> di
     )
     status = "pending"
     is_current = False
-    if review is not None:
+    review_business_date = str(review.get("business_date") or "") if review is not None else ""
+    if review is not None and review_business_date == current_business_date:
         status = "refined" if review.get("action") == "context_added" else "confirmed"
         is_current = int(review.get("source_report_id") or 0) == int(source_report_id or 0)
+    current_review = review if is_current else None
     return {
         "status": status,
         "state": status,
-        "review_id": int(review["id"]) if review is not None and review.get("id") is not None else None,
+        "review_id": int(current_review["id"]) if current_review is not None and current_review.get("id") is not None else None,
         "source_report_id": source_report_id,
-        "revision": int(review["revision"]) if review is not None and review.get("revision") is not None else None,
-        "manager_context": review.get("manager_context") if review is not None else None,
-        "confirmed_at": review.get("created_at") if review is not None else None,
+        "revision": int(current_review["revision"]) if current_review is not None and current_review.get("revision") is not None else None,
+        "manager_context": current_review.get("manager_context") if current_review is not None else None,
+        "confirmed_at": current_review.get("created_at") if current_review is not None else None,
+        "business_date": current_business_date,
+        "last_confirmation_business_date": review_business_date or None,
         "is_current": is_current,
     }
 
@@ -5599,14 +5649,7 @@ DAILY_CHECKLIST_LIMIT = 5
 
 
 def _daily_checklist_business_date(value: date | datetime | str | None = None) -> str:
-    if isinstance(value, str):
-        return date.fromisoformat(value).isoformat()
-    if isinstance(value, datetime):
-        current = value if value.tzinfo else value.replace(tzinfo=MSK_TZ)
-        return current.astimezone(MSK_TZ).date().isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    return datetime.now(MSK_TZ).date().isoformat()
+    return _moscow_business_date(value)
 
 
 def _normalize_daily_checklist_text(value: Any) -> str:

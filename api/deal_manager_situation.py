@@ -246,17 +246,15 @@ def load_manager_screen_context(
         db_path,
         deal_id=str(deal_id),
     )
-    situation_review = None
     current_status = _situation_status(situation if isinstance(situation, dict) else None)
     if require_confirmed_situation and not current_status:
         raise ValueError("Сначала подтвердите текущую ситуацию сделки")
-    if current_status:
-        situation_review = _storage_call_alias(
-            ("get_latest_deal_manager_situation_review", "get_current_deal_manager_situation_review"),
-            db_path,
-            deal_id=str(deal_id),
-            source_report_id=report_id,
-        )
+    situation_review = _storage_call_alias(
+        ("get_latest_deal_manager_situation_review", "get_current_deal_manager_situation_review"),
+        db_path,
+        deal_id=str(deal_id),
+        source_report_id=report_id,
+    )
     situation_projection = project_manager_projection(
         situation_review.get("refined_coaching") if isinstance(situation_review, dict) else None
     )
@@ -304,6 +302,8 @@ def _public_situation(
         ),
         "manager_projection": saved.get("manager_projection", manager_projection),
         "context": saved.get("context", context),
+        "business_date": saved.get("business_date"),
+        "last_confirmation_business_date": saved.get("business_date"),
     }
     for key in ("created_at", "updated_at"):
         if saved.get(key) is not None:

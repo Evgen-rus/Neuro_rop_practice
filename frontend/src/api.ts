@@ -852,6 +852,8 @@ export type ManagerSituationState = {
   revision?: number | null
   manager_context?: string | null
   confirmed_at?: string | null
+  business_date?: string | null
+  last_confirmation_business_date?: string | null
   is_current: boolean
 }
 
@@ -1722,9 +1724,9 @@ export type ManagerCompanionWorkspace = {
   source_report_id?: number | null
 }
 
-export function startManagerCompanion(dealId: string, confirmPaid = true, regenerate = false) {
+export function startManagerCompanion(dealId: string, confirmPaid = true, regenerate = false, managerNote = '') {
   return api<ManagerCompanionJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/companion`, {
-    method: 'POST', body: JSON.stringify({ confirm_paid: confirmPaid, regenerate }),
+    method: 'POST', body: JSON.stringify({ confirm_paid: confirmPaid, regenerate, manager_note: managerNote }),
   })
 }
 

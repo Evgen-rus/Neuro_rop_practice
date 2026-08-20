@@ -699,6 +699,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),
         "communication_quality_audit": communication_audit,
         "direct_manager_question": str(brief.get("direct_manager_question") or ""),
+        "main_risk_description": str(risk.get("description") or "").strip(),
     }
     if report is None or report.get("id") is None:
         return coaching

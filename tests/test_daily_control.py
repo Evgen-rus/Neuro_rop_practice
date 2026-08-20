@@ -282,6 +282,24 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertFalse(card["ai_context"]["current_situation"])
         self.assertFalse(card["script"])
 
+    def test_attention_reason_prefers_main_risk_description(self) -> None:
+        card = project_deal_review_card(_deal_row(coaching={
+            "report_id": 1,
+            "current_situation": "КП отправлено, клиент сравнивает условия.",
+            "main_risk_description": "Решение зависло у юриста, срок договора сгорает 25.08.",
+            "communication_quality_audit": _audit(),
+        }))
+        self.assertEqual(card["attention_reason"], "Решение зависло у юриста, срок договора сгорает 25.08.")
+        self.assertEqual(card["ai_context"]["current_situation"], "КП отправлено, клиент сравнивает условия.")
+
+    def test_attention_reason_falls_back_to_situation_without_risk(self) -> None:
+        card = project_deal_review_card(_deal_row(coaching={
+            "report_id": 1,
+            "current_situation": "КП отправлено, клиент сравнивает условия.",
+            "communication_quality_audit": _audit(),
+        }))
+        self.assertEqual(card["attention_reason"], "КП отправлено, клиент сравнивает условия.")
+
 
 class DailyControlStorageTests(unittest.TestCase):
     def setUp(self) -> None:
