@@ -73,7 +73,7 @@ def _request(*, cookie: str | None = None) -> Request:
 
 
 class DealAuthorizationTests(unittest.TestCase):
-    def test_manager_gets_full_own_row_and_bounded_foreign_row(self) -> None:
+    def test_manager_can_open_own_row_but_foreign_row_stays_bounded(self) -> None:
         manager = _user("manager", manager_id="10", user_id=10)
         own = _deal("101", "10")
         foreign = _deal("202", "77")
@@ -103,6 +103,27 @@ class DealAuthorizationTests(unittest.TestCase):
         for key in ("tasks", "bitrix_tasks", "coaching", "checklist", "communications_today", "private_marker"):
             self.assertNotIn(key, projected)
         self.assertIn("private_marker", access.project_deal_row(own, manager))
+
+    def test_manager_dashboard_contains_only_own_deals(self) -> None:
+        manager = _user("manager", manager_id="10", user_id=10)
+        dashboard = {
+            "deals": [_deal("101", "10"), _deal("202", "77")],
+            "summary": {"active_deals": 2, "portfolio_amount": 2000},
+            "scope": {"initial_deal_ids": ["101", "202"], "manager_ids": ["10", "77"]},
+        }
+
+        with patch.object(
+            access.storage,
+            "get_deal_control_metrics",
+            return_value={},
+            create=True,
+        ):
+            projected = access.scoped_dashboard(dashboard, manager)
+
+        self.assertEqual([row["deal_id"] for row in projected["deals"]], ["101"])
+        self.assertEqual(projected["summary"]["active_deals"], 1)
+        self.assertEqual(projected["scope"]["initial_deal_ids"], ["101"])
+        self.assertEqual(projected["scope"]["manager_ids"], ["10"])
 
     def test_rop_is_limited_to_configured_team_and_has_no_paid_ai(self) -> None:
         rop = _user("rop", user_id=2)

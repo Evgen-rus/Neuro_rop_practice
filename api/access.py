@@ -180,10 +180,7 @@ def scoped_dashboard(dashboard: dict[str, Any], user: dict[str, Any]) -> dict[st
     elif role == "manager":
         owned_source = [row for row in source_deals if deal_access(user, row).is_own]
         owned = [project_deal_row(row, user, full=True) for row in owned_source]
-        # Keep foreign rows visible as a deliberately bounded projection.  No
-        # tasks, reports, checklist, coaching or CRM evidence crosses the row.
-        foreign = [project_deal_row(row, user, full=True) for row in source_deals if not deal_access(user, row).is_own]
-        deals = owned + foreign
+        deals = owned
         summary = dict(dashboard.get("summary") or {})
         summary["active_deals"] = len(owned)
         summary["portfolio_amount"] = sum(
