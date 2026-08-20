@@ -7,6 +7,7 @@ import {
   automaticAnalysisPollInterval,
   automaticAnalysisStageLabel,
   automaticAnalysisStatusLabel,
+  shouldReloadAfterAutomaticAnalysis,
   shouldReloadAfterReportsPublished,
 } from './automaticAnalysis.ts'
 
@@ -42,4 +43,23 @@ test('reloads deal-control only when a new report appears', () => {
   assert.equal(shouldReloadAfterReportsPublished(0, 1), true)
   assert.equal(shouldReloadAfterReportsPublished(4, 4), false)
   assert.equal(shouldReloadAfterReportsPublished(undefined, 0), false)
+})
+
+test('reloads deal-control when an automatic packet finishes without a full report', () => {
+  assert.equal(shouldReloadAfterAutomaticAnalysis(
+    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
+    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
+  ), true)
+})
+
+test('reloads deal-control when polling first sees a different completed packet', () => {
+  assert.equal(shouldReloadAfterAutomaticAnalysis(
+    { status: 'done', started_at: '2026-08-20T08:00:00+03:00', reports_published: 2 },
+    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
+  ), true)
+})
+
+test('does not reload deal-control repeatedly for the same completed packet', () => {
+  const snapshot = { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 }
+  assert.equal(shouldReloadAfterAutomaticAnalysis(snapshot, snapshot), false)
 })

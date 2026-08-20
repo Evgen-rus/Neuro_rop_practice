@@ -74,7 +74,7 @@ import {
   automaticAnalysisPollInterval,
   automaticAnalysisStageLabel,
   automaticAnalysisStatusLabel,
-  shouldReloadAfterReportsPublished,
+  shouldReloadAfterAutomaticAnalysis,
 } from './automaticAnalysis'
 import {
   freshQuickHelpIdFromJob,
@@ -454,7 +454,7 @@ function NoticeToast({ message, onClose }: { message: string; onClose: () => voi
 
 function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: () => void }) {
   const [snapshot, setSnapshot] = useState<AutomaticAnalysisLatest | null>(null)
-  const publishedRef = useRef<number | null>(null)
+  const previousSnapshotRef = useRef<AutomaticAnalysisLatest | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -465,15 +465,10 @@ function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: (
         if (cancelled) return
         const latest = payload.latest
         setSnapshot(latest)
-        const published = latest?.reports_published ?? 0
-        if (publishedRef.current === null) {
-          publishedRef.current = latest ? published : null
-        } else if (shouldReloadAfterReportsPublished(publishedRef.current, published)) {
-          publishedRef.current = published
+        if (shouldReloadAfterAutomaticAnalysis(previousSnapshotRef.current, latest)) {
           onReportsPublished()
-        } else if (latest) {
-          publishedRef.current = published
         }
+        previousSnapshotRef.current = latest
         window.clearTimeout(timer)
         timer = window.setTimeout(() => void poll(), automaticAnalysisPollInterval(latest?.status))
       } catch {

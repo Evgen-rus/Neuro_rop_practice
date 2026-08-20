@@ -90,3 +90,28 @@ export function shouldReloadAfterReportsPublished(
   const after = Number(next || 0)
   return after > before
 }
+
+type AutomaticAnalysisRefreshSnapshot = Pick<
+  AutomaticAnalysisLatest,
+  'status' | 'started_at' | 'reports_published'
+>
+
+export function shouldReloadAfterAutomaticAnalysis(
+  previous: AutomaticAnalysisRefreshSnapshot | null | undefined,
+  next: AutomaticAnalysisRefreshSnapshot | null | undefined,
+): boolean {
+  if (!previous || !next) return false
+
+  const previousStartedAt = String(previous.started_at || '')
+  const nextStartedAt = String(next.started_at || '')
+  const runChanged = Boolean(
+    previousStartedAt
+    && nextStartedAt
+    && previousStartedAt !== nextStartedAt,
+  )
+  const nextTerminal = next.status !== 'running'
+
+  if (runChanged && nextTerminal) return true
+  if (!runChanged && previous.status === 'running' && nextTerminal) return true
+  return shouldReloadAfterReportsPublished(previous.reports_published, next.reports_published)
+}
