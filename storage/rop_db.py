@@ -910,6 +910,29 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_automatic_analysis_items_run
                 ON automatic_analysis_items(run_id, entity_type, entity_id);
+
+            CREATE TABLE IF NOT EXISTS daily_control_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_date TEXT NOT NULL,
+                creation_kind TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                cutoff_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                source_watermark TEXT NOT NULL,
+                automatic_analysis_run_id INTEGER,
+                source_status TEXT NOT NULL DEFAULT 'ok',
+                warnings_json TEXT NOT NULL DEFAULT '[]',
+                error TEXT,
+                FOREIGN KEY(automatic_analysis_run_id) REFERENCES automatic_analysis_runs(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_daily_control_reports_created
+                ON daily_control_reports(id DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_control_reports_planning_date
+                ON daily_control_reports(business_date)
+                WHERE creation_kind = 'automatic_planning';
             """
         )
         _ensure_column(conn, "analysis_runs", "model", "TEXT")
@@ -2509,6 +2532,176 @@ def update_automatic_analysis_item(
                 """,
                 (now, int(run_id)),
             )
+
+
+DAILY_CONTROL_METADATA_COLUMNS = (
+    "id, business_date, creation_kind, started_at, cutoff_at, created_at, "
+    "source_watermark, automatic_analysis_run_id, source_status, warnings_json, error"
+)
+DAILY_CONTROL_CREATION_KINDS = frozenset({"manual", "automatic_planning"})
+
+
+def _row_to_daily_control_report(
+    row: sqlite3.Row | None,
+    *,
+    include_snapshot: bool = True,
+) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    warnings = loads_json(value.pop("warnings_json", None), [])
+    value["warnings"] = warnings if isinstance(warnings, list) else []
+    snapshot_json = value.pop("snapshot_json", None)
+    if include_snapshot:
+        snapshot = loads_json(snapshot_json, {})
+        value["snapshot"] = snapshot if isinstance(snapshot, dict) else {}
+    return value
+
+
+def create_daily_control_report(
+    db_path: str | Path,
+    *,
+    business_date: str,
+    creation_kind: str,
+    started_at: str,
+    cutoff_at: str,
+    snapshot: dict[str, Any],
+    source_watermark: str,
+    automatic_analysis_run_id: int | None = None,
+    source_status: str = "ok",
+    warnings: list[str] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Persist an immutable daily-control snapshot. Planning reports are unique per MSK date."""
+    kind = str(creation_kind or "").strip()
+    if kind not in DAILY_CONTROL_CREATION_KINDS:
+        raise ValueError("creation_kind должен быть manual или automatic_planning")
+    init_db(db_path)
+    now = utcish_now()
+    payload = (
+        str(business_date),
+        kind,
+        str(started_at),
+        str(cutoff_at),
+        now,
+        dumps_json(snapshot),
+        str(source_watermark),
+        int(automatic_analysis_run_id) if automatic_analysis_run_id is not None else None,
+        str(source_status or "ok"),
+        dumps_json(list(warnings or [])),
+        str(error) if error else None,
+    )
+    with connect(db_path) as conn:
+        if kind == "automatic_planning":
+            existing = conn.execute(
+                f"SELECT {DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json FROM daily_control_reports "
+                "WHERE business_date = ? AND creation_kind = 'automatic_planning' LIMIT 1",
+                (str(business_date),),
+            ).fetchone()
+            if existing is not None:
+                return _row_to_daily_control_report(existing, include_snapshot=True) or {}
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO daily_control_reports (
+                    business_date, creation_kind, started_at, cutoff_at, created_at,
+                    snapshot_json, source_watermark, automatic_analysis_run_id,
+                    source_status, warnings_json, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+            report_id = int(cursor.lastrowid)
+        except sqlite3.IntegrityError:
+            existing = conn.execute(
+                f"SELECT {DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json FROM daily_control_reports "
+                "WHERE business_date = ? AND creation_kind = 'automatic_planning' LIMIT 1",
+                (str(business_date),),
+            ).fetchone()
+            if existing is not None:
+                return _row_to_daily_control_report(existing, include_snapshot=True) or {}
+            raise
+    return get_daily_control_report(db_path, report_id, include_snapshot=True) or {}
+
+
+def get_daily_control_report(
+    db_path: str | Path,
+    report_id: int,
+    *,
+    include_snapshot: bool = True,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    columns = f"{DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json" if include_snapshot else DAILY_CONTROL_METADATA_COLUMNS
+    with connect(db_path) as conn:
+        row = conn.execute(
+            f"SELECT {columns} FROM daily_control_reports WHERE id = ?",
+            (int(report_id),),
+        ).fetchone()
+    return _row_to_daily_control_report(row, include_snapshot=include_snapshot)
+
+
+def list_daily_control_reports(db_path: str | Path) -> list[dict[str, Any]]:
+    """Newest-first metadata only: snapshot JSON stays in the detail query."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT {DAILY_CONTROL_METADATA_COLUMNS} FROM daily_control_reports ORDER BY id DESC"
+        ).fetchall()
+    return [
+        item
+        for item in (_row_to_daily_control_report(row, include_snapshot=False) for row in rows)
+        if item is not None
+    ]
+
+
+def get_latest_daily_control_report(
+    db_path: str | Path,
+    *,
+    include_snapshot: bool = False,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    columns = f"{DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json" if include_snapshot else DAILY_CONTROL_METADATA_COLUMNS
+    with connect(db_path) as conn:
+        row = conn.execute(
+            f"SELECT {columns} FROM daily_control_reports ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    return _row_to_daily_control_report(row, include_snapshot=include_snapshot)
+
+
+def list_deal_daily_checklist_summaries(
+    db_path: str | Path,
+    *,
+    business_date: str,
+) -> list[dict[str, Any]]:
+    """Read-only checklist watermarks for a Moscow business date. Does not create rows."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT checklists.deal_id AS deal_id,
+                   checklists.revision AS revision,
+                   checklists.updated_at AS updated_at,
+                   SUM(CASE WHEN items.status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE WHEN items.status != 'retired' THEN 1 ELSE 0 END) AS total
+            FROM deal_daily_checklists AS checklists
+            LEFT JOIN deal_daily_checklist_items AS items
+                ON items.checklist_id = checklists.id
+            WHERE checklists.business_date = ?
+            GROUP BY checklists.id
+            ORDER BY checklists.deal_id
+            """,
+            (str(business_date),),
+        ).fetchall()
+    return [
+        {
+            "deal_id": str(row["deal_id"]),
+            "revision": int(row["revision"] or 0),
+            "updated_at": row["updated_at"],
+            "completed": int(row["completed"] or 0),
+            "total": int(row["total"] or 0),
+        }
+        for row in rows
+    ]
 
 
 def _row_to_deal_manager_situation_review(row: sqlite3.Row | None) -> dict[str, Any] | None:

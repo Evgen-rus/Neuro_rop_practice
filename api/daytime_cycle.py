@@ -32,7 +32,7 @@ from storage.rop_db import (
 CYCLE_INTERVAL = timedelta(minutes=30)
 WORKDAY_START = time(8, 0)
 WORKDAY_END = time(18, 0)
-PLANNING_PREP_TIME = time(15, 50)
+PLANNING_REPORT_TIME = time(15, 45)
 WEEKDAY_MONDAY = 0
 WEEKDAY_FRIDAY = 4
 ANALYZE_JOB_TIMEOUT_SECONDS = 50 * 60
@@ -75,14 +75,14 @@ def _is_workday(day: date) -> bool:
 
 
 def slot_times_for_day() -> list[time]:
-    """Weekday slots from 08:00 to 18:00 MSK every 30 minutes, plus 15:50 before planning."""
+    """Weekday slots from 08:00 to 18:00 MSK every 30 minutes, plus 15:45 planning publish."""
     slots: list[time] = []
     cursor = datetime.combine(date.min, WORKDAY_START)
     last = datetime.combine(date.min, WORKDAY_END)
     while cursor <= last:
         slots.append(cursor.time())
         cursor += CYCLE_INTERVAL
-    slots.append(PLANNING_PREP_TIME)
+    slots.append(PLANNING_REPORT_TIME)
     return sorted(set(slots))
 
 
@@ -125,7 +125,7 @@ def daytime_cycle_status() -> dict[str, Any]:
         "interval_minutes": int(CYCLE_INTERVAL.total_seconds() // 60),
         "workdays": "mon-fri",
         "work_hours": "08:00-18:00",
-        "planning_prep_at": "15:50",
+        "planning_report_at": "15:45",
         "timezone": "Europe/Moscow",
         "next_at": next_at,
         "last": last,
@@ -507,8 +507,44 @@ def _set_next_at(value: datetime | None) -> None:
         _next_at = _iso(value) if value is not None else None
 
 
+def _publish_planning_report(due: datetime) -> dict[str, Any]:
+    """Snapshot persisted deal-control state; do not wait for in-flight LLM jobs."""
+    from api.daily_control import publish_planning_daily_control_report
+
+    started_at = _iso(due)
+    try:
+        report = publish_planning_daily_control_report(now=due)
+        payload = {
+            "status": "success",
+            "trigger": "planning_report",
+            "started_at": started_at,
+            "finished_at": utcish_now(),
+            "daily_control_report_id": report.get("id"),
+            "creation_kind": report.get("creation_kind"),
+            "source_status": report.get("source_status"),
+            "warnings": report.get("warnings") or [],
+        }
+        logger.info(
+            "Планировочный daily-control готов: id=%s, cutoff=%s.",
+            report.get("id"),
+            report.get("cutoff_at"),
+        )
+        return _store_cycle_result(payload)
+    except Exception as error:  # noqa: BLE001 - the next scheduled tick must still run
+        logger.exception("Не удалось опубликовать планировочный daily-control.")
+        return _store_cycle_result(
+            {
+                "status": "error",
+                "trigger": "planning_report",
+                "started_at": started_at,
+                "finished_at": utcish_now(),
+                "errors": [str(error)],
+            }
+        )
+
+
 def _scheduler_loop() -> None:
-    logger.info("Планировщик дневного цикла: будни 08:00–18:00 МСК каждые 30 минут и слот 15:50.")
+    logger.info("Планировщик дневного цикла: будни 08:00–18:00 МСК каждые 30 минут и публикация отчёта в 15:45.")
     while not _stop_event.is_set():
         due = next_scheduled_at()
         _set_next_at(due)
@@ -516,9 +552,11 @@ def _scheduler_loop() -> None:
         logger.info("Следующий дневной цикл: %s МСК.", _iso(due))
         if _stop_event.wait(timeout=wait_seconds):
             break
-        trigger = "planning_prep" if due.hour == 15 and due.minute == 50 else "interval_30m"
         try:
-            run_daytime_cycle(trigger=trigger, now=due)
+            if due.hour == 15 and due.minute == 45:
+                _publish_planning_report(due)
+            else:
+                run_daytime_cycle(trigger="interval_30m", now=due)
         except Exception:  # noqa: BLE001 - a failed tick must not kill the loop
             logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
     _set_next_at(None)

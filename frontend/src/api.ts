@@ -621,6 +621,72 @@ export type CommunicationQualityAudit = {
   insufficient_reason?: string | null
 }
 
+export type DailyControlStatus = 'red' | 'yellow' | 'green'
+
+export type DailyControlQualityCriterion = {
+  score: 0 | 1 | null
+  verdict: string
+}
+
+export type DailyControlDeal = {
+  deal_id: string
+  title?: string | null
+  manager_id?: string | null
+  manager_name?: string | null
+  stage_id?: string | null
+  stage_name?: string | null
+  amount?: string | null
+  currency_id?: string | null
+  status: DailyControlStatus
+  status_label: string
+  attention_reason: string
+  quality: {
+    status: 'assessed' | 'insufficient_evidence' | 'missing'
+    criteria: {
+      next_action: DailyControlQualityCriterion
+      value_development: DailyControlQualityCriterion
+      data_collection: DailyControlQualityCriterion
+    }
+    confirmed_count: number | null
+    total: number
+    scope_summary?: string | null
+    zero_reasons: Array<{ criterion?: string | null; explanation?: string | null; quote?: string | null }>
+    summary_for_rop?: string | null
+    insufficient_reason?: string | null
+  }
+  summary_for_rop?: string | null
+  direct_question: string
+  generic_question: string
+  ai_context: {
+    current_situation: string
+    rop_focus: string
+    what_to_check_now: string
+    manager_coaching: string
+    known: string[]
+    unknowns: string[]
+    strengths: string[]
+    weaknesses: string[]
+  }
+  script: string
+  script_variants: string[]
+  communications_today: DealControlCommunicationsToday & {
+    unavailable?: boolean
+    content_available?: boolean
+    items: Array<DealControlCommunicationItem & { content_available?: boolean }>
+  }
+  checklist: {
+    business_date?: string | null
+    revision?: number
+    source_report_id?: number | null
+    completed: number
+    total: number
+    progress_percent?: number
+    items: Array<DealControlChecklistItem & { why?: string | null }>
+  }
+  has_analysis: boolean
+  analysis_created_at?: string | null
+}
+
 export type DealControlDeal = {
   deal_id: string
   source: 'initial' | 'pipeline'
@@ -671,7 +737,9 @@ export type DealControlDeal = {
     expected_crm_update?: string
     communication_quality_audit?: CommunicationQualityAudit | null
     manager_situation?: ManagerSituationState | null
+    direct_manager_question?: string
   }
+  review?: DailyControlDeal
 }
 
 export type DealControlDashboard = {
@@ -694,6 +762,87 @@ export type DealControlDashboard = {
   }
   outcome_metrics: DealControlMetrics
   deals: DealControlDeal[]
+}
+
+export type DailyControlFreshnessState = 'current' | 'stale' | 'historical' | 'missing'
+export type DailyControlCreationKind = 'manual' | 'automatic_planning'
+
+export type DailyControlManager = {
+  manager_id?: string | null
+  manager_name: string
+  deals_count: number
+  checklist_completed: number
+  checklist_total: number
+  calls: number
+  messages: number
+  talk_seconds: number
+  red: number
+  yellow: number
+  green: number
+}
+
+export type DailyControlSnapshot = {
+  team: {
+    traffic_light: { red: number; yellow: number; green: number }
+    deals_total: number
+    no_movement: { count: number; total: number }
+    calls: number
+    messages: number
+    talk_seconds: number
+  }
+  managers: DailyControlManager[]
+  deals: DailyControlDeal[]
+  source_warnings: string[]
+  communications_unavailable_count?: number
+}
+
+export type DailyControlFreshness = {
+  state: DailyControlFreshnessState
+  label: string
+  is_latest: boolean
+  live_watermark: string
+  report_watermark?: string | null
+}
+
+export type DailyControlGeneration = {
+  status: 'queued' | 'running' | 'done' | 'error'
+  started_at?: string | null
+  finished_at?: string | null
+  report_id?: number | null
+  error?: string | null
+}
+
+export type DailyControlReportMeta = {
+  id: number
+  business_date: string
+  creation_kind: DailyControlCreationKind
+  started_at: string
+  cutoff_at: string
+  created_at: string
+  source_watermark: string
+  automatic_analysis_run_id?: number | null
+  source_status?: string | null
+  warnings: string[]
+  error?: string | null
+  position?: number
+  total?: number
+  freshness?: DailyControlFreshness
+}
+
+export type DailyControlHistory = {
+  reports: DailyControlReportMeta[]
+  latest_id: number | null
+  total: number
+  live_watermark: string
+  generation: DailyControlGeneration | null
+}
+
+export type DailyControlReport = DailyControlReportMeta & {
+  snapshot: DailyControlSnapshot
+  freshness: DailyControlFreshness
+  previous_id?: number | null
+  next_id?: number | null
+  generation?: DailyControlGeneration | null
 }
 
 export type ManagerSituationState = {
@@ -1201,6 +1350,7 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
       manager_situation: foreignProjection ? null : (deal.manager_situation || null),
       checklist: foreignProjection ? emptyChecklist : (deal.checklist || emptyChecklist),
       coaching: foreignProjection ? emptyCoaching : (deal.coaching || emptyCoaching),
+      review: foreignProjection ? undefined : deal.review,
     }
   })
   return { ...payload, deals }
@@ -1725,6 +1875,18 @@ export function startDealTaskGuidance(taskId: number) {
 
 export function fetchDealTaskGuidanceJob(jobId: string) {
   return api<DealTaskGuidanceJob>(`/api/deal-control/guidance-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchDailyControlHistory() {
+  return api<DailyControlHistory>('/api/daily-control/reports')
+}
+
+export function fetchDailyControlReport(reportId: number) {
+  return api<DailyControlReport>(`/api/daily-control/reports/${reportId}`)
+}
+
+export function startDailyControlReport() {
+  return api<DailyControlGeneration>('/api/daily-control/reports', { method: 'POST' })
 }
 
 export function createDailySummary(

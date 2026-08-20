@@ -102,6 +102,11 @@ from api.deal_manager_situation import (
 )
 from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
 from api.daytime_cycle import daytime_cycle_status, start_daytime_cycle, stop_daytime_cycle
+from api.daily_control import (
+    history_payload as daily_control_history_payload,
+    report_payload as daily_control_report_payload,
+    start_manual_daily_control_report,
+)
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
@@ -738,6 +743,27 @@ def automatic_analysis_latest() -> dict[str, Any]:
 def deal_control_dashboard() -> dict[str, Any]:
     user = auth_current_user()
     return scoped_dashboard(build_deal_control_dashboard(db_path=DEFAULT_DB_PATH), user)
+
+
+@app.get("/api/daily-control/reports")
+def daily_control_reports() -> dict[str, Any]:
+    _require_admin_or_rop()
+    return daily_control_history_payload()
+
+
+@app.get("/api/daily-control/reports/{report_id}")
+def daily_control_report_get(report_id: int) -> dict[str, Any]:
+    user = _require_admin_or_rop()
+    payload = daily_control_report_payload(report_id, user)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Отчёт ежедневного контроля не найден")
+    return payload
+
+
+@app.post("/api/daily-control/reports")
+def daily_control_report_create() -> dict[str, Any]:
+    _require_admin_or_rop()
+    return start_manual_daily_control_report()
 
 
 @app.put("/api/deal-control/scope")

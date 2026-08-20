@@ -101,6 +101,7 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("idx_manager_trajectory_manager_time", indexes)
             self.assertIn("automatic_analysis_runs", tables)
             self.assertIn("automatic_analysis_items", tables)
+            self.assertIn("daily_control_reports", tables)
 
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))

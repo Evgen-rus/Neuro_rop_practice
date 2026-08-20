@@ -91,27 +91,14 @@ import {
   workspaceModeClassName,
 } from './dealPush'
 import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
+import { DailyControl } from './DailyControl'
+import { DealReviewCard } from './DealReviewCard'
 
-type DealControlView = 'dashboard' | 'rop' | 'manager'
+type DealControlView = 'dashboard' | 'rop' | 'daily' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
 const BITRIX_DEAL_BASE_URL = 'https://obtorg.bitrix24.ru/crm/deal/details'
 const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
-
-const RECOMMENDATION_LABELS: Record<DealControlRecommendationState, string> = {
-  not_done: 'Не выполнено',
-  attempted: 'Была попытка',
-  contacted: 'Был контакт',
-  achieved: 'Нужный результат',
-  unconfirmed: 'Контакт не подтверждён',
-}
-
-const RECOMMENDATION_STEPS: Array<{ state: Exclude<DealControlRecommendationState, 'unconfirmed'>; label: string }> = [
-  { state: 'not_done', label: 'Не выполнено' },
-  { state: 'attempted', label: 'Была попытка' },
-  { state: 'contacted', label: 'Был контакт' },
-  { state: 'achieved', label: 'Нужный результат' },
-]
 
 const EXECUTION_LABELS: Record<DealControlTask['crm_execution_status'], string> = {
   not_reflected: 'Не отражено в Bitrix',
@@ -128,6 +115,10 @@ const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = 
   rop: {
     title: 'Контроль РОП',
     subtitle: 'Что просрочено, что на сегодня и как помочь менеджеру довести сделку',
+  },
+  daily: {
+    title: 'Ежедневный контроль',
+    subtitle: 'Срез команды к планёрке: кого разбирать и какие вопросы задать',
   },
   manager: {
     title: 'Мои задачи',
@@ -321,19 +312,6 @@ function recommendationStateOf(task: DealControlTask): DealControlRecommendation
     return 'attempted'
   }
   return 'unconfirmed'
-}
-
-function recommendationReasonOf(task: DealControlTask, state: DealControlRecommendationState) {
-  const explicitReason = task.recommendation_reason?.trim()
-  if (explicitReason) return explicitReason
-  if (state === 'unconfirmed' && task.recommendation_state === 'achieved' && task.latest_outcome?.result_status !== 'achieved') {
-    return 'Backend передал «achieved», но явный outcome achieved не зафиксирован. Показываем безопасный fallback: контакт не подтверждён.'
-  }
-  if (state === 'unconfirmed') return 'Backend не передал подтверждённое состояние рекомендации. Результат и контакт нужно зафиксировать явно.'
-  if (state === 'attempted') return 'Зафиксирована попытка; активность сама по себе не подтверждает контакт с клиентом.'
-  if (state === 'contacted') return 'Контакт с клиентом подтверждён, но нужный результат ещё не зафиксирован.'
-  if (state === 'achieved') return 'Нужный результат подтверждён явным outcome задачи.'
-  return 'Рекомендация ещё не отмечена выполненной.'
 }
 
 function recommendationRankOf(deal: DealControlDeal) {
@@ -561,6 +539,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setView('rop')
     setManagerFilter('')
     setTimeView('today')
+  }
+
+  function openDailyView() {
+    setView('daily')
+    setManagerFilter('')
+    setTimeView('all')
   }
 
   function openManagerView() {
@@ -940,6 +924,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {canOpenRopView ? <button className={view === 'rop' ? 'active' : ''} onClick={openRopView} title="Контроль РОПа">
           <span>◎</span><b>Контроль РОПа</b><small>План и просрочки команды</small>
         </button> : null}
+        {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Ежедневный контроль">
+          <span>▣</span><b>Ежедневный контроль</b><small>Разбор команды к планёрке</small>
+        </button> : null}
         {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
           <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
         </button> : null}
@@ -949,6 +936,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content">
+      {view === 'daily' ? <DailyControl user={user} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} />
@@ -1027,6 +1015,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           onAnalyze={analyzeDeal}
         />
       </div>
+      </>}
     </section>
 
     {analysisConfirmDeal ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setAnalysisConfirmDeal(null) }}>
@@ -1239,6 +1228,9 @@ function DealDetail(props: {
   const [assistantOpen, setAssistantOpen] = useState(false)
   // Анимируем только свежий ответ; история и повторное открытие показываем сразу.
   const [freshQuickHelpId, setFreshQuickHelpId] = useState<number | null>(null)
+  const [askedByDeal, setAskedByDeal] = useState<Record<string, [boolean, boolean]>>({})
+  const [scriptCopyNotice, setScriptCopyNotice] = useState('')
+  const [openReviewEventId, setOpenReviewEventId] = useState('')
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
   // На дашборде правая панель следует роли: менеджер всегда видит свой экран,
@@ -1276,6 +1268,8 @@ function DealDetail(props: {
     setAssistantLoading(false)
     setAssistantOpen(false)
     setFreshQuickHelpId(null)
+    setScriptCopyNotice('')
+    setOpenReviewEventId('')
   }, [activeDealId, activeReportId])
 
   useEffect(() => {
@@ -1522,9 +1516,25 @@ function DealDetail(props: {
     return response.text.trim()
   }
 
+  function toggleAsked(index: 0 | 1) {
+    if (!activeDealId) return
+    setAskedByDeal((current) => {
+      const previous = current[activeDealId] || [false, false]
+      const next: [boolean, boolean] = [...previous]
+      next[index] = !next[index]
+      return { ...current, [activeDealId]: next }
+    })
+  }
+
+  async function copyReviewScript() {
+    const script = String(props.deal?.review?.ai_context.manager_coaching || '').trim()
+    await props.onCopy(script, 'Сценарий разговора')
+    setScriptCopyNotice(script.trim() ? 'Сценарий скопирован' : '')
+    window.setTimeout(() => setScriptCopyNotice(''), 2500)
+  }
+
   if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
-  const aiRecommendation = visibleRecommendation
   const coaching = deal.coaching
   const hasAnalysis = Boolean(coaching.report_id)
   const managerSituation = managerSituationOf(deal)
@@ -1583,7 +1593,10 @@ function DealDetail(props: {
             <div className="dc-detail-stat-fixed" title={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`} aria-label={`Сумма: ${money(deal.amount, deal.currency_id || 'RUB')}`}><span aria-hidden="true">₽</span><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong></div>
           </section>
         </div>
-        <p className="dc-deal-compact-title">{deal.title}</p>
+        <div className="dc-deal-compact-row">
+          <p className="dc-deal-compact-title">{deal.title}</p>
+          {deal.review ? <span className={`dc-daily-pill ${deal.review.status}`}>{deal.review.status_label}</span> : null}
+        </div>
         {hasAnalysis ? analysisReady : analysisMissing}
       </div>
     </header>
@@ -1627,8 +1640,12 @@ function DealDetail(props: {
       onToggleChecklistItem={props.onToggleChecklistItem}
     /> : <RopDealScreen
       deal={deal}
-      aiRecommendation={aiRecommendation}
-      hasAnalysis={hasAnalysis}
+      asked={askedByDeal[deal.deal_id] || [false, false]}
+      onToggleAsked={toggleAsked}
+      onCopyScript={() => void copyReviewScript()}
+      copyNotice={scriptCopyNotice}
+      openEventId={openReviewEventId}
+      onToggleEvent={(eventId) => setOpenReviewEventId((current) => current === eventId ? '' : eventId)}
     />}
   </aside>
 }
@@ -1724,85 +1741,36 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
   </>
 }
 
-function RopDealScreen({ deal, aiRecommendation, hasAnalysis }: {
+function RopDealScreen({
+  deal,
+  asked,
+  onToggleAsked,
+  onCopyScript,
+  copyNotice,
+  openEventId,
+  onToggleEvent,
+}: {
   deal: DealControlDeal
-  aiRecommendation: DealControlTask | null
-  hasAnalysis: boolean
+  asked: [boolean, boolean]
+  onToggleAsked: (index: 0 | 1) => void
+  onCopyScript: () => void
+  copyNotice: string
+  openEventId: string
+  onToggleEvent: (eventId: string) => void
 }) {
-  return <>
-    {hasAnalysis ? <DealChecklistCard deal={deal} editable={false} /> : null}
-    <DailyCommunicationWidget summary={deal.communications_today} />
-    {hasAnalysis && deal.coaching.communication_quality_audit ? <CommunicationQualityAuditCard deal={deal} /> : null}
-    {hasAnalysis ? <RopCurrentSummary deal={deal} aiRecommendation={aiRecommendation} /> : null}
-  </>
-}
-
-const AUDIT_CRITERION_LABELS = {
-  next_action: 'Next Action',
-  value_development: 'Ценность касаний',
-  data_collection: 'Сбор данных',
-} as const
-
-function CommunicationQualityAuditCard({ deal }: { deal: DealControlDeal }) {
-  const audit = deal.coaching.communication_quality_audit
-  if (!audit) return null
-  const criteria = Object.entries(AUDIT_CRITERION_LABELS) as Array<[keyof typeof AUDIT_CRITERION_LABELS, string]>
-  return <details className="dc-communication-audit">
-    <summary>
-      <span>QC</span>
-      <div><h3>Контроль качества ведения сделки</h3><p>{audit.scope_summary}</p></div>
-      <strong>{audit.status === 'assessed' ? 'Аудит готов' : 'Недостаточно данных'}</strong>
-      <i aria-hidden="true">⌄</i>
-    </summary>
-    <div className="dc-communication-audit-body">
-      {audit.status === 'insufficient_evidence' ? <p className="dc-communication-audit-empty">{audit.insufficient_reason}</p> : <>
-        <div className="dc-communication-audit-scores">
-          {criteria.map(([key, label], index) => <div key={key}>
-            <span>Критерий {index + 1}</span><b>{label}</b><strong className={`score-${audit.criteria[key].score}`}>{audit.criteria[key].score}</strong>
-          </div>)}
-        </div>
-        <section>
-          <h4>Аргументация по оценкам 0</h4>
-          {audit.zero_reasons.length ? <ul>{audit.zero_reasons.map((reason) => <li key={reason.criterion}>
-            <b>{AUDIT_CRITERION_LABELS[reason.criterion]}</b>
-            <span>{reason.explanation}</span>
-            <q>{reason.quote}</q>
-          </li>)}</ul> : <p>Ошибок не выявлено.</p>}
-        </section>
-        <aside><b>Резюме для РОПа</b><span>{audit.summary_for_rop}</span></aside>
-      </>}
-    </div>
-  </details>
-}
-
-function AiRecommendationCard({ task }: { task: DealControlTask | null }) {
-  const state = task ? recommendationStateOf(task) : 'unconfirmed'
-  const reason = task ? recommendationReasonOf(task, state) : ''
-  return <details className={`dc-rop-recommendation ${state}`}>
-    <summary className="dc-recommendation-summary">
-      <strong>Текущая AI-рекомендация</strong>
-      <span className="dc-recommendation-status">{task ? RECOMMENDATION_LABELS[state] : 'Нет рекомендации'}</span>
-      <span className="dc-recommendation-chevron" aria-hidden="true">⌄</span>
-    </summary>
-    <div className="dc-recommendation-content">
-      {!task ? <p className="dc-boundary-note">AI-рекомендация не передана текущим API. Карточка не восстановлена по одному `source_report_id`.</p> : <>
-        <div className="dc-recommendation-main">
-          <h4>{compactTaskText(task.task_text)}</h4>
-          <p>{task.expected_result?.trim() || 'Ожидаемый результат не указан'}</p>
-        </div>
-        {compactTaskText(task.task_text) !== task.task_text.trim() ? <details className="dc-task-details"><summary>Подробная рекомендация</summary><p>{task.task_text}</p></details> : null}
-        <ol className="dc-recommendation-ladder" aria-label="Стадия выполнения AI-рекомендации">
-          {RECOMMENDATION_STEPS.map((step) => <li className={step.state === state ? 'active' : ''} key={step.state}>
-            <span>{step.state === state ? '●' : '○'}</span>{step.label}
-          </li>)}
-        </ol>
-        <div className="dc-recommendation-meta">
-          <p><strong>Статус:</strong> {reason}</p>
-          <p><strong>Срок:</strong> {dateTime(task.due_at)}{task.needs_follow_up ? ' · Нужен follow-up' : ''}</p>
-        </div>
-      </>}
-    </div>
-  </details>
+  return <DealReviewCard
+    deal={deal.review || null}
+    asked={asked}
+    onToggleAsked={onToggleAsked}
+    onCopyScript={onCopyScript}
+    copyNotice={copyNotice}
+    openEventId={openEventId}
+    onToggleEvent={onToggleEvent}
+    showHeader={false}
+    emptyText="Разбор сделки пока недоступен."
+    contentNote="Текст письма, исходное сообщение и транскрипт здесь не показываются."
+    scriptHint="Для разговора с менеджером"
+  />
 }
 
 function DealChecklistCard({ deal, editable, onToggle }: {
@@ -1838,30 +1806,6 @@ function DealChecklistCard({ deal, editable, onToggle }: {
       </li>)}</ul> : <p className="dc-deal-checklist-empty">Чек-лист появится после успешного анализа сделки.</p>}
     </div>
   </section>
-}
-
-function RopCurrentSummary({ deal, aiRecommendation }: { deal: DealControlDeal; aiRecommendation: DealControlTask | null }) {
-  const checklist = deal.checklist
-  const remaining = checklist?.items.filter((item) => !item.completed).map((item) => item.text) || []
-  const completed = checklist?.items.filter((item) => item.completed).map((item) => item.text) || []
-  const analysisTime = deal.coaching.analysis_created_at
-    ? formatMoscowDateTime(deal.coaching.analysis_created_at, { hour: '2-digit', minute: '2-digit' })
-    : ''
-  return <details className="dc-rop-current-summary">
-    <summary>
-      <span>AI</span>
-      <h3>{analysisTime ? `Итог на ${analysisTime}` : 'Текущий итог'}</h3>
-      <strong>{deal.coaching.report_id ? 'Последний анализ' : 'Нет анализа'}</strong>
-      <i aria-hidden="true">⌄</i>
-    </summary>
-    <div>
-      <p>{deal.coaching.current_situation || 'Текущая ситуация пока не сформирована.'}</p>
-      {completed.length ? <p><b>Менеджер закрыл:</b> {completed.join(' ')}</p> : null}
-      {remaining.length ? <p><b>Осталось:</b> {remaining.join(' ')}</p> : null}
-      <aside><b>Вывод для РОПа</b><span>{deal.coaching.rop_focus || deal.coaching.what_to_check_now || 'Управленческий вывод появится после анализа сделки.'}</span></aside>
-    </div>
-    <AiRecommendationCard task={aiRecommendation} />
-  </details>
 }
 
 function ManagerSituationActions(props: {
@@ -3253,64 +3197,6 @@ function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }
     <p>{isError ? progress?.error || job.error || 'Проверьте сообщение об ошибке и повторите запуск.' : <>{counter ? <strong>{counter}. </strong> : null}{analysisStageDetail(job, dealId)}</>}</p>
     {!isDone && !isError && progress?.updated_at ? <small>Последнее обновление: {dateTime(progress.updated_at)}</small> : null}
     {stage === 'skipped' ? <small>Платный полный вызов не потребовался: значимых новых клиентских данных не обнаружено.</small> : null}
-  </section>
-}
-
-function communicationDuration(seconds: number) {
-  const safe = Math.max(0, Math.round(seconds || 0))
-  const minutes = Math.floor(safe / 60)
-  const remainder = safe % 60
-  if (!minutes) return `${remainder} сек`
-  return remainder ? `${minutes} мин ${remainder} сек` : `${minutes} мин`
-}
-
-function countLabel(value: number, one: string, few: string, many: string) {
-  const normalized = Math.abs(Math.trunc(value)) % 100
-  if (normalized >= 11 && normalized <= 14) return many
-  const last = normalized % 10
-  if (last === 1) return one
-  if (last >= 2 && last <= 4) return few
-  return many
-}
-
-function DailyCommunicationWidget({ summary }: { summary?: DealControlCommunicationsToday | null }) {
-  const [open, setOpen] = useState(false)
-  const completed = Math.max(0, summary?.completed || 0)
-  const available = Boolean(summary?.available)
-  const items = summary?.items || []
-  const lastTouch = items.reduce((latest, item) => !latest || item.occurred_at > latest.occurred_at ? item : latest, items[0])
-  const lastTouchTime = lastTouch
-    ? formatMoscowDateTime(lastTouch.occurred_at, { hour: '2-digit', minute: '2-digit' }) || '—'
-    : '—'
-  const calls = Math.max(0, summary?.calls || 0)
-  const messages = Math.max(0, summary?.messages || 0)
-  return <section className={`dc-communication-widget ${available ? '' : 'unavailable'}`}>
-    <div className="dc-communication-head">
-      <div className="dc-communication-title"><span>↗</span><div><h3>Коммуникации сегодня</h3></div></div>
-      <div className="dc-communication-score"><small>{available ? `${completed} ${countLabel(completed, 'касание', 'касания', 'касаний')}` : 'Нет данных'}</small></div>
-    </div>
-    <div className="dc-communication-stats">
-      <div><strong>{calls}</strong><small>{countLabel(calls, 'звонок', 'звонка', 'звонков')}</small></div>
-      <div><strong>{messages}</strong><small>{countLabel(messages, 'сообщение', 'сообщения', 'сообщений')}</small></div>
-      <div><strong>{communicationDuration(summary?.duration_seconds || 0)}</strong><small>разговор</small></div>
-      <div><strong>{lastTouchTime}</strong><small>последнее касание</small></div>
-    </div>
-    <div className="dc-communication-actions">
-      {!available ? <p className="dc-communication-note">Обновите Bitrix, чтобы получить активности за текущий московский день.</p> : null}
-      <button type="button" disabled={!items.length} aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Скрыть детали' : 'Показать детали'}</button>
-    </div>
-    {open && items.length ? <div className="dc-communication-details">
-      {items.map((item) => {
-        const call = item.channel === 'call'
-        const time = formatMoscowDateTime(item.occurred_at, { hour: '2-digit', minute: '2-digit' }) || '—'
-        const boundary = item.contact_class === 'confirmed_contact' ? 'контакт подтверждён' : 'результат клиента не подтверждён'
-        return <article key={item.event_id}>
-          <span>{call ? '☎' : '✉'}</span>
-          <div><strong>{item.subject || (call ? 'Звонок' : 'Сообщение')}</strong><small>{time} · {boundary}</small></div>
-          <b>{call ? communicationDuration(item.duration_seconds || 0) : 'текст'}</b>
-        </article>
-      })}
-    </div> : null}
   </section>
 }
 

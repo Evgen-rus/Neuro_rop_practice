@@ -1691,6 +1691,13 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
             errors.append(
                 "deal_control_brief.call_opening_variants must contain exactly 2 items for phone contact"
             )
+        direct_question = control_brief.get("direct_manager_question")
+        if direct_question is not None:
+            _expect_non_empty_string(
+                direct_question,
+                "deal_control_brief.direct_manager_question",
+                errors,
+            )
 
     deal_mode = _expect_dict(analysis.get("deal_mode"), "deal_mode", errors)
     if deal_mode:

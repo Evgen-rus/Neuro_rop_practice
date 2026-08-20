@@ -698,6 +698,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "rop_task_hint": str(rop.get("message_to_manager") or rop.get("check_for_rop") or ""),
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),
         "communication_quality_audit": communication_audit,
+        "direct_manager_question": str(brief.get("direct_manager_question") or ""),
     }
     if report is None or report.get("id") is None:
         return coaching
@@ -821,6 +822,8 @@ def _deal_checklist(
 
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
                                  sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
+    from api.daily_control import project_deal_review_card
+
     current = now or datetime.now(MSK_TZ)
     deals = list_deal_control_deals(db_path)
     active_deal_ids = [str(deal["deal_id"]) for deal in deals]
@@ -907,6 +910,7 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             db_path,
             deal_id=str(deal["deal_id"]),
         )
+        deal["review"] = project_deal_review_card(deal)
         items.append(deal)
     items = [
         deal for _, deal in sorted(

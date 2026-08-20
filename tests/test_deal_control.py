@@ -389,6 +389,52 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(coaching["communication_quality_audit"]["status"], "insufficient_evidence")
             self.assertTrue(coaching["analysis_created_at"])
 
+    def test_live_dashboard_reuses_daily_review_card_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json={
+                    "deal_control_brief": {
+                        "current_situation": "Клиент получил КП.",
+                        "direct_manager_question": "Ты получил дату решения комиссии?",
+                        "manager_coaching": "Уточни дату решения комиссии и зафиксируй её в CRM.",
+                        "call_script": "Добрый день, сверю статус.",
+                    },
+                    "communication_quality_audit": {
+                        "status": "assessed",
+                        "scope_summary": "Учтён звонок.",
+                        "criteria": {
+                            "next_action": {"score": 0},
+                            "value_development": {"score": 1},
+                            "data_collection": {"score": 1},
+                        },
+                        "zero_reasons": [
+                            {"criterion": "next_action", "explanation": "Нет даты", "quote": "позже"}
+                        ],
+                        "summary_for_rop": "Нужна дата решения.",
+                        "insufficient_reason": None,
+                    },
+                },
+            )
+
+            deal = build_deal_control_dashboard(db_path=db_path)["deals"][0]
+            review = deal["review"]
+
+            self.assertEqual(review["generic_question"], "Что было сделано и какой сейчас статус?")
+            self.assertEqual(review["direct_question"], "Ты получил дату решения комиссии?")
+            self.assertEqual(review["script"], "Уточни дату решения комиссии и зафиксируй её в CRM.")
+            self.assertNotEqual(review["script"], "Добрый день, сверю статус.")
+            self.assertEqual(review["quality"]["criteria"]["next_action"]["score"], 0)
+            self.assertEqual(review["status"], "yellow")
+            self.assertEqual(review["ai_context"]["current_situation"], "Клиент получил КП.")
+            self.assertEqual(review["checklist"]["completed"], deal["checklist"]["completed"])
+            self.assertEqual(review["checklist"]["total"], deal["checklist"]["total"])
+            self.assertFalse(review["communications_today"].get("content_available"))
+
     def test_shared_deal_checklist_projects_actions_and_persists_manager_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
