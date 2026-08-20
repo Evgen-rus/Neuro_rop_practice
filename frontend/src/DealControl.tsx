@@ -1580,6 +1580,16 @@ function DealDetail(props: {
       {analysisButton}
     </div>
   )
+  const analysisUnavailable = (
+    <div className="dc-analysis-ready dc-analysis-missing">
+      <div>
+        <span>✦</span>
+        <div>
+          <strong>Анализ недоступен: сделка другого менеджера</strong>
+        </div>
+      </div>
+    </div>
+  )
 
   return <aside className="dc-detail">
     <header className="dc-detail-top">
@@ -1598,7 +1608,7 @@ function DealDetail(props: {
           <p className="dc-deal-compact-title">{deal.title}</p>
           {deal.review ? <span className={`dc-daily-pill ${deal.review.status}`}>{deal.review.status_label}</span> : null}
         </div>
-        {hasAnalysis ? analysisReady : analysisMissing}
+      {!deal.can_open ? analysisUnavailable : hasAnalysis ? analysisReady : analysisMissing}
       </div>
     </header>
     {analysisRunning && props.analysisJob ? <DealAnalysisProgress job={props.analysisJob} dealId={deal.deal_id} /> : null}
