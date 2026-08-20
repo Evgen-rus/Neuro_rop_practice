@@ -1792,6 +1792,9 @@ export function recordRecommendationEvent(
   recommendationKind: 'deal_task' | 'quick_help',
   recommendationId: number,
 ) {
+  const occurrenceId = eventType === 'viewed'
+    ? (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+    : undefined
   return api<{ ok: boolean; event_id: number }>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/recommendation-events`,
     {
@@ -1800,6 +1803,7 @@ export function recordRecommendationEvent(
         event_type: eventType,
         recommendation_kind: recommendationKind,
         recommendation_id: recommendationId,
+        occurrence_id: occurrenceId,
       }),
     },
   )

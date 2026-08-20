@@ -197,6 +197,24 @@ class ManagerTrajectoryStorageTests(unittest.TestCase):
             "actor_role": "manager",
             "actor_manager_id": "10",
         })
+        first_view = record_recommendation_lifecycle_event(
+            self.db_path, deal_id="101", recommendation_kind="deal_task",
+            recommendation_id=task["id"], event_type="recommendation_viewed", auth_user_id=1,
+            occurrence_id="view-one",
+        )
+        first_view_retry = record_recommendation_lifecycle_event(
+            self.db_path, deal_id="101", recommendation_kind="deal_task",
+            recommendation_id=task["id"], event_type="recommendation_viewed", auth_user_id=1,
+            occurrence_id="view-one",
+        )
+        second_view = record_recommendation_lifecycle_event(
+            self.db_path, deal_id="101", recommendation_kind="deal_task",
+            recommendation_id=task["id"], event_type="recommendation_viewed", auth_user_id=1,
+            occurrence_id="view-two",
+        )
+        self.assertEqual(first_view["id"], first_view_retry["id"])
+        self.assertNotEqual(first_view["id"], second_view["id"])
+        self.assertEqual(first_view["payload"]["occurrence_id"], "view-one")
         from_at, to_at = _recent_event_range()
         events = list_manager_trajectory_events(
             self.db_path, from_at=from_at, to_at=to_at, manager_ids=["10"],
@@ -285,8 +303,76 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         report = build_manager_trajectory_report(
             db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
         )
-        self.assertEqual(set(report), {"period", "collection_status", "managers", "warnings"})
+        self.assertEqual(
+            set(report),
+            {"schema_version", "period", "collection_status", "summary", "managers", "warnings"},
+        )
         self.assertEqual(report["managers"][0]["counts"]["crm_activity_observed"], 2)
+
+    def test_report_projects_manager_name_deal_timeline_and_each_view(self) -> None:
+        upsert_deal_control_deal(
+            self.db_path, deal_id="900", source="manager", title="Сделка", manager_id="10",
+            manager_name="Иван Петров", stage_id="NEW", stage_name="Новая", pipeline_id="15",
+            amount="100", currency_id="RUB", created_at_crm=NOW.isoformat(),
+            modified_at_crm=NOW.isoformat(), is_active=True,
+        )
+        events = [
+            ("generated", "recommendation_generated", NOW - timedelta(hours=3), None),
+            ("shown", "recommendation_shown", NOW - timedelta(hours=2, minutes=55), {
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+            }),
+            ("view-1", "recommendation_viewed", NOW - timedelta(hours=2, minutes=50), {
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+                "occurrence_id": "view-1",
+            }),
+            ("view-2", "recommendation_viewed", NOW - timedelta(hours=2), {
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+                "occurrence_id": "view-2",
+            }),
+        ]
+        for key, event_type, occurred_at, payload in events:
+            record_manager_trajectory_event(
+                self.db_path, entity_type="deal", entity_id="900", manager_id="10",
+                event_type=event_type, recommendation_kind="deal_task", recommendation_id="77",
+                source="fixture", source_event_key=key, occurred_at=occurred_at.isoformat(), payload=payload,
+            )
+        for key, occurred_at, last_updated, activity_id in (
+            ("activity-old", NOW - timedelta(hours=3, minutes=10), NOW - timedelta(hours=3), "a1"),
+            ("activity-new-version", NOW - timedelta(hours=3, minutes=10), NOW - timedelta(hours=1), "a1"),
+            ("activity-after-first-view", NOW - timedelta(hours=2, minutes=40), NOW - timedelta(hours=2, minutes=40), "a2"),
+        ):
+            record_manager_trajectory_event(
+                self.db_path, entity_type="deal", entity_id="900", manager_id="10",
+                event_type="crm_activity_observed", source="bitrix", source_event_key=key,
+                occurred_at=occurred_at.isoformat(), payload={
+                    "activity_id": activity_id, "activity_kind": "call", "direction": "2",
+                    "completed": True, "last_updated": last_updated.isoformat(),
+                },
+            )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="900", manager_id="10",
+            event_type="deal_stage_changed", source="bitrix", source_event_key="stage-after-second-view",
+            occurred_at=(NOW - timedelta(hours=1, minutes=30)).isoformat(),
+            payload={"from_stage_id": "NEW", "to_stage_id": "PREPAYMENT_INVOICE"},
+        )
+
+        report = build_manager_trajectory_report(
+            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        manager = report["managers"][0]
+        self.assertEqual(manager["manager_name"], "Иван Петров")
+        self.assertEqual(manager["workday"]["unique_crm_actions"], 2)
+        deal = next(item for item in manager["workday"]["entities"] if item["entity_id"] == "900")
+        self.assertEqual(len(deal["crm_actions"]), 2)
+        self.assertEqual(len(deal["stage_changes"]), 1)
+        recommendation = manager["product_usage"]["recommendations"][0]
+        self.assertEqual(recommendation["view_count"], 2)
+        self.assertEqual(recommendation["view_tracking_precision"], "occurrence")
+        views = manager["correlations"][0]["views"]
+        self.assertEqual(len(views), 2)
+        self.assertEqual([item["activity_id"] for item in views[0]["actions_before_since_previous_view"]], ["a1"])
+        self.assertEqual([item["activity_id"] for item in views[0]["actions_after_until_next_view"]], ["a2"])
+        self.assertEqual(views[1]["actions_after_until_next_view"][0]["action_type"], "stage_change")
 
     def test_stage_change_is_append_only_and_partial_does_not_advance_watermark(self) -> None:
         collect_manager_trajectory(
@@ -369,11 +455,13 @@ class ManagerTrajectoryApiTests(unittest.TestCase):
                 "101",
                 api_app.RecommendationEventRequest(
                     event_type="viewed", recommendation_kind="quick_help", recommendation_id=9,
+                    occurrence_id="view-123",
                 ),
             )
         self.assertEqual(result, {"ok": True, "event_id": 7})
         self.assertEqual(record.call_args.kwargs["auth_user_id"], 42)
         self.assertEqual(record.call_args.kwargs["event_type"], "recommendation_viewed")
+        self.assertEqual(record.call_args.kwargs["occurrence_id"], "view-123")
 
     def test_endpoint_maps_actor_permission_error_to_403(self) -> None:
         from api import app as api_app
@@ -414,8 +502,33 @@ class ManagerTrajectoryCliTests(unittest.TestCase):
                 ])
             payload = json.loads(output.getvalue())
         self.assertEqual(code, 0)
-        self.assertEqual(set(payload), {"period", "collection_status", "managers", "warnings"})
+        self.assertEqual(
+            set(payload),
+            {"schema_version", "period", "collection_status", "summary", "managers", "warnings"},
+        )
+        self.assertEqual(payload["schema_version"], 2)
         self.assertEqual(payload["managers"][0]["manager_id"], "10")
+
+    def test_report_text_has_three_human_readable_sections(self) -> None:
+        from scripts import manager_trajectory as cli
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "cli.sqlite"
+            init_db(db_path)
+            save_deal_control_scope(
+                db_path, initial_deal_ids=[], manager_ids=["10"], pipeline_id="15",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = cli.main([
+                    "--db-path", str(db_path), "report",
+                    "--from", "2026-08-16", "--to", "2026-08-16",
+                ])
+            rendered = output.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("1. Чем занимался в течение дня", rendered)
+        self.assertIn("2. Как использовал НейроРОП", rendered)
+        self.assertIn("3. Что происходило до и после просмотров", rendered)
 
 
 if __name__ == "__main__":

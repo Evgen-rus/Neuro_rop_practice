@@ -7712,12 +7712,19 @@ def record_recommendation_lifecycle_event(
     recommendation_id: str | int,
     event_type: str,
     auth_user_id: int,
+    occurrence_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate recommendation ownership and derive all actor fields server-side."""
     if event_type not in {"recommendation_shown", "recommendation_viewed"}:
         raise ValueError("Допустимы только recommendation_shown/recommendation_viewed")
     if recommendation_kind not in MANAGER_RECOMMENDATION_KINDS:
         raise ValueError("Неизвестный recommendation_kind")
+    normalized_occurrence_id = str(occurrence_id or "").strip()
+    if normalized_occurrence_id and (
+        len(normalized_occurrence_id) > 96
+        or re.fullmatch(r"[A-Za-z0-9._:-]+", normalized_occurrence_id) is None
+    ):
+        raise ValueError("Некорректный occurrence_id события рекомендации")
     init_db(db_path)
     with connect(db_path) as conn:
         auth_user = _get_auth_user_row(conn, user_id=int(auth_user_id))
@@ -7772,12 +7779,14 @@ def record_recommendation_lifecycle_event(
             source="manager_ui",
             source_event_key=(
                 f"{event_name}:{recommendation_kind}:{row['id']}:user:{int(auth_user_id)}"
+                + (f":occurrence:{normalized_occurrence_id}" if normalized_occurrence_id else "")
             ),
             occurred_at=utcish_now(),
             payload={
                 "actor_verified": True,
                 "actor_role": "manager",
                 "actor_manager_id": actor_manager_id,
+                **({"occurrence_id": normalized_occurrence_id} if normalized_occurrence_id else {}),
             },
         )
 

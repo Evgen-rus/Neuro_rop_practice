@@ -57,6 +57,50 @@ def _manager_ids(args: argparse.Namespace) -> list[str] | None:
     return list(dict.fromkeys(str(item).strip() for item in (args.manager_id or []) if str(item).strip())) or None
 
 
+def _clock(value: Any) -> str:
+    if not value:
+        return "время не указано"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=MSK_TZ)
+        return parsed.astimezone(MSK_TZ).strftime("%H:%M:%S МСК")
+    except ValueError:
+        return str(value)
+
+
+def _activity_label(action: dict[str, Any]) -> str:
+    if action.get("action_type") == "stage_change":
+        return f"смена стадии {action.get('from_stage_id') or 'не указана'} → {action.get('to_stage_id') or 'не указана'}"
+    labels = {
+        "call": "звонок",
+        "email": "письмо",
+        "message": "сообщение",
+        "task": "задача",
+        "other": "другая CRM-активность",
+    }
+    label = labels.get(str(action.get("activity_kind") or "other"), str(action.get("activity_kind") or "активность"))
+    direction = {"1": "входящий", "2": "исходящий"}.get(str(action.get("direction") or ""))
+    completed = action.get("completed")
+    details = [value for value in (direction, "завершена" if completed is True else None) if value]
+    activity_id = action.get("activity_id")
+    suffix = f"activity #{activity_id}" if activity_id else None
+    annotations = ", ".join([*details, *([suffix] if suffix else [])])
+    return f"{label}{f' ({annotations})' if annotations else ''}"
+
+
+def _print_actions(actions: list[dict[str, Any]], *, indent: str) -> None:
+    if not actions:
+        print(f"{indent}действий не обнаружено")
+        return
+    for action in actions:
+        print(f"{indent}{_clock(action.get('occurred_at'))} — {_activity_label(action)}")
+
+
+def _recommendation_label(kind: Any) -> str:
+    return "Quick Help" if str(kind or "") == "quick_help" else "задача НейроРОПа"
+
+
 def _print_text(payload: dict[str, Any], command: str) -> None:
     if command == "collect":
         print(f"Статус: {payload['status']}")
@@ -76,25 +120,96 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
         print(payload["cost_preview"].get("message") or "")
         return
     print(f"Период: {payload['period']['from']} — {payload['period']['to']}")
+    summary = payload.get("summary") or {}
+    print(
+        "Итого: "
+        f"менеджеров {summary.get('managers', 0)}, "
+        f"уникальных CRM-действий {summary.get('unique_crm_actions', 0)}, "
+        f"рекомендаций создано/показано/просмотрено "
+        f"{summary.get('recommendations_generated', 0)}/"
+        f"{summary.get('recommendations_shown', 0)}/"
+        f"{summary.get('recommendations_viewed', 0)}"
+    )
     for manager in payload["managers"]:
-        print(f"Менеджер {manager['manager_id']}")
+        manager_label = manager.get("manager_name") or "Имя не найдено"
+        print(f"\nМенеджер {manager_label} (ID {manager['manager_id']})")
         counts = manager.get("counts") or {}
+        workday = manager.get("workday") or {}
+        print("  1. Чем занимался в течение дня")
+        activity_counts = workday.get("activity_counts") or {}
         print(
-            "  generated/shown/viewed: "
+            "    Уникальных CRM-действий: "
+            f"{workday.get('unique_crm_actions', 0)}; "
+            f"звонков {activity_counts.get('call', 0)}, "
+            f"сообщений {activity_counts.get('message', 0)}, "
+            f"писем {activity_counts.get('email', 0)}, "
+            f"задач {activity_counts.get('task', 0)}, "
+            f"смен стадий {workday.get('stage_changes', 0)}"
+        )
+        print(
+            f"    Сделок затронуто: {workday.get('deals_touched', 0)}; "
+            f"лидов: {workday.get('leads_touched', 0)}"
+        )
+        for entity in workday.get("entities") or []:
+            entity_label = "Сделка" if entity.get("entity_type") == "deal" else "Лид"
+            stage = entity.get("stage_name") or entity.get("stage_id")
+            print(f"    {entity_label} #{entity.get('entity_id')}{f' · этап {stage}' if stage else ''}")
+            timeline = [*(entity.get("crm_actions") or []), *(entity.get("stage_changes") or [])]
+            timeline.sort(key=lambda item: str(item.get("occurred_at") or ""))
+            _print_actions(timeline, indent="      ")
+
+        print("  2. Как использовал НейроРОП")
+        print(
+            "    Создано/показано/просмотрено: "
             f"{counts.get('recommendation_generated', 0)}/"
             f"{counts.get('recommendation_shown', 0)}/"
             f"{counts.get('recommendation_viewed', 0)}"
         )
-        print(f"  CRM-события: {counts.get('crm_activity_observed', 0)}; сущностей: {manager['entities']}")
+        recommendations = (manager.get("product_usage") or {}).get("recommendations") or []
+        if not recommendations:
+            print("    Событий использования рекомендаций не обнаружено")
+        for recommendation in recommendations:
+            print(
+                f"    Сделка #{recommendation.get('deal_id')} · "
+                f"{_recommendation_label(recommendation.get('recommendation_kind'))} "
+                f"#{recommendation.get('recommendation_id')}"
+            )
+            print(
+                f"      создана: {', '.join(_clock(item) for item in recommendation.get('generated_at') or []) or 'вне периода или нет данных'}"
+            )
+            print(
+                f"      показана: {', '.join(_clock(item) for item in recommendation.get('shown_at') or []) or 'нет данных'}"
+            )
+            print(
+                f"      просмотры: {', '.join(_clock(item) for item in recommendation.get('viewed_at') or []) or 'нет'}; "
+                f"точность: {recommendation.get('view_tracking_precision')}"
+            )
+
+        print("  3. Что происходило до и после просмотров")
+        correlations = manager.get("correlations") or []
+        if not correlations:
+            print("    Подтверждённых просмотров за период не обнаружено")
+        for deal in correlations:
+            print(f"    Сделка #{deal.get('deal_id')}")
+            for view in deal.get("views") or []:
+                print(
+                    f"      Просмотр {view.get('view_index_for_deal')} · {_clock(view.get('occurred_at'))} · "
+                    f"{_recommendation_label(view.get('recommendation_kind'))} #{view.get('recommendation_id')}"
+                )
+                print("        До просмотра (после предыдущего просмотра этой сделки):")
+                _print_actions(view.get("actions_before_since_previous_view") or [], indent="          ")
+                print("        После просмотра до следующего просмотра этой сделки или конца периода:")
+                _print_actions(view.get("actions_after_until_next_view") or [], indent="          ")
+                delay = view.get("minutes_to_first_same_deal_action")
+                print(
+                    "        В первые 60 минут по этой сделке: "
+                    f"{len(view.get('same_deal_actions_within_60m') or [])}; "
+                    f"по другим сделкам: {view.get('other_deal_actions_within_60m', 0)}; "
+                    f"до первого действия по этой сделке: {f'{delay} мин.' if delay is not None else 'действий не обнаружено'}"
+                )
         excluded = manager.get("excluded_unverified_lifecycle_events", 0)
         if excluded:
-            print(f"  Исключено неподтверждённых shown/viewed: {excluded}")
-        for window in manager.get("viewed_windows_60m") or []:
-            print(
-                f"  После {window['recommendation_kind']} #{window['recommendation_id']}: "
-                f"{window['observation']} (целевая сущность: {window['target_entity_events']}, "
-                f"другие: {window['other_entity_events']})"
-            )
+            print(f"  Исключено неподтверждённых shown/viewed событий: {excluded}")
     for warning in payload.get("warnings") or []:
         print(f"Важно: {warning}")
 

@@ -319,6 +319,7 @@ class RecommendationEventRequest(BaseModel):
     event_type: Literal["shown", "viewed"]
     recommendation_kind: Literal["deal_task", "quick_help"]
     recommendation_id: int = Field(ge=1)
+    occurrence_id: str | None = Field(default=None, max_length=96, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class DealContextLeverPriorityRequest(BaseModel):
@@ -1197,6 +1198,7 @@ def deal_recommendation_event_create(
             recommendation_id=body.recommendation_id,
             event_type=f"recommendation_{body.event_type}",
             auth_user_id=int(user["id"]),
+            occurrence_id=body.occurrence_id,
         )
         return {"ok": True, "event_id": int(event["id"])}
     except PermissionError as error:

@@ -1485,13 +1485,6 @@ function DealDetail(props: {
   async function openAssistant() {
     const workspace = await loadAssistantWorkspace(true)
     if (!workspace) return
-    const existingEntry = currentEntryForMode(
-      workspace.entries,
-      'push',
-      workspace.source_report_id,
-      workspace.situation_review_id,
-    )
-    if (existingEntry) recordQuickHelpLifecycle('viewed', existingEntry.id)
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status) && quickHelpAnswerReady(quickHelpJob)) return
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
     if (missingCurrentModes(workspace.current_by_mode).length) {
@@ -2588,6 +2581,7 @@ function ManagerAssistantModal(props: {
   const onClose = props.onClose
   const onFreshAnswerConsumed = props.onFreshAnswerConsumed
   const onRecommendationEvent = props.onRecommendationEvent
+  const visibleEntryId = visibleEntry?.id
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
@@ -2606,9 +2600,10 @@ function ManagerAssistantModal(props: {
   }, [busy, onFreshAnswerConsumed, props.freshEntryId, view, viewingLatest])
 
   useEffect(() => {
-    if (view !== 'answer' || !visibleEntry) return
-    onRecommendationEvent('shown', visibleEntry.id)
-  }, [onRecommendationEvent, view, visibleEntry])
+    if (view !== 'answer' || visibleEntryId == null) return
+    onRecommendationEvent('shown', visibleEntryId)
+    onRecommendationEvent('viewed', visibleEntryId)
+  }, [onRecommendationEvent, view, visibleEntryId])
 
   async function send() {
     if (view === 'companion') {
@@ -2629,29 +2624,15 @@ function ManagerAssistantModal(props: {
 
   function switchMode(next: ManagerAssistantMode) {
     if (next === assistantMode) return
-    const nextEntry = entryForTurn(visibleTurn, next)
-      || (viewingLatest
-        ? currentEntryForMode(
-            props.workspace.entries,
-            next,
-            props.workspace.source_report_id,
-            props.workspace.situation_review_id,
-          )
-        : null)
-    if (nextEntry) props.onRecommendationEvent('viewed', nextEntry.id)
     setAssistantMode(next)
   }
 
   function navigateHistory(nextOffset: number) {
     const boundedOffset = Math.min(Math.max(0, nextOffset), Math.max(0, turns.length - 1))
-    const turn = turns[turns.length - 1 - boundedOffset] || null
-    const entry = entryForTurn(turn, assistantMode)
-    if (entry) props.onRecommendationEvent('viewed', entry.id)
     setHistoryOffset(boundedOffset)
   }
 
   function showAnswer() {
-    if (view !== 'answer' && visibleEntry) props.onRecommendationEvent('viewed', visibleEntry.id)
     setView('answer')
   }
 
