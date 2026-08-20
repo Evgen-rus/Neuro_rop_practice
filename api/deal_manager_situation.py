@@ -247,7 +247,7 @@ def load_manager_screen_context(
         deal_id=str(deal_id),
     )
     current_status = _situation_status(situation if isinstance(situation, dict) else None)
-    if require_confirmed_situation and not current_status:
+    if require_confirmed_situation and current_status != "confirmed":
         raise ValueError("Сначала подтвердите текущую ситуацию сделки")
     situation_review = _storage_call_alias(
         ("get_latest_deal_manager_situation_review", "get_current_deal_manager_situation_review"),
@@ -412,7 +412,7 @@ def _run_situation_job(job_id: str, db_path: str | Path) -> None:
         with _SITUATION_LOCK:
             job.situation_id = _situation_id(saved)
             job.status = "done"
-        _touch(job, stage="done", detail="Ситуация уточнена и подтверждена", percent=100)
+        _touch(job, stage="done", detail="Ситуация пересобрана. Проверьте текст и подтвердите", percent=100)
     except Exception as error:  # noqa: BLE001 - never return model content in a job error
         logger.exception("Situation refine job %s failed for deal %s", job_id, job.deal_id)
         with _SITUATION_LOCK:

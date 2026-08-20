@@ -404,7 +404,7 @@ function managerSituationOf(deal: DealControlDeal): ManagerSituationState {
 }
 
 function managerSituationIsConfirmed(situation: ManagerSituationState) {
-  return situation.is_current && ['confirmed', 'refined'].includes(situation.state)
+  return situation.is_current && situation.state === 'confirmed'
 }
 
 function readDealDraft(prefix: string, dealId: string) {
@@ -1840,9 +1840,12 @@ function ManagerSituationActions(props: {
 }) {
   const confirmed = managerSituationIsConfirmed(props.situation)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
-  const stateLabel = !props.situation.is_current || props.situation.state === 'pending'
-    ? 'Требует подтверждения на сегодня'
-    : props.situation.state === 'refined' ? 'Уточнена менеджером' : 'Подтверждена'
+  const needsReview = props.situation.is_current && props.situation.state === 'refined'
+  const stateLabel = confirmed
+    ? 'Подтверждена'
+    : needsReview
+      ? 'Нужно подтвердить новую формулировку'
+      : 'Требует подтверждения на сегодня'
 
   return <>
     <section className={`dc-manager-situation ${confirmed ? 'confirmed' : 'pending'}`}>
@@ -1855,7 +1858,7 @@ function ManagerSituationActions(props: {
         </span>
         <div className="dc-manager-situation-heading">
           <h3>Текущая ситуация</h3>
-          {!confirmed ? <p>Проверьте, актуальна ли ситуация сейчас</p> : null}
+          {!confirmed ? <p>{needsReview ? 'Проверьте текст после пересборки и подтвердите его' : 'Проверьте, актуальна ли ситуация сейчас'}</p> : null}
         </div>
         <span className="dc-manager-situation-status"><i />{stateLabel}</span>
       </header>
@@ -1868,7 +1871,7 @@ function ManagerSituationActions(props: {
 
       <footer className="dc-manager-situation-actions">
         <button className="dc-button primary" disabled={busy || confirmed} onClick={props.onConfirm}>
-          {confirmed ? '✓ Ситуация подтверждена' : 'Подтвердить на сегодня'}
+          {confirmed ? '✓ Ситуация подтверждена' : needsReview ? 'Подтвердить ситуацию' : 'Подтвердить на сегодня'}
         </button>
         <button className="dc-button" disabled={busy} onClick={props.onOpenModal}>
           {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}

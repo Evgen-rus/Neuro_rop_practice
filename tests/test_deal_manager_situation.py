@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from api.deal_control import _analysis_coaching, build_deal_control_dashboard
+from api.deal_manager_situation import load_manager_screen_context
 from storage.rop_db import (
     connect,
     get_deal_manager_situation_state,
@@ -354,6 +355,51 @@ class DealManagerSituationTests(unittest.TestCase):
                     (report_id,),
                 ).fetchone()[0]
             self.assertEqual(saved_report_json, json.dumps(before, ensure_ascii=False, sort_keys=True))
+
+    def test_refined_projection_still_requires_explicit_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            _seed_deal(db_path)
+            report_id = save_ui_report(
+                db_path,
+                entity_type="deal",
+                entity_id="101",
+                report_json=_base_analysis(),
+            )
+            save_deal_manager_situation_refined_projection(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                manager_context="Клиент попросил вернуться после совещания",
+                refined_coaching={"current_situation": "Клиент ждёт внутреннее совещание"},
+            )
+
+            state = get_deal_manager_situation_state(db_path, deal_id="101")
+            self.assertEqual(state["status"], "refined")
+            self.assertTrue(state["is_current"])
+            self.assertEqual(
+                _analysis_coaching(db_path, "101")["current_situation"],
+                "Клиент ждёт внутреннее совещание",
+            )
+            with self.assertRaisesRegex(ValueError, "Сначала подтвердите текущую ситуацию сделки"):
+                load_manager_screen_context(db_path, "101", require_confirmed_situation=True)
+
+            confirmed = save_deal_manager_situation_confirmation(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+            )
+            current = get_deal_manager_situation_state(db_path, deal_id="101")
+            context = load_manager_screen_context(db_path, "101", require_confirmed_situation=True)
+
+            self.assertEqual(confirmed["action"], "confirmed")
+            self.assertEqual(current["status"], "confirmed")
+            self.assertTrue(current["is_current"])
+            self.assertEqual(context["situation_status"], "confirmed")
+            self.assertEqual(
+                context["situation_projection"]["current_situation"],
+                "Клиент ждёт внутреннее совещание",
+            )
 
 
 if __name__ == "__main__":

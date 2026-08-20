@@ -3096,6 +3096,8 @@ def get_deal_manager_situation_state(
     is_current = False
     review_business_date = str(review.get("business_date") or "") if review is not None else ""
     if review is not None and review_business_date == current_business_date:
+        # context_added keeps the rebuilt text visible, but only `confirmed`
+        # unlocks Quick Help and other paid manager actions.
         status = "refined" if review.get("action") == "context_added" else "confirmed"
         is_current = int(review.get("source_report_id") or 0) == int(source_report_id or 0)
     current_review = review if is_current else None

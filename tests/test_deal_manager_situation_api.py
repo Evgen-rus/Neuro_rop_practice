@@ -189,6 +189,27 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertIsNone(save_kwargs["manager_context"])
         storage_call.assert_called()
 
+    def test_refined_situation_does_not_unlock_confirmed_actions(self) -> None:
+        refined_state = {
+            "id": 22,
+            "status": "refined",
+            "state": "refined",
+            "is_current": True,
+        }
+        with patch.object(situation, "_storage_call", side_effect=dispatcher(state=refined_state)):
+            with self.assertRaisesRegex(ValueError, "Сначала подтвердите текущую ситуацию сделки"):
+                situation.load_manager_screen_context(
+                    Path("state.sqlite"),
+                    "101",
+                    require_confirmed_situation=True,
+                )
+            context = situation.load_manager_screen_context(
+                Path("state.sqlite"),
+                "101",
+                require_confirmed_situation=False,
+            )
+        self.assertEqual(context["situation_status"], "refined")
+
     def test_refine_passes_previous_projection_and_saves_only_complete_result(self) -> None:
         calls = []
         current = {
