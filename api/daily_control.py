@@ -273,16 +273,16 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": "missing",
             "criteria": {
-                "next_action": {"score": None, "verdict": "Нет оценки"},
-                "value_development": {"score": None, "verdict": "Нет оценки"},
-                "data_collection": {"score": None, "verdict": "Нет оценки"},
+                "next_action": {"score": None, "verdict": "Нет данных"},
+                "value_development": {"score": None, "verdict": "Нет данных"},
+                "data_collection": {"score": None, "verdict": "Нет данных"},
             },
             "confirmed_count": None,
             "total": 3,
             "scope_summary": None,
             "zero_reasons": [],
             "summary_for_rop": None,
-            "insufficient_reason": "В сохранённом анализе нет communication_quality_audit.",
+            "insufficient_reason": "Нет данных",
         }
     if audit.get("status") == "insufficient_evidence":
         return {
@@ -297,7 +297,7 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
             "scope_summary": audit.get("scope_summary"),
             "zero_reasons": [],
             "summary_for_rop": None,
-            "insufficient_reason": audit.get("insufficient_reason") or "Недостаточно содержательной коммуникации.",
+            "insufficient_reason": audit.get("insufficient_reason") or "Нет данных",
         }
     scores = _audit_scores(audit)
     labels = {
@@ -315,7 +315,7 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
         elif score == 0:
             verdict = bad_text
         else:
-            verdict = "Нет оценки"
+            verdict = "Нет данных"
         criteria[name] = {"score": score, "verdict": verdict}
     reasons = []
     for raw in audit.get("zero_reasons") or []:
@@ -412,10 +412,8 @@ def _attention_reason(deal: dict[str, Any], quality: dict[str, Any]) -> str:
         if text:
             return text
     if quality.get("status") == "insufficient_evidence":
-        return str(quality.get("insufficient_reason") or "Нет содержательного звонка, письма или переписки, чтобы оценить качество ведения.")
-    if not coaching.get("report_id"):
-        return "Сохранённого анализа сделки ещё нет — проверьте факт работы менеджера."
-    return "Нужно проверить текущий статус сделки."
+        return str(quality.get("insufficient_reason") or "Нет данных")
+    return "Нет данных"
 
 
 def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:

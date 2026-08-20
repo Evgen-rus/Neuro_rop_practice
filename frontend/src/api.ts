@@ -1678,6 +1678,64 @@ export function fetchManagerFollowups(dealId: string) {
   return api<{ followups: ManagerFollowupsRecord | null }>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/followups`)
 }
 
+export type ManagerCompanionLastContact = {
+  event_id: string
+  channel?: string | null
+  direction?: string | null
+  occurred_at?: string | null
+  duration_seconds?: number | null
+  subject?: string | null
+  contact_class?: string | null
+  content_available?: boolean
+}
+
+export type ManagerCompanionRecord = {
+  id: number
+  last_event_id?: string
+  content: {
+    companion_contract: 'companion_message_v1'
+    understood: string[]
+    message_text: string
+    insufficient_reason?: string | null
+  }
+  created_at: string
+}
+
+export type ManagerCompanionJob = {
+  job_id: string
+  deal_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage: string
+  detail: string
+  percent: number
+  companion_id?: number | null
+  reused?: boolean
+  analysis_started?: boolean
+  analysis_decision?: string | null
+  missing_reason?: string | null
+  error?: string | null
+}
+
+export type ManagerCompanionWorkspace = {
+  last_contact: ManagerCompanionLastContact | null
+  companion: ManagerCompanionRecord | null
+  source_report_id?: number | null
+}
+
+export function startManagerCompanion(dealId: string, confirmPaid = true, regenerate = false) {
+  return api<ManagerCompanionJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/companion`, {
+    method: 'POST', body: JSON.stringify({ confirm_paid: confirmPaid, regenerate }),
+  })
+}
+
+export function fetchManagerCompanionJob(jobId: string) {
+  return api<ManagerCompanionJob>(`/api/deal-control/companion-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchManagerCompanion(dealId: string) {
+  return api<ManagerCompanionWorkspace>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/companion`)
+}
+
 export async function transcribeManagerVoice(
   dealId: string,
   audio: Blob,

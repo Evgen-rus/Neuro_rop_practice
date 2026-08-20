@@ -539,7 +539,7 @@ function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selecte
           <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
           <b>{money(deal.amount, deal.currency_id || 'RUB')}</b>
         </header>
-        <small>{deal.stage_name || 'Этап не указан'} · {deal.status_label}</small>
+        <small>{deal.stage_name || 'Нет данных'} · {deal.status_label}</small>
         <p className={selected ? 'full' : 'clamp'}>{deal.attention_reason}</p>
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.completed} касаний сегодня · ${talkTime(communications.duration_seconds)} разговоров`}</span>

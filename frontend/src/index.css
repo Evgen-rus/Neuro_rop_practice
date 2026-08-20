@@ -7424,6 +7424,16 @@ ul.facts.bad li:before {
 .dc-manager-followups article small, .dc-manager-followups article em { color: #74869a; font-size: 9.5px; line-height: 1.4; }
 .dc-manager-followups article em { color: #8a6735; font-style: normal; }
 
+.dc-manager-companion { display: grid; gap: 12px; }
+.dc-manager-companion > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.dc-manager-companion > header h3, .dc-manager-companion > header p { margin: 0; }
+.dc-manager-companion > header p, .dc-manager-companion .summary, .dc-manager-companion .empty { color: #64788f; font-size: 11px; }
+.dc-manager-companion .understood { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid #d8e3ed; border-radius: 12px; background: #f7fafc; }
+.dc-manager-companion .understood small { color: #8595a6; font-size: 8px; text-transform: uppercase; }
+.dc-manager-companion .understood ul { margin: 0; padding-left: 16px; color: #405a73; font-size: 12px; }
+.dc-manager-companion pre { margin: 0; white-space: pre-wrap; padding: 13px; border: 1px solid #d8e3ed; border-radius: 12px; background: #fff; color: #173c62; font: inherit; font-size: 13px; line-height: 1.45; }
+.dc-manager-companion .dc-button { justify-self: start; }
+
 .dc-manager-assistant-main > footer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 11px 13px; border-top: 1px solid #d6e2ed; background: #fff; }
 .dc-manager-assistant-main > footer .dc-manager-voice-control { align-self: center; }
 .dc-manager-assistant-main > footer .dc-manager-voice-button { width: 38px; min-height: 38px; overflow: hidden; padding: 6px; font-size: 0; }

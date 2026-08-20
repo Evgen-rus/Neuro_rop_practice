@@ -273,6 +273,15 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertTrue(snapshot["deals"][0]["communications_today"]["unavailable"])
         self.assertTrue(any("недоступны" in item for item in snapshot["source_warnings"]))
 
+    def test_missing_analysis_fields_are_empty_not_invented(self) -> None:
+        card = project_deal_review_card(_deal_row(coaching={"report_id": None}))
+        self.assertEqual(card["attention_reason"], "Нет данных")
+        self.assertIsNone(card["summary_for_rop"])
+        self.assertEqual(card["quality"]["insufficient_reason"], "Нет данных")
+        self.assertEqual(card["quality"]["criteria"]["next_action"]["verdict"], "Нет данных")
+        self.assertFalse(card["ai_context"]["current_situation"])
+        self.assertFalse(card["script"])
+
 
 class DailyControlStorageTests(unittest.TestCase):
     def setUp(self) -> None:

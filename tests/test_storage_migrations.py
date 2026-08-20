@@ -102,6 +102,7 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("automatic_analysis_runs", tables)
             self.assertIn("automatic_analysis_items", tables)
             self.assertIn("daily_control_reports", tables)
+            self.assertIn("deal_manager_companion_messages", tables)
 
             init_db(db_path)
             self.assertIsNotNone(index_sql(db_path))

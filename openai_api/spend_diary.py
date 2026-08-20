@@ -32,6 +32,7 @@ KIND_LABELS = {
     "deal_manager_quick_help_push": "Quick Help",
     "deal_manager_quick_help_reanimator": "Quick Help (дожим)",
     "deal_manager_followups": "фоллоуапы",
+    "deal_manager_companion": "сопроводительный текст",
     "deal_manager_situation": "ситуация",
     "deal_manager_email": "письмо",
     "deal_manager_strategy_pack": "стратегия",

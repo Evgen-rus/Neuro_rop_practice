@@ -7,6 +7,7 @@ const QUALITY_LABELS = {
   data_collection: 'Сбор данных',
 } as const
 
+const NO_DATA = 'Нет данных'
 const DEFAULT_CONTENT_NOTE = 'Текст письма, исходное сообщение и транскрипт в снимке отсутствуют.'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
 
@@ -33,7 +34,7 @@ export function DailyIcon({ name }: { name: keyof typeof ICON_PATHS }) {
 
 function money(value?: string | number | null, currency = 'RUB') {
   const parsed = Number(String(value ?? '').replace(',', '.'))
-  if (!Number.isFinite(parsed)) return '—'
+  if (!Number.isFinite(parsed)) return NO_DATA
   return new Intl.NumberFormat('ru-RU', {
     style: 'currency',
     currency: currency || 'RUB',
@@ -59,13 +60,13 @@ function channelLabel(channel: string) {
   if (channel === 'call') return 'Звонок'
   if (channel === 'email') return 'Письмо'
   if (channel === 'message') return 'Сообщение'
-  return channel || 'Событие'
+  return channel || NO_DATA
 }
 
 function directionLabel(direction: string) {
   if (direction === 'incoming') return 'входящий'
   if (direction === 'outgoing') return 'исходящий'
-  return 'направление не указано'
+  return NO_DATA
 }
 
 const INSUFFICIENT_QUALITY_LABEL = 'Нет данных для оценки'
@@ -123,14 +124,14 @@ export function DealReviewCard(props: {
     ? `${quality.confirmed_count} из ${quality.total} подтверждены`
     : quality.status === 'insufficient_evidence'
       ? INSUFFICIENT_QUALITY_LABEL
-      : 'Оценки отсутствуют'
+      : NO_DATA
   return (
     <section className="dc-daily-card">
       {props.showHeader !== false ? (
         <header className="dc-daily-card-head">
           <div>
             <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
-            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {deal.stage_name || 'Этап не указан'}</p>
+            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {deal.stage_name || NO_DATA}</p>
           </div>
           <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
         </header>
@@ -175,7 +176,7 @@ export function DealReviewCard(props: {
               ) : null}
               <div className="dc-daily-argument-scope">
                 <span className="dc-daily-argument-label">Основание анализа</span>
-                <p>{humanQualityText(quality.scope_summary) || 'Основание анализа отсутствует.'}</p>
+                <p>{humanQualityText(quality.scope_summary) || NO_DATA}</p>
               </div>
               {quality.insufficient_reason ? <p>{humanQualityText(quality.insufficient_reason)}</p> : null}
               {quality.zero_reasons.length ? (
@@ -206,7 +207,7 @@ export function DealReviewCard(props: {
             <span className="dc-daily-focus-icon" aria-hidden="true">!</span>
             <div>
               <small>Вывод для РОПа</small>
-              <p>{humanQualityText(deal.summary_for_rop || quality.insufficient_reason) || 'Управленческий вывод пока отсутствует.'}</p>
+              <p>{humanQualityText(deal.summary_for_rop || quality.insufficient_reason) || NO_DATA}</p>
             </div>
           </div>
           <div className="dc-daily-focus-step question">
@@ -236,7 +237,7 @@ export function DealReviewCard(props: {
             </span>
           </summary>
           <div className="dc-daily-tile-body">
-            <p><b>Ситуация.</b> {deal.ai_context.current_situation || 'Нет сохранённого контекста.'}</p>
+            <p><b>Ситуация.</b> {deal.ai_context.current_situation || NO_DATA}</p>
             {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {deal.ai_context.rop_focus}</p> : null}
             {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {deal.ai_context.what_to_check_now}</p> : null}
             {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {deal.ai_context.manager_coaching}</p> : null}
@@ -253,7 +254,7 @@ export function DealReviewCard(props: {
             </span>
           </summary>
           <div className="dc-daily-tile-body">
-            {script ? <pre>{script}</pre> : <p>Сохранённого текста для разговора с менеджером нет.</p>}
+            {script ? <pre>{script}</pre> : <p>{NO_DATA}</p>}
             {script ? <button type="button" className="dc-button" onClick={props.onCopyScript}>Скопировать сценарий</button> : null}
             {props.copyNotice ? <small>{props.copyNotice}</small> : null}
           </div>
@@ -278,7 +279,7 @@ export function DealReviewCard(props: {
               <span className="dc-daily-comm-sep" aria-hidden="true">·</span>
               <span><strong>{talkTime(communications.duration_seconds)}</strong></span>
               <span className="dc-daily-comm-sep" aria-hidden="true">·</span>
-              <span>последнее касание {lastTouch ? formatClock(lastTouch.occurred_at) : '—'}</span>
+              <span>последнее касание {lastTouch ? formatClock(lastTouch.occurred_at) : NO_DATA}</span>
             </div>
             <details className="dc-daily-comm-events">
               <summary>Показать события · {communications.items.length}</summary>
@@ -295,7 +296,7 @@ export function DealReviewCard(props: {
                     <i aria-hidden="true">{open ? '▴' : '▾'}</i>
                     {open ? (
                       <div>
-                        <p>{item.subject || 'Тема в CRM не указана'}</p>
+                        <p>{item.subject || NO_DATA}</p>
                         <small>ID события: {item.event_id}. {contentNote}</small>
                       </div>
                     ) : null}
@@ -324,7 +325,7 @@ export function DealReviewCard(props: {
                 {item.why ? <small>Почему: {item.why}</small> : null}
               </div>
             </div>
-          )) : <p className="dc-daily-block-note">Пунктов чек-листа на этот день нет.</p>}
+          )) : <p className="dc-daily-block-note">{NO_DATA}</p>}
         </div>
       </article>
     </section>

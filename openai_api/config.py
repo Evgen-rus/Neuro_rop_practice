@@ -37,6 +37,8 @@ QUICK_HELP_MAX_OUTPUT_TOKENS = int(os.getenv("QUICK_HELP_MAX_OUTPUT_TOKENS", "40
 # Follow-up ideas JSON plus reasoning tokens. Default stays the previous
 # hardcoded 3600; raise via env if high reasoning truncates the answer.
 FOLLOWUPS_MAX_OUTPUT_TOKENS = int(os.getenv("FOLLOWUPS_MAX_OUTPUT_TOKENS", "3600") or "3600")
+# Short post-call client message. Keep below follow-ups: the answer is a few lines.
+COMPANION_MAX_OUTPUT_TOKENS = int(os.getenv("COMPANION_MAX_OUTPUT_TOKENS", "1800") or "1800")
 COMMUNICATION_QUALITY_AUDIT_ENABLED = read_bool_env("COMMUNICATION_QUALITY_AUDIT_ENABLED", True)
 USD_RUB_RATE = float(os.getenv("USD_RUB_RATE", "75") or "75")
 OPENAI_LOG_PREVIEW_LINES = int(os.getenv("OPENAI_LOG_PREVIEW_LINES", "25") or "25")

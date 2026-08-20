@@ -33,6 +33,7 @@ DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
     ("deal_manager_call_scripts", "DELETE FROM deal_manager_call_scripts"),
     ("deal_manager_email_scripts", "DELETE FROM deal_manager_email_scripts"),
     ("deal_manager_followups", "DELETE FROM deal_manager_followups"),
+    ("deal_manager_companion_messages", "DELETE FROM deal_manager_companion_messages"),
     ("deal_manager_quick_help", "DELETE FROM deal_manager_quick_help"),
     ("deal_manager_situation_reviews", "DELETE FROM deal_manager_situation_reviews"),
     ("deal_control_task_reschedules", "DELETE FROM deal_control_task_reschedules"),
@@ -684,6 +685,20 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 FOREIGN KEY(source_report_id) REFERENCES ui_reports(id),
                 FOREIGN KEY(situation_review_id) REFERENCES deal_manager_situation_reviews(id),
                 UNIQUE(deal_id, manager_id, source_report_id, situation_review_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deal_manager_companion_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT NOT NULL,
+                source_report_id INTEGER NOT NULL,
+                last_event_id TEXT NOT NULL,
+                companion_json TEXT NOT NULL,
+                model_meta_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(deal_id) REFERENCES deal_control_deals(deal_id),
+                FOREIGN KEY(source_report_id) REFERENCES ui_reports(id),
+                UNIQUE(deal_id, manager_id, source_report_id, last_event_id)
             );
 
             CREATE TABLE IF NOT EXISTS deal_manager_assistant_events (
@@ -3781,6 +3796,70 @@ def save_deal_manager_followups(
             (str(deal_id), manager_id, int(source_report_id), int(situation_review_id)),
         ).fetchone()
     result = _row_to_deal_manager_followups(row)
+    assert result is not None
+    return result
+
+
+def _row_to_deal_manager_companion(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["content"] = loads_json(value.pop("companion_json", None), {})
+    value["model_meta"] = loads_json(value.pop("model_meta_json", None), None)
+    return value
+
+
+def get_deal_manager_companion(
+    db_path: str | Path, *, deal_id: str, source_report_id: int, last_event_id: str,
+) -> dict[str, Any] | None:
+    """Return companion text only for this report and last CRM event."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT item.* FROM deal_manager_companion_messages AS item
+               JOIN deal_control_deals AS deal ON deal.deal_id = item.deal_id
+               WHERE item.deal_id = ? AND item.manager_id = deal.manager_id
+                 AND item.source_report_id = ? AND item.last_event_id = ?
+               LIMIT 1""",
+            (str(deal_id), int(source_report_id), str(last_event_id)),
+        ).fetchone()
+    return _row_to_deal_manager_companion(row)
+
+
+def save_deal_manager_companion(
+    db_path: str | Path, *, deal_id: str, source_report_id: int, last_event_id: str,
+    companion_json: dict[str, Any], model_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist a validated companion message for the current report and event."""
+    if not isinstance(companion_json, dict) or not companion_json:
+        raise ValueError("Сопроводительный текст должен быть непустым JSON-объектом")
+    event_id = str(last_event_id or "").strip()
+    if not event_id:
+        raise ValueError("Нужен идентификатор последней коммуникации")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        manager_id = _deal_manager_situation_review_context(
+            conn, deal_id=str(deal_id), source_report_id=int(source_report_id),
+        )
+        conn.execute(
+            """INSERT INTO deal_manager_companion_messages (
+                   deal_id, manager_id, source_report_id, last_event_id,
+                   companion_json, model_meta_json, created_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(deal_id, manager_id, source_report_id, last_event_id) DO UPDATE SET
+                   companion_json = excluded.companion_json,
+                   model_meta_json = excluded.model_meta_json,
+                   created_at = excluded.created_at""",
+            (str(deal_id), manager_id, int(source_report_id), event_id,
+             dumps_json(companion_json), dumps_json(model_meta) if model_meta is not None else None, utcish_now()),
+        )
+        row = conn.execute(
+            """SELECT * FROM deal_manager_companion_messages
+               WHERE deal_id = ? AND manager_id = ? AND source_report_id = ? AND last_event_id = ?""",
+            (str(deal_id), manager_id, int(source_report_id), event_id),
+        ).fetchone()
+    result = _row_to_deal_manager_companion(row)
     assert result is not None
     return result
 

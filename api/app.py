@@ -94,6 +94,7 @@ from api.deal_manager_full_script import (
     start_full_script_job,
 )
 from api.deal_manager_followups import get_followups_job, get_followups_workspace, start_followups_job
+from api.deal_manager_companion import get_companion_job, get_companion_workspace, start_companion_job
 from api.deal_manager_situation import (
     StorageContractUnavailable,
     confirm_deal_manager_situation,
@@ -302,6 +303,11 @@ class DealManagerFullScriptRequest(BaseModel):
 
 class DealManagerFollowupsRequest(BaseModel):
     confirm_paid: bool = False
+
+
+class DealManagerCompanionRequest(BaseModel):
+    confirm_paid: bool = False
+    regenerate: bool = False
 
 
 class DealManagerCommunicationCompletedRequest(BaseModel):
@@ -1106,6 +1112,42 @@ def deal_manager_followups_get(deal_id: str) -> dict[str, Any]:
         return get_followups_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур фоллоуапов ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/companion")
+def deal_manager_companion_start(deal_id: str, body: DealManagerCompanionRequest) -> dict[str, Any]:
+    require_deal(deal_id, action="paid_ai")
+    try:
+        return start_companion_job(
+            db_path=DEFAULT_DB_PATH,
+            deal_id=deal_id,
+            confirm_paid=body.confirm_paid,
+            regenerate=body.regenerate,
+        )
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур сопроводительного текста ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/companion-jobs/{job_id}")
+def deal_manager_companion_job_get(job_id: str) -> dict[str, Any]:
+    job = get_companion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание сопроводительного текста не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    return job
+
+
+@app.get("/api/deal-control/deals/{deal_id}/companion")
+def deal_manager_companion_get(deal_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_companion_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
+    except StorageContractUnavailable as error:
+        raise HTTPException(status_code=503, detail="Контур сопроводительного текста ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

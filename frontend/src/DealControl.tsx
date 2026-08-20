@@ -9,6 +9,8 @@ import {
   fetchManagerFullScriptJob,
   fetchManagerFollowups,
   fetchManagerFollowupsJob,
+  fetchManagerCompanion,
+  fetchManagerCompanionJob,
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
   fetchReportMarkdown,
@@ -20,6 +22,7 @@ import {
   startManagerQuickHelp,
   startManagerFullScript,
   startManagerFollowups,
+  startManagerCompanion,
   startManagerSituationRefinement,
   syncDealControl,
   transcribeManagerVoice,
@@ -54,6 +57,9 @@ import {
   type ManagerObjectionHandling,
   type ManagerFollowupsJob,
   type ManagerFollowupsRecord,
+  type ManagerCompanionJob,
+  type ManagerCompanionLastContact,
+  type ManagerCompanionRecord,
   type ManagerAssistantWorkspace,
   type ManagerDiscProfile,
   type ManagerSituationJob,
@@ -2523,11 +2529,15 @@ function ManagerAssistantModal(props: {
   onFreshAnswerConsumed: () => void
   onRecommendationEvent: (eventType: 'shown' | 'viewed', recommendationId: number) => void
 }) {
-  const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups'>('answer')
+  const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups' | 'companion'>('answer')
   const [assistantMode, setAssistantMode] = useState<ManagerAssistantMode>('push')
   const [followups, setFollowups] = useState<ManagerFollowupsRecord | null>(null)
   const [followupsJob, setFollowupsJob] = useState<ManagerFollowupsJob | null>(null)
   const [followupsError, setFollowupsError] = useState('')
+  const [companion, setCompanion] = useState<ManagerCompanionRecord | null>(null)
+  const [companionLastContact, setCompanionLastContact] = useState<ManagerCompanionLastContact | null>(null)
+  const [companionJob, setCompanionJob] = useState<ManagerCompanionJob | null>(null)
+  const [companionError, setCompanionError] = useState('')
   const [historyOffset, setHistoryOffset] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
@@ -2634,6 +2644,24 @@ function ManagerAssistantModal(props: {
     }
   }
 
+  async function generateCompanion(regenerate = false) {
+    setCompanionError('')
+    try {
+      const started = await startManagerCompanion(props.deal.deal_id, true, regenerate)
+      setCompanionJob(started)
+      if (started.status === 'done') {
+        const payload = await fetchManagerCompanion(props.deal.deal_id)
+        setCompanion(payload.companion)
+        setCompanionLastContact(payload.last_contact)
+        if (started.missing_reason && !payload.companion?.content.message_text) {
+          setCompanionError(started.missing_reason)
+        }
+      }
+    } catch (error) {
+      setCompanionError(error instanceof Error ? error.message : 'Не удалось подготовить сопроводительный текст')
+    }
+  }
+
   useEffect(() => {
     if (view !== 'followups' || followups || followupsJob) return
     let cancelled = false
@@ -2657,6 +2685,40 @@ function ManagerAssistantModal(props: {
     }, 900)
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [followupsJob, props.deal.deal_id])
+
+  useEffect(() => {
+    if (view !== 'companion') return
+    let cancelled = false
+    void fetchManagerCompanion(props.deal.deal_id).then((result) => {
+      if (cancelled) return
+      setCompanionLastContact(result.last_contact)
+      if (!companionJob) setCompanion(result.companion)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [companionJob, props.deal.deal_id, view])
+
+  useEffect(() => {
+    if (!companionJob || !['queued', 'running'].includes(companionJob.status)) return
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await fetchManagerCompanionJob(companionJob.job_id)
+        if (cancelled) return
+        setCompanionJob(next)
+        if (next.status === 'done') {
+          const payload = await fetchManagerCompanion(props.deal.deal_id)
+          if (cancelled) return
+          setCompanion(payload.companion)
+          setCompanionLastContact(payload.last_contact)
+          if (next.missing_reason && !payload.companion?.content.message_text) setCompanionError(next.missing_reason)
+        }
+        if (next.status === 'error') setCompanionError(next.detail || 'Не удалось подготовить сопроводительный текст')
+      } catch (error) {
+        if (!cancelled) setCompanionError(error instanceof Error ? error.message : 'Не удалось получить сопроводительный текст')
+      }
+    }, 900)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [companionJob, props.deal.deal_id])
 
   function bitrixComment(entry: ManagerQuickHelpEntry) {
     const checklist = entry.content.crm_checklist.length
@@ -2686,6 +2748,7 @@ function ManagerAssistantModal(props: {
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
           <button className={view === 'context' ? 'active' : ''} onClick={() => setView('context')}><span>i</span>Контекст сделки</button>
           <button className={view === 'followups' ? 'active' : ''} onClick={() => setView('followups')}><span>↗</span>Фоллоуапы</button>
+          <button className={view === 'companion' ? 'active' : ''} onClick={() => setView('companion')}><span>✉</span>Сопроводительный текст</button>
         </nav>
         <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
@@ -2753,6 +2816,14 @@ function ManagerAssistantModal(props: {
             report={props.workspace.context.report || null}
           /> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <><p className="summary">{followups.content.context_summary}</p><div>{followups.content.items.map((item) => <article key={item.item_id}><header><strong>{item.concern_or_scenario}</strong><span>{item.basis_status === 'confirmed' ? 'Подтверждено' : item.basis_status === 'inferred' ? 'Гипотеза' : 'Условный сценарий'}</span></header><h4>{item.idea}</h4><p>{item.why_it_may_help}</p><dl><div><dt>Формат</dt><dd>{item.followup_type}</dd></div><div><dt>Канал</dt><dd>{item.suggested_channel}</dd></div><div><dt>Когда</dt><dd>{item.timing}</dd></div><div><dt>Цель</dt><dd>{item.target_micro_conversion}</dd></div></dl><small>Основание: {item.evidence_summary}</small><em>{item.caution}</em></article>)}</div></> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
+          {view === 'companion' ? <CompanionTextPanel
+            lastContact={companionLastContact}
+            companion={companion}
+            job={companionJob}
+            error={companionError}
+            onGenerate={(regenerate) => void generateCompanion(regenerate)}
+            onCopy={(text) => void props.onCopy(text, 'Сопроводительный текст')}
+          /> : null}
         </div>
         <footer>
           <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
@@ -3001,6 +3072,63 @@ function ManagerDealContextView(props: {
 
     <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown"><button className="dc-analysis-material-link" disabled={markdownLoading || !props.report?.report_id || props.report.markdown_available === false} onClick={() => void toggleMarkdown()}>{markdownLoading ? 'Открываем полный отчёт…' : markdownOpen ? 'Скрыть полный Markdown-отчёт' : 'Открыть полный Markdown-отчёт'}</button>{markdownError ? <small className="dc-manager-error">{markdownError}</small> : null}{markdownOpen && markdown ? <pre>{markdown}</pre> : null}</section>
   </section>
+}
+
+function companionContactLabel(contact: ManagerCompanionLastContact | null) {
+  if (!contact) return 'Нет данных'
+  const channel = contact.channel === 'call' ? 'звонок' : contact.channel === 'email' ? 'письмо' : contact.channel === 'message' ? 'сообщение' : contact.channel || 'касание'
+  const when = dateTime(contact.occurred_at)
+  const seconds = Math.max(0, Math.round(Number(contact.duration_seconds || 0)))
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  const duration = contact.channel === 'call' && seconds
+    ? ` · ${minutes} мин ${String(rest).padStart(2, '0')} сек`
+    : ''
+  return [when, channel].filter(Boolean).join(' · ') + duration
+}
+
+function CompanionTextPanel({
+  lastContact,
+  companion,
+  job,
+  error,
+  onGenerate,
+  onCopy,
+}: {
+  lastContact: ManagerCompanionLastContact | null
+  companion: ManagerCompanionRecord | null
+  job: ManagerCompanionJob | null
+  error: string
+  onGenerate: (regenerate: boolean) => void
+  onCopy: (text: string) => void
+}) {
+  const running = Boolean(job && ['queued', 'running'].includes(job.status))
+  const message = String(companion?.content.message_text || '').trim()
+  const understood = companion?.content.understood || []
+  const missing = !message && (error === 'Нет данных' || companion?.content.insufficient_reason)
+  return (
+    <section className="dc-manager-companion">
+      <header>
+        <div>
+          <h3>Сопроводительный текст</h3>
+          <p>После разговора система сначала читает Bitrix по этой сделке, затем решает, нужен ли анализ, и готовит короткое сообщение клиенту.</p>
+        </div>
+        <button className="dc-button primary" disabled={running} onClick={() => onGenerate(Boolean(message))}>
+          {message ? 'Сформировать снова' : 'Сформировать сопроводительный текст'}
+        </button>
+      </header>
+      <p className="summary">Последний контакт: {companionContactLabel(lastContact)}</p>
+      {running ? <ManagerJobProgress job={job || { status: 'running', detail: 'Обновляем данные из Bitrix', percent: 12 }} label="Сопроводительный текст" /> : null}
+      {error && error !== 'Нет данных' ? <p className="dc-manager-error">{error}</p> : null}
+      {message ? (
+        <>
+          {understood.length ? <div className="understood"><small>Что система поняла</small><ul>{understood.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+          <pre>{message}</pre>
+          <button type="button" className="dc-button" onClick={() => onCopy(message)}>Скопировать</button>
+        </>
+      ) : !running ? <p className="empty">{missing ? 'Нет данных' : 'Нажмите кнопку: сначала обновим Bitrix по этой сделке, потом решим, нужен ли анализ. Пока ничего не генерируется.'}</p> : null}
+    </section>
+  )
 }
 
 function ManagerJobProgress({ job, label }: { job: Pick<ManagerSituationJob, 'status' | 'detail' | 'percent' | 'error'>; label: string }) {
