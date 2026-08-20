@@ -379,6 +379,18 @@ def can_view_job(job: dict[str, Any], user: dict[str, Any]) -> bool:
     return True
 
 
+_ACTIVE_AUTOMATIC_ANALYSIS_STAGES = frozenset(
+    {
+        "crm_context",
+        "audio_download",
+        "transcription",
+        "llm_analysis",
+        "validation",
+        "report",
+    }
+)
+
+
 def scoped_automatic_analysis_items(
     items: list[dict[str, Any]],
     user: dict[str, Any],
@@ -394,6 +406,29 @@ def scoped_automatic_analysis_items(
         if deal_access(user, deal).can_open:
             visible.append(item)
     return visible
+
+
+def _current_automatic_analysis_payload(
+    run: dict[str, Any],
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if str(run.get("status") or "") != "running":
+        return None
+    active = [
+        item
+        for item in items
+        if str(item.get("stage") or "") in _ACTIVE_AUTOMATIC_ANALYSIS_STAGES
+    ]
+    if not active:
+        return None
+    chosen = max(active, key=lambda item: str(item.get("updated_at") or ""))
+    entity_id = str(chosen.get("entity_id") or "").strip()
+    if not entity_id:
+        return None
+    deal = get_deal(entity_id)
+    title = str((deal or {}).get("title") or "").strip() or f"Сделка {entity_id}"
+    stage = str(chosen.get("stage") or "").strip() or None
+    return {"title": title, "stage": stage}
 
 
 def automatic_analysis_latest_payload(
@@ -430,6 +465,7 @@ def automatic_analysis_latest_payload(
         "mini": mini,
         "reports_published": published,
         "current_stage": run.get("current_stage"),
+        "current": _current_automatic_analysis_payload(run, items),
         "started_at": run.get("started_at"),
         "updated_at": run.get("updated_at"),
         "finished_at": run.get("finished_at"),

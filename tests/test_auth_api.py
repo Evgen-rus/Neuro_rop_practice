@@ -379,10 +379,97 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
         self.assertEqual(payload["mini"], 0)
         self.assertEqual(payload["succeeded"], 1)
         self.assertEqual(payload["reports_published"], 1)
+        self.assertIsNone(payload["current"])
         dumped = json.dumps(payload)
         self.assertNotIn("entity_id", dumped)
         self.assertNotIn("101", dumped)
         self.assertNotIn("Deal 101", dumped)
+
+    def test_running_payload_shows_scoped_current_deal_without_foreign_ids(self) -> None:
+        manager = _user("manager", manager_id="10", user_id=10)
+        run = {
+            "business_date": "2026-08-20",
+            "status": "running",
+            "current_stage": "llm_analysis",
+            "started_at": "2026-08-20T18:00:00+03:00",
+            "updated_at": "2026-08-20T18:08:00+03:00",
+            "finished_at": None,
+        }
+        items = [
+            {
+                "entity_id": "101",
+                "stage": "done",
+                "decision_status": "skip",
+                "publication_status": "not_applicable",
+                "updated_at": "2026-08-20T18:01:00+03:00",
+            },
+            {
+                "entity_id": "202",
+                "stage": "llm_analysis",
+                "decision_status": None,
+                "publication_status": "pending",
+                "updated_at": "2026-08-20T18:08:00+03:00",
+            },
+            {
+                "entity_id": "303",
+                "stage": "transcription",
+                "decision_status": None,
+                "publication_status": "pending",
+                "updated_at": "2026-08-20T18:07:00+03:00",
+            },
+        ]
+        with patch.object(
+            access,
+            "get_deal",
+            side_effect=lambda deal_id, **_kwargs: _deal(str(deal_id), "10" if str(deal_id) in {"101", "303"} else "77"),
+        ):
+            visible = access.scoped_automatic_analysis_items(items, manager)
+            payload = access.automatic_analysis_latest_payload(run, visible)
+        self.assertEqual(payload["total"], 2)
+        self.assertEqual(payload["current"], {"title": "Deal 303", "stage": "transcription"})
+        dumped = json.dumps(payload)
+        self.assertNotIn("entity_id", dumped)
+        self.assertNotIn("Deal 202", dumped)
+        self.assertNotIn("\"202\"", dumped)
+
+    def test_running_payload_hides_current_when_active_deal_is_out_of_scope(self) -> None:
+        manager = _user("manager", manager_id="10", user_id=10)
+        run = {
+            "business_date": "2026-08-20",
+            "status": "running",
+            "current_stage": "llm_analysis",
+            "started_at": "2026-08-20T18:00:00+03:00",
+            "updated_at": "2026-08-20T18:08:00+03:00",
+            "finished_at": None,
+        }
+        items = [
+            {
+                "entity_id": "101",
+                "stage": "done",
+                "decision_status": "skip",
+                "publication_status": "not_applicable",
+                "updated_at": "2026-08-20T18:01:00+03:00",
+            },
+            {
+                "entity_id": "202",
+                "stage": "llm_analysis",
+                "decision_status": None,
+                "publication_status": "pending",
+                "updated_at": "2026-08-20T18:08:00+03:00",
+            },
+        ]
+        with patch.object(
+            access,
+            "get_deal",
+            side_effect=lambda deal_id, **_kwargs: _deal(str(deal_id), "10" if str(deal_id) == "101" else "77"),
+        ):
+            visible = access.scoped_automatic_analysis_items(items, manager)
+            payload = access.automatic_analysis_latest_payload(run, visible)
+        self.assertEqual(payload["total"], 1)
+        self.assertIsNone(payload["current"])
+        dumped = json.dumps(payload)
+        self.assertNotIn("Deal 202", dumped)
+        self.assertNotIn("\"202\"", dumped)
 
     def test_latest_endpoint_requires_authentication(self) -> None:
         from fastapi.testclient import TestClient

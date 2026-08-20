@@ -4,6 +4,7 @@ import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
   AUTOMATIC_ANALYSIS_RUNNING_POLL_MS,
   automaticAnalysisCountersText,
+  automaticAnalysisCurrentText,
   automaticAnalysisPollInterval,
   automaticAnalysisStageLabel,
   automaticAnalysisStatusLabel,
@@ -22,6 +23,33 @@ test('maps known statuses and stages without exposing backend logs', () => {
   assert.equal(automaticAnalysisStatusLabel('interrupted'), 'Автоматический пакет прерван')
   assert.equal(automaticAnalysisStageLabel('llm_analysis'), 'Анализ')
   assert.equal(automaticAnalysisStageLabel(null), null)
+})
+
+test('shows a short current-deal line only while the packet is running', () => {
+  assert.equal(
+    automaticAnalysisCurrentText({
+      status: 'running',
+      current: { title: 'ООО Ромашка', stage: 'llm_analysis' },
+      current_stage: 'llm_analysis',
+    }),
+    'сейчас: ООО Ромашка · Анализ',
+  )
+  assert.equal(
+    automaticAnalysisCurrentText({
+      status: 'done',
+      current: { title: 'ООО Ромашка', stage: 'done' },
+      current_stage: 'done',
+    }),
+    null,
+  )
+  assert.equal(
+    automaticAnalysisCurrentText({
+      status: 'running',
+      current: null,
+      current_stage: 'llm_analysis',
+    }),
+    null,
+  )
 })
 
 test('renders counters from the safe aggregate', () => {

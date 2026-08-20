@@ -2056,6 +2056,7 @@ export type AutomaticAnalysisLatest = {
   mini: number
   reports_published: number
   current_stage: string | null
+  current?: { title: string; stage: string | null } | null
   started_at: string | null
   updated_at: string | null
   finished_at: string | null

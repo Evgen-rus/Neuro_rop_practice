@@ -71,6 +71,7 @@ import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './da
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
   automaticAnalysisCountersText,
+  automaticAnalysisCurrentText,
   automaticAnalysisPollInterval,
   automaticAnalysisStageLabel,
   automaticAnalysisStatusLabel,
@@ -485,13 +486,15 @@ function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: (
   }, [onReportsPublished])
 
   if (!snapshot) return null
-  const stage = automaticAnalysisStageLabel(snapshot.current_stage)
+  const current = automaticAnalysisCurrentText(snapshot)
+  const stage = current ? null : automaticAnalysisStageLabel(snapshot.current_stage)
   const updated = snapshot.updated_at || snapshot.started_at
   return (
     <div className={`dc-auto-analysis ${snapshot.status}`} role="status">
       {snapshot.status === 'running' ? <span className="dc-spinner" /> : null}
       <div>
         <strong>{automaticAnalysisStatusLabel(snapshot.status)}</strong>
+        {current ? <span className="dc-auto-analysis-current">{current}</span> : null}
         <small>
           {snapshot.business_date ? `${snapshot.business_date} · ` : ''}
           {automaticAnalysisCountersText(snapshot)}

@@ -673,6 +673,15 @@ textarea {
   font-size: 13px;
 }
 
+.dc-auto-analysis-current {
+  color: var(--dc-text);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dc-auto-analysis small {
   color: var(--dc-muted);
   font-size: 12px;
@@ -3488,6 +3497,7 @@ textarea {
     align-items: flex-start;
   }
 
+  .dc-auto-analysis-current,
   .dc-auto-analysis small {
     white-space: normal;
   }

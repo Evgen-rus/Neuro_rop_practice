@@ -9,6 +9,11 @@ export type AutomaticAnalysisStatus =
   | 'skipped_locked'
   | string
 
+export type AutomaticAnalysisCurrent = {
+  title: string
+  stage: string | null
+}
+
 export type AutomaticAnalysisLatest = {
   business_date: string | null
   status: AutomaticAnalysisStatus
@@ -21,6 +26,7 @@ export type AutomaticAnalysisLatest = {
   mini: number
   reports_published: number
   current_stage: string | null
+  current?: AutomaticAnalysisCurrent | null
   started_at: string | null
   updated_at: string | null
   finished_at: string | null
@@ -66,6 +72,16 @@ export function automaticAnalysisStageLabel(stage: string | null | undefined): s
   const key = String(stage || '').trim()
   if (!key) return null
   return STAGE_LABELS[key] || key
+}
+
+export function automaticAnalysisCurrentText(
+  snapshot: Pick<AutomaticAnalysisLatest, 'status' | 'current' | 'current_stage'>,
+): string | null {
+  if (snapshot.status !== 'running') return null
+  const title = String(snapshot.current?.title || '').trim()
+  if (!title) return null
+  const stage = automaticAnalysisStageLabel(snapshot.current?.stage || snapshot.current_stage)
+  return stage ? `сейчас: ${title} · ${stage}` : `сейчас: ${title}`
 }
 
 export function automaticAnalysisCountersText(snapshot: Pick<
