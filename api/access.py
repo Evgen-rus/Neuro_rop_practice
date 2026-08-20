@@ -43,6 +43,7 @@ class DealAccess:
     read_only: bool
     can_open: bool
     can_edit: bool
+    can_run_analysis: bool
     can_run_paid_ai: bool
 
     @property
@@ -103,6 +104,7 @@ def deal_access(user: dict[str, Any], deal: dict[str, Any]) -> DealAccess:
     else:
         can_open = can_edit = is_own
         can_run_paid_ai = is_own
+    can_run_analysis = can_open
     return DealAccess(
         user=user,
         deal=deal,
@@ -111,6 +113,7 @@ def deal_access(user: dict[str, Any], deal: dict[str, Any]) -> DealAccess:
         read_only=not can_edit,
         can_open=can_open,
         can_edit=can_edit,
+        can_run_analysis=can_run_analysis,
         can_run_paid_ai=can_run_paid_ai,
     )
 
@@ -126,6 +129,7 @@ def deal_flags(access: DealAccess) -> dict[str, Any]:
         "read_only": access.read_only,
         "can_open": access.can_open,
         "can_edit": access.can_edit,
+        "can_run_analysis": access.can_run_analysis,
         "can_run_paid_ai": access.can_run_paid_ai,
     }
 

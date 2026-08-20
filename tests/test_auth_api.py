@@ -10,6 +10,7 @@ from unittest.mock import patch
 from fastapi import HTTPException, Request, Response
 
 import api.access as access
+import api.app as app_api
 import api.auth as auth
 
 
@@ -84,9 +85,11 @@ class DealAuthorizationTests(unittest.TestCase):
         self.assertTrue(own_access.is_own)
         self.assertTrue(own_access.can_open)
         self.assertTrue(own_access.can_edit)
+        self.assertTrue(own_access.can_run_analysis)
         self.assertTrue(own_access.can_run_paid_ai)
         self.assertFalse(foreign_access.is_own)
         self.assertFalse(foreign_access.can_open)
+        self.assertFalse(foreign_access.can_run_analysis)
         self.assertTrue(foreign_access.read_only)
         self.assertFalse(foreign_access.can_run_paid_ai)
 
@@ -97,6 +100,7 @@ class DealAuthorizationTests(unittest.TestCase):
             "read_only",
             "can_open",
             "can_edit",
+            "can_run_analysis",
             "can_run_paid_ai",
         }
         self.assertEqual(set(projected), expected)
@@ -125,7 +129,7 @@ class DealAuthorizationTests(unittest.TestCase):
         self.assertEqual(projected["scope"]["initial_deal_ids"], ["101"])
         self.assertEqual(projected["scope"]["manager_ids"], ["10"])
 
-    def test_rop_is_limited_to_configured_team_and_has_no_paid_ai(self) -> None:
+    def test_rop_can_run_analysis_only_for_configured_team(self) -> None:
         rop = _user("rop", user_id=2)
         team_deal = _deal("101", "10")
         foreign_deal = _deal("202", "77")
@@ -140,9 +144,24 @@ class DealAuthorizationTests(unittest.TestCase):
 
         self.assertTrue(team.can_open)
         self.assertTrue(team.can_edit)
+        self.assertTrue(team.can_run_analysis)
         self.assertFalse(team.can_run_paid_ai)
         self.assertFalse(foreign.can_open)
+        self.assertFalse(foreign.can_run_analysis)
         self.assertTrue(foreign.read_only)
+
+    def test_rop_paid_analysis_scope_accepts_team_deal_but_not_lead(self) -> None:
+        rop = _user("rop", user_id=2)
+        with patch.object(app_api, "auth_current_user", return_value=rop), \
+             patch.object(app_api, "require_deal") as require:
+            result = app_api._require_analyze_scope("deal", ["101"], paid=True)
+        self.assertEqual(result, rop)
+        require.assert_called_once_with("101", user=rop, action="open")
+
+        with patch.object(app_api, "auth_current_user", return_value=rop):
+            with self.assertRaises(HTTPException) as error:
+                app_api._require_analyze_scope("lead", ["501"], paid=True)
+        self.assertEqual(error.exception.status_code, 403)
 
     def test_job_visibility_follows_deal_scope(self) -> None:
         admin = _user("admin")

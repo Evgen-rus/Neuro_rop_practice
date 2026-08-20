@@ -698,6 +698,7 @@ export type DealControlDeal = {
   read_only: boolean
   can_open: boolean
   can_edit: boolean
+  can_run_analysis: boolean
   can_run_paid_ai: boolean
   stage_id?: string | null
   stage_name?: string | null
@@ -1344,6 +1345,7 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
       read_only: deal.read_only === true,
       can_open: deal.can_open === true,
       can_edit: deal.can_edit === true,
+      can_run_analysis: deal.can_run_analysis === true,
       can_run_paid_ai: deal.can_run_paid_ai === true,
       bitrix_tasks: foreignProjection ? [] : (Array.isArray(deal.bitrix_tasks) ? deal.bitrix_tasks : []),
       communications_today: foreignProjection ? emptyCommunications : (deal.communications_today || emptyCommunications),

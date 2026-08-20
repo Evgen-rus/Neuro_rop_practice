@@ -851,8 +851,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }
 
   async function runAnalyzeDeal(deal: DealControlDeal, confirmPaid = false) {
-    if (!deal.can_run_paid_ai) {
-      setError('AI-действие недоступно для этой роли.')
+    if (!deal.can_run_analysis) {
+      setError('Анализ недоступен для этой сделки.')
       return
     }
     if (analysisJob && ['queued', 'running'].includes(analysisJob.status)) return

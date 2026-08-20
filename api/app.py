@@ -567,8 +567,6 @@ def _require_analyze_scope(entity_type: str, ids: list[str], *, paid: bool) -> d
     if role == "admin":
         return user
     if role == "rop":
-        if paid:
-            raise HTTPException(status_code=403, detail="Paid analysis is not available for this role")
         if entity_type != "deal":
             raise HTTPException(status_code=403, detail="ROP analysis is limited to team deals")
         for entity_id in ids:
