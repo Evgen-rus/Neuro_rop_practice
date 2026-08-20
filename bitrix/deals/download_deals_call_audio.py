@@ -19,7 +19,7 @@ import argparse
 import mimetypes
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -43,6 +43,10 @@ DEFAULT_DEAL_IDS = ["18507", "18493"]
 DEFAULT_RAW_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "raw"
 DEFAULT_AUDIO_DIR = BASE_DIR / "reports" / "bitrix_customer_path" / "audio"
 AUDIO_FILE_DISCOVERY_WINDOW = timedelta(days=5)
+EVENING_RECHECK_START = time(17, 30)
+FIRST_MORNING_RECHECK_END = time(8, 30)
+RECORDING_DURATION_RATIO = 0.80
+RECORDING_DURATION_TOLERANCE_SECONDS = 5.0
 
 logger = get_logger(__file__)
 
@@ -159,6 +163,105 @@ def file_download_url(client: BitrixReadOnlyClient, file_id: str) -> tuple[str |
     return None, response
 
 
+def disk_file_size(response: dict[str, Any] | None) -> int | None:
+    if not isinstance(response, dict) or not response.get("ok"):
+        return None
+    result = response.get("response", {}).get("result") or {}
+    if not isinstance(result, dict):
+        return None
+    for key in ("SIZE", "FILE_SIZE", "size", "fileSize"):
+        value = result.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        return parsed if parsed >= 0 else None
+    return None
+
+
+def activity_duration_seconds(activity: dict[str, Any]) -> float | None:
+    started = parse_bitrix_datetime(activity.get("START_TIME") or activity.get("CREATED"))
+    ended = parse_bitrix_datetime(activity.get("END_TIME"))
+    if started is None or ended is None:
+        return None
+    duration = (ended - started).total_seconds()
+    return round(duration, 1) if duration >= 0 else None
+
+
+def previous_workday(day: date) -> date:
+    candidate = day - timedelta(days=1)
+    while candidate.weekday() > 4:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def should_recheck_recording(activity: dict[str, Any], *, now: datetime | None = None) -> bool:
+    started = parse_bitrix_datetime(activity.get("START_TIME") or activity.get("CREATED"))
+    if started is None:
+        return False
+    current = now or datetime.now(MSK_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MSK_TZ)
+    current = current.astimezone(MSK_TZ)
+    started = started.astimezone(MSK_TZ)
+    if started.date() == current.date():
+        return True
+    return (
+        started.date() == previous_workday(current.date())
+        and started.time() >= EVENING_RECHECK_START
+        and current.time() <= FIRST_MORNING_RECHECK_END
+    )
+
+
+def recording_readiness(
+    download: dict[str, Any],
+    activity: dict[str, Any],
+    *,
+    previous: dict[str, Any] | None = None,
+    remote_size_bytes: int | None = None,
+    size_changed: bool = False,
+) -> dict[str, Any]:
+    row = dict(download)
+    local_duration = row.get("duration_seconds")
+    expected_duration = activity_duration_seconds(activity)
+    previous_stable = int((previous or {}).get("recording_stable_observations") or 0)
+    previous_remote = (previous or {}).get("remote_size_bytes")
+    try:
+        previous_remote_size = int(previous_remote) if previous_remote not in (None, "") else None
+    except (TypeError, ValueError):
+        previous_remote_size = None
+    if remote_size_bytes is None:
+        stable_observations = previous_stable
+    elif size_changed or previous_remote_size != remote_size_bytes:
+        stable_observations = 1
+    else:
+        stable_observations = previous_stable + 1
+    row["remote_size_bytes"] = remote_size_bytes
+    row["expected_call_duration_seconds"] = expected_duration
+    row["recording_stable_observations"] = stable_observations
+
+    materially_incomplete = False
+    if local_duration is not None and expected_duration is not None and expected_duration > 0:
+        tolerance = max(RECORDING_DURATION_TOLERANCE_SECONDS, expected_duration * (1.0 - RECORDING_DURATION_RATIO))
+        materially_incomplete = float(local_duration) + tolerance < expected_duration
+
+    if materially_incomplete:
+        row["recording_ready_for_transcription"] = False
+        row["recording_stability_status"] = "duration_incomplete"
+    elif expected_duration is not None and local_duration is not None:
+        row["recording_ready_for_transcription"] = True
+        row["recording_stability_status"] = "duration_matches_activity"
+    elif stable_observations >= 2:
+        row["recording_ready_for_transcription"] = True
+        row["recording_stability_status"] = "size_stable_twice"
+    else:
+        row["recording_ready_for_transcription"] = False
+        row["recording_stability_status"] = "awaiting_second_size_observation"
+    return row
+
+
 def deterministic_output_path(output_dir: Path, response: requests.Response, fallback_name: str) -> Path:
     filename = filename_from_response(response, fallback_name)
     path = output_dir / filename
@@ -174,6 +277,8 @@ def try_download_url(
     output_dir: Path,
     fallback_name: str,
     retry_callback: Any = None,
+    *,
+    replace_existing: bool = False,
 ) -> dict[str, Any]:
     def download_once() -> dict[str, Any]:
         response = requests.get(url, stream=True, timeout=60, allow_redirects=True)
@@ -203,7 +308,7 @@ def try_download_url(
 
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = deterministic_output_path(output_dir, response, fallback_name)
-            if output_path.exists():
+            if output_path.exists() and not replace_existing:
                 return enrich_download_with_duration(
                     {
                         "ok": True,
@@ -237,7 +342,7 @@ def try_download_url(
             return enrich_download_with_duration(
                 {
                     "ok": True,
-                    "status": "downloaded",
+                    "status": "redownloaded_grown_file" if replace_existing else "downloaded",
                     "http_status": response.status_code,
                     "content_type": content_type,
                     "url": url,
@@ -336,6 +441,10 @@ def record_transcribed_and_purged(
                 "status": "transcribed_and_purged",
                 "transcribed_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
                 "source_audio_path": str(audio_path),
+                "source_file_id": str(download.get("file_id") or ""),
+                "source_size_bytes": download.get("size_bytes"),
+                "source_remote_size_bytes": download.get("remote_size_bytes") or download.get("size_bytes"),
+                "source_duration_seconds": download.get("duration_seconds"),
                 "transcript_txt_path": transcript_paths["txt_path"],
                 "transcript_md_path": transcript_paths["md_path"],
                 "transcript_json_path": transcript_paths["json_path"],
@@ -352,6 +461,95 @@ def mark_existing_downloads(downloads: list[dict[str, Any]]) -> list[dict[str, A
         row["status"] = "already_downloaded"
         rows.append(row)
     return rows
+
+
+def _existing_download_for_file(downloads: list[dict[str, Any]], file_id: str) -> dict[str, Any] | None:
+    for item in downloads:
+        if str(item.get("file_id") or "") == str(file_id):
+            return item
+    return downloads[0] if len(downloads) == 1 else None
+
+
+def _transcribed_source_growth(
+    client: BitrixReadOnlyClient,
+    activity: dict[str, Any],
+    transcription: dict[str, Any],
+) -> tuple[bool, str | None, str | None, dict[str, Any] | None, int | None]:
+    if not should_recheck_recording(activity):
+        return False, None, None, None, None
+    source_size = transcription.get("source_remote_size_bytes") or transcription.get("source_size_bytes")
+    source_file_id = str(transcription.get("source_file_id") or "")
+    if source_size in (None, "") or not source_file_id:
+        return False, None, None, None, None
+    try:
+        previous_size = int(source_size)
+    except (TypeError, ValueError):
+        return False, None, None, None, None
+    download_url, disk_response = file_download_url(client, source_file_id)
+    remote_size = disk_file_size(disk_response)
+    grew = remote_size is not None and remote_size > previous_size
+    return grew, source_file_id, download_url, disk_response, remote_size
+
+
+def _refresh_existing_downloads(
+    client: BitrixReadOnlyClient,
+    deal_audio_dir: Path,
+    activity: dict[str, Any],
+    existing_downloads: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    if not should_recheck_recording(activity):
+        return mark_existing_downloads(existing_downloads), False
+
+    refreshed: list[dict[str, Any]] = []
+    any_growth = False
+    files = [item for item in (activity.get("FILES") or []) if isinstance(item, dict)]
+    file_ids = [str(item.get("id") or item.get("ID") or "") for item in files]
+    if not any(file_ids):
+        file_ids = [str(item.get("file_id") or "") for item in existing_downloads]
+
+    for file_id in file_ids:
+        if not file_id:
+            continue
+        previous = _existing_download_for_file(existing_downloads, file_id)
+        if previous is None:
+            continue
+        download_url, disk_response = file_download_url(client, file_id)
+        remote_size = disk_file_size(disk_response)
+        local_path = Path(str(previous.get("local_path") or ""))
+        local_size = local_path.stat().st_size if local_path.exists() else 0
+        grew = remote_size is not None and remote_size > local_size
+        if grew and download_url:
+            try:
+                result = try_download_url(
+                    str(download_url),
+                    deal_audio_dir,
+                    f"activity_{activity.get('ID') or ''}_file_{file_id}",
+                    client.retry_callback,
+                    replace_existing=True,
+                )
+            except requests.RequestException as error:
+                result = dict(previous)
+                result["status"] = "refresh_download_request_error"
+                result["refresh_error_type"] = type(error).__name__
+            any_growth = any_growth or bool(
+                result.get("ok") and result.get("status") == "redownloaded_grown_file"
+            )
+        else:
+            result = dict(previous)
+            result["status"] = "already_downloaded"
+            result["size_bytes"] = local_size
+        result["file_id"] = file_id
+        result["source"] = "disk.file.get"
+        result = recording_readiness(
+            result,
+            activity,
+            previous=previous,
+            remote_size_bytes=remote_size,
+            size_changed=grew,
+        )
+        refreshed.append(result)
+
+    return (refreshed or mark_existing_downloads(existing_downloads)), any_growth
 
 
 def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | None = None) -> bool:
@@ -387,22 +585,36 @@ def process_call(
         "owner_id": activity.get("_owner_id"),
         "subject": activity.get("SUBJECT"),
         "start_time": activity.get("START_TIME") or activity.get("CREATED"),
+        "end_time": activity.get("END_TIME"),
         "origin_id": activity.get("ORIGIN_ID"),
         "files": files,
         "downloads": [],
     }
 
+    stale_transcription: dict[str, Any] | None = None
+    forced_file: tuple[str, str, dict[str, Any] | None, int | None] | None = None
     if missing_only and existing_transcription:
-        row["transcription"] = existing_transcription
-        row["status"] = "transcribed_and_purged"
-        return row
+        grew, file_id, download_url, disk_response, remote_size = _transcribed_source_growth(
+            client,
+            activity,
+            existing_transcription,
+        )
+        if not grew or not file_id or not download_url:
+            row["transcription"] = existing_transcription
+            row["status"] = "transcribed_and_purged"
+            return row
+        stale_transcription = dict(existing_transcription)
+        stale_transcription["status"] = "stale_source_grew"
+        stale_transcription["replacement_remote_size_bytes"] = remote_size
+        row["transcription"] = stale_transcription
+        forced_file = (file_id, download_url, disk_response, remote_size)
 
     if missing_only and existing_downloads:
-        row["downloads"] = mark_existing_downloads(existing_downloads)
-        row["status"] = "already_downloaded"
+        row["downloads"], grew = _refresh_existing_downloads(client, deal_audio_dir, activity, existing_downloads)
+        row["status"] = "redownloaded_grown_file" if grew else "already_downloaded"
         return row
 
-    if not files:
+    if not files and forced_file is None:
         if audio_file_discovery_expired(activity):
             row["status"] = "no_files_check_expired"
             row["audio_file_discovery_window_days"] = AUDIO_FILE_DISCOVERY_WINDOW.days
@@ -411,7 +623,11 @@ def process_call(
         return row
 
     any_downloaded = False
-    for file_info in files:
+    files_to_process = files
+    if forced_file is not None:
+        files_to_process = [{"id": forced_file[0]}]
+
+    for file_info in files_to_process:
         if not isinstance(file_info, dict):
             row["downloads"].append({"ok": False, "status": "invalid_crm_activity_file"})
             continue
@@ -427,7 +643,11 @@ def process_call(
             )
             continue
 
-        download_url, disk_response = file_download_url(client, file_id)
+        if forced_file is not None and file_id == forced_file[0]:
+            download_url, disk_response, remote_size = forced_file[1], forced_file[2], forced_file[3]
+        else:
+            download_url, disk_response = file_download_url(client, file_id)
+            remote_size = disk_file_size(disk_response)
         if not download_url:
             row["downloads"].append(
                 {
@@ -446,6 +666,13 @@ def process_call(
 
         result["file_id"] = file_id
         result["source"] = "disk.file.get"
+        if result.get("ok"):
+            result = recording_readiness(
+                result,
+                activity,
+                remote_size_bytes=remote_size,
+                size_changed=True,
+            )
 
         any_downloaded = any_downloaded or bool(result.get("ok"))
         row["downloads"].append(result)
@@ -453,7 +680,7 @@ def process_call(
     if any_downloaded and all(item.get("status") == "already_downloaded" for item in row["downloads"] if item.get("ok")):
         row["status"] = "already_downloaded"
     elif any_downloaded:
-        row["status"] = "downloaded"
+        row["status"] = "recording_refreshed_transcript_stale" if stale_transcription else "downloaded"
     else:
         row["status"] = "not_downloaded"
     return row

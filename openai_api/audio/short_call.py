@@ -68,12 +68,23 @@ def enrich_manifest_calls(manifest: dict[str, Any]) -> dict[str, Any]:
             for item in (row.get("downloads") or [])
         ]
         row["downloads"] = downloads
+        pending_stability = [
+            item
+            for item in downloads
+            if isinstance(item, dict)
+            and item.get("ok")
+            and item.get("recording_ready_for_transcription") is False
+        ]
         short_hits = [
             item
             for item in downloads
             if isinstance(item, dict) and item.get("is_short_no_answer")
         ]
-        if short_hits and all(
+        if pending_stability:
+            row["call_quality"] = "recording_incomplete"
+            row["skip_transcribe"] = True
+            row["recording_stability_status"] = pending_stability[0].get("recording_stability_status")
+        elif short_hits and all(
             isinstance(item, dict) and item.get("is_short_no_answer")
             for item in downloads
             if isinstance(item, dict) and item.get("ok")

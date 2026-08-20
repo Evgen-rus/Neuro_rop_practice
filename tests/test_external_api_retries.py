@@ -75,6 +75,27 @@ class ExternalApiRetryTests(unittest.TestCase):
             self.assertEqual(list(output.glob("*.part")), [])
             self.assertEqual(request.call_count, 2)
 
+    def test_audio_growth_atomically_replaces_existing_file(self) -> None:
+        response = FakeResponse(200, chunks=[b"complete-grown-audio"])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            existing = output / "call.mp3"
+            existing.write_bytes(b"partial")
+            with (
+                patch("bitrix.deals.download_deals_call_audio.requests.get", return_value=response),
+                patch("bitrix.deals.download_deals_call_audio.enrich_download_with_duration", side_effect=lambda value: value),
+            ):
+                result = try_download_url(
+                    "https://example.test/call.mp3",
+                    output,
+                    "call",
+                    replace_existing=True,
+                )
+
+            self.assertEqual(result["status"], "redownloaded_grown_file")
+            self.assertEqual(existing.read_bytes(), b"complete-grown-audio")
+            self.assertEqual(list(output.glob("*.part")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

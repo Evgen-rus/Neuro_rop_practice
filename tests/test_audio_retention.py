@@ -11,22 +11,28 @@ from bitrix.deals.download_deals_call_audio import (
     audio_file_discovery_expired,
     existing_transcriptions_by_activity,
     process_call,
+    recording_readiness,
     record_transcribed_and_purged,
+    should_recheck_recording,
 )
 from bitrix.leads.download_leads_call_audio import build_manifest as build_lead_audio_manifest
 from setup import MSK_TZ
 
 
 class RecordingClient:
-    def __init__(self) -> None:
+    def __init__(self, *, size: int | None = None) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.retry_callback = None
+        self.size = size
 
     def safe_call(self, method: str, params: dict) -> dict:
         self.calls.append((method, params))
+        result = {"DOWNLOAD_URL": "https://example.invalid/audio.mp3"}
+        if self.size is not None:
+            result["SIZE"] = str(self.size)
         return {
             "ok": True,
-            "response": {"result": {"DOWNLOAD_URL": "https://example.invalid/audio.mp3"}},
+            "response": {"result": result},
         }
 
 
@@ -45,7 +51,17 @@ class AudioRetentionTests(unittest.TestCase):
                         "calls": [
                             {
                                 "activity_id": "42",
-                                "downloads": [{"ok": True, "local_path": str(audio_path), "status": "downloaded"}],
+                                "downloads": [
+                                    {
+                                        "ok": True,
+                                        "file_id": "777",
+                                        "local_path": str(audio_path),
+                                        "status": "downloaded",
+                                        "size_bytes": 5,
+                                        "remote_size_bytes": 5,
+                                        "duration_seconds": 25.0,
+                                    }
+                                ],
                             }
                         ]
                     },
@@ -65,6 +81,9 @@ class AudioRetentionTests(unittest.TestCase):
             self.assertTrue(marked)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             transcription = existing_transcriptions_by_activity(manifest)["42"]
+            self.assertEqual(transcription["source_file_id"], "777")
+            self.assertEqual(transcription["source_remote_size_bytes"], 5)
+            self.assertEqual(transcription["source_duration_seconds"], 25.0)
             result = process_call(
                 client=None,
                 deal_audio_dir=root,
@@ -145,6 +164,134 @@ class AudioRetentionTests(unittest.TestCase):
             "activity_42_file_777",
             None,
         )
+
+    def test_recording_shorter_than_activity_waits_for_growth(self) -> None:
+        activity = {
+            "START_TIME": "2026-08-20T10:00:00+03:00",
+            "END_TIME": "2026-08-20T10:02:00+03:00",
+        }
+        result = recording_readiness(
+            {"ok": True, "duration_seconds": 25.0, "size_bytes": 50},
+            activity,
+            remote_size_bytes=50,
+            size_changed=True,
+        )
+
+        self.assertFalse(result["recording_ready_for_transcription"])
+        self.assertEqual(result["recording_stability_status"], "duration_incomplete")
+        self.assertEqual(result["expected_call_duration_seconds"], 120.0)
+
+    def test_unknown_call_duration_requires_two_equal_remote_size_observations(self) -> None:
+        activity = {"START_TIME": "2026-08-20T10:00:00+03:00"}
+        first = recording_readiness(
+            {"ok": True, "duration_seconds": 25.0, "size_bytes": 50},
+            activity,
+            remote_size_bytes=50,
+            size_changed=True,
+        )
+        second = recording_readiness(
+            first,
+            activity,
+            previous=first,
+            remote_size_bytes=50,
+            size_changed=False,
+        )
+
+        self.assertFalse(first["recording_ready_for_transcription"])
+        self.assertEqual(first["recording_stable_observations"], 1)
+        self.assertTrue(second["recording_ready_for_transcription"])
+        self.assertEqual(second["recording_stability_status"], "size_stable_twice")
+
+    def test_grown_recording_is_replaced_and_becomes_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio_path = root / "call.mp3"
+            audio_path.write_bytes(b"x" * 50)
+            previous = {
+                "ok": True,
+                "file_id": "777",
+                "local_path": str(audio_path),
+                "size_bytes": 50,
+                "remote_size_bytes": 50,
+                "duration_seconds": 25.0,
+                "recording_stable_observations": 1,
+            }
+            activity = {
+                "ID": "42",
+                "START_TIME": "2026-08-20T10:00:00+03:00",
+                "END_TIME": "2026-08-20T10:02:00+03:00",
+                "FILES": [{"id": "777"}],
+            }
+            refreshed = {
+                "ok": True,
+                "status": "redownloaded_grown_file",
+                "local_path": str(audio_path),
+                "size_bytes": 200,
+                "duration_seconds": 120.0,
+            }
+
+            with (
+                patch("bitrix.deals.download_deals_call_audio.should_recheck_recording", return_value=True),
+                patch("bitrix.deals.download_deals_call_audio.try_download_url", return_value=refreshed) as download,
+            ):
+                result = process_call(
+                    client=RecordingClient(size=200),
+                    deal_audio_dir=root,
+                    activity=activity,
+                    existing_downloads=[previous],
+                    missing_only=True,
+                )
+
+        self.assertEqual(result["status"], "redownloaded_grown_file")
+        self.assertTrue(result["downloads"][0]["recording_ready_for_transcription"])
+        self.assertEqual(result["downloads"][0]["duration_seconds"], 120.0)
+        self.assertTrue(download.call_args.kwargs["replace_existing"])
+
+    def test_transcribed_recording_growth_marks_transcript_stale(self) -> None:
+        activity = {
+            "ID": "42",
+            "START_TIME": "2026-08-20T10:00:00+03:00",
+            "END_TIME": "2026-08-20T10:02:00+03:00",
+            "FILES": [{"id": "777"}],
+        }
+        transcription = {
+            "status": "transcribed_and_purged",
+            "source_file_id": "777",
+            "source_remote_size_bytes": 50,
+        }
+        refreshed = {
+            "ok": True,
+            "status": "downloaded",
+            "local_path": "audio.mp3",
+            "size_bytes": 200,
+            "duration_seconds": 120.0,
+        }
+
+        with (
+            patch("bitrix.deals.download_deals_call_audio.should_recheck_recording", return_value=True),
+            patch("bitrix.deals.download_deals_call_audio.try_download_url", return_value=refreshed),
+        ):
+            result = process_call(
+                client=RecordingClient(size=200),
+                deal_audio_dir=Path("unused"),
+                activity=activity,
+                existing_transcription=transcription,
+                missing_only=True,
+            )
+
+        self.assertEqual(result["status"], "recording_refreshed_transcript_stale")
+        self.assertEqual(result["transcription"]["status"], "stale_source_grew")
+        self.assertTrue(result["downloads"][0]["recording_ready_for_transcription"])
+
+    def test_recheck_window_is_today_plus_first_morning_for_evening_call(self) -> None:
+        today = {"START_TIME": "2026-08-20T09:00:00+03:00"}
+        yesterday_morning = {"START_TIME": "2026-08-19T09:00:00+03:00"}
+        friday_evening = {"START_TIME": "2026-08-21T17:45:00+03:00"}
+
+        self.assertTrue(should_recheck_recording(today, now=datetime(2026, 8, 20, 12, 0, tzinfo=MSK_TZ)))
+        self.assertFalse(should_recheck_recording(yesterday_morning, now=datetime(2026, 8, 20, 8, 0, tzinfo=MSK_TZ)))
+        self.assertTrue(should_recheck_recording(friday_evening, now=datetime(2026, 8, 24, 8, 15, tzinfo=MSK_TZ)))
+        self.assertFalse(should_recheck_recording(friday_evening, now=datetime(2026, 8, 24, 9, 0, tzinfo=MSK_TZ)))
 
     def test_lead_manifest_uses_shared_no_files_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

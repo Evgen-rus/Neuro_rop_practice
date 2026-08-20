@@ -396,6 +396,27 @@ def manifest_path(entity_type: str, entity_id: str) -> Path:
     return workspace_dir(entity_type, entity_id) / "audio" / f"{entity_type}_{entity_id}_call_audio_manifest.json"
 
 
+def manifest_calls(entity_type: str, entity_id: str) -> list[dict[str, Any]]:
+    path = manifest_path(entity_type, entity_id)
+    if not path.exists():
+        return []
+    try:
+        payload = load_json(path)
+    except ValueError:
+        return []
+    return [item for item in (payload.get("calls") or []) if isinstance(item, dict)]
+
+
+def stale_transcript_activity_ids(entity_type: str, entity_id: str) -> set[str]:
+    return {
+        str(call.get("activity_id") or "")
+        for call in manifest_calls(entity_type, entity_id)
+        if isinstance(call.get("transcription"), dict)
+        and call["transcription"].get("status") == "stale_source_grew"
+        and call.get("activity_id")
+    }
+
+
 def existing_transcript_activity_ids(entity_type: str, entity_id: str) -> set[str]:
     transcripts_dir = workspace_dir(entity_type, entity_id) / "transcripts"
     ids: set[str] = set()
@@ -410,7 +431,7 @@ def existing_transcript_activity_ids(entity_type: str, entity_id: str) -> set[st
         activity_id = str(metadata.get("activity_id") or "")
         if activity_id:
             ids.add(activity_id)
-    return ids
+    return ids - stale_transcript_activity_ids(entity_type, entity_id)
 
 
 def manifest_audio_by_activity(entity_type: str, entity_id: str) -> dict[str, list[Path]]:
@@ -489,7 +510,7 @@ def short_no_answer_activity_ids(entity_type: str, entity_id: str) -> set[str]:
         activity_id = str(call.get("activity_id") or "")
         if not activity_id:
             continue
-        if call.get("skip_transcribe") or call.get("call_quality") == "short_no_answer":
+        if call.get("call_quality") == "short_no_answer":
             ids.add(activity_id)
             continue
         for item in call.get("downloads") or []:
@@ -501,17 +522,41 @@ def short_no_answer_activity_ids(entity_type: str, entity_id: str) -> set[str]:
     return ids
 
 
+def pending_recording_activity_ids(entity_type: str, entity_id: str) -> set[str]:
+    ids: set[str] = set()
+    for call in manifest_calls(entity_type, entity_id):
+        activity_id = str(call.get("activity_id") or "")
+        if not activity_id:
+            continue
+        if any(
+            isinstance(item, dict)
+            and item.get("ok")
+            and item.get("recording_ready_for_transcription") is False
+            for item in (call.get("downloads") or [])
+        ):
+            ids.add(activity_id)
+    return ids
+
+
 def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]:
     payload = diagnostic_payload(entity_type, entity_id)
     transcript_ids = existing_transcript_activity_ids(entity_type, entity_id)
     audio_paths = audio_by_activity(entity_type, entity_id)
     short_ids = short_no_answer_activity_ids(entity_type, entity_id)
+    pending_ids = pending_recording_activity_ids(entity_type, entity_id)
     rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
     for gap in payload.get("gaps") or []:
         if not isinstance(gap, dict):
             continue
         activity_id = str(gap.get("activity_id") or "")
         if not activity_id or activity_id in transcript_ids:
+            continue
+        if activity_id in pending_ids:
+            print(
+                f"Ожидание стабилизации записи activity_id={activity_id}: "
+                "аудиофайл короче CRM-звонка или размер ещё не подтверждён."
+            )
             continue
         if activity_id in short_ids:
             print(
@@ -532,6 +577,32 @@ def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]
             )
             continue
         rows.append({**gap, "audio_path": str(candidates[0])})
+        seen_ids.add(activity_id)
+
+    for call in manifest_calls(entity_type, entity_id):
+        activity_id = str(call.get("activity_id") or "")
+        transcription = call.get("transcription") if isinstance(call.get("transcription"), dict) else {}
+        if (
+            not activity_id
+            or activity_id in seen_ids
+            or transcription.get("status") != "stale_source_grew"
+            or activity_id in pending_ids
+        ):
+            continue
+        candidates = audio_paths.get(activity_id) or []
+        if not candidates:
+            continue
+        rows.append(
+            {
+                "activity_id": activity_id,
+                "date": call.get("start_time"),
+                "subject": call.get("subject"),
+                "source_entity_type": call.get("source"),
+                "source_entity_id": call.get("owner_id"),
+                "audio_path": str(candidates[0]),
+                "reason": "Исходный файл вырос после предыдущей транскрибации.",
+            }
+        )
     return rows
 
 

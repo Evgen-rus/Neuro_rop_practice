@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import subprocess
+import json
+import tempfile
 import unittest
 from dataclasses import asdict
+from pathlib import Path
 from unittest.mock import call, patch
 
 from api.jobs import AnalyzeOptions, JobState, _JOBS, _run_job
-from run_rop_assistant import WorkflowOptions, refresh_workspace_after_transcription, run_analysis
+from run_rop_assistant import WorkflowOptions, refresh_workspace_after_transcription, run_analysis, transcribable_gaps
 
 
 def workflow_options() -> WorkflowOptions:
@@ -26,6 +29,61 @@ def workflow_options() -> WorkflowOptions:
 
 
 class AnalysisBatchResilienceTests(unittest.TestCase):
+    def test_grown_source_makes_stale_transcript_transcribable_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entity_dir = root / "deal_42"
+            audio_dir = entity_dir / "audio"
+            transcript_dir = entity_dir / "transcripts"
+            diagnostics_dir = entity_dir / "diagnostics"
+            audio_dir.mkdir(parents=True)
+            transcript_dir.mkdir()
+            diagnostics_dir.mkdir()
+            audio_path = audio_dir / "activity_77.mp3"
+            audio_path.write_bytes(b"grown-audio")
+            transcript_path = transcript_dir / "call_77_transcript.json"
+            transcript_path.write_text(
+                json.dumps({"metadata": {"activity_id": "77"}, "text": "old"}),
+                encoding="utf-8",
+            )
+            (diagnostics_dir / "context_gaps.json").write_text(
+                json.dumps({"gaps": []}),
+                encoding="utf-8",
+            )
+            (audio_dir / "deal_42_call_audio_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "calls": [
+                            {
+                                "activity_id": "77",
+                                "source": "deal",
+                                "owner_id": "42",
+                                "start_time": "2026-08-20T10:00:00+03:00",
+                                "transcription": {"status": "stale_source_grew"},
+                                "downloads": [
+                                    {
+                                        "ok": True,
+                                        "local_path": str(audio_path),
+                                        "recording_ready_for_transcription": True,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch("run_rop_assistant.workspace_root", return_value=root),
+                patch("openai_api.audio.short_call.is_short_no_answer_audio", return_value=False),
+            ):
+                gaps = transcribable_gaps("deal", "42")
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["activity_id"], "77")
+        self.assertEqual(gaps[0]["audio_path"], str(audio_path))
+
     def test_deal_workspace_is_fully_refreshed_after_transcription(self) -> None:
         commands: list[tuple[list[str], str]] = []
 
