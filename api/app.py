@@ -322,6 +322,13 @@ class RecommendationEventRequest(BaseModel):
     occurrence_id: str | None = Field(default=None, max_length=96, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class QuickHelpOpenedRequest(BaseModel):
+    occurrence_id: str = Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9._:-]+$")
+    entrypoint: Literal["assistant_button"] = "assistant_button"
+    assistant_mode: Literal["push", "reanimator"] | None = None
+    active_quick_help_id: int | None = Field(default=None, ge=1)
+
+
 class DealContextLeverPriorityRequest(BaseModel):
     priority: Literal[1, 2, 3] | None = None
 
@@ -1199,6 +1206,30 @@ def deal_recommendation_event_create(
             event_type=f"recommendation_{body.event_type}",
             auth_user_id=int(user["id"]),
             occurrence_id=body.occurrence_id,
+        )
+        return {"ok": True, "event_id": int(event["id"])}
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/deals/{deal_id}/quick-help-opened")
+def deal_quick_help_opened_create(
+    deal_id: str,
+    body: QuickHelpOpenedRequest,
+) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    user = auth_current_user()
+    try:
+        event = storage.record_quick_help_opened_event(
+            DEFAULT_DB_PATH,
+            deal_id=str(deal_id),
+            auth_user_id=int(user["id"]),
+            occurrence_id=body.occurrence_id,
+            entrypoint=body.entrypoint,
+            assistant_mode=body.assistant_mode,
+            active_quick_help_id=body.active_quick_help_id,
         )
         return {"ok": True, "event_id": int(event["id"])}
     except PermissionError as error:

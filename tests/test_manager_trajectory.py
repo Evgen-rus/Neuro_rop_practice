@@ -81,6 +81,32 @@ class FakeBitrixClient:
                 "ID": "901", "ASSIGNED_BY_ID": "10", "STATUS_ID": "IN_PROCESS",
                 "DATE_MODIFY": "2026-08-16T19:46:00+03:00",
             }]}
+        if method == "crm.timeline.comment.list":
+            entity_id = str((payload.get("filter") or {}).get("ENTITY_ID") or "")
+            return {"ok": True, "items": [{
+                "ID": f"comment-{entity_id}", "AUTHOR_ID": "10", "COMMENT": "Текст комментария",
+                "CREATED": "2026-08-16T19:47:00+03:00",
+            }]}
+        if method == "crm.stagehistory.list":
+            entity_id = str((payload.get("filter") or {}).get("OWNER_ID") or "")
+            return {"ok": True, "items": [{
+                "ID": f"stage-{entity_id}", "OWNER_ID": entity_id,
+                "CREATED_TIME": "2026-08-16T19:48:00+03:00",
+                "STAGE_ID": self.stage if entity_id == "900" else "IN_PROCESS",
+                "CATEGORY_ID": "15" if entity_id == "900" else None,
+            }]}
+        if method == "task.ctasklogitem.list":
+            return {"ok": True, "items": []}
+        if method == "user.get":
+            return {"ok": True, "items": [{
+                "ID": "10", "NAME": "Иван", "LAST_NAME": "Петров",
+                "IS_ONLINE": "Y", "LAST_ACTIVITY_DATE": "2026-08-16T19:50:00+03:00",
+            }]}
+        raise AssertionError(method)
+
+    def safe_call(self, method, payload):
+        if method == "task.ctasklogitem.list":
+            return {"ok": True, "response": {"result": []}}
         raise AssertionError(method)
 
 
@@ -287,6 +313,9 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["counts"]["activities"], 2)
+        self.assertEqual(result["counts"]["timeline_comments"], 2)
+        self.assertEqual(result["counts"]["stage_history"], 2)
+        self.assertEqual(result["counts"]["presence_snapshots"], 1)
         collect_manager_trajectory(
             FakeBitrixClient(), db_path=self.db_path,
             from_at=NOW - timedelta(days=1), to_at=NOW,
@@ -506,7 +535,7 @@ class ManagerTrajectoryCliTests(unittest.TestCase):
             set(payload),
             {"schema_version", "period", "collection_status", "summary", "managers", "warnings"},
         )
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(payload["managers"][0]["manager_id"], "10")
 
     def test_report_text_has_three_human_readable_sections(self) -> None:

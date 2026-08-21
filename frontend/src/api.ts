@@ -1809,6 +1809,27 @@ export function recordRecommendationEvent(
   )
 }
 
+export function recordQuickHelpOpened(
+  dealId: string,
+  assistantMode?: ManagerAssistantMode | null,
+  activeQuickHelpId?: number | null,
+) {
+  const occurrenceId = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  return api<{ ok: boolean; event_id: number }>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/quick-help-opened`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        occurrence_id: occurrenceId,
+        entrypoint: 'assistant_button',
+        assistant_mode: assistantMode ?? null,
+        active_quick_help_id: activeQuickHelpId ?? null,
+      }),
+    },
+  )
+}
+
 export function updateDealContextLeverPriority(
   dealId: string,
   leverId: string,

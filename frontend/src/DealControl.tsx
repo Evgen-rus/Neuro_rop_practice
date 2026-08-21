@@ -16,6 +16,7 @@ import {
   fetchReportMarkdown,
   fetchJob,
   recordManagerCommunicationCompleted,
+  recordQuickHelpOpened,
   recordRecommendationEvent,
   saveDealControlScope,
   startAnalyze,
@@ -1488,6 +1489,9 @@ function DealDetail(props: {
   async function openAssistant() {
     const workspace = await loadAssistantWorkspace(true)
     if (!workspace) return
+    if (managerTelemetryEnabled && activeDealId) {
+      void recordQuickHelpOpened(activeDealId).catch(() => undefined)
+    }
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status) && quickHelpAnswerReady(quickHelpJob)) return
     if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
     if (missingCurrentModes(workspace.current_by_mode).length) {

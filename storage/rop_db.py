@@ -16,7 +16,7 @@ import sqlite3
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from setup import BASE_DIR, MSK_TZ
 
@@ -83,13 +83,32 @@ MANAGER_TRAJECTORY_EVENT_TYPES = frozenset({
     "recommendation_generated",
     "recommendation_shown",
     "recommendation_viewed",
+    "quick_help_opened",
     "manager_communication_completed",
     "crm_activity_observed",
+    "crm_task_history_observed",
+    "crm_timeline_comment_observed",
+    "crm_stage_history_observed",
+    "crm_business_field_changed",
     "deal_stage_changed",
     "lead_stage_changed",
     "outcome_recorded",
 })
 MANAGER_RECOMMENDATION_KINDS = frozenset({"deal_task", "quick_help"})
+MANAGER_TRAJECTORY_BUSINESS_FIELDS = frozenset({
+    "TITLE",
+    "NAME",
+    "STAGE_ID",
+    "STATUS_ID",
+    "ASSIGNED_BY_ID",
+    "OPPORTUNITY",
+    "CURRENCY_ID",
+    "PROBABILITY",
+    "BEGINDATE",
+    "CLOSEDATE",
+    "SOURCE_ID",
+    "SOURCE_DESCRIPTION",
+})
 _UNSET = object()
 AUTH_UNSET = _UNSET
 
@@ -883,6 +902,9 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_manager_trajectory_manager_time
                 ON manager_trajectory_events(manager_id, occurred_at);
 
+            CREATE INDEX IF NOT EXISTS idx_manager_trajectory_event_type_time
+                ON manager_trajectory_events(event_type, occurred_at);
+
             CREATE TABLE IF NOT EXISTS manager_trajectory_collection_state (
                 collection_key TEXT NOT NULL PRIMARY KEY,
                 last_success_at TEXT,
@@ -898,9 +920,30 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 manager_id TEXT,
                 stage_id TEXT,
                 modified_at TEXT,
+                business_snapshot_json TEXT,
+                business_snapshot_hash TEXT,
+                business_snapshot_at TEXT,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(entity_type, entity_id)
             );
+
+            CREATE TABLE IF NOT EXISTS manager_trajectory_presence_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                manager_id TEXT NOT NULL,
+                auth_user_id INTEGER,
+                status TEXT NOT NULL CHECK(status IN ('online', 'offline', 'unknown')),
+                is_online INTEGER,
+                last_activity_at TEXT,
+                observed_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_event_key TEXT NOT NULL UNIQUE,
+                recorded_at TEXT NOT NULL,
+                payload_json TEXT,
+                FOREIGN KEY(auth_user_id) REFERENCES auth_users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_manager_trajectory_presence_manager_time
+                ON manager_trajectory_presence_events(manager_id, observed_at);
 
             CREATE TABLE IF NOT EXISTS automatic_analysis_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1000,6 +1043,17 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "deal_manager_quick_help", "mode", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "origin", "TEXT")
         _ensure_column(conn, "deal_manager_quick_help", "turn_id", "TEXT")
+        _ensure_column(conn, "manager_trajectory_entity_state", "business_snapshot_json", "TEXT")
+        _ensure_column(conn, "manager_trajectory_entity_state", "business_snapshot_hash", "TEXT")
+        _ensure_column(conn, "manager_trajectory_entity_state", "business_snapshot_at", "TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manager_trajectory_event_type_time "
+            "ON manager_trajectory_events(event_type, occurred_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manager_trajectory_presence_manager_time "
+            "ON manager_trajectory_presence_events(manager_id, observed_at)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_deal_manager_quick_help_current "
             "ON deal_manager_quick_help("
@@ -1014,6 +1068,16 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             "ON deal_control_tasks(source_report_id) "
             "WHERE source_kind = 'neuro_rop' AND source_report_id IS NOT NULL"
         )
+
+        trajectory_v3_migration_id = "2026-08-21-manager-trajectory-v3-storage"
+        if conn.execute(
+            "SELECT 1 FROM local_migrations WHERE migration_id = ?",
+            (trajectory_v3_migration_id,),
+        ).fetchone() is None:
+            conn.execute(
+                "INSERT INTO local_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (trajectory_v3_migration_id, utcish_now()),
+            )
 
         migration_id = "2026-07-22-reactivate-lead-no-attention"
         migration_applied = conn.execute(
@@ -7927,3 +7991,406 @@ def observe_manager_trajectory_entity(
             (entity_type, str(entity_id), manager_id, stage_id, normalized_modified, utcish_now()),
         )
         return event
+
+
+def _project_manager_trajectory_business_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    field_allowlist: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("business snapshot должен быть JSON-объектом")
+    allowed = {
+        str(field).strip()
+        for field in (field_allowlist if field_allowlist is not None else MANAGER_TRAJECTORY_BUSINESS_FIELDS)
+        if str(field).strip()
+    }
+    if not allowed:
+        raise ValueError("Список значимых бизнес-полей не должен быть пустым")
+    projected: dict[str, Any] = {}
+    for raw_key, value in snapshot.items():
+        key = str(raw_key).strip()
+        if key in allowed:
+            projected[key] = value
+    try:
+        dumps_json(projected)
+    except (TypeError, ValueError) as error:
+        raise ValueError("business snapshot должен быть JSON-сериализуемым") from error
+    return projected
+
+
+def observe_manager_trajectory_business_snapshot(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    entity_type: str,
+    entity_id: str,
+    manager_id: str | None,
+    snapshot: Mapping[str, Any],
+    modified_at: str | None = None,
+    changed_by_id: str | int | None = None,
+    field_allowlist: Iterable[str] | None = None,
+    field_labels: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Persist a compact business snapshot and append field-change facts.
+
+    The snapshot row is a mutable projection. Facts about changes are always
+    appended to ``manager_trajectory_events`` and are idempotent by source key.
+    Missing fields are treated as unavailable and therefore do not erase a
+    previously observed value; this avoids false changes when a Bitrix select
+    omits a field.
+    """
+    normalized_entity_type = str(entity_type or "").strip()
+    normalized_entity_id = str(entity_id or "").strip()
+    if normalized_entity_type not in MANAGER_TRAJECTORY_ENTITY_TYPES:
+        raise ValueError("entity_type должен быть deal или lead")
+    if not normalized_entity_id:
+        raise ValueError("entity_id обязателен")
+    projected = _project_manager_trajectory_business_snapshot(
+        snapshot,
+        field_allowlist=field_allowlist,
+    )
+    labels = {
+        str(key).strip(): str(value)
+        for key, value in (field_labels or {}).items()
+        if str(key).strip()
+    }
+    normalized_modified = (
+        _require_aware_timestamp(modified_at, field="modified_at")
+        if modified_at
+        else utcish_now()
+    )
+    normalized_manager_id = str(manager_id or "").strip() or None
+    normalized_changed_by_id = str(changed_by_id).strip() if changed_by_id is not None else None
+    init_db(db_path)
+    with connect(db_path) as conn:
+        previous = conn.execute(
+            "SELECT * FROM manager_trajectory_entity_state WHERE entity_type = ? AND entity_id = ?",
+            (normalized_entity_type, normalized_entity_id),
+        ).fetchone()
+        previous_snapshot = loads_json(
+            previous["business_snapshot_json"] if previous is not None else None,
+            {},
+        )
+        if not isinstance(previous_snapshot, dict):
+            previous_snapshot = {}
+        merged_snapshot = dict(previous_snapshot)
+        changed_fields: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        observed_at = utcish_now()
+        for field_name, new_value in sorted(projected.items()):
+            old_value = previous_snapshot.get(field_name)
+            if field_name in previous_snapshot and old_value == new_value:
+                continue
+            if field_name not in previous_snapshot:
+                merged_snapshot[field_name] = new_value
+                continue
+            merged_snapshot[field_name] = new_value
+            old_value_hash = hashlib.sha256(
+                dumps_json(old_value).encode("utf-8")
+            ).hexdigest()[:16]
+            value_hash = hashlib.sha256(
+                dumps_json(new_value).encode("utf-8")
+            ).hexdigest()[:16]
+            payload = {
+                "payload_version": 3,
+                "field_name": field_name,
+                "field_label": labels.get(field_name, field_name),
+                "from_value": old_value,
+                "to_value": new_value,
+                "changed_by_id": normalized_changed_by_id,
+                "entity_modified_at": normalized_modified,
+                "observed_at": observed_at,
+                "source_kind": "unknown",
+                "change_detection": "snapshot_diff",
+            }
+            event = _insert_manager_trajectory_event(
+                conn,
+                entity_type=normalized_entity_type,
+                entity_id=normalized_entity_id,
+                manager_id=normalized_manager_id or (
+                    str(previous["manager_id"] or "").strip() if previous is not None else None
+                ),
+                event_type="crm_business_field_changed",
+                source="bitrix",
+                source_event_key=(
+                    f"bitrix_field_change:{normalized_entity_type}:{normalized_entity_id}:"
+                    f"{field_name}:{normalized_modified}:{old_value_hash}:{value_hash}"
+                ),
+                occurred_at=normalized_modified,
+                payload=payload,
+            )
+            changed_fields.append(payload)
+            events.append(event)
+        snapshot_json = dumps_json(merged_snapshot)
+        snapshot_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        stored_manager_id = normalized_manager_id or (
+            str(previous["manager_id"] or "").strip() if previous is not None else None
+        )
+        stage_id = (
+            projected.get("STAGE_ID")
+            if "STAGE_ID" in projected
+            else projected.get("STATUS_ID")
+            if "STATUS_ID" in projected
+            else (previous["stage_id"] if previous is not None else None)
+        )
+        conn.execute(
+            """
+            INSERT INTO manager_trajectory_entity_state (
+                entity_type, entity_id, manager_id, stage_id, modified_at,
+                business_snapshot_json, business_snapshot_hash, business_snapshot_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                manager_id = COALESCE(excluded.manager_id, manager_trajectory_entity_state.manager_id),
+                stage_id = COALESCE(excluded.stage_id, manager_trajectory_entity_state.stage_id),
+                modified_at = excluded.modified_at,
+                business_snapshot_json = excluded.business_snapshot_json,
+                business_snapshot_hash = excluded.business_snapshot_hash,
+                business_snapshot_at = excluded.business_snapshot_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_entity_type,
+                normalized_entity_id,
+                stored_manager_id,
+                str(stage_id) if stage_id is not None else None,
+                normalized_modified,
+                snapshot_json,
+                snapshot_hash,
+                observed_at,
+                observed_at,
+            ),
+        )
+    return {
+        "entity_type": normalized_entity_type,
+        "entity_id": normalized_entity_id,
+        "manager_id": stored_manager_id,
+        "snapshot": loads_json(snapshot_json, {}),
+        "snapshot_hash": snapshot_hash,
+        "changed_fields": changed_fields,
+        "events": events,
+    }
+
+
+def list_manager_trajectory_entity_states(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    manager_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return current local CRM entity projections without contacting Bitrix."""
+    init_db(db_path)
+    managers = [str(item).strip() for item in (manager_ids or []) if str(item).strip()]
+    clauses: list[str] = []
+    params: list[Any] = []
+    if managers:
+        clauses.append("manager_id IN (" + ",".join("?" for _ in managers) + ")")
+        params.extend(managers)
+    query = "SELECT * FROM manager_trajectory_entity_state"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY entity_type, entity_id"
+    with connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["business_snapshot"] = loads_json(value.pop("business_snapshot_json", None), {})
+        result.append(value)
+    return result
+
+
+def record_manager_trajectory_presence_event(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    manager_id: str,
+    status: str,
+    observed_at: str,
+    source: str = "bitrix",
+    source_event_key: str | None = None,
+    is_online: bool | None = None,
+    last_activity_at: str | None = None,
+    auth_user_id: int | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append an idempotent read-only presence sample for a Bitrix manager."""
+    normalized_manager_id = str(manager_id or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    normalized_source = str(source or "").strip()
+    if not normalized_manager_id or not normalized_source:
+        raise ValueError("manager_id и source обязательны")
+    if normalized_status not in {"online", "offline", "unknown"}:
+        raise ValueError("status должен быть online, offline или unknown")
+    if payload is not None and not isinstance(payload, dict):
+        raise ValueError("Payload presence event должен быть JSON-объектом")
+    normalized_observed_at = _require_aware_timestamp(observed_at, field="observed_at")
+    normalized_last_activity_at = (
+        _require_aware_timestamp(last_activity_at, field="last_activity_at")
+        if last_activity_at
+        else None
+    )
+    normalized_key = str(source_event_key or "").strip() or (
+        f"{normalized_source}:presence:{normalized_manager_id}:"
+        f"{normalized_observed_at}:{normalized_status}"
+    )
+    if is_online is None:
+        normalized_is_online = {"online": 1, "offline": 0}.get(normalized_status)
+    else:
+        normalized_is_online = int(bool(is_online))
+    init_db(db_path)
+    recorded_at = utcish_now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO manager_trajectory_presence_events (
+                manager_id, auth_user_id, status, is_online, last_activity_at,
+                observed_at, source, source_event_key, recorded_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_event_key) DO NOTHING
+            """,
+            (
+                normalized_manager_id,
+                int(auth_user_id) if auth_user_id is not None else None,
+                normalized_status,
+                normalized_is_online,
+                normalized_last_activity_at,
+                normalized_observed_at,
+                normalized_source,
+                normalized_key,
+                recorded_at,
+                dumps_json(payload) if payload is not None else None,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM manager_trajectory_presence_events WHERE source_event_key = ?",
+            (normalized_key,),
+        ).fetchone()
+    assert row is not None
+    value = dict(row)
+    value["is_online"] = bool(value["is_online"]) if value["is_online"] is not None else None
+    value["payload"] = loads_json(value.pop("payload_json", None), None)
+    return value
+
+
+def list_manager_trajectory_presence_events(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    from_at: str,
+    to_at: str,
+    manager_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    start = _require_aware_timestamp(from_at, field="from_at")
+    end = _require_aware_timestamp(to_at, field="to_at")
+    if start >= end:
+        raise ValueError("Начало периода должно быть раньше окончания")
+    managers = [str(item).strip() for item in (manager_ids or []) if str(item).strip()]
+    clauses = ["observed_at >= ?", "observed_at < ?"]
+    params: list[Any] = [start, end]
+    if managers:
+        clauses.append("manager_id IN (" + ",".join("?" for _ in managers) + ")")
+        params.extend(managers)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM manager_trajectory_presence_events WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY observed_at, id",
+            params,
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["is_online"] = bool(value["is_online"]) if value["is_online"] is not None else None
+        value["payload"] = loads_json(value.pop("payload_json", None), None)
+        result.append(value)
+    return result
+
+
+def record_quick_help_opened_event(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    deal_id: str,
+    auth_user_id: int,
+    occurrence_id: str | None,
+    entrypoint: str = "assistant_button",
+    assistant_mode: str | None = None,
+    active_quick_help_id: int | str | None = None,
+) -> dict[str, Any]:
+    """Record a verified manager opening Quick Help for a deal."""
+    normalized_deal_id = str(deal_id or "").strip()
+    normalized_entrypoint = str(entrypoint or "").strip()
+    normalized_mode = str(assistant_mode or "").strip() or None
+    normalized_occurrence_id = str(occurrence_id or "").strip() or None
+    if not normalized_deal_id:
+        raise ValueError("deal_id обязателен")
+    if not normalized_entrypoint or len(normalized_entrypoint) > 128:
+        raise ValueError("Некорректный entrypoint")
+    if normalized_mode is not None and len(normalized_mode) > 128:
+        raise ValueError("Некорректный assistant_mode")
+    if normalized_occurrence_id and (
+        len(normalized_occurrence_id) > 96
+        or re.fullmatch(r"[A-Za-z0-9._:-]+", normalized_occurrence_id) is None
+    ):
+        raise ValueError("Некорректный occurrence_id события Quick Help")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        auth_user = _get_auth_user_row(conn, user_id=int(auth_user_id))
+        if (
+            auth_user is None
+            or not bool(auth_user["is_active"])
+            or str(auth_user["role"] or "") != "manager"
+            or not str(auth_user["manager_id"] or "").strip()
+        ):
+            raise PermissionError("Событие Quick Help может записать только активный менеджер")
+        deal = conn.execute(
+            "SELECT manager_id FROM deal_control_deals WHERE deal_id = ?",
+            (normalized_deal_id,),
+        ).fetchone()
+        if deal is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        manager_id = str(deal["manager_id"] or "").strip()
+        actor_manager_id = str(auth_user["manager_id"] or "").strip()
+        if not manager_id:
+            raise ValueError("У сделки не указан локальный ответственный менеджер")
+        if manager_id != actor_manager_id:
+            raise PermissionError("Менеджер может открыть Quick Help только для своей сделки")
+        normalized_quick_help_id: str | None = None
+        if active_quick_help_id is not None:
+            try:
+                quick_help_id = int(active_quick_help_id)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Некорректный active_quick_help_id") from error
+            quick = conn.execute(
+                """
+                SELECT id FROM deal_manager_quick_help
+                WHERE id = ? AND deal_id = ? AND manager_id = ?
+                """,
+                (quick_help_id, normalized_deal_id, manager_id),
+            ).fetchone()
+            if quick is None:
+                raise ValueError("Quick Help не найдена для этой сделки")
+            normalized_quick_help_id = str(quick["id"])
+        return _insert_manager_trajectory_event(
+            conn,
+            entity_type="deal",
+            entity_id=normalized_deal_id,
+            manager_id=manager_id,
+            auth_user_id=int(auth_user_id),
+            event_type="quick_help_opened",
+            recommendation_kind="quick_help",
+            recommendation_id=normalized_quick_help_id,
+            source="manager_ui",
+            source_event_key=(
+                f"quick_help_opened:deal:{normalized_deal_id}:user:{int(auth_user_id)}"
+                + (f":occurrence:{normalized_occurrence_id}" if normalized_occurrence_id else "")
+            ),
+            occurred_at=utcish_now(),
+            payload={
+                "payload_version": 3,
+                "actor_verified": True,
+                "actor_role": "manager",
+                "actor_manager_id": actor_manager_id,
+                "entrypoint": normalized_entrypoint,
+                "assistant_mode": normalized_mode,
+                "active_quick_help_id": normalized_quick_help_id,
+                "occurrence_id": normalized_occurrence_id,
+            },
+        )

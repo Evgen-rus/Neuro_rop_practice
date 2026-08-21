@@ -78,6 +78,10 @@ def _activity_label(action: dict[str, Any]) -> str:
         "message": "сообщение",
         "task": "задача",
         "other": "другая CRM-активность",
+        "task_history": "изменение задачи",
+        "timeline_comment": "комментарий таймлайна",
+        "business_field_change": "изменение бизнес-поля",
+        "stage_history": "вход в стадию (история Bitrix)",
     }
     label = labels.get(str(action.get("activity_kind") or "other"), str(action.get("activity_kind") or "активность"))
     direction = {"1": "входящий", "2": "исходящий"}.get(str(action.get("direction") or ""))
@@ -86,7 +90,11 @@ def _activity_label(action: dict[str, Any]) -> str:
     activity_id = action.get("activity_id")
     suffix = f"activity #{activity_id}" if activity_id else None
     annotations = ", ".join([*details, *([suffix] if suffix else [])])
-    return f"{label}{f' ({annotations})' if annotations else ''}"
+    content = str(action.get("subject") or action.get("description") or "").strip()
+    content = " ".join(content.split())
+    if len(content) > 180:
+        content = content[:177].rstrip() + "..."
+    return f"{label}{f' ({annotations})' if annotations else ''}{f' — {content}' if content else ''}"
 
 
 def _print_actions(actions: list[dict[str, Any]], *, indent: str) -> None:
@@ -108,6 +116,14 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
         print(f"Менеджеры: {', '.join(payload['manager_ids'])}")
         print(f"Версии CRM-активностей, полученные по LAST_UPDATED: {payload['counts']['activities']}")
         print(f"Изменения стадий между наблюдаемыми срезами: {payload['counts']['stage_changes']}")
+        print(
+            "Дополнительно: "
+            f"история стадий {payload['counts'].get('stage_history', 0)}, "
+            f"история задач {payload['counts'].get('task_history', 0)}, "
+            f"комментарии {payload['counts'].get('timeline_comments', 0)}, "
+            f"изменения бизнес-полей {payload['counts'].get('business_field_changes', 0)}, "
+            f"presence-снимки {payload['counts'].get('presence_snapshots', 0)}"
+        )
         for source, error in payload.get("errors", {}).items():
             print(f"Недоступно {source}: {error}")
         return
@@ -128,7 +144,8 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
         f"рекомендаций создано/показано/просмотрено "
         f"{summary.get('recommendations_generated', 0)}/"
         f"{summary.get('recommendations_shown', 0)}/"
-        f"{summary.get('recommendations_viewed', 0)}"
+        f"{summary.get('recommendations_viewed', 0)}; "
+        f"входов в Quick Help {summary.get('quick_help_opened', 0)}"
     )
     for manager in payload["managers"]:
         manager_label = manager.get("manager_name") or "Имя не найдено"
@@ -154,7 +171,11 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
             entity_label = "Сделка" if entity.get("entity_type") == "deal" else "Лид"
             stage = entity.get("stage_name") or entity.get("stage_id")
             print(f"    {entity_label} #{entity.get('entity_id')}{f' · этап {stage}' if stage else ''}")
-            timeline = [*(entity.get("crm_actions") or []), *(entity.get("stage_changes") or [])]
+            timeline = [
+                *(entity.get("crm_actions") or []), *(entity.get("stage_changes") or []),
+                *(entity.get("task_history") or []), *(entity.get("timeline_comments") or []),
+                *(entity.get("business_field_changes") or []), *(entity.get("stage_history") or []),
+            ]
             timeline.sort(key=lambda item: str(item.get("occurred_at") or ""))
             _print_actions(timeline, indent="      ")
 
@@ -184,6 +205,14 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
                 f"      просмотры: {', '.join(_clock(item) for item in recommendation.get('viewed_at') or []) or 'нет'}; "
                 f"точность: {recommendation.get('view_tracking_precision')}"
             )
+        openings = (manager.get("product_usage") or {}).get("quick_help_openings") or []
+        print(f"    Входов в раздел Quick Help: {len(openings)}")
+        for opening in openings:
+            mode = opening.get("assistant_mode") or "режим не указан"
+            print(
+                f"      {_clock(opening.get('opened_at'))} — сделка #{opening.get('deal_id')} · {mode}; "
+                f"точность: {opening.get('tracking_precision')}"
+            )
 
         print("  3. Что происходило до и после просмотров")
         correlations = manager.get("correlations") or []
@@ -205,6 +234,22 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
                     "        В первые 60 минут по этой сделке: "
                     f"{len(view.get('same_deal_actions_within_60m') or [])}; "
                     f"по другим сделкам: {view.get('other_deal_actions_within_60m', 0)}; "
+                    f"до первого действия по этой сделке: {f'{delay} мин.' if delay is not None else 'действий не обнаружено'}"
+                )
+            for opening in deal.get("quick_help_openings") or []:
+                print(
+                    f"      Вход в Quick Help {opening.get('opening_index_for_deal')} · "
+                    f"{_clock(opening.get('opened_at'))} · {opening.get('assistant_mode') or 'режим не указан'}"
+                )
+                print("        До входа (после предыдущего входа в Quick Help по этой сделке):")
+                _print_actions(opening.get("actions_before_since_previous_open") or [], indent="          ")
+                print("        После входа до следующего входа или конца периода:")
+                _print_actions(opening.get("actions_after_until_next_open") or [], indent="          ")
+                delay = opening.get("minutes_to_first_same_deal_action")
+                print(
+                    "        В первые 60 минут по этой сделке: "
+                    f"{len(opening.get('same_deal_actions_within_60m') or [])}; "
+                    f"по другим сделкам: {opening.get('other_deal_actions_within_60m', 0)}; "
                     f"до первого действия по этой сделке: {f'{delay} мин.' if delay is not None else 'действий не обнаружено'}"
                 )
         excluded = manager.get("excluded_unverified_lifecycle_events", 0)
