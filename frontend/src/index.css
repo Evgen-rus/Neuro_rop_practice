@@ -1061,8 +1061,8 @@ textarea {
 .dc-deal-columns,
 .dc-deal-row {
   display: grid;
-  grid-template-columns: minmax(250px, 1.45fr) minmax(165px, .95fr) minmax(180px, 1.02fr) minmax(205px, 1.1fr);
-  min-width: 860px;
+  grid-template-columns: minmax(250px, 1.5fr) minmax(118px, .5fr) minmax(180px, 1.05fr) minmax(205px, 1.1fr);
+  min-width: 820px;
 }
 
 .dc-deal-columns,
@@ -1086,7 +1086,7 @@ textarea {
 
 .dc-deal-row {
   position: relative;
-  min-height: 94px;
+  min-height: 0;
   margin-bottom: 6px;
   overflow: hidden;
   border: 1px solid #dce6f1;
@@ -1125,7 +1125,7 @@ textarea {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 9px 10px;
   border-right: 1px solid #e2eaf3;
 }
@@ -1351,8 +1351,14 @@ textarea {
   padding: 8px 10px;
 }
 
+.dc-stage-cell .dc-stage-meta-group {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
 .dc-stage-cell .dc-stage-meta {
-  margin-top: 6px;
+  display: block;
+  margin-top: 0;
   color: var(--dc-muted);
   font-size: 10px;
   font-weight: 650;
@@ -2819,8 +2825,8 @@ textarea {
 
 .dc-deal-columns,
 .dc-deal-row {
-  grid-template-columns: minmax(210px, 1.35fr) minmax(145px, .9fr) minmax(155px, 1fr) minmax(180px, 1.05fr);
-  min-width: 720px;
+  grid-template-columns: minmax(220px, 1.45fr) minmax(112px, .48fr) minmax(160px, 1fr) minmax(190px, 1.1fr);
+  min-width: 700px;
 }
 
 .dc-task-columns,
@@ -2862,6 +2868,11 @@ textarea {
   gap: 5px 9px;
   margin-top: 8px;
   font-size: 10px;
+}
+
+.dc-deal-main .dc-cell-card > p {
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .dc-deal-id {
@@ -2919,12 +2930,12 @@ textarea {
 
 .dc-deal-columns,
 .dc-deal-row {
-  grid-template-columns: minmax(195px, 1.2fr) minmax(130px, .78fr) minmax(145px, .9fr) minmax(215px, 1.2fr);
-  min-width: 710px;
+  grid-template-columns: minmax(210px, 1.4fr) minmax(108px, .46fr) minmax(155px, 1fr) minmax(210px, 1.15fr);
+  min-width: 690px;
 }
 
 .dc-deal-row {
-  min-height: 132px;
+  min-height: 0;
 }
 
 .dc-deal-row > div {
@@ -2936,7 +2947,8 @@ textarea {
 .dc-cell-card {
   display: flex;
   width: 100%;
-  min-height: 112px;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -2975,28 +2987,29 @@ textarea {
 }
 
 .dc-control-deadline {
-  display: grid;
-  min-height: 42px;
-  place-content: center;
+  display: block;
+  min-height: 0;
+  margin: 0;
   color: #10294c;
-  line-height: 1.05;
+  line-height: 1.15;
   text-align: center;
 }
 
 .dc-control-deadline strong {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 900;
+  white-space: nowrap;
 }
 
 .dc-control-deadline span {
-  margin-top: 3px;
   font-size: 12px;
   font-weight: 800;
 }
 
 .dc-control-cell .dc-status {
-  align-self: center;
-  margin-top: 7px;
+  align-self: stretch;
+  max-width: none;
+  margin-top: auto;
 }
 
 .dc-stage-cell .dc-cell-card {
