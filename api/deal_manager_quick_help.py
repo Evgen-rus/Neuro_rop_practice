@@ -362,7 +362,7 @@ def list_quick_help_history(
     return {"items": items if isinstance(items, list) else []}
 
 
-def _load_local_communications(deal_id: str) -> list[dict[str, Any]]:
+def load_local_communication_bundle(deal_id: str) -> dict[str, Any]:
     paths = (
         deal_workspace_dir(str(deal_id)) / "raw" / f"deal_{deal_id}_customer_history_bundle.json",
         DEFAULT_RAW_DIR / f"deal_{deal_id}_customer_history_bundle.json",
@@ -378,6 +378,11 @@ def _load_local_communications(deal_id: str) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             bundle = value
             break
+    return bundle
+
+
+def _load_local_communications(deal_id: str) -> list[dict[str, Any]]:
+    bundle = load_local_communication_bundle(str(deal_id))
     if not bundle:
         return []
     events = bundle.get("normalized_communications")
@@ -774,6 +779,7 @@ def get_manager_assistant_workspace(
                 "kind": "communication",
                 "occurred_at": item.get("occurred_at"),
                 "text": text,
+                "channel": item.get("channel"),
                 "contact_class": item.get("contact_class"),
             })
     timeline.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
@@ -824,6 +830,8 @@ def get_manager_assistant_workspace(
             "stage": str(deal.get("stage_name") or ""),
             "current_task": str(task.get("subject") or task.get("description") or ""),
             "last_communication": {
+                "event_id": latest_communication.get("event_id"),
+                "channel": latest_communication.get("channel"),
                 "occurred_at": latest_communication.get("occurred_at"),
                 "text": _communication_text(latest_communication),
             } if latest_communication else None,

@@ -288,7 +288,9 @@ def fetch_activity_facts(client: Any, manager_ids: list[str], start: datetime, e
             json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()[:16]
         facts.append(_fact(
-            source_event_key=f"crm_activity:{activity_id}:{version}",
+            # v3 has a distinct namespace so a historical re-collection can
+            # append the richer payload beside an existing compact v2 fact.
+            source_event_key=f"crm_activity_v3:{activity_id}:{version}",
             entity_type=entity_type,
             entity_id=entity_id,
             manager_id=payload.get("responsible_id"),

@@ -232,6 +232,8 @@ def _today_communications(activities: list[dict[str, Any]], now: datetime) -> di
             "direction": str(event.get("direction") or "unknown"),
             "occurred_at": localized.isoformat(timespec="seconds"),
             "subject": str(event.get("subject") or ""),
+            # Persist for explicit lazy loading only; daily-control API sanitizes this field.
+            "content": str(event.get("content") or ""),
             "duration_seconds": event.get("duration_seconds"),
             "contact_class": str(event.get("contact_class") or "attempt"),
         })

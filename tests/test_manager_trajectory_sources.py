@@ -144,7 +144,7 @@ class ManagerTrajectorySourcesTests(unittest.TestCase):
         self.assertFalse(result["errors"])
         self.assertEqual(len(result["facts"]), 1)
         fact = result["facts"][0]
-        self.assertEqual(fact["source_event_key"], "crm_activity:a1:2026-08-21T10:01:00+03:00")
+        self.assertEqual(fact["source_event_key"], "crm_activity_v3:a1:2026-08-21T10:01:00+03:00")
         self.assertEqual(fact["manager_id"], "10")
         self.assertEqual(client.list_calls[0][1]["select"], ACTIVITY_SELECT_V3)
 

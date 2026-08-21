@@ -514,6 +514,34 @@ class ManagerTrajectoryApiTests(unittest.TestCase):
 
 
 class ManagerTrajectoryCliTests(unittest.TestCase):
+    def test_snapshot_collects_then_builds_report_in_one_command(self) -> None:
+        from scripts import manager_trajectory as cli
+
+        collected = {
+            "status": "success", "period": {}, "manager_ids": ["10"],
+            "counts": {}, "errors": {}, "collection_state": {},
+        }
+        report = {
+            "schema_version": 3, "period": {}, "collection_status": {},
+            "summary": {}, "managers": [], "warnings": [],
+        }
+        output = io.StringIO()
+        with patch.object(cli, "make_client", return_value=object()), patch.object(
+            cli, "collect_manager_trajectory", return_value=collected,
+        ) as collect, patch.object(
+            cli, "build_manager_trajectory_report", return_value=report,
+        ) as build, redirect_stdout(output):
+            code = cli.main([
+                "snapshot", "--date", "2026-08-20", "--format", "json",
+            ])
+        payload = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["collection_run"]["status"], "success")
+        self.assertEqual(collect.call_count, 1)
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(collect.call_args.kwargs["from_at"], build.call_args.kwargs["from_at"])
+        self.assertEqual(collect.call_args.kwargs["to_at"], build.call_args.kwargs["to_at"])
+
     def test_report_json_is_local_and_has_stable_top_level_contract(self) -> None:
         from scripts import manager_trajectory as cli
 

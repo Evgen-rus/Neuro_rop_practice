@@ -568,6 +568,22 @@ export type DealControlCommunicationItem = {
   contact_class?: string
 }
 
+export type DealCallTranscript = {
+  deal_id: string
+  event_id: string
+  text: string
+  truncated: boolean
+}
+
+export type DealCommunicationContent = {
+  deal_id: string
+  event_id: string
+  channel: string
+  text: string
+  is_excerpt: boolean
+  truncated: boolean
+}
+
 export type DealControlCommunicationsToday = {
   date: string
   available: boolean
@@ -1084,6 +1100,7 @@ export type ManagerAssistantTimelineEntry = {
   kind: 'assistant_request' | 'communication' | 'communication_completed' | string
   occurred_at?: string | null
   text: string
+  channel?: string | null
   contact_class?: string | null
 }
 
@@ -1247,7 +1264,12 @@ export type ManagerAssistantWorkspace = {
   context: {
     stage: string
     current_task: string
-    last_communication?: { occurred_at?: string | null; text: string } | null
+    last_communication?: {
+      event_id?: string | null
+      channel?: string | null
+      occurred_at?: string | null
+      text: string
+    } | null
     main_risk: string
     deal_context?: DealContextSnapshot | null
     report?: { report_id?: number | null; markdown_available: boolean } | null
@@ -1415,6 +1437,18 @@ export function previewAnalysisProfile(
 
 export function fetchDealControl() {
   return api<DealControlDashboard>('/api/deal-control', { cache: 'no-store' }).then(normalizeDealControlDashboard)
+}
+
+export function fetchDealCallTranscript(dealId: string, eventId: string) {
+  return api<DealCallTranscript>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/communications/${encodeURIComponent(eventId)}/transcript`,
+  )
+}
+
+export function fetchDealCommunicationContent(dealId: string, eventId: string) {
+  return api<DealCommunicationContent>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/communications/${encodeURIComponent(eventId)}/content`,
+  )
 }
 
 export function confirmManagerSituation(dealId: string) {

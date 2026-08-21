@@ -310,6 +310,7 @@ class DealControlTests(unittest.TestCase):
             {
                 "ID": "701", "OWNER_ID": "101", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
                 "SUBJECT": "Сообщение клиенту", "DIRECTION": "2", "COMPLETED": "Y",
+                "DESCRIPTION": "Полный текст письма для ленивой загрузки",
                 "START_TIME": "2026-07-20T09:14:00+03:00",
             },
             {
@@ -346,6 +347,10 @@ class DealControlTests(unittest.TestCase):
         self.assertEqual([item["event_id"] for item in result["items"]], [
             "crm_activity:701", "crm_activity:702", "crm_activity:703",
         ])
+        self.assertEqual(
+            result["items"][0]["content"],
+            "Полный текст письма для ленивой загрузки",
+        )
 
     def test_analysis_coaching_projects_manager_message_call_variants_and_crm_checklist(self):
         with tempfile.TemporaryDirectory() as directory:

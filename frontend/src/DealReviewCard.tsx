@@ -1,4 +1,5 @@
 import type { DailyControlDeal } from './api'
+import { CommunicationContent } from './CommunicationContent'
 import { formatMoscowDateTime } from './dateTime'
 
 const QUALITY_LABELS = {
@@ -8,7 +9,7 @@ const QUALITY_LABELS = {
 } as const
 
 const NO_DATA = 'Нет данных'
-const DEFAULT_CONTENT_NOTE = 'Текст письма, исходное сообщение и транскрипт в снимке отсутствуют.'
+const DEFAULT_CONTENT_NOTE = 'Содержимое загружается отдельно и не является частью сохранённого снимка.'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
 
 const ICON_PATHS = {
@@ -299,21 +300,24 @@ export function DealReviewCard(props: {
               {communications.items.length ? communications.items.map((item) => {
                 const open = props.openEventId === item.event_id
                 return (
-                  <button type="button" key={item.event_id} className={open ? 'open' : ''} onClick={() => props.onToggleEvent(item.event_id)}>
-                    <time>{formatClock(item.occurred_at)}</time>
-                    <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
-                    <span>
-                      {channelLabel(item.channel)} · {directionLabel(item.direction)}
-                    </span>
-                    <em>{item.duration_seconds ? talkTime(item.duration_seconds) : ''}</em>
-                    <i aria-hidden="true">{open ? '▴' : '▾'}</i>
+                  <div className={`dc-daily-comm-event ${open ? 'open' : ''}`} key={item.event_id}>
+                    <button type="button" onClick={() => props.onToggleEvent(item.event_id)}>
+                      <time>{formatClock(item.occurred_at)}</time>
+                      <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
+                      <span>
+                        {channelLabel(item.channel)} · {directionLabel(item.direction)}
+                      </span>
+                      <em>{item.duration_seconds ? talkTime(item.duration_seconds) : ''}</em>
+                      <i aria-hidden="true">{open ? '▴' : '▾'}</i>
+                    </button>
                     {open ? (
-                      <div>
+                      <div className="dc-daily-comm-event-detail">
                         <p>{item.subject || NO_DATA}</p>
                         <small>ID события: {item.event_id}. {contentNote}</small>
+                        <CommunicationContent dealId={deal.deal_id} eventId={item.event_id} channel={item.channel} />
                       </div>
                     ) : null}
-                  </button>
+                  </div>
                 )
               }) : <p className="dc-daily-block-note">Событий за день не зафиксировано.</p>}
             </details>

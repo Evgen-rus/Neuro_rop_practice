@@ -78,6 +78,11 @@ from api.deal_control import (
 )
 from api.deal_control import review_task_crm_fact as review_deal_control_task_crm_fact
 from api.deal_control import task_history as deal_control_task_history
+from api.deal_call_transcript import DealCallTranscriptNotFound, get_deal_call_transcript
+from api.deal_communication_content import (
+    DealCommunicationContentNotFound,
+    get_deal_communication_content,
+)
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
 from api.deal_manager_quick_help import (
     get_manager_assistant_workspace,
@@ -1158,6 +1163,28 @@ def deal_manager_companion_get(deal_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Контур сопроводительного текста ещё не подключён") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/deals/{deal_id}/communications/{event_id}/transcript")
+def deal_call_transcript_get(deal_id: str, event_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_deal_call_transcript(deal_id, event_id)
+    except DealCallTranscriptNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/deals/{deal_id}/communications/{event_id}/content")
+def deal_communication_content_get(deal_id: str, event_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_deal_communication_content(
+            deal_id,
+            event_id,
+            db_path=DEFAULT_DB_PATH,
+        )
+    except DealCommunicationContentNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.put("/api/deal-control/deals/{deal_id}/checklist/{item_id}/completion")

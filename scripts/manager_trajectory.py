@@ -38,6 +38,15 @@ def _datetime_arg(value: str, *, is_end: bool = False) -> datetime:
 
 def _period(args: argparse.Namespace, *, default_yesterday: bool) -> tuple[datetime | None, datetime | None]:
     now = datetime.now(MSK_TZ)
+    selected_date = str(getattr(args, "date", "") or "").strip()
+    if selected_date:
+        if args.date_from or args.date_to:
+            raise ValueError("Используйте либо --date, либо --from/--to")
+        day = date.fromisoformat(selected_date)
+        return (
+            datetime.combine(day, time.min, MSK_TZ),
+            datetime.combine(day + timedelta(days=1), time.min, MSK_TZ),
+        )
     if args.date_from:
         start = _datetime_arg(args.date_from)
     elif default_yesterday:
@@ -135,6 +144,9 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
             print(f"- {item['entity_type']} #{item['entity_id']}: {reasons}")
         print(payload["cost_preview"].get("message") or "")
         return
+    if command == "snapshot":
+        collection = payload.get("collection_run") or {}
+        print(f"Сбор Bitrix: {collection.get('status') or 'статус неизвестен'}")
     print(f"Период: {payload['period']['from']} — {payload['period']['to']}")
     summary = payload.get("summary") or {}
     print(
@@ -308,12 +320,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ручная telemetry НейроРОПа для developer/admin")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("collect", "report", "candidates"):
+    for name in ("snapshot", "collect", "report", "candidates"):
         subparser = subparsers.add_parser(name)
         subparser.add_argument("--from", dest="date_from")
         subparser.add_argument("--to", dest="date_to")
         subparser.add_argument("--manager-id", action="append")
         subparser.add_argument("--format", choices=("text", "json"), default="text")
+        if name == "snapshot":
+            subparser.add_argument("--date")
         if name == "candidates":
             subparser.add_argument("--profile-id", type=int)
     return parser
@@ -334,16 +348,27 @@ def main(argv: list[str] | None = None) -> int:
                 to_at=end,
             )
             exit_code = 0 if payload["status"] == "success" else 2
-        elif args.command == "report":
+        elif args.command in {"report", "snapshot"}:
             start, end = _period(args, default_yesterday=True)
             assert start is not None and end is not None
+            collection = None
+            if args.command == "snapshot":
+                collection = collect_manager_trajectory(
+                    make_client(),
+                    db_path=args.db_path,
+                    manager_ids=_manager_ids(args),
+                    from_at=start,
+                    to_at=end,
+                )
             payload = build_manager_trajectory_report(
                 db_path=args.db_path,
                 from_at=start,
                 to_at=end,
                 manager_ids=_manager_ids(args),
             )
-            exit_code = 0
+            if collection is not None:
+                payload["collection_run"] = collection
+            exit_code = 0 if collection is None or collection["status"] == "success" else 2
         else:
             payload = _candidate_payload(args)
             exit_code = 0

@@ -100,6 +100,7 @@ import {
   workspaceModeClassName,
 } from './dealPush'
 import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
+import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 
@@ -1821,7 +1822,7 @@ function RopDealScreen({
     onToggleEvent={onToggleEvent}
     showHeader={false}
     emptyText="Разбор сделки пока недоступен."
-    contentNote="Текст письма, исходное сообщение и транскрипт здесь не показываются."
+    contentNote="Содержимое коммуникации загружается отдельно при раскрытии."
     scriptHint="Для разговора с менеджером"
   />
 }
@@ -2854,7 +2855,7 @@ function ManagerAssistantModal(props: {
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}
-          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><p>{item.text}</p></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
+          {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{item.text}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <ManagerDealContextView
             deal={props.deal}
             onToggleChecklistItem={props.onToggleChecklistItem}
@@ -2869,6 +2870,7 @@ function ManagerAssistantModal(props: {
           /> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <><p className="summary">{followups.content.context_summary}</p><div>{followups.content.items.map((item) => <article key={item.item_id}><header><strong>{item.concern_or_scenario}</strong><span>{item.basis_status === 'confirmed' ? 'Подтверждено' : item.basis_status === 'inferred' ? 'Гипотеза' : 'Условный сценарий'}</span></header><h4>{item.idea}</h4><p>{item.why_it_may_help}</p><dl><div><dt>Формат</dt><dd>{item.followup_type}</dd></div><div><dt>Канал</dt><dd>{item.suggested_channel}</dd></div><div><dt>Когда</dt><dd>{item.timing}</dd></div><div><dt>Цель</dt><dd>{item.target_micro_conversion}</dd></div></dl><small>Основание: {item.evidence_summary}</small><em>{item.caution}</em></article>)}</div></> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
           {view === 'companion' ? <CompanionTextPanel
+            dealId={props.deal.deal_id}
             lastContact={companionLastContact}
             companion={companion}
             job={companionJob}
@@ -2928,7 +2930,12 @@ function ManagerDealContextView(props: {
   context: DealContextSnapshot | null
   stage: string
   currentTask: string
-  lastCommunication: { occurred_at?: string | null; text: string } | null
+  lastCommunication: {
+    event_id?: string | null
+    channel?: string | null
+    occurred_at?: string | null
+    text: string
+  } | null
   mainRisk: string
   discProfile?: ManagerDiscProfile | null
   report: { report_id?: number | null; markdown_available: boolean } | null
@@ -2994,7 +3001,7 @@ function ManagerDealContextView(props: {
     <section className="dc-manager-assistant-context-grid">
       <div><small>Этап</small><strong>{props.stage || 'Не указан'}</strong></div>
       <div><small>Текущая задача</small><strong>{props.currentTask || 'Нет открытой задачи'}</strong></div>
-      <div><small>Последняя коммуникация</small><strong>{props.lastCommunication ? `${dateTime(props.lastCommunication.occurred_at)} · ${props.lastCommunication.text}` : 'Нет доступных данных'}</strong></div>
+      <div><small>Последняя коммуникация</small><strong>{props.lastCommunication ? `${dateTime(props.lastCommunication.occurred_at)} · ${props.lastCommunication.text}` : 'Нет доступных данных'}</strong>{props.lastCommunication?.channel && props.lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={props.lastCommunication.event_id} channel={props.lastCommunication.channel} /> : null}</div>
       <div><small>Главный риск</small><strong>{props.mainRisk || 'Не выделен'}</strong></div>
       <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
     </section>
@@ -3034,6 +3041,12 @@ function ManagerDealContextView(props: {
   return <section className="dc-deal-context">
     {checklist}
     <header className="dc-deal-context-heading"><div><h3>Живая карта сделки</h3><p>Информационный срез последнего полного анализа. Выбранные рычаги пока не влияют на дожим и фоллоуапы.</p></div><span>Отчёт #{props.report?.report_id || '—'}</span></header>
+
+    {props.lastCommunication ? <section className="dc-deal-context-section">
+      <h4>Последняя коммуникация</h4>
+      <p className="dc-deal-context-note">{dateTime(props.lastCommunication.occurred_at)} · {props.lastCommunication.text}</p>
+      {props.lastCommunication.channel && props.lastCommunication.event_id ? <CommunicationContent dealId={props.dealId} eventId={props.lastCommunication.event_id} channel={props.lastCommunication.channel} /> : null}
+    </section> : null}
 
     <section className="dc-deal-context-truth">
       <h4>Карточка сделки</h4>
@@ -3141,6 +3154,7 @@ function companionContactLabel(contact: ManagerCompanionLastContact | null) {
 }
 
 function CompanionTextPanel({
+  dealId,
   lastContact,
   companion,
   job,
@@ -3148,6 +3162,7 @@ function CompanionTextPanel({
   onGenerate,
   onCopy,
 }: {
+  dealId: string
   lastContact: ManagerCompanionLastContact | null
   companion: ManagerCompanionRecord | null
   job: ManagerCompanionJob | null
@@ -3171,6 +3186,7 @@ function CompanionTextPanel({
         </button>
       </header>
       <p className="summary">Последний контакт: {companionContactLabel(lastContact)}</p>
+      {lastContact?.channel && lastContact.event_id ? <CommunicationContent dealId={dealId} eventId={lastContact.event_id} channel={lastContact.channel} /> : null}
       {running ? <ManagerJobProgress job={job || { status: 'running', detail: 'Обновляем данные из Bitrix', percent: 12 }} label="Сопроводительный текст" /> : null}
       {error && error !== 'Нет данных' ? <p className="dc-manager-error">{error}</p> : null}
       {message ? (

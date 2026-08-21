@@ -100,6 +100,32 @@ $env:DAYTIME_CYCLE_ENABLED = 'false'
 .\venv\Scripts\python.exe .\scripts\manager_trajectory.py --help
 ```
 
+### `snapshot`: основной единый вызов
+
+Для обычной выгрузки используйте `snapshot`: команда сначала выполняет read-only
+сбор из Bitrix, затем сразу строит отчёт из обновлённой SQLite. Раздельные команды
+`collect` и `report` нужны только для диагностики или повторного построения отчёта
+без обращения к Bitrix.
+
+```powershell
+.\venv\Scripts\python.exe .\scripts\manager_trajectory.py snapshot --date 2026-08-20 --format json
+```
+
+На VPS JSON можно сразу сохранить на хосте:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py snapshot \
+  --date 2026-08-20 --format json \
+  > trajectory-2026-08-20-v3.json
+```
+В файл сохранение
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py report   --from 2026-08-20   --to 2026-08-20   --format json   > /opt/Neuro_rop_practice/runtime/trajectory-2026-08-20-v3.json
+```
+Без дат `snapshot` использует предыдущий московский день, как и `report`. При
+частичном отказе одного из REST-источников JSON всё равно формируется, содержит
+`collection_run.status: partial` и список ошибок, а команда завершается кодом `2`.
+
 ### `report`: локальный отчёт без Bitrix
 
 Отчёт читает только SQLite и не вызывает Bitrix, транскрибацию или OpenAI.
@@ -131,6 +157,8 @@ $env:DAYTIME_CYCLE_ENABLED = 'false'
 Новые явные просмотры имеют отдельный `occurrence_id`, поэтому повторное открытие одной рекомендации считается новым просмотром, а сетевой повтор того же события не создаёт дубль. Старые события без `occurrence_id` остаются валидными, но означают только «рекомендация была просмотрена хотя бы один раз».
 
 Версии одной CRM-активности, повторно полученные по `LAST_UPDATED`, в человекочитаемом отчёте сворачиваются по `activity_id`. Полное число сохранённых версий остаётся в сырых trajectory events для аудита.
+
+После обновления с v2 на v3 исторический `collect` нужно выполнить повторно. Расширенная v3-версия активности сохраняется рядом со старой краткой записью и становится актуальной проекцией отчёта; старый факт не перезаписывается.
 
 JSON-формат предназначен для локальной технической проверки и может содержать внутренние идентификаторы. Не публикуйте и не коммитьте его:
 
@@ -191,6 +219,7 @@ Watermark сбора общий для manager trajectory, а не отдель�
 | Результат | Откуда берётся | Обращается к Bitrix | Может вызвать OpenAI |
 | --- | --- | --- | --- |
 | `manager_trajectory.py report` | Локальные trajectory events в SQLite | Нет | Нет |
+| `manager_trajectory.py snapshot` | Сначала Bitrix, затем обновлённые trajectory events | Да, только чтение | Нет |
 | `manager_trajectory.py collect` | CRM-факты выбранных менеджеров | Да, только чтение | Нет |
 | «Ежедневный контроль» | Persisted deal-control, анализы, чек-листы и коммуникации | При ручном формировании — да | Сам snapshot — нет |
 | Автоматический 30-минутный цикл | Deal-control sync, trajectory collect и change-aware анализ | Да, только чтение | Возможно по решению FULL/MINI/skip |
@@ -207,3 +236,32 @@ Watermark сбора общий для manager trajectory, а не отдель�
 - источник manager scope: `storage/rop_db.py`, таблица настройки deal-control.
 
 Не выводите и не коммитьте `.env`, webhook URL, CRM-данные, содержимое `reports/`, JSON-выгрузки, аудио или транскрипты.
+
+
+### `snapshot`: основной единый вызов   дублирую для себя
+
+Для обычной выгрузки используйте `snapshot`: команда сначала выполняет read-only
+сбор из Bitrix, затем сразу строит отчёт из обновлённой SQLite. Раздельные команды
+`collect` и `report` нужны только для диагностики или повторного построения отчёта
+без обращения к Bitrix.
+
+```powershell
+.\venv\Scripts\python.exe .\scripts\manager_trajectory.py snapshot --date 2026-08-20 --format json
+```
+
+На VPS JSON можно сразу сохранить на хосте:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py snapshot \
+  --date 2026-08-20 --format json \
+  > trajectory-2026-08-20-v3.json
+```
+
+Без дат `snapshot` использует предыдущий московский день, как и `report`. При
+частичном отказе одного из REST-источников JSON всё равно формируется, содержит
+`collection_run.status: partial` и список ошибок, а команда завершается кодом `2`.
+
+В файл сохранение
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py report   --from 2026-08-20   --to 2026-08-20   --format json   > /opt/Neuro_rop_practice/runtime/trajectory-2026-08-20-v3.json
+```

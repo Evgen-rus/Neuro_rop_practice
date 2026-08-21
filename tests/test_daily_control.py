@@ -230,6 +230,7 @@ class SnapshotBuilderTests(unittest.TestCase):
                     "duration_seconds": 90,
                     "text": "придуманный транскрипт",
                     "body": "тело письма",
+                    "content": "сохранённый текст коммуникации",
                     "transcript": "разговор",
                 }],
             })],
@@ -237,6 +238,7 @@ class SnapshotBuilderTests(unittest.TestCase):
         item = snapshot["deals"][0]["communications_today"]["items"][0]
         self.assertNotIn("text", item)
         self.assertNotIn("body", item)
+        self.assertNotIn("content", item)
         self.assertNotIn("transcript", item)
         self.assertFalse(item["content_available"])
         self.assertEqual(snapshot["deals"][0]["generic_question"], GENERIC_STATUS_QUESTION)
