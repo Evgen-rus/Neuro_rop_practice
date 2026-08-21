@@ -1,0 +1,13 @@
+# Cursor не должен индексировать рабочие данные:
+# отчёты, аудио, sqlite. Иначе Remote SSH зависает на слабом VPS.
+runtime/
+logs/
+__pycache__/
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.sqlite
+*.db
+frontend/node_modules/
+.git/cursor/

@@ -86,3 +86,67 @@
 - обычный просмотр, вход в Quick Help и просмотр ответа Quick Help не смешиваются;
 - старый JSON v2 остаётся читаемым, новые отчёты имеют `schema_version: 3`;
 - никакой код не записывает данные в Bitrix.
+
+
+На VPS перейди в проект:
+
+```bash
+cd /opt/Neuro_rop_practice
+```
+
+Чтобы вечером дозабрать сегодняшний день до текущего момента:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py collect --from 2026-08-20
+```
+
+Это только read-only чтение Bitrix — без аудио, транскрибации и OpenAI.
+
+После успешного `collect` получи отчёт:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py report --from 2026-08-20 --to 2026-08-20
+```
+
+Если нужны структурированные данные для дальнейшей обработки Codex:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py report --from 2026-08-20 --to 2026-08-20 --format json
+```
+Сейчас JSON никуда автоматически не сохраняется — он выводится только в терминал и не попадает в `docker logs`.
+
+-------------------------------------------------------------------------
+
+Сохрани его в защищённую runtime-папку VPS:
+
+```bash
+install -d -m 700 /opt/Neuro_rop_practice/runtime/trajectory_reports
+umask 077
+docker exec neuro-rop-api python scripts/manager_trajectory.py report \
+  --from 2026-08-20 \
+  --to 2026-08-20 \
+  --format json \
+  > /opt/Neuro_rop_practice/runtime/trajectory_reports/trajectory-2026-08-20.json
+```
+
+Проверить, что файл создан:
+
+```bash
+ls -lh /opt/Neuro_rop_practice/runtime/trajectory_reports/trajectory-2026-08-20.json
+```
+
+Сам JSON лучше не открывать через `cat`: он снова заполнит терминал. Для обычного просмотра запускай текстовую версию:
+
+```bash
+docker exec neuro-rop-api python scripts/manager_trajectory.py report \
+  --from 2026-08-20 \
+  --to 2026-08-20
+```
+
+Файл останется на VPS здесь:
+
+```text
+/opt/Neuro_rop_practice/runtime/trajectory_reports/trajectory-2026-08-20.json
+```
+
+Он содержит внутренние CRM-идентификаторы, поэтому его не нужно добавлять в Git или пересылать в открытые чаты.
