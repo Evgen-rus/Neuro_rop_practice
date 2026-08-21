@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ApiError,
   confirmManagerSituation,
   fetchAutomaticAnalysisLatest,
   fetchDealControl,
@@ -100,7 +101,7 @@ import {
 } from './dealPush'
 import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
 import { DailyControl } from './DailyControl'
-import { DealReviewCard } from './DealReviewCard'
+import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 
 type DealControlView = 'dashboard' | 'rop' | 'daily' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -511,6 +512,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const defaultView: DealControlView = user.role === 'manager' ? 'dashboard' : user.role === 'rop' ? 'rop' : 'dashboard'
   const [data, setData] = useState<DealControlDashboard | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
   const [error, setError] = useState('')
@@ -563,6 +565,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const reload = useCallback(async () => {
     setLoading(true)
     setError('')
+    setLoadErrorStatus(null)
     try {
       const response = await fetchDealControl()
       setData(response)
@@ -573,6 +576,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         return response.deals.find((deal) => deal.can_open)?.deal_id || ''
       })
     } catch (reason) {
+      setLoadErrorStatus(reason instanceof ApiError ? reason.status : null)
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setLoading(false)
@@ -897,7 +901,31 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     return <main className="dc-shell dc-loading"><span className="dc-spinner" />Загружается контроль сделок…</main>
   }
 
-  if (!data?.scope.configured) {
+  if (!data) {
+    const reason = loadErrorStatus === null
+      ? 'Не удалось связаться с сервером.'
+      : loadErrorStatus >= 500
+        ? `Сервер временно недоступен (${loadErrorStatus}).`
+        : loadErrorStatus === 403
+          ? 'Недостаточно прав для загрузки приложения.'
+          : `Сервер вернул ошибку (${loadErrorStatus}).`
+    return <main className="dc-setup">
+      <section>
+        <span className="dc-eyebrow">НейроРОП</span>
+        <h1>Не удалось загрузить приложение «НейроРОП»</h1>
+        <p>Не удалось получить данные с сервера.</p>
+        <p className="dc-alert error" role="alert">{reason}</p>
+        <p>Попробуйте ещё раз. Если ошибка повторится, передайте этот текст администратору.</p>
+        <div>
+          <button className="dc-button primary" onClick={() => void reload()}>Попробовать снова</button>
+          <button className="dc-button" onClick={() => window.location.reload()}>Перезагрузить НейроРОП</button>
+          {onLogout ? <button className="dc-button" onClick={() => void onLogout()}>Выйти</button> : null}
+        </div>
+      </section>
+    </main>
+  }
+
+  if (!data.scope.configured) {
     if (user.role !== 'admin') {
       return <main className="dc-setup"><section><h1>Контроль сделок пока не настроен</h1><p>Попросите администратора настроить рабочую выборку.</p>{onLogout ? <button className="dc-button" onClick={() => void onLogout()}>Выйти</button> : null}</section></main>
     }
@@ -1649,6 +1677,8 @@ function DealDetail(props: {
       onTranscribe={transcribeVoice}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
       onToggleChecklistItem={props.onToggleChecklistItem}
+      asked={askedByDeal[deal.deal_id] || [false, false]}
+      onToggleAsked={toggleAsked}
     /> : <RopDealScreen
       deal={deal}
       asked={askedByDeal[deal.deal_id] || [false, false]}
@@ -1697,6 +1727,8 @@ type ManagerDealScreenProps = {
   onTranscribe: (audio: Blob) => Promise<string>
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
+  asked: [boolean, boolean]
+  onToggleAsked: (index: 0 | 1) => void
 }
 
 function ManagerDealScreen(props: ManagerDealScreenProps) {
@@ -1730,6 +1762,16 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       />
       <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
+      {props.deal.review ? (
+        <section className="dc-daily-card">
+          {/* Те же два блока, что у РОПа. Они внутри confirmed: без подтверждения ситуации их нет. */}
+          <DealQualityAndFocus
+            deal={props.deal.review}
+            asked={props.asked}
+            onToggleAsked={props.onToggleAsked}
+          />
+        </section>
+      ) : null}
       {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
         deal={props.deal}
         workspace={props.assistantWorkspace}

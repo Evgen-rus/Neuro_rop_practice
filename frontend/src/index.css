@@ -2656,6 +2656,7 @@ textarea {
 
 .dc-setup > section > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

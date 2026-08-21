@@ -96,47 +96,20 @@ function channelIcon(channel: string) {
   return 'message'
 }
 
-export function DealReviewCard(props: {
-  deal: DailyControlDeal | null
+export function DealQualityAndFocus(props: {
+  deal: DailyControlDeal
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
-  onCopyScript: () => void
-  copyNotice: string
-  openEventId: string
-  onToggleEvent: (eventId: string) => void
-  showHeader?: boolean
-  emptyText?: string
-  contentNote?: string
-  scriptHint?: string
 }) {
   const deal = props.deal
-  if (!deal) {
-    return <section className="dc-daily-card"><p className="dc-daily-empty-list">{props.emptyText || 'Выберите другую категорию, чтобы открыть сделку.'}</p></section>
-  }
   const quality = deal.quality
-  const communications = deal.communications_today
-  const lastTouch = communications.items[communications.items.length - 1]
-  const checklist = deal.checklist
-  const contentNote = props.contentNote || DEFAULT_CONTENT_NOTE
-  const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
-  const script = meetingScript(deal)
   const qualityCaption = quality.status === 'assessed' && quality.confirmed_count != null
     ? `${quality.confirmed_count} из ${quality.total} подтверждены`
     : quality.status === 'insufficient_evidence'
       ? INSUFFICIENT_QUALITY_LABEL
       : NO_DATA
   return (
-    <section className="dc-daily-card">
-      {props.showHeader !== false ? (
-        <header className="dc-daily-card-head">
-          <div>
-            <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
-            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {deal.stage_name || NO_DATA}</p>
-          </div>
-          <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
-        </header>
-      ) : null}
-
+    <>
       <article className="dc-daily-block">
         <header className="dc-daily-block-title">
           <span className="dc-daily-title-with-icon">
@@ -226,6 +199,46 @@ export function DealReviewCard(props: {
           </div>
         </div>
       </article>
+    </>
+  )
+}
+
+export function DealReviewCard(props: {
+  deal: DailyControlDeal | null
+  asked: [boolean, boolean]
+  onToggleAsked: (index: 0 | 1) => void
+  onCopyScript: () => void
+  copyNotice: string
+  openEventId: string
+  onToggleEvent: (eventId: string) => void
+  showHeader?: boolean
+  emptyText?: string
+  contentNote?: string
+  scriptHint?: string
+}) {
+  const deal = props.deal
+  if (!deal) {
+    return <section className="dc-daily-card"><p className="dc-daily-empty-list">{props.emptyText || 'Выберите другую категорию, чтобы открыть сделку.'}</p></section>
+  }
+  const communications = deal.communications_today
+  const lastTouch = communications.items[communications.items.length - 1]
+  const checklist = deal.checklist
+  const contentNote = props.contentNote || DEFAULT_CONTENT_NOTE
+  const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
+  const script = meetingScript(deal)
+  return (
+    <section className="dc-daily-card">
+      {props.showHeader !== false ? (
+        <header className="dc-daily-card-head">
+          <div>
+            <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
+            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {deal.stage_name || NO_DATA}</p>
+          </div>
+          <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
+        </header>
+      ) : null}
+
+      <DealQualityAndFocus deal={deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
 
       <div className="dc-daily-tiles">
         <details className="dc-daily-tile tone-ai">

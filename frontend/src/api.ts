@@ -1414,7 +1414,7 @@ export function previewAnalysisProfile(
 }
 
 export function fetchDealControl() {
-  return api<DealControlDashboard>('/api/deal-control').then(normalizeDealControlDashboard)
+  return api<DealControlDashboard>('/api/deal-control', { cache: 'no-store' }).then(normalizeDealControlDashboard)
 }
 
 export function confirmManagerSituation(dealId: string) {
