@@ -1347,8 +1347,25 @@ textarea {
 }
 
 .dc-stage-cell .dc-stage-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   align-self: stretch;
+  box-sizing: border-box;
+  height: 60px;
+  min-height: 60px;
   padding: 8px 10px;
+  overflow: hidden;
+}
+
+.dc-stage-cell .dc-stage-pill > span {
+  display: -webkit-box;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
 }
 
 .dc-stage-cell .dc-stage-meta-group {
@@ -2871,8 +2888,19 @@ textarea {
 }
 
 .dc-deal-main .dc-cell-card > p {
+  flex-wrap: nowrap;
   margin-top: auto;
   padding-top: 10px;
+}
+
+.dc-deal-created {
+  color: var(--dc-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .dc-deal-id {
@@ -2987,7 +3015,9 @@ textarea {
 }
 
 .dc-control-deadline {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   min-height: 0;
   margin: 0;
   color: #10294c;
@@ -3002,8 +3032,10 @@ textarea {
 }
 
 .dc-control-deadline span {
+  margin-top: 2px;
+  color: #5d718c;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .dc-control-cell .dc-status {

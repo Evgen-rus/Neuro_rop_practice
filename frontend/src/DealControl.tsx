@@ -1147,17 +1147,17 @@ function DealTable(props: {
         const bitrixTask = primaryBitrixTaskOf(deal)
         const controlDeadline = dateTimeParts(task?.due_at || bitrixTask?.deadline || deal.next_control_at)
         const payment = parsePaymentPeriod(deal.expected_payment_period)
+        const stageLabel = formatDealPipelineStage(deal)
         const savePayment = (week: string, month: string) => void props.onSaveFields(deal, {
           expected_payment_period: formatPaymentPeriod(week, month),
         })
         return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /></p></div></div>
-          <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <strong>{controlDeadline.date}{controlDeadline.time ? ` ${controlDeadline.time}` : ''}</strong> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
+          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
+          <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
           <div className="dc-stage-cell">
-            <span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span>
+            <span className="dc-stage-pill" title={stageLabel}><span>{stageLabel}</span></span>
             <div className="dc-stage-meta-group">
               <span className="dc-stage-meta">♟ {deal.manager_name || 'Не назначен'}</span>
-              <span className="dc-stage-meta">Создана {dateOnly(deal.created_at_crm)}</span>
             </div>
           </div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
