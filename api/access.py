@@ -26,6 +26,7 @@ _LIGHTWEIGHT_DEAL_FIELDS = (
     "stage_id",
     "stage_name",
     "pipeline_id",
+    "pipeline_name",
     "amount",
     "currency_id",
     "created_at_crm",

@@ -1,6 +1,7 @@
 import type { DailyControlDeal } from './api'
 import { CommunicationContent } from './CommunicationContent'
 import { formatMoscowDateTime } from './dateTime'
+import { formatDealPipelineStage } from './dealDisplay'
 
 const QUALITY_LABELS = {
   next_action: 'Следующий шаг',
@@ -233,7 +234,7 @@ export function DealReviewCard(props: {
         <header className="dc-daily-card-head">
           <div>
             <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
-            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {deal.stage_name || NO_DATA}</p>
+            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {formatDealPipelineStage(deal)}</p>
           </div>
           <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
         </header>

@@ -8,7 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from api.candidates import fetch_candidate_activities_bulk, load_pipeline_stage_names, make_client, parse_bitrix_dt
+from api.candidates import (
+    fetch_candidate_activities_bulk,
+    list_crm_pipelines,
+    load_pipeline_stage_names,
+    make_client,
+    parse_bitrix_dt,
+)
 from api.jobs import unwrap_analysis_payload
 from bitrix.customer_history import activity_type, build_normalized_communications
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
@@ -829,6 +835,11 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
 
     current = now or datetime.now(MSK_TZ)
     deals = list_deal_control_deals(db_path)
+    pipeline_names = {
+        str(item.get("id") or ""): str(item.get("name") or "")
+        for item in list_crm_pipelines().get("deal_pipelines") or []
+        if isinstance(item, dict) and item.get("id") is not None
+    }
     active_deal_ids = [str(deal["deal_id"]) for deal in deals]
     all_tasks = list_deal_control_tasks(db_path, deal_ids=active_deal_ids) if active_deal_ids else []
     bitrix_states = {
@@ -846,6 +857,11 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     missing = 0
     for deal in deals:
         deal = dict(deal)
+        pipeline_id = str(deal.get("pipeline_id") or "").strip()
+        deal["pipeline_name"] = (
+            pipeline_names.get(pipeline_id)
+            or (f"Воронка {pipeline_id}" if pipeline_id else None)
+        )
         communications_today = deal.get("communications_today")
         current_date = current.astimezone(MSK_TZ).date().isoformat()
         if not isinstance(communications_today, dict) or communications_today.get("date") != current_date:

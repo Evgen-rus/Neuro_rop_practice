@@ -175,6 +175,25 @@ class DealControlTests(unittest.TestCase):
             "manager_action_block": {"recommended_channel": "phone"},
         }
 
+    def test_dashboard_projects_pipeline_name_and_safe_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            catalog = {
+                "deal_pipelines": [
+                    {"id": "15", "name": "Основные продажи", "stages": []},
+                ],
+            }
+            with patch("api.deal_control.list_crm_pipelines", return_value=catalog):
+                named = build_deal_control_dashboard(db_path=db_path)["deals"][0]
+            self.assertEqual(named["pipeline_name"], "Основные продажи")
+            self.assertEqual(named["review"]["pipeline_name"], "Основные продажи")
+
+            with patch("api.deal_control.list_crm_pipelines", return_value={"deal_pipelines": []}):
+                fallback = build_deal_control_dashboard(db_path=db_path)["deals"][0]
+            self.assertEqual(fallback["pipeline_name"], "Воронка 15")
+            self.assertEqual(fallback["review"]["pipeline_name"], "Воронка 15")
+
     def test_neuro_recommendation_materialization_is_idempotent_and_uses_latest_report(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

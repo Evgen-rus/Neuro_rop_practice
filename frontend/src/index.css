@@ -1302,6 +1302,46 @@ textarea {
   font-size: 8px;
 }
 
+.dc-rop-deal-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.dc-rop-deal-link {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dc-blue);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+  text-overflow: ellipsis;
+}
+
+.dc-rop-deal-link:hover,
+.dc-rop-deal-link:focus-visible {
+  text-decoration: underline;
+}
+
+.dc-deal-status-indicator {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dc-deal-status-indicator.red { background: var(--dc-red); }
+.dc-deal-status-indicator.yellow { background: var(--dc-orange); }
+.dc-deal-status-indicator.green { background: var(--dc-green); }
+
 .dc-stage-pill {
   display: inline-block;
   padding: 4px 7px;
@@ -8101,21 +8141,6 @@ ul.facts.bad li:before {
   box-shadow: inset 3px 0 0 var(--daily-blue);
 }
 
-.dc-daily-status {
-  display: grid;
-  width: 19px;
-  height: 19px;
-  place-items: center;
-  border-radius: 999px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.dc-daily-deal.red .dc-daily-status { background: var(--daily-red); }
-.dc-daily-deal.yellow .dc-daily-status { background: var(--daily-yellow); }
-.dc-daily-deal.green .dc-daily-status { background: var(--daily-green); }
-
 .dc-daily-deal header {
   display: flex;
   justify-content: space-between;
@@ -8123,6 +8148,7 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-deal strong { overflow-wrap: anywhere; }
+.dc-deal-pipeline-stage { display: block; margin-top: 2px; }
 .dc-daily-deal p { margin: 6px 0; color: #38516d; }
 .dc-daily-deal p.clamp {
   display: -webkit-box;

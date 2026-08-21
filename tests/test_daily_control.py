@@ -45,6 +45,9 @@ def _deal_row(**overrides):
         "title": "Сделка 101",
         "manager_id": "10",
         "manager_name": "Иванов Иван",
+        "pipeline_id": "15",
+        "pipeline_name": "Основные продажи",
+        "stage_id": "C15:NEW",
         "stage_name": "КП отправлено",
         "amount": "100000",
         "currency_id": "RUB",
@@ -254,8 +257,17 @@ class SnapshotBuilderTests(unittest.TestCase):
             self.assertEqual(saved["direct_question"], live["direct_question"])
             self.assertEqual(saved["quality"], live["quality"])
             self.assertEqual(saved["generic_question"], live["generic_question"])
+            self.assertEqual(saved["status"], live["status"])
+            self.assertEqual(saved["pipeline_id"], "15")
+            self.assertEqual(saved["pipeline_name"], live["pipeline_name"])
         self.assertEqual(saved["script"], live["script"])
         self.assertEqual(saved["ai_context"], live["ai_context"])
+
+    def test_review_card_preserves_pipeline_contract(self) -> None:
+        card = project_deal_review_card(_deal_row())
+        self.assertEqual(card["pipeline_id"], "15")
+        self.assertEqual(card["pipeline_name"], "Основные продажи")
+        self.assertEqual(card["stage_id"], "C15:NEW")
 
     def test_review_script_is_manager_coaching_not_client_call_script(self) -> None:
         card = project_deal_review_card(_deal_row(coaching={

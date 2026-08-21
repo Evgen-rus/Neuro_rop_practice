@@ -651,6 +651,8 @@ export type DailyControlDeal = {
   manager_name?: string | null
   stage_id?: string | null
   stage_name?: string | null
+  pipeline_id?: string | null
+  pipeline_name?: string | null
   amount?: string | null
   currency_id?: string | null
   status: DailyControlStatus
@@ -719,6 +721,7 @@ export type DealControlDeal = {
   stage_id?: string | null
   stage_name?: string | null
   pipeline_id?: string | null
+  pipeline_name?: string | null
   amount?: string | null
   currency_id?: string | null
   created_at_crm?: string | null

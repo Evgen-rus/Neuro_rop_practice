@@ -440,6 +440,8 @@ def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
         "manager_name": deal.get("manager_name"),
         "stage_id": deal.get("stage_id"),
         "stage_name": deal.get("stage_name"),
+        "pipeline_id": deal.get("pipeline_id"),
+        "pipeline_name": deal.get("pipeline_name"),
         "amount": deal.get("amount"),
         "currency_id": deal.get("currency_id") or "RUB",
         "status": status,

@@ -14,14 +14,14 @@ import {
 import { copyTextToClipboard } from './contextPersist'
 import { formatMoscowDateTime, parseMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
+import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
+import { DealStatusIndicator } from './dealPresentation'
 
-const BITRIX_DEAL_BASE_URL = 'https://obtorg.bitrix24.ru/crm/deal/details'
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
 const SPLITTER_DEFAULT = 380
 const SPLITTER_MIN = 280
 const SPLITTER_MAX_MARGIN = 320
 const SPLITTER_STEP = 24
-const STATUS_SYMBOL: Record<DailyControlStatus, string> = { red: '!', yellow: '?', green: '✓' }
 const STATUS_FILTERS: Array<{ id: 'all' | DailyControlStatus; label: string }> = [
   { id: 'all', label: 'Все' },
   { id: 'red', label: 'Красные' },
@@ -62,10 +62,6 @@ function sameMinute(left?: string | null, right?: string | null) {
   const second = parseMoscowDateTime(right)
   if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) return left === right
   return Math.abs(first.getTime() - second.getTime()) < 60_000
-}
-
-function bitrixDealUrl(dealId: string) {
-  return `${BITRIX_DEAL_BASE_URL}/${encodeURIComponent(dealId)}/`
 }
 
 function money(value?: string | number | null, currency = 'RUB') {
@@ -533,13 +529,13 @@ function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selecte
   const communications = deal.communications_today
   return (
     <button type="button" className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}`} role="tab" aria-selected={selected} onClick={onSelect}>
-      <span className="dc-daily-status" aria-label={deal.status_label}>{STATUS_SYMBOL[deal.status]}</span>
+      <DealStatusIndicator status={deal.status} label={deal.status_label} />
       <div>
         <header>
           <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
           <b>{money(deal.amount, deal.currency_id || 'RUB')}</b>
         </header>
-        <small>{deal.stage_name || 'Нет данных'} · {deal.status_label}</small>
+        <small className="dc-deal-pipeline-stage">{formatDealPipelineStage(deal)}</small>
         <p className={selected ? 'full' : 'clamp'}>{deal.attention_reason}</p>
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.completed} касаний сегодня · ${talkTime(communications.duration_seconds)} разговоров`}</span>
