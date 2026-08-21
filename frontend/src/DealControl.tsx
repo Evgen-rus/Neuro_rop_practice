@@ -69,7 +69,7 @@ import {
   isCallScriptContent,
   isNeuroRopTask,
 } from './api'
-import { formatMoscowDateTime, moscowDateParts, parseMoscowDateTime } from './dateTime'
+import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
   automaticAnalysisCountersText,
@@ -104,7 +104,7 @@ import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
-import { DealStatusIndicator } from './dealPresentation'
+import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 
 type DealControlView = 'dashboard' | 'rop' | 'daily' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -253,13 +253,6 @@ function dateOnly(value?: string | null) {
     month: '2-digit',
     year: 'numeric',
   }) || value
-}
-
-function stageAge(value?: string | null) {
-  if (!value) return null
-  const parsed = parseMoscowDateTime(value)
-  if (Number.isNaN(parsed.getTime())) return null
-  return Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 86_400_000))
 }
 
 function taskStatus(task?: DealControlTask | null) {
@@ -1148,20 +1141,23 @@ function DealTable(props: {
   const monthOptions = paymentMonthOptions()
   return <div className="dc-table-wrap">
     <div className="dc-table-scroll">
-      <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Стадия</span><span>Сумма и прогноз оплаты</span></div>
+      <div className="dc-deal-columns"><span>Сделка</span><span>Дата и время контроля</span><span>Этап</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
         const task = currentTaskOf(deal)
         const bitrixTask = primaryBitrixTaskOf(deal)
-        const age = stageAge(deal.modified_at_crm)
         const controlDeadline = dateTimeParts(task?.due_at || bitrixTask?.deadline || deal.next_control_at)
         const payment = parsePaymentPeriod(deal.expected_payment_period)
         const savePayment = (week: string, month: string) => void props.onSaveFields(deal, {
           expected_payment_period: formatPaymentPeriod(week, month),
         })
         return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
-          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><span className="dc-deal-id">#{deal.deal_id}</span><span>♟ {deal.manager_name || 'Не назначен'}</span><span>Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
+          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><small>Контроль</small><time className="dc-control-deadline">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
-          <div className="dc-stage-cell"><div className="dc-cell-card"><small>Воронка → текущая стадия</small><strong>{formatDealPipelineStage(deal)}</strong><p>Сделка обновлена {dateOnly(deal.modified_at_crm)}{age == null ? null : <span className={age > 30 ? 'danger' : age > 14 ? 'warn' : ''}>{age} дн.</span>}</p></div></div>
+          <div className="dc-stage-cell">
+            <span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span>
+            <span className="dc-stage-meta">♟ {deal.manager_name || 'Не назначен'}</span>
+            <span className="dc-stage-meta">Создана {dateOnly(deal.created_at_crm)}</span>
+          </div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select aria-label="Вероятность оплаты" value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
             <select aria-label="Неделя оплаты" value={payment.week} onChange={(event) => savePayment(event.target.value, payment.month)}><option value="">— нед.</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select>
@@ -1189,18 +1185,10 @@ function TaskTable({ view, deals, selectedId, onSelect }: { view: DealControlVie
             {view === 'rop' && deal.review ? (
               <div className="dc-rop-deal-title">
                 <DealStatusIndicator status={deal.review.status} label={deal.review.status_label} />
-                <a
-                  className="dc-rop-deal-link"
-                  href={bitrixDealUrl(deal.deal_id)}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  {deal.title || `Сделка #${deal.deal_id}`}
-                </a>
+                <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
               </div>
             ) : <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>}
-            <span className="dc-deal-id">#{deal.deal_id}</span>
+            <BitrixDealIdLink dealId={deal.deal_id} />
           </div>
           <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span>{view === 'rop' ? <small>♟ {deal.manager_name}</small> : null}</div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
@@ -1637,8 +1625,17 @@ function DealDetail(props: {
     <header className="dc-detail-top">
       <div className="dc-detail-heading">
         <div className="dc-deal-title-row">
-          <h2>Сделка #{deal.deal_id}</h2>
-          <a className="dc-button primary dc-bitrix-detail-link" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">B24 ↗</a>
+          <h2>Сделка</h2>
+          <a
+            className="dc-button primary dc-bitrix-detail-link"
+            href={bitrixDealUrl(deal.deal_id)}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}
+            title="Открыть в Bitrix"
+          >
+            #{deal.deal_id}
+          </a>
           <section className="dc-detail-stats dc-detail-stats-compact" aria-label="Основные данные сделки">
             <div className="dc-detail-stat-grow" title={`Воронка и этап: ${formatDealPipelineStage(deal)}`} aria-label={`Воронка и этап: ${formatDealPipelineStage(deal)}`}><span aria-hidden="true">◆</span><strong>{formatDealPipelineStage(deal)}</strong></div>
             <div className="dc-detail-stat-fixed" title={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`} aria-label={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`}><span aria-hidden="true">◔</span><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>

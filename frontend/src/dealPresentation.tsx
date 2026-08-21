@@ -1,9 +1,26 @@
 import type { DailyControlStatus } from './api'
+import { bitrixDealUrl } from './dealDisplay'
 
 const STATUS_SYMBOL: Record<DailyControlStatus, string> = {
   red: '!',
   yellow: '?',
   green: '✓',
+}
+
+export function BitrixDealIdLink({ dealId }: { dealId: string }) {
+  return (
+    <a
+      className="dc-deal-id"
+      href={bitrixDealUrl(dealId)}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Открыть сделку #${dealId} в Bitrix`}
+      title="Открыть в Bitrix"
+      onClick={(event) => event.stopPropagation()}
+    >
+      #{dealId}
+    </a>
+  )
 }
 
 export function DealStatusIndicator(props: {
