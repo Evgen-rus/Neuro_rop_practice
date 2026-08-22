@@ -40,6 +40,11 @@ export type TrajectoryManager = {
   manager_id: string
   manager_name: string
   totals: TrajectoryTotals
+  call_summary: Record<'incoming' | 'outgoing' | 'unknown', {
+    count: number
+    duration_seconds: number
+    missing_duration: number
+  }>
   attention: {
     distribution: { deals: number; leads: number; other: number }
     context_switches: {
@@ -56,7 +61,7 @@ export type TrajectoryManager = {
 export type TrajectoryDay = {
   date: string
   timezone: 'Europe/Moscow'
-  bucket_minutes: 15 | 30 | 60
+  bucket_minutes: 30 | 60
   period: { from: string; to: string }
   axis: { from: string; to: string; slots: Array<{ from: string; to: string; label: string }> }
   collection: {
@@ -2324,7 +2329,7 @@ export function saveCompactFeedback(
 
 export function fetchTrajectoryDay(params: {
   date: string
-  bucket_minutes: 15 | 30 | 60
+  bucket_minutes: 30 | 60
   manager_id?: string
   category?: TrajectoryCategory
   q?: string

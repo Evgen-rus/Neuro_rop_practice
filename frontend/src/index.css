@@ -3710,6 +3710,7 @@ textarea {
 .trajectory-manager-title strong, .trajectory-manager-title small { display: block; }
 .trajectory-manager-title strong { color: #162a42; font-size: 13px; }
 .trajectory-manager-title small { margin-top: 3px; color: #6d8095; font-size: 9.5px; }
+.trajectory-manager-call-summary { display: block; margin-top: 4px; color: #35658f; font-size: 9.5px; font-weight: 700; line-height: 1.35; }
 .trajectory-density-grid { padding: 7px 0; }
 .trajectory-density { position: relative; min-width: 0; border: 0; border-left: 1px solid rgba(255,255,255,.55); border-radius: 2px; color: #23415f; cursor: pointer; }
 .trajectory-density:disabled { cursor: default; }

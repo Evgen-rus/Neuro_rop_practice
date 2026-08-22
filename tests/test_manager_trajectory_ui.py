@@ -44,7 +44,7 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
             snapshot={"TITLE": "Лид Бета", "STATUS_ID": "NEW"}, modified_at=START.isoformat(),
             field_allowlist=["TITLE", "STATUS_ID"],
         )
-        self._event("deal", "101", "call", START + timedelta(minutes=5), "a1")
+        self._event("deal", "101", "call", START + timedelta(minutes=5), "a1", direction="2")
         self._event("lead", "202", "email", START + timedelta(minutes=15), "a2")
         self._event("deal", "101", "task", START + timedelta(minutes=35), "a3")
         record_manager_trajectory_event(
@@ -74,6 +74,8 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         *,
         manager_id: str = "10",
         description: str | None = None,
+        direction: str | None = None,
+        duration_seconds: int | None = 65,
     ) -> None:
         record_manager_trajectory_event(
             self.db_path, entity_type=entity_type, entity_id=entity_id, manager_id=manager_id,
@@ -84,7 +86,8 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
                 "last_updated": at.isoformat(), "subject": f"Событие {activity_id}",
                 "description": description,
                 "completed": kind == "task",
-                "call": {"duration_seconds": 65} if kind == "call" else {},
+                "direction": direction,
+                "call": {"duration_seconds": duration_seconds} if kind == "call" else {},
             },
         )
 
@@ -101,6 +104,43 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertNotIn("description", manager["buckets"][0])
         self.assertFalse(result["collection"]["is_current_day"])
         self.assertIsNotNone(result["collection"]["last_success_at"])
+
+    def test_call_summary_splits_direction_and_known_duration(self) -> None:
+        self._event(
+            "deal", "101", "call", START + timedelta(minutes=6), "incoming",
+            direction="1", duration_seconds=125,
+        )
+        self._event(
+            "deal", "101", "call", START + timedelta(minutes=7), "outgoing",
+            direction="outgoing", duration_seconds=35,
+        )
+        self._event(
+            "deal", "101", "call", START + timedelta(minutes=8), "unknown",
+            duration_seconds=None,
+        )
+
+        manager = build_day_projection(value=DAY, db_path=self.db_path)["managers"][0]
+
+        self.assertEqual(manager["totals"]["calls"], 4)
+        self.assertEqual(
+            manager["call_summary"]["incoming"],
+            {"count": 1, "duration_seconds": 125, "missing_duration": 0},
+        )
+        self.assertEqual(
+            manager["call_summary"]["outgoing"],
+            {"count": 2, "duration_seconds": 100, "missing_duration": 0},
+        )
+        self.assertEqual(
+            manager["call_summary"]["unknown"],
+            {"count": 1, "duration_seconds": 0, "missing_duration": 1},
+        )
+
+    def test_default_bucket_is_one_hour_and_fifteen_minutes_is_rejected(self) -> None:
+        result = build_day_projection(value=DAY, db_path=self.db_path)
+
+        self.assertEqual(result["bucket_minutes"], 60)
+        with self.assertRaisesRegex(ValueError, "30 или 60"):
+            build_day_projection(value=DAY, bucket_minutes=15, db_path=self.db_path)
 
     def test_density_uses_one_maximum_across_visible_managers(self) -> None:
         save_deal_control_scope(
@@ -273,6 +313,24 @@ class ManagerTrajectoryUiAccessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"date": DAY.isoformat()})
         self.assertEqual(build.call_args.kwargs["bucket_minutes"], 30)
+
+    def test_http_default_bucket_is_one_hour(self) -> None:
+        from fastapi.testclient import TestClient
+        from api import app as api_app
+
+        admin = {
+            "id": 1, "login": "admin", "role": "admin",
+            "manager_id": None, "is_active": True,
+        }
+        with patch.object(api_app, "authenticate_request", return_value=admin), patch.object(
+            api_app, "build_manager_trajectory_day", return_value={"date": DAY.isoformat()},
+        ) as build:
+            response = TestClient(api_app.app).get(
+                "/api/admin/trajectory/day?date=2026-08-21",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(build.call_args.kwargs["bucket_minutes"], 60)
 
     def test_event_detail_endpoint_is_admin_only(self) -> None:
         from api import app as api_app

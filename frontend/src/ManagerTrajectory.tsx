@@ -62,9 +62,35 @@ function bucketMap(manager: TrajectoryManager) {
   return new Map(manager.buckets.map((bucket) => [bucket.from, bucket]))
 }
 
+function totalDurationLabel(seconds: number) {
+  const rounded = Math.max(0, Math.round(seconds))
+  const hours = Math.floor(rounded / 3600)
+  const minutes = Math.floor((rounded % 3600) / 60)
+  const rest = rounded % 60
+  if (hours) return `${hours} ч ${minutes ? `${minutes} мин` : ''}`.trim()
+  if (minutes) return `${minutes} мин ${rest ? `${rest} сек` : ''}`.trim()
+  return `${rest} сек`
+}
+
+function callSummaryLabel(manager: TrajectoryManager) {
+  const labels = { incoming: 'входящих', outgoing: 'исходящих', unknown: 'без направления' } as const
+  const parts = (['incoming', 'outgoing', 'unknown'] as const).flatMap((direction) => {
+    const item = manager.call_summary[direction]
+    if (!item.count) return []
+    const duration = item.count === item.missing_duration
+      ? `длительность не указана`
+      : totalDurationLabel(item.duration_seconds)
+    const missing = item.missing_duration && item.count !== item.missing_duration
+      ? ` · ${item.missing_duration} без длительности`
+      : ''
+    return [`${item.count} ${labels[direction]} · ${duration}${missing}`]
+  })
+  return `${manager.totals.calls} звонков${parts.length ? `: ${parts.join('; ')}` : ''}`
+}
+
 export function ManagerTrajectory() {
   const [date, setDate] = useState(moscowDateInputValue)
-  const [bucketMinutes, setBucketMinutes] = useState<15 | 30 | 60>(30)
+  const [bucketMinutes, setBucketMinutes] = useState<30 | 60>(60)
   const [category, setCategory] = useState<TrajectoryCategory>('all')
   const [managerId, setManagerId] = useState('')
   const [query, setQuery] = useState('')
@@ -184,8 +210,8 @@ export function ManagerTrajectory() {
         <button type="button" className="today" onClick={() => setDate(moscowDateInputValue())}>Сегодня</button>
       </div>
       <div className="trajectory-filter-row">
-        <label>Шаг<select value={bucketMinutes} onChange={(event) => setBucketMinutes(Number(event.target.value) as 15 | 30 | 60)}>
-          <option value={60}>1 час</option><option value={30}>30 минут</option><option value={15}>15 минут</option>
+        <label>Шаг<select value={bucketMinutes} onChange={(event) => setBucketMinutes(Number(event.target.value) as 30 | 60)}>
+          <option value={60}>1 час</option><option value={30}>30 минут</option>
         </select></label>
         <label>Менеджер<select value={managerId} onChange={(event) => setManagerId(event.target.value)}>
           <option value="">Все менеджеры</option>
@@ -226,7 +252,7 @@ export function ManagerTrajectory() {
             <div className="trajectory-manager-main">
               <button className="trajectory-manager-title" type="button" onClick={() => toggleManager(manager.manager_id)} aria-expanded={isExpanded}>
                 <span>{isExpanded ? '⌃' : '⌄'}</span>
-                <div><strong>{manager.manager_name}</strong><small>{manager.totals.events} событий · {manager.totals.deals} сделок · {manager.totals.leads} лидов · {manager.totals.calls} звонков · {manager.totals.tasks} задач · {manager.totals.communications} коммуникаций · {manager.totals.crm} CRM · {manager.totals.neurorop} НейроРОП</small></div>
+                <div><strong>{manager.manager_name}</strong><small>{manager.totals.events} событий · {manager.totals.deals} сделок · {manager.totals.leads} лидов · {manager.totals.tasks} задач · {manager.totals.communications} коммуникаций · {manager.totals.crm} CRM · {manager.totals.neurorop} НейроРОП</small><span className="trajectory-manager-call-summary">☎ {callSummaryLabel(manager)}</span></div>
               </button>
               <div className="trajectory-density-grid">
                 {day.axis.slots.map((slot) => {

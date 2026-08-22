@@ -13,7 +13,7 @@ from setup import MSK_TZ
 from storage.rop_db import DEFAULT_DB_PATH
 
 
-BUCKET_MINUTES = {15, 30, 60}
+BUCKET_MINUTES = {30, 60}
 UI_CATEGORIES = {"all", "deals", "leads", "communications", "tasks", "crm", "neurorop"}
 NEUROROP_EVENT_LABELS = {
     "generated": "Рекомендация сформирована",
@@ -315,6 +315,29 @@ def _attention(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _call_summary(events: Iterable[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    result = {
+        direction: {"count": 0, "duration_seconds": 0, "missing_duration": 0}
+        for direction in ("incoming", "outgoing", "unknown")
+    }
+    for event in events:
+        if event.get("label") != "Звонок":
+            continue
+        raw_direction = str(event.get("direction") or "").lower()
+        direction = (
+            "incoming" if raw_direction in {"1", "incoming"}
+            else "outgoing" if raw_direction in {"2", "outgoing"}
+            else "unknown"
+        )
+        result[direction]["count"] += 1
+        duration = event.get("duration_seconds")
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration >= 0:
+            result[direction]["duration_seconds"] += round(duration)
+        else:
+            result[direction]["missing_duration"] += 1
+    return result
+
+
 def _report(
     db_path: str | Path, value: date, manager_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], datetime, datetime]:
@@ -327,14 +350,14 @@ def _report(
 def build_day_projection(
     *,
     value: date,
-    bucket_minutes: int = 30,
+    bucket_minutes: int = 60,
     manager_ids: list[str] | None = None,
     category: str = "all",
     query: str = "",
     db_path: str | Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     if bucket_minutes not in BUCKET_MINUTES:
-        raise ValueError("bucket_minutes должен быть 15, 30 или 60")
+        raise ValueError("bucket_minutes должен быть 30 или 60")
     if category not in UI_CATEGORIES:
         raise ValueError("Неизвестный фильтр событий")
     report, start, end = _report(db_path, value, manager_ids)
@@ -396,6 +419,7 @@ def build_day_projection(
                 "crm": sum(item.get("category") == "crm" for item in events),
                 "neurorop": sum(item.get("category") == "neurorop" for item in events),
             },
+            "call_summary": _call_summary(events),
             "attention": _attention(events),
             "buckets": list(buckets.values()),
         })

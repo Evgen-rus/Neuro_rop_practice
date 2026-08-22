@@ -766,7 +766,7 @@ def automatic_analysis_latest() -> dict[str, Any]:
 @app.get("/api/admin/trajectory/day")
 def manager_trajectory_day_get(
     date_: date = Query(alias="date"),
-    bucket_minutes: int = Query(default=30),
+    bucket_minutes: int = Query(default=60),
     manager_id: str | None = None,
     category: Literal["all", "deals", "leads", "communications", "tasks", "crm", "neurorop"] = "all",
     q: str = Query(default="", max_length=120),
