@@ -28,6 +28,16 @@ def day_bounds(value: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
+def _now_moscow() -> datetime:
+    return datetime.now(MSK_TZ)
+
+
+def _effective_day_bounds(value: date) -> tuple[datetime, datetime]:
+    start, end = day_bounds(value)
+    now = _now_moscow()
+    return start, min(end, now) if value == now.date() else end
+
+
 def _parse_at(value: Any) -> datetime | None:
     if not value:
         return None
@@ -341,7 +351,7 @@ def _call_summary(events: Iterable[dict[str, Any]]) -> dict[str, dict[str, int]]
 def _report(
     db_path: str | Path, value: date, manager_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], datetime, datetime]:
-    start, end = day_bounds(value)
+    start, end = _effective_day_bounds(value)
     return build_manager_trajectory_report(
         db_path=db_path, from_at=start, to_at=end, manager_ids=manager_ids,
     ), start, end
@@ -370,11 +380,14 @@ def build_day_projection(
     first_hour = min((item.hour for item in all_datetimes), default=8)
     last_hour = max((item.hour + (1 if item.minute or item.second else 0) for item in all_datetimes), default=20)
     axis_start = start.replace(hour=max(0, min(8, first_hour)))
+    day_end = day_bounds(value)[1]
     axis_end = start.replace(hour=min(23, max(20, last_hour)))
+    axis_end = min(axis_end, end)
     if axis_end <= axis_start:
-        axis_end = min(end, axis_start + timedelta(hours=12))
-    if axis_end < end and any(item >= axis_end for item in all_datetimes):
+        axis_start = start
         axis_end = end
+    if axis_end < end and any(item >= axis_end for item in all_datetimes):
+        axis_end = min(day_end, end)
     slots: list[dict[str, Any]] = []
     cursor = axis_start
     while cursor < axis_end:
@@ -476,6 +489,9 @@ def build_window_projection(
 ) -> dict[str, Any]:
     start = from_at.astimezone(MSK_TZ) if from_at.tzinfo else from_at.replace(tzinfo=MSK_TZ)
     end = to_at.astimezone(MSK_TZ) if to_at.tzinfo else to_at.replace(tzinfo=MSK_TZ)
+    now = _now_moscow()
+    if start.date() == now.date():
+        end = min(end, now)
     if start >= end or end - start > timedelta(hours=24):
         raise ValueError("Интервал должен быть положительным и не длиннее 24 часов")
     if category not in UI_CATEGORIES:

@@ -133,6 +133,66 @@ class ManagerTrajectorySourcesTests(unittest.TestCase):
         self.assertTrue(payload["completed"])
         self.assertEqual(payload["activity_kind"], "email")
 
+    def test_future_uncompleted_activity_remains_scheduled_but_is_not_observed_work(self) -> None:
+        payload = normalize_activity_payload(
+            {
+                "ID": "planned-1",
+                "OWNER_ID": "20",
+                "OWNER_TYPE_ID": "1",
+                "TYPE_ID": "6",
+                "PROVIDER_ID": "CRM_ACTIVITY",
+                "COMPLETED": "N",
+                "START_TIME": "2026-08-22T17:12:00+03:00",
+                "END_TIME": "2026-08-22T17:42:00+03:00",
+                "DEADLINE": "2026-08-22T18:00:00+03:00",
+                "CREATED": "2026-08-22T08:10:00+03:00",
+                "LAST_UPDATED": "2026-08-22T08:20:00+03:00",
+            },
+            observed_at=datetime(2026, 8, 22, 8, 30, tzinfo=MSK_TZ),
+        )
+
+        self.assertIsNone(payload["occurred_at"])
+        self.assertFalse(payload["is_observed_workday"])
+        self.assertEqual(payload["scheduled_at"], "2026-08-22T17:12:00+03:00")
+        self.assertEqual(payload["start_time"], payload["scheduled_at"])
+        self.assertEqual(payload["end_time"], "2026-08-22T17:42:00+03:00")
+        self.assertEqual(payload["deadline"], "2026-08-22T18:00:00+03:00")
+        self.assertEqual(payload["created"], "2026-08-22T08:10:00+03:00")
+        self.assertEqual(payload["last_updated"], "2026-08-22T08:20:00+03:00")
+
+    def test_completed_call_keeps_its_real_start_time(self) -> None:
+        payload = normalize_activity_payload(
+            {
+                "TYPE_ID": "2",
+                "PROVIDER_ID": "VOXIMPLANT_CALL",
+                "COMPLETED": "Y",
+                "START_TIME": "2026-08-22T07:55:00+03:00",
+                "END_TIME": "2026-08-22T07:57:00+03:00",
+                "LAST_UPDATED": "2026-08-22T08:20:00+03:00",
+            },
+            observed_at=datetime(2026, 8, 22, 8, 30, tzinfo=MSK_TZ),
+        )
+
+        self.assertEqual(payload["activity_kind"], "call")
+        self.assertEqual(payload["occurred_at"], "2026-08-22T07:55:00+03:00")
+        self.assertEqual(payload["occurred_at_source"], "start_time")
+        self.assertTrue(payload["is_observed_workday"])
+
+    def test_completed_task_does_not_treat_future_start_as_completion_time(self) -> None:
+        payload = normalize_activity_payload(
+            {
+                "PROVIDER_ID": "CRM_TASKS_TASK",
+                "COMPLETED": "Y",
+                "START_TIME": "2026-08-22T17:12:00+03:00",
+                "LAST_UPDATED": "2026-08-22T08:20:00+03:00",
+            },
+            observed_at=datetime(2026, 8, 22, 8, 30, tzinfo=MSK_TZ),
+        )
+
+        self.assertEqual(payload["occurred_at"], "2026-08-22T08:20:00+03:00")
+        self.assertEqual(payload["occurred_at_source"], "last_updated")
+        self.assertEqual(payload["scheduled_at"], "2026-08-22T17:12:00+03:00")
+
     def test_fetch_activity_facts_uses_manager_filter_and_event_key(self) -> None:
         client = FakeClient()
         result = fetch_activity_facts(

@@ -145,12 +145,21 @@ def collect_manager_trajectory(
         if manager_id not in allowed:
             counts["ignored_outside_scope"] += 1
             continue
+        payload = fact["payload"]
+        is_observed_workday = bool(payload.get("is_observed_workday"))
+        recorded_at = (
+            fact.get("occurred_at")
+            or payload.get("last_updated")
+            or payload.get("created")
+            or _iso(end)
+        )
         record_manager_trajectory_event(
             db_path,
             entity_type=fact["entity_type"], entity_id=fact["entity_id"], manager_id=manager_id,
-            event_type="crm_activity_observed", source="bitrix",
+            event_type="crm_activity_observed" if is_observed_workday else "crm_activity_planned",
+            source="bitrix",
             source_event_key=fact["source_event_key"],
-            occurred_at=fact.get("occurred_at") or _iso(end), payload=fact["payload"],
+            occurred_at=recorded_at, payload=payload,
         )
         activity_facts.append(fact)
         counts["activities"] += 1

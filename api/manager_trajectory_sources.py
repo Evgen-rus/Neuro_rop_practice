@@ -178,10 +178,47 @@ def _first_datetime(row: dict[str, Any], keys: Iterable[str]) -> str | None:
     return None
 
 
-def normalize_activity_payload(activity: dict[str, Any]) -> dict[str, Any]:
+def _activity_occurred_at(
+    activity: dict[str, Any],
+    *,
+    kind: str,
+    completed: bool,
+    observed_at: datetime,
+) -> tuple[str | None, str | None]:
+    """Return a defensible performed-at timestamp, never a future CRM plan."""
+    if not completed:
+        return None, None
+
+    candidates = (
+        (("START_TIME", "start_time"), ("END_TIME", "end_time"),
+         ("LAST_UPDATED", "last_updated"), ("CREATED", "created"))
+        if kind in {"call", "email", "message", "meeting"}
+        else (("LAST_UPDATED", "last_updated"), ("END_TIME", "end_time"),
+              ("START_TIME", "start_time"), ("CREATED", "created"))
+    )
+    for field, source in candidates:
+        parsed = parse_bitrix_dt(activity.get(field))
+        if parsed is not None and parsed.astimezone(MSK_TZ) <= observed_at:
+            return parsed.astimezone(MSK_TZ).isoformat(timespec="seconds"), source
+    return None, None
+
+
+def normalize_activity_payload(
+    activity: dict[str, Any],
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
     """Project one CRM activity into a stable, text-preserving fact payload."""
     provider_id = str(activity.get("PROVIDER_ID") or "").upper()
     kind = "task" if provider_id.startswith("CRM_TASKS_") else activity_type(activity)
+    completed = str(activity.get("COMPLETED") or "").upper() in {"Y", "1", "TRUE"}
+    observation = (observed_at or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    occurred_at, occurred_at_source = _activity_occurred_at(
+        activity,
+        kind=kind,
+        completed=completed,
+        observed_at=observation,
+    )
     start = parse_bitrix_dt(activity.get("START_TIME"))
     end = parse_bitrix_dt(activity.get("END_TIME"))
     duration_seconds = None
@@ -207,12 +244,15 @@ def normalize_activity_payload(activity: dict[str, Any]) -> dict[str, Any]:
         "author_id": _string(activity.get("AUTHOR_ID")),
         "editor_id": _string(activity.get("EDITOR_ID")),
         "direction": _string(activity.get("DIRECTION")),
-        "completed": str(activity.get("COMPLETED") or "").upper() in {"Y", "1", "TRUE"},
+        "completed": completed,
         "status": _string(activity.get("STATUS")),
         "subject": activity.get("SUBJECT"),
         "description": activity.get("DESCRIPTION"),
         "description_type": _string(activity.get("DESCRIPTION_TYPE")),
-        "occurred_at": _first_datetime(activity, ("START_TIME", "CREATED", "DEADLINE", "LAST_UPDATED")),
+        "occurred_at": occurred_at,
+        "occurred_at_source": occurred_at_source,
+        "is_observed_workday": occurred_at is not None,
+        "scheduled_at": _iso(activity.get("START_TIME")),
         "start_time": _iso(activity.get("START_TIME")),
         "end_time": _iso(activity.get("END_TIME")),
         "deadline": _iso(activity.get("DEADLINE")),
@@ -291,8 +331,9 @@ def fetch_activity_facts(client: Any, manager_ids: list[str], start: datetime, e
     errors: dict[str, Any] = {}
     _errors_add(errors, "crm.activity.list", response)
     facts: list[dict[str, Any]] = []
+    observed_at = min(end.astimezone(MSK_TZ), datetime.now(MSK_TZ))
     for activity in _result_items(response):
-        payload = normalize_activity_payload(activity)
+        payload = normalize_activity_payload(activity, observed_at=observed_at)
         entity_type = str(payload.get("owner_type") or "")
         if entity_type not in {"deal", "lead"}:
             continue

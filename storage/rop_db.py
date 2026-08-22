@@ -86,6 +86,7 @@ MANAGER_TRAJECTORY_EVENT_TYPES = frozenset({
     "quick_help_opened",
     "manager_communication_completed",
     "crm_activity_observed",
+    "crm_activity_planned",
     "crm_task_history_observed",
     "crm_timeline_comment_observed",
     "crm_stage_history_observed",

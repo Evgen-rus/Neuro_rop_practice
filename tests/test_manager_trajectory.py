@@ -338,6 +338,50 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         )
         self.assertEqual(report["managers"][0]["counts"]["crm_activity_observed"], 2)
 
+    def test_planned_activity_is_saved_but_not_projected_as_observed_work(self) -> None:
+        scheduled_at = (NOW + timedelta(hours=2)).isoformat()
+        last_updated = (NOW - timedelta(minutes=10)).isoformat()
+        planned_fact = {
+            "source_event_key": "crm_activity_v3:planned:1",
+            "entity_type": "deal",
+            "entity_id": "900",
+            "manager_id": "10",
+            "occurred_at": None,
+            "payload": {
+                "activity_id": "planned",
+                "activity_kind": "task",
+                "completed": False,
+                "is_observed_workday": False,
+                "occurred_at": None,
+                "scheduled_at": scheduled_at,
+                "start_time": scheduled_at,
+                "last_updated": last_updated,
+            },
+        }
+
+        with patch(
+            "api.manager_trajectory.fetch_activity_facts",
+            return_value={"facts": [planned_fact], "errors": {}},
+        ):
+            collect_manager_trajectory(
+                FakeBitrixClient(), db_path=self.db_path,
+                from_at=NOW - timedelta(days=1), to_at=NOW,
+            )
+
+        events = list_manager_trajectory_events(
+            self.db_path,
+            from_at=(NOW - timedelta(days=1)).isoformat(),
+            to_at=NOW.isoformat(),
+            manager_ids=["10"],
+        )
+        planned = next(item for item in events if item["event_type"] == "crm_activity_planned")
+        self.assertEqual(planned["payload"]["scheduled_at"], scheduled_at)
+        self.assertEqual(planned["payload"]["start_time"], scheduled_at)
+        report = build_manager_trajectory_report(
+            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        self.assertEqual(report["managers"][0]["workday"]["unique_crm_actions"], 0)
+
     def test_report_projects_manager_name_deal_timeline_and_each_view(self) -> None:
         upsert_deal_control_deal(
             self.db_path, deal_id="900", source="manager", title="Сделка", manager_id="10",

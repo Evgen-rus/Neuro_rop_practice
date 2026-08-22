@@ -415,7 +415,7 @@ function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string
   return <div className="trajectory-entity-detail">
     <div className="trajectory-entity-meta">
       <span><small>Воронка</small><b>{entity.pipeline_name || entity.pipeline_id || '—'}</b></span>
-      <span><small>Стадия</small><b>{entity.stage_name || entity.stage_id || '—'}</b></span>
+      <span><small>Текущая стадия</small><b>{entity.stage_name || entity.stage_id || '—'}</b></span>
       <span><small>Ответственный</small><b>{entity.manager_name || `#${entity.manager_id}`}</b></span>
     </div>
     {fields.length ? <details><summary>Актуальные CRM-поля ({fields.length})</summary><dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl></details> : null}

@@ -105,6 +105,37 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertFalse(result["collection"]["is_current_day"])
         self.assertIsNotNone(result["collection"]["last_success_at"])
 
+    def test_current_day_excludes_events_after_now_from_buckets_and_totals(self) -> None:
+        now = datetime(2026, 8, 20, 8, 30, tzinfo=MSK_TZ)
+
+        with patch("api.manager_trajectory_ui._now_moscow", return_value=now):
+            result = build_day_projection(value=DAY, bucket_minutes=60, db_path=self.db_path)
+
+        self.assertEqual(result["period"]["to"], "2026-08-20T08:30:00+03:00")
+        self.assertEqual(result["axis"]["to"], "2026-08-20T08:30:00+03:00")
+        self.assertEqual(result["totals"]["events"], 0)
+        manager = result["managers"][0]
+        self.assertEqual(manager["totals"]["events"], 0)
+        self.assertEqual(manager["totals"]["communications"], 0)
+        self.assertEqual(manager["totals"]["tasks"], 0)
+        self.assertEqual(manager["totals"]["crm"], 0)
+        self.assertEqual(manager["buckets"], [])
+
+    def test_historical_day_keeps_real_event_at_1712(self) -> None:
+        occurred_at = datetime(2026, 8, 20, 17, 12, tzinfo=MSK_TZ)
+        self._event("lead", "202", "call", occurred_at, "historical-1712")
+
+        with patch(
+            "api.manager_trajectory_ui._now_moscow",
+            return_value=datetime(2026, 8, 22, 8, 30, tzinfo=MSK_TZ),
+        ):
+            result = build_day_projection(value=DAY, bucket_minutes=60, db_path=self.db_path)
+
+        manager = result["managers"][0]
+        bucket = next(item for item in manager["buckets"] if item["from"].startswith("2026-08-20T17:00"))
+        self.assertEqual(bucket["count"], 1)
+        self.assertEqual(manager["totals"]["events"], 5)
+
     def test_call_summary_splits_direction_and_known_duration(self) -> None:
         self._event(
             "deal", "101", "call", START + timedelta(minutes=6), "incoming",
