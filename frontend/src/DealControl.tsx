@@ -1715,6 +1715,7 @@ function DealDetail(props: {
       openEventId={openReviewEventId}
       onToggleEvent={(eventId) => setOpenReviewEventId((current) => current === eventId ? '' : eventId)}
     />}
+    <DealMarkdownReport reportId={coaching.report_id} onCopy={props.onCopy} />
   </aside>
 }
 
@@ -2893,6 +2894,7 @@ function ManagerAssistantModal(props: {
             mainRisk={props.workspace.context.main_risk}
             discProfile={props.workspace.disc_profile}
             report={props.workspace.context.report || null}
+            onCopy={props.onCopy}
           /> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <><p className="summary">{followups.content.context_summary}</p><div>{followups.content.items.map((item) => <article key={item.item_id}><header><strong>{item.concern_or_scenario}</strong><span>{item.basis_status === 'confirmed' ? 'Подтверждено' : item.basis_status === 'inferred' ? 'Гипотеза' : 'Условный сценарий'}</span></header><h4>{item.idea}</h4><p>{item.why_it_may_help}</p><dl><div><dt>Формат</dt><dd>{item.followup_type}</dd></div><div><dt>Канал</dt><dd>{item.suggested_channel}</dd></div><div><dt>Когда</dt><dd>{item.timing}</dd></div><div><dt>Цель</dt><dd>{item.target_micro_conversion}</dd></div></dl><small>Основание: {item.evidence_summary}</small><em>{item.caution}</em></article>)}</div></> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
           {view === 'companion' ? <CompanionTextPanel
@@ -2949,6 +2951,84 @@ function ContextEvidence({ values }: { values: string[] }) {
   return values.length ? <details className="dc-deal-context-evidence"><summary>Основание · {values.length}</summary><ul>{values.map((value, index) => <li key={`${index}:${value}`}>{value}</li>)}</ul></details> : null
 }
 
+function DealMarkdownReport(props: {
+  reportId?: number | null
+  markdownAvailable?: boolean
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  const [markdown, setMarkdown] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [error, setError] = useState('')
+  const reportId = props.reportId || null
+  const canOpen = Boolean(reportId) && props.markdownAvailable !== false
+
+  useEffect(() => {
+    setMarkdown(null)
+    setOpen(false)
+    setError('')
+  }, [reportId])
+
+  async function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    if (markdown) {
+      setOpen(true)
+      return
+    }
+    if (!reportId) return
+    setLoading(true)
+    setError('')
+    try {
+      const result = await fetchReportMarkdown(reportId)
+      setMarkdown(result.markdown)
+      setOpen(true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось открыть Markdown-отчёт')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function copyMarkdown() {
+    if (!markdown) return
+    setCopying(true)
+    setError('')
+    try {
+      await props.onCopy(markdown, 'Markdown-отчёт')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось скопировать Markdown-отчёт')
+    } finally {
+      setCopying(false)
+    }
+  }
+
+  return (
+    <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown">
+      <div className="dc-markdown-report-actions">
+        <button
+          type="button"
+          className="dc-analysis-material-link"
+          disabled={loading || !canOpen}
+          onClick={() => void toggle()}
+        >
+          {loading ? 'Открываем полный отчёт…' : open ? 'Скрыть полный Markdown-отчёт' : 'Открыть полный Markdown-отчёт'}
+        </button>
+        {open && markdown ? (
+          <button type="button" className="dc-button" disabled={copying} onClick={() => void copyMarkdown()}>
+            {copying ? 'Копируем…' : 'Скопировать'}
+          </button>
+        ) : null}
+      </div>
+      {error ? <small className="dc-manager-error">{error}</small> : null}
+      {open && markdown ? <pre>{markdown}</pre> : null}
+    </section>
+  )
+}
+
 function ManagerDealContextView(props: {
   deal: DealControlDeal
   onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
@@ -2965,14 +3045,11 @@ function ManagerDealContextView(props: {
   mainRisk: string
   discProfile?: ManagerDiscProfile | null
   report: { report_id?: number | null; markdown_available: boolean } | null
+  onCopy: (text: string, label: string) => Promise<void>
 }) {
   const [priorities, setPriorities] = useState<Record<string, 1 | 2 | 3 | null>>({})
   const [priorityBusy, setPriorityBusy] = useState('')
   const [priorityError, setPriorityError] = useState('')
-  const [markdown, setMarkdown] = useState<string | null>(null)
-  const [markdownOpen, setMarkdownOpen] = useState(false)
-  const [markdownLoading, setMarkdownLoading] = useState(false)
-  const [markdownError, setMarkdownError] = useState('')
   const context = props.context
   const checklist = <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
 
@@ -2998,29 +3075,13 @@ function ManagerDealContextView(props: {
     }
   }
 
-  async function toggleMarkdown() {
-    if (markdownOpen) {
-      setMarkdownOpen(false)
-      return
-    }
-    if (markdown) {
-      setMarkdownOpen(true)
-      return
-    }
-    const reportId = props.report?.report_id
-    if (!reportId) return
-    setMarkdownLoading(true)
-    setMarkdownError('')
-    try {
-      const result = await fetchReportMarkdown(reportId)
-      setMarkdown(result.markdown)
-      setMarkdownOpen(true)
-    } catch (error) {
-      setMarkdownError(error instanceof Error ? error.message : 'Не удалось открыть Markdown-отчёт')
-    } finally {
-      setMarkdownLoading(false)
-    }
-  }
+  const markdownReport = (
+    <DealMarkdownReport
+      reportId={props.report?.report_id}
+      markdownAvailable={props.report?.markdown_available}
+      onCopy={props.onCopy}
+    />
+  )
 
   if (!context) return <section className="dc-deal-context">
     {checklist}
@@ -3031,6 +3092,7 @@ function ManagerDealContextView(props: {
       <div><small>Главный риск</small><strong>{props.mainRisk || 'Не выделен'}</strong></div>
       <div><small>DISC клиента</small><strong>{discProfileLabel(props.discProfile)}</strong></div>
     </section>
+    {markdownReport}
   </section>
 
   const truth = context.current_truth
@@ -3162,7 +3224,7 @@ function ManagerDealContextView(props: {
 
     {context.source_conflicts.length ? <section className="dc-deal-context-section warning"><h4>Противоречия источников</h4>{context.source_conflicts.map((conflict, index) => <article key={`${index}:${conflict.description}`}><strong>{conflict.description}</strong><p>{conflict.sources.join(' · ')}</p><small>Проверить: {conflict.next_check}</small></article>)}</section> : null}
 
-    <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown"><button className="dc-analysis-material-link" disabled={markdownLoading || !props.report?.report_id || props.report.markdown_available === false} onClick={() => void toggleMarkdown()}>{markdownLoading ? 'Открываем полный отчёт…' : markdownOpen ? 'Скрыть полный Markdown-отчёт' : 'Открыть полный Markdown-отчёт'}</button>{markdownError ? <small className="dc-manager-error">{markdownError}</small> : null}{markdownOpen && markdown ? <pre>{markdown}</pre> : null}</section>
+    {markdownReport}
   </section>
 }
 
