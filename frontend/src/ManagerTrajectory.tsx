@@ -420,6 +420,10 @@ function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string
     </div>
     {fields.length ? <details><summary>Актуальные CRM-поля ({fields.length})</summary><dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl></details> : null}
     <h3>Хронология дня</h3>
+    {entity.created_at ? <div className="trajectory-entity-created">
+      <time>{formatMoscowDateTime(entity.created_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time>
+      <span><b>{entity.entity_type === 'lead' ? 'Лид появился в CRM' : 'Сделка появилась в CRM'}</b><small>Системная точка начала ожидания, не действие менеджера</small></span>
+    </div> : null}
     <div className="trajectory-entity-chronology">
       {entity.chronology.map((event, index) => <TrajectoryEventRow
         event={event}

@@ -360,6 +360,10 @@ def _detail_action(event: dict[str, Any]) -> dict[str, Any]:
         "payload": payload,
         "subject": payload.get("field_label") or payload.get("field") or payload.get("comment_id"),
         "description": payload.get("comment"),
+        "is_system_creation": (
+            event_type == "crm_stage_history_observed"
+            and str(payload.get("history_type_id") or "") == "1"
+        ),
         "from_stage_id": payload.get("from_stage_id"),
         "to_stage_id": payload.get("to_stage_id") or payload.get("stage_id"),
     }
@@ -752,19 +756,28 @@ def build_manager_trajectory_report(
                 "crm_business_field_changed", "crm_stage_history_observed",
             }
         ]
-        stage_history = [item for item in detail_actions if item["event_type"] == "crm_stage_history_observed"]
+        stage_history_all = [
+            item for item in detail_actions
+            if item["event_type"] == "crm_stage_history_observed"
+        ]
         for entity_key in {
-            (item["entity_type"], item["entity_id"]) for item in stage_history
+            (item["entity_type"], item["entity_id"]) for item in stage_history_all
         }:
             previous_stage_id = None
             for item in sorted(
-                (value for value in stage_history if (value["entity_type"], value["entity_id"]) == entity_key),
+                (
+                    value for value in stage_history_all
+                    if (value["entity_type"], value["entity_id"]) == entity_key
+                ),
                 key=lambda value: (str(value.get("occurred_at") or ""), int(value["event_id"])),
             ):
                 item["from_stage_id"] = previous_stage_id
                 previous_stage_id = item.get("to_stage_id")
+        system_creation_events = [item for item in stage_history_all if item.get("is_system_creation")]
+        manager_detail_actions = [item for item in detail_actions if not item.get("is_system_creation")]
+        stage_history = [item for item in stage_history_all if not item.get("is_system_creation")]
         # Имена берём из актуальной карты в момент отчёта, а не из payload сбора.
-        for item in (*stage_actions, *stage_history):
+        for item in (*stage_actions, *stage_history_all):
             item["from_stage_name"] = _stage_label(item.get("from_stage_id"), stage_names)
             item["to_stage_name"] = _stage_label(item.get("to_stage_id"), stage_names)
         recommendations = _recommendation_usage(counted_rows)
@@ -776,13 +789,21 @@ def build_manager_trajectory_report(
         work_entities: list[dict[str, Any]] = []
         entity_keys = sorted({
             (str(item.get("entity_type") or ""), str(item.get("entity_id") or ""))
-            for item in [*crm_actions, *stage_actions, *detail_actions]
+            for item in [*crm_actions, *stage_actions, *manager_detail_actions]
             if item.get("entity_type") and item.get("entity_id")
         })
         for entity_type, entity_id in entity_keys:
             metadata = deal_meta.get(entity_id) if entity_type == "deal" else None
             state = entity_state_meta.get((entity_type, entity_id)) or {}
             snapshot = state.get("business_snapshot") if isinstance(state.get("business_snapshot"), dict) else {}
+            creation_event = min(
+                (
+                    item for item in system_creation_events
+                    if item["entity_type"] == entity_type and item["entity_id"] == entity_id
+                ),
+                key=lambda item: str(item.get("occurred_at") or ""),
+                default=None,
+            )
             pipeline_id = (
                 metadata.get("pipeline_id") if metadata
                 else snapshot.get("CATEGORY_ID") if entity_type == "deal"
@@ -804,6 +825,9 @@ def build_manager_trajectory_report(
                     else pipeline_names.get(str(pipeline_id or ""))
                 ),
                 "is_active": bool(metadata.get("is_active")) if metadata else None,
+                "created_at": snapshot.get("DATE_CREATE") or (
+                    creation_event.get("occurred_at") if creation_event else None
+                ),
                 "current_business_fields": snapshot,
                 "crm_actions": [
                     _action_reference(item) for item in crm_actions
@@ -814,17 +838,17 @@ def build_manager_trajectory_report(
                     if item.get("entity_type") == entity_type and str(item.get("entity_id")) == entity_id
                 ],
                 "task_history": [
-                    item for item in detail_actions
+                    item for item in manager_detail_actions
                     if item["event_type"] == "crm_task_history_observed"
                     and item["entity_type"] == entity_type and item["entity_id"] == entity_id
                 ],
                 "timeline_comments": [
-                    item for item in detail_actions
+                    item for item in manager_detail_actions
                     if item["event_type"] == "crm_timeline_comment_observed"
                     and item["entity_type"] == entity_type and item["entity_id"] == entity_id
                 ],
                 "business_field_changes": [
-                    item for item in detail_actions
+                    item for item in manager_detail_actions
                     if item["event_type"] == "crm_business_field_changed"
                     and item["entity_type"] == entity_type and item["entity_id"] == entity_id
                 ],
@@ -876,7 +900,8 @@ def build_manager_trajectory_report(
                 "task_history_events": counts.get("crm_task_history_observed", 0),
                 "timeline_comments": counts.get("crm_timeline_comment_observed", 0),
                 "business_field_changes": counts.get("crm_business_field_changed", 0),
-                "stage_history_events": counts.get("crm_stage_history_observed", 0),
+                "stage_history_events": len(stage_history),
+                "system_creation_events": len(system_creation_events),
                 "presence_snapshots": [
                     item for item in presence_events if str(item.get("manager_id") or "") == manager_id
                 ],
@@ -894,10 +919,10 @@ def build_manager_trajectory_report(
             },
             "correlations": _merge_deal_correlations(
                 _view_correlations(
-                    recommendations, [*crm_actions, *stage_actions, *detail_actions], report_end=end,
+                    recommendations, [*crm_actions, *stage_actions, *manager_detail_actions], report_end=end,
                 ),
                 _quick_help_opening_correlations(
-                    quick_help_openings, [*crm_actions, *stage_actions, *detail_actions], report_end=end,
+                    quick_help_openings, [*crm_actions, *stage_actions, *manager_detail_actions], report_end=end,
                 ),
             ),
         })

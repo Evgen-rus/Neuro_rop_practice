@@ -121,6 +121,7 @@ export type TrajectoryEntity = {
   manager_id: string | null
   manager_name: string | null
   period: { from: string; to: string }
+  created_at: string | null
   relevant_fields: Record<string, unknown>
   chronology: TrajectoryEvent[]
 }

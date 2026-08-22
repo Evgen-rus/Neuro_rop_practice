@@ -424,6 +424,12 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
             )
         record_manager_trajectory_event(
             self.db_path, entity_type="deal", entity_id="900", manager_id="10",
+            event_type="crm_stage_history_observed", source="bitrix_stage_history",
+            source_event_key="deal-created", occurred_at=(NOW - timedelta(hours=3, minutes=5)).isoformat(),
+            payload={"history_type_id": "1", "stage_id": "NEW"},
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="900", manager_id="10",
             event_type="deal_stage_changed", source="bitrix", source_event_key="stage-after-second-view",
             occurred_at=(NOW - timedelta(hours=1, minutes=30)).isoformat(),
             payload={"from_stage_id": "NEW", "to_stage_id": "PREPAYMENT_INVOICE"},
@@ -449,6 +455,8 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         manager = report["managers"][0]
         self.assertEqual(manager["manager_name"], "Иван Петров")
         self.assertEqual(manager["workday"]["unique_crm_actions"], 2)
+        self.assertEqual(manager["workday"]["stage_history_events"], 0)
+        self.assertEqual(manager["workday"]["system_creation_events"], 1)
         deal = next(item for item in manager["workday"]["entities"] if item["entity_id"] == "900")
         self.assertEqual(len(deal["crm_actions"]), 2)
         self.assertEqual(len(deal["stage_changes"]), 1)

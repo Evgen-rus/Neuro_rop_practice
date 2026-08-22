@@ -538,6 +538,7 @@ def build_entity_projection(
                 "manager_id": manager.get("manager_id"),
                 "manager_name": manager.get("manager_name"),
                 "period": {"from": start.isoformat(timespec="seconds"), "to": end.isoformat(timespec="seconds")},
+                "created_at": entity.get("created_at"),
                 "relevant_fields": fields,
                 "chronology": events,
             }

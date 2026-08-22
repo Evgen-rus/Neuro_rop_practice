@@ -281,6 +281,32 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertEqual(facts["Предыдущая стадия"], "Перезвонить")
         self.assertEqual(facts["Новая стадия"], "Не удалось связаться")
 
+    def test_lead_creation_is_a_marker_not_manager_work(self) -> None:
+        created_at = START - timedelta(hours=7)
+        creation = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_stage_history_observed", source="bitrix_stage_history",
+            source_event_key="lead-created", occurred_at=created_at.isoformat(),
+            payload={"history_type_id": "1", "stage_id": "NEW"},
+        )
+        moved = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="crm_stage_history_observed", source="bitrix_stage_history",
+            source_event_key="lead-taken", occurred_at=(START + timedelta(minutes=16)).isoformat(),
+            payload={"history_type_id": "2", "stage_id": "IN_PROCESS"},
+        )
+
+        day = build_day_projection(value=DAY, bucket_minutes=60, db_path=self.db_path)
+        entity = build_entity_projection(
+            entity_type="lead", entity_id="202", value=DAY, db_path=self.db_path,
+        )
+
+        self.assertEqual(day["totals"]["events"], 5)
+        self.assertEqual(entity["created_at"], created_at.isoformat())
+        chronology_ids = {item["event_id"] for item in entity["chronology"]}
+        self.assertNotIn(creation["id"], chronology_ids)
+        self.assertIn(moved["id"], chronology_ids)
+
     def test_stage_change_falls_back_to_id_when_name_is_missing(self) -> None:
         recorded = record_manager_trajectory_event(
             self.db_path, entity_type="lead", entity_id="202", manager_id="10",
