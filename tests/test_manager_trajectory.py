@@ -385,15 +385,34 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
             payload={"from_stage_id": "NEW", "to_stage_id": "PREPAYMENT_INVOICE"},
         )
 
-        report = build_manager_trajectory_report(
-            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
-        )
+        catalog = {
+            "deal_pipelines": [
+                {
+                    "id": "15",
+                    "name": "Основная",
+                    "stages": [
+                        {"id": "NEW", "name": "Новая"},
+                        {"id": "PREPAYMENT_INVOICE", "name": "Счёт на предоплату"},
+                    ],
+                }
+            ],
+            "lead_pipeline": {"id": "lead", "name": "Лиды", "stages": []},
+        }
+        with patch("api.manager_trajectory.list_crm_pipelines", return_value=catalog):
+            report = build_manager_trajectory_report(
+                db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+            )
         manager = report["managers"][0]
         self.assertEqual(manager["manager_name"], "Иван Петров")
         self.assertEqual(manager["workday"]["unique_crm_actions"], 2)
         deal = next(item for item in manager["workday"]["entities"] if item["entity_id"] == "900")
         self.assertEqual(len(deal["crm_actions"]), 2)
         self.assertEqual(len(deal["stage_changes"]), 1)
+        change = deal["stage_changes"][0]
+        self.assertEqual(change["from_stage_id"], "NEW")
+        self.assertEqual(change["to_stage_id"], "PREPAYMENT_INVOICE")
+        self.assertEqual(change["from_stage_name"], "Новая")
+        self.assertEqual(change["to_stage_name"], "Счёт на предоплату")
         recommendation = manager["product_usage"]["recommendations"][0]
         self.assertEqual(recommendation["view_count"], 2)
         self.assertEqual(recommendation["view_tracking_precision"], "occurrence")

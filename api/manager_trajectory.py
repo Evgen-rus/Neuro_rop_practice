@@ -300,6 +300,15 @@ def _crm_action(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stage_label(stage_id: Any, stage_names: dict[str, str]) -> str | None:
+    """Человеческое имя из текущего справочника; пустой или неизвестный код не подменяем."""
+    key = str(stage_id or "").strip()
+    if not key:
+        return None
+    name = str(stage_names.get(key) or "").strip()
+    return name or None
+
+
 def _stage_action(event: dict[str, Any]) -> dict[str, Any]:
     payload = _event_payload(event)
     return {
@@ -745,6 +754,10 @@ def build_manager_trajectory_report(
             ):
                 item["from_stage_id"] = previous_stage_id
                 previous_stage_id = item.get("to_stage_id")
+        # Имена берём из актуальной карты в момент отчёта, а не из payload сбора.
+        for item in (*stage_actions, *stage_history):
+            item["from_stage_name"] = _stage_label(item.get("from_stage_id"), stage_names)
+            item["to_stage_name"] = _stage_label(item.get("to_stage_id"), stage_names)
         recommendations = _recommendation_usage(counted_rows)
         quick_help_openings = _quick_help_openings(counted_rows)
         activity_counts: dict[str, int] = {}

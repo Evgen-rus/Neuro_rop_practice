@@ -215,6 +215,75 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         )
         self.assertIn({"label": "Состояние", "value": "Завершена"}, task_detail["details"])
 
+    def test_lead_stage_change_uses_pipeline_map_names(self) -> None:
+        recorded = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="lead_stage_changed", source="bitrix",
+            source_event_key="lead-stage-1",
+            occurred_at=(START + timedelta(minutes=40)).isoformat(),
+            payload={"from_stage_id": "UC_RVPA19", "to_stage_id": "UC_I4YXDJ"},
+        )
+        catalog = {
+            "deal_pipelines": [],
+            "lead_pipeline": {
+                "id": "lead",
+                "name": "Лиды",
+                "stages": [
+                    {"id": "UC_RVPA19", "name": "Перезвонить"},
+                    {"id": "UC_I4YXDJ", "name": "Не удалось связаться"},
+                ],
+            },
+        }
+
+        with patch("api.manager_trajectory.list_crm_pipelines", return_value=catalog):
+            window = build_window_projection(
+                manager_id="10", from_at=START, to_at=START + timedelta(hours=1),
+                db_path=self.db_path,
+            )
+            detail = build_event_detail_projection(
+                manager_id="10", event_id=str(recorded["id"]), value=DAY, db_path=self.db_path,
+            )
+
+        stage_event = next(item for item in window["events"] if item["label"] == "Смена стадии")
+        self.assertEqual(stage_event["description"], "Перезвонить → Не удалось связаться")
+        facts = {item["label"]: item["value"] for item in detail["details"]}
+        self.assertEqual(facts["Предыдущая стадия"], "Перезвонить")
+        self.assertEqual(facts["Новая стадия"], "Не удалось связаться")
+
+    def test_stage_change_falls_back_to_id_when_name_is_missing(self) -> None:
+        recorded = record_manager_trajectory_event(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            event_type="lead_stage_changed", source="bitrix",
+            source_event_key="lead-stage-unknown",
+            occurred_at=(START + timedelta(minutes=41)).isoformat(),
+            payload={"from_stage_id": "UC_UNKNOWN", "to_stage_id": "UC_I4YXDJ"},
+        )
+        catalog = {
+            "deal_pipelines": [],
+            "lead_pipeline": {
+                "id": "lead",
+                "name": "Лиды",
+                "stages": [
+                    {"id": "UC_I4YXDJ", "name": "Не удалось связаться"},
+                ],
+            },
+        }
+
+        with patch("api.manager_trajectory.list_crm_pipelines", return_value=catalog):
+            window = build_window_projection(
+                manager_id="10", from_at=START, to_at=START + timedelta(hours=1),
+                db_path=self.db_path,
+            )
+            detail = build_event_detail_projection(
+                manager_id="10", event_id=str(recorded["id"]), value=DAY, db_path=self.db_path,
+            )
+
+        stage_event = next(item for item in window["events"] if item["label"] == "Смена стадии")
+        self.assertEqual(stage_event["description"], "UC_UNKNOWN → Не удалось связаться")
+        facts = {item["label"]: item["value"] for item in detail["details"]}
+        self.assertEqual(facts["Предыдущая стадия"], "UC_UNKNOWN")
+        self.assertEqual(facts["Новая стадия"], "Не удалось связаться")
+
     def test_business_field_change_detail_is_human_readable(self) -> None:
         observed = observe_manager_trajectory_business_snapshot(
             self.db_path, entity_type="lead", entity_id="202", manager_id="10",

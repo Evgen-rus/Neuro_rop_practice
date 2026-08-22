@@ -80,7 +80,9 @@ def _clock(value: Any) -> str:
 
 def _activity_label(action: dict[str, Any]) -> str:
     if action.get("action_type") == "stage_change":
-        return f"смена стадии {action.get('from_stage_id') or 'не указана'} → {action.get('to_stage_id') or 'не указана'}"
+        before = action.get("from_stage_name") or action.get("from_stage_id") or "не указана"
+        after = action.get("to_stage_name") or action.get("to_stage_id") or "не указана"
+        return f"смена стадии {before} → {after}"
     labels = {
         "call": "звонок",
         "email": "письмо",
