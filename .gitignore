@@ -64,6 +64,7 @@ amo/tokens.json
 # Local client data and generated reports
 Docs/
 reports/
+model_compare/
 knowledge/
 !knowledge/
 knowledge/*
