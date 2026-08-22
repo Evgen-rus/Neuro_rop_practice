@@ -147,7 +147,6 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
         "risk_signals.md",
         "call_attempt_rules.md",
         "commercial_offer_followup.md",
-        "manager_texts.md",
         "objections.md",
         "funnel.md",
     ]
@@ -156,6 +155,7 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
         "attention_delta_core.md",
         "attention_delta_deal.md",
         "attention_delta_lead.md",
+        "manager_texts.md",
     }
     extra = sorted(
         path

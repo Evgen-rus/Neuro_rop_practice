@@ -16,7 +16,6 @@ ORIGINAL_OKF_FILES = (
     "risk_signals.md",
     "call_attempt_rules.md",
     "commercial_offer_followup.md",
-    "manager_texts.md",
     "objections.md",
     "funnel.md",
 )

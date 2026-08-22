@@ -24,6 +24,7 @@ class AttentionDeltaKnowledgeTests(unittest.TestCase):
                 "attention_delta_core.md",
                 "attention_delta_lead.md",
                 "attention_delta_deal.md",
+                "manager_texts.md",
             ):
                 (root / filename).write_text(filename, encoding="utf-8")
 
