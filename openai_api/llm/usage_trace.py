@@ -77,6 +77,9 @@ def build_daily_usage_line(event: dict[str, Any]) -> tuple[str, str]:
         f"model={_one_line(event.get('model'))}",
         f"call={_one_line(event.get('call_type'))}",
         f"entity={entity}",
+        f"semantic_attempt={_token_value(event.get('semantic_attempt_number'))}",
+        f"validation={_one_line(event.get('validation_status'))}",
+        f"transport_retry={_one_line(event.get('transport_retry'))}",
         f"input={_token_value(event.get('input_tokens'))}",
         f"cached={_token_value(event.get('cached_input_tokens'))}",
         f"cache_write={_token_value(event.get('cache_write_tokens'))}",
@@ -113,6 +116,17 @@ def build_usage_trace_event(
         "status": status,
         "error_type": error_type,
         "reasoning_effort": metadata.get("reasoning_effort"),
+        "semantic_attempt_number": metadata.get("attempt_number"),
+        "semantic_correction_retry": metadata.get("semantic_correction_retry"),
+        "validation_status": (
+            "passed" if metadata.get("validation_passed") is True
+            else "failed" if metadata.get("validation_passed") is False
+            else None
+        ),
+        "validation_error": metadata.get("validation_error"),
+        "transport_retry": metadata.get("transport_retry"),
+        "transport_attempt_count": metadata.get("transport_attempt_count"),
+        "transport_retry_count": metadata.get("transport_retry_count"),
         "cache_mode": cache.get("mode"),
         "prompt_cache_key": cache.get("prompt_cache_key"),
         "cache_breakpoint_count": cache.get("breakpoint_count"),

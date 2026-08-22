@@ -168,6 +168,33 @@ class PromptCachingRequestTests(unittest.TestCase):
                 call_analysis_json("prompt", stable_prefix="not-prefix")
         create.assert_not_called()
 
+    def test_transport_retry_is_recorded_without_exposing_error_text(self) -> None:
+        def retry_runner(operation, *, on_event, **_kwargs):
+            on_event({"status": "attempt", "attempt": 1, "max_attempts": 3, "operation": "test"})
+            on_event({
+                "status": "retry_wait",
+                "attempt": 1,
+                "max_attempts": 3,
+                "operation": "test",
+                "error": "sensitive transport detail",
+                "delay_seconds": 0,
+            })
+            on_event({"status": "attempt", "attempt": 2, "max_attempts": 3, "operation": "test"})
+            result = operation()
+            on_event({"status": "success", "attempt": 2, "max_attempts": 3, "operation": "test"})
+            return result
+
+        with (
+            patch("openai_api.llm.llm_client.run_with_retry", side_effect=retry_runner),
+            patch("openai_api.llm.llm_client.client.responses.create", return_value=response()),
+        ):
+            _, metadata = call_analysis_json("prompt")
+
+        self.assertTrue(metadata["transport_retry"])
+        self.assertEqual(metadata["transport_attempt_count"], 2)
+        self.assertEqual(metadata["transport_retry_count"], 1)
+        self.assertNotIn("transport_events", metadata)
+
     def test_more_than_four_breakpoints_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "at most 4"):
             _cache_request(

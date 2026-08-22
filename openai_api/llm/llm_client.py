@@ -248,6 +248,7 @@ def call_analysis_json(
     cache_prefixes: list[str] | None = None,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
+    defer_usage_trace: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
     request_input, cache_options, cache_metadata = _cache_request(
@@ -273,6 +274,13 @@ def call_analysis_json(
     )
     requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started_at = perf_counter()
+    transport_events: list[dict[str, Any]] = []
+
+    def transport_callback(event: dict[str, Any]) -> None:
+        transport_events.append(dict(event))
+        if retry_callback is not None:
+            retry_callback(event)
+
     try:
         response = run_with_retry(
             lambda: client.responses.create(
@@ -286,7 +294,7 @@ def call_analysis_json(
             ),
             operation_name="openai:responses.create",
             policy=DEFAULT_TRANSPORT_RETRY,
-            on_event=retry_callback,
+            on_event=transport_callback,
         )
     except Exception as error:
         append_usage_trace(
@@ -298,6 +306,9 @@ def call_analysis_json(
                 "prompt_cache": cache_metadata,
                 "request_fingerprint": request_fingerprint,
                 "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+                "transport_attempt_count": sum(1 for event in transport_events if event.get("status") == "attempt"),
+                "transport_retry_count": sum(1 for event in transport_events if event.get("status") == "retry_wait"),
+                "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
             },
             status="error",
             entity_type=trace_entity_type,
@@ -337,19 +348,23 @@ def call_analysis_json(
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
         "estimated_cost_rub": estimated_cost.get("estimated_cost_rub"),
         "response_id": getattr(response, "id", None),
+        "transport_attempt_count": sum(1 for event in transport_events if event.get("status") == "attempt"),
+        "transport_retry_count": sum(1 for event in transport_events if event.get("status") == "retry_wait"),
+        "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
         "raw_output_text": text,
     }
 
     try:
         parsed = parse_json_object(text)
     except (json.JSONDecodeError, ValueError) as error:
-        append_usage_trace(
-            metadata,
-            status="error",
-            entity_type=trace_entity_type,
-            entity_id=trace_entity_id,
-            error_type="ModelJsonParseError",
-        )
+        if not defer_usage_trace:
+            append_usage_trace(
+                metadata,
+                status="error",
+                entity_type=trace_entity_type,
+                entity_id=trace_entity_id,
+                error_type="ModelJsonParseError",
+            )
         preview = text[:500].replace("\n", "\\n")
         raise ModelJsonParseError(
             f"Model returned invalid JSON: {error}. Raw output preview: {preview}",
@@ -357,7 +372,8 @@ def call_analysis_json(
             metadata=metadata,
         ) from error
 
-    append_usage_trace(metadata, entity_type=trace_entity_type, entity_id=trace_entity_id)
+    if not defer_usage_trace:
+        append_usage_trace(metadata, entity_type=trace_entity_type, entity_id=trace_entity_id)
     return parsed, metadata
 
 
@@ -432,6 +448,53 @@ def _aggregate_attempt_metadata(attempts: list[dict[str, Any]], final_metadata: 
     return result
 
 
+def _safe_validation_error(error: BaseException) -> str:
+    if isinstance(error, ModelJsonParseError):
+        return "ModelJsonParseError: invalid JSON response"
+    text = re.sub(r"https?://\S+", "[url]", str(error or ""))
+    text = re.sub(r"(\bgot\s+)[^;]+", r"\1[invalid value]", text)
+    return f"{error.__class__.__name__}: {text}"[:2000]
+
+
+def _semantic_attempt_metadata(
+    metadata: dict[str, Any],
+    *,
+    attempt_number: int,
+    validation_passed: bool,
+    validation_error: str | None,
+) -> dict[str, Any]:
+    result = dict(metadata)
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    input_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+    input_details = input_details if isinstance(input_details, dict) else {}
+    output_details = usage.get("output_tokens_details") or usage.get("completion_tokens_details") or {}
+    output_details = output_details if isinstance(output_details, dict) else {}
+    cost = result.get("estimated_cost") if isinstance(result.get("estimated_cost"), dict) else {}
+    result.update(
+        {
+            "attempt_number": attempt_number,
+            "semantic_correction_retry": attempt_number > 1,
+            "input_tokens": usage.get("input_tokens", cost.get("input_tokens")),
+            "cached_tokens": input_details.get(
+                "cached_tokens",
+                usage.get("cached_input_tokens", cost.get("cached_input_tokens")),
+            ),
+            "cache_write_tokens": input_details.get(
+                "cache_write_tokens",
+                usage.get("cache_write_tokens", cost.get("cache_write_tokens")),
+            ),
+            "output_tokens": usage.get("output_tokens", cost.get("output_tokens")),
+            "reasoning_tokens": output_details.get("reasoning_tokens", usage.get("reasoning_tokens")),
+            "estimated_cost_usd": result.get("estimated_cost_usd", cost.get("estimated_cost_usd")),
+            "estimated_cost_rub": result.get("estimated_cost_rub", cost.get("estimated_cost_rub")),
+            "validation_passed": validation_passed,
+            "validation_error": validation_error,
+            "transport_retry": bool(result.get("transport_retry")),
+        }
+    )
+    return result
+
+
 def call_validated_analysis_json(
     prompt: str,
     *,
@@ -465,22 +528,26 @@ def call_validated_analysis_json(
                     "operation": "openai:validated_analysis",
                 }
             )
+        deferred_trace = analysis_caller is call_analysis_json
+        attempt_error: BaseException | None = None
         try:
             if prompt_cache_marker is not None and prompt_cache_markers is not None:
                 raise ValueError("prompt_cache_marker and prompt_cache_markers are mutually exclusive")
             markers = prompt_cache_markers or ([prompt_cache_marker] if prompt_cache_marker else [])
             cache_prefixes = [prompt_prefix_before(current_prompt, marker) for marker in markers]
             cache_prefixes = sorted(set(cache_prefixes), key=len)
-            analysis, metadata = analysis_caller(
-                current_prompt,
-                model=model,
-                retry_callback=retry_callback,
-                call_type=call_type,
-                prompt_cache_key=prompt_cache_key,
-                cache_prefixes=cache_prefixes or None,
-                trace_entity_type=trace_entity_type,
-                trace_entity_id=trace_entity_id,
-            )
+            caller_options = {
+                "model": model,
+                "retry_callback": retry_callback,
+                "call_type": call_type,
+                "prompt_cache_key": prompt_cache_key,
+                "cache_prefixes": cache_prefixes or None,
+                "trace_entity_type": trace_entity_type,
+                "trace_entity_id": trace_entity_id,
+            }
+            if deferred_trace:
+                caller_options["defer_usage_trace"] = True
+            analysis, metadata = analysis_caller(current_prompt, **caller_options)
             final_raw = str(metadata.get("raw_output_text") or "")
             final_analysis = analysis
             normalization_changes = normalizer(analysis)
@@ -493,10 +560,24 @@ def call_validated_analysis_json(
             final_raw = error.raw_output_text
             final_analysis = None
             final_error = str(error)
+            attempt_error = error
         except validation_error_types as error:
             final_error = str(error)
+            attempt_error = error
         else:
-            attempts.append(dict(metadata))
+            attempt_metadata = _semantic_attempt_metadata(
+                metadata,
+                attempt_number=semantic_attempt,
+                validation_passed=True,
+                validation_error=None,
+            )
+            attempts.append(attempt_metadata)
+            if deferred_trace:
+                append_usage_trace(
+                    attempt_metadata,
+                    entity_type=trace_entity_type,
+                    entity_id=trace_entity_id,
+                )
             if semantic_callback is not None:
                 semantic_callback(
                     {
@@ -508,7 +589,22 @@ def call_validated_analysis_json(
                 )
             return analysis, _aggregate_attempt_metadata(attempts, metadata)
 
-        attempts.append(dict(metadata))
+        safe_attempt_error = _safe_validation_error(attempt_error or ValueError(final_error))
+        attempt_metadata = _semantic_attempt_metadata(
+            metadata,
+            attempt_number=semantic_attempt,
+            validation_passed=False,
+            validation_error=safe_attempt_error,
+        )
+        attempts.append(attempt_metadata)
+        if deferred_trace:
+            append_usage_trace(
+                attempt_metadata,
+                status="error",
+                entity_type=trace_entity_type,
+                entity_id=trace_entity_id,
+                error_type=type(attempt_error).__name__ if attempt_error is not None else "ValidationError",
+            )
         if semantic_attempt == 1:
             if semantic_callback is not None:
                 semantic_callback(

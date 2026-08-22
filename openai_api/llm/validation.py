@@ -140,6 +140,94 @@ TURNING_POINT_STATUS_ALIASES = {
     "current": "active",
 }
 
+COMMUNICATION_QUALITY_CRITERIA = (
+    "next_action",
+    "value_development",
+    "data_collection",
+)
+
+
+def _normalize_communication_quality_audit(
+    analysis: dict[str, Any],
+    changes: list[dict[str, Any]],
+) -> None:
+    audit = analysis.get("communication_quality_audit")
+    if not isinstance(audit, dict):
+        return
+    status = audit.get("status")
+    criteria = audit.get("criteria")
+    if isinstance(criteria, dict):
+        for name in COMMUNICATION_QUALITY_CRITERIA:
+            item = criteria.get(name)
+            if not isinstance(item, dict):
+                continue
+            score = item.get("score")
+            if status == "assessed" and isinstance(score, str) and score.strip() in {"0", "1"}:
+                item["score"] = int(score.strip())
+                changes.append(
+                    {
+                        "path": f"communication_quality_audit.criteria.{name}.score",
+                        "action": "numeric_string_to_integer",
+                    }
+                )
+            elif status == "insufficient_evidence" and score is not None:
+                item["score"] = None
+                changes.append(
+                    {
+                        "path": f"communication_quality_audit.criteria.{name}.score",
+                        "action": "dependent_value_to_null",
+                    }
+                )
+
+    reasons = audit.get("zero_reasons")
+    if status == "insufficient_evidence":
+        if reasons != []:
+            audit["zero_reasons"] = []
+            changes.append(
+                {
+                    "path": "communication_quality_audit.zero_reasons",
+                    "action": "dependent_value_to_empty_list",
+                }
+            )
+        if audit.get("summary_for_rop") is not None:
+            audit["summary_for_rop"] = None
+            changes.append(
+                {
+                    "path": "communication_quality_audit.summary_for_rop",
+                    "action": "dependent_value_to_null",
+                }
+            )
+        return
+
+    if status != "assessed" or not isinstance(reasons, list):
+        return
+    ordered: list[Any] = []
+    seen: set[str] = set()
+    duplicates = 0
+    for criterion in COMMUNICATION_QUALITY_CRITERIA:
+        for reason in reasons:
+            if not isinstance(reason, dict) or reason.get("criterion") != criterion:
+                continue
+            if criterion in seen:
+                duplicates += 1
+                continue
+            seen.add(criterion)
+            ordered.append(reason)
+    ordered.extend(
+        reason
+        for reason in reasons
+        if not isinstance(reason, dict) or reason.get("criterion") not in COMMUNICATION_QUALITY_CRITERIA
+    )
+    if ordered != reasons:
+        audit["zero_reasons"] = ordered
+        changes.append(
+            {
+                "path": "communication_quality_audit.zero_reasons",
+                "action": "deduplicated_and_ordered",
+                "removed_items": duplicates,
+            }
+        )
+
 
 def normalize_analysis_for_validation(
     analysis: dict[str, Any],
@@ -162,6 +250,7 @@ def normalize_analysis_for_validation(
         allow_legacy_qualification_assessment=allow_legacy_qualification_assessment,
     )
     _normalize_deal_context_enum_aliases(analysis, changes)
+    _normalize_communication_quality_audit(analysis, changes)
     if allow_legacy_qualification_assessment:
         if "deal_state" in analysis and "recommendation_feedback" not in analysis:
             analysis["recommendation_feedback"] = {

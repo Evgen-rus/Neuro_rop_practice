@@ -54,6 +54,8 @@ class UsageTraceTests(unittest.TestCase):
         )
         serialized = json.dumps(event, ensure_ascii=False)
         self.assertEqual(event["cached_input_tokens"], 1_200)
+        self.assertIsNone(event["semantic_attempt_number"])
+        self.assertIsNone(event["validation_status"])
         self.assertEqual(event["entity_id"], "123")
         self.assertEqual(event["prompt_sha256_16"], "abc123")
         self.assertEqual(event["stable_prefix_sha256_16"], "def456")
@@ -100,6 +102,30 @@ class UsageTraceTests(unittest.TestCase):
         self.assertIn("cache_write=0", line)
         self.assertIn("output=300", line)
         self.assertIn("cost=$0.0100/0.75 ₽", line)
+
+    def test_semantic_attempt_fields_are_privacy_safe_and_visible(self) -> None:
+        metadata = self.metadata()
+        metadata.update({
+            "attempt_number": 2,
+            "semantic_correction_retry": True,
+            "validation_passed": False,
+            "validation_error": "AnalysisValidationError: field score is invalid",
+            "transport_retry": True,
+            "transport_attempt_count": 2,
+            "transport_retry_count": 1,
+        })
+
+        event = build_usage_trace_event(metadata, status="error", entity_type="deal", entity_id="123")
+        _filename, line = build_daily_usage_line(event)
+
+        self.assertEqual(event["semantic_attempt_number"], 2)
+        self.assertEqual(event["validation_status"], "failed")
+        self.assertTrue(event["semantic_correction_retry"])
+        self.assertTrue(event["transport_retry"])
+        self.assertEqual(event["transport_retry_count"], 1)
+        self.assertIn("semantic_attempt=2", line)
+        self.assertIn("validation=failed", line)
+        self.assertIn("transport_retry=True", line)
 
     def test_trace_write_failure_does_not_escape(self) -> None:
         with patch("pathlib.Path.open", side_effect=OSError("denied")):

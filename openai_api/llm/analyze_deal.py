@@ -152,10 +152,17 @@ def knowledge_files(knowledge_dir: Path) -> list[Path]:
         "funnel.md",
     ]
     files = [knowledge_dir / name for name in priority if (knowledge_dir / name).exists()]
+    excluded = {
+        "attention_delta_core.md",
+        "attention_delta_deal.md",
+        "attention_delta_lead.md",
+    }
     extra = sorted(
         path
         for path in knowledge_dir.glob("*.md")
-        if path.name not in set(priority) and path.name.lower() != "readme.md"
+        if path.name not in set(priority)
+        and path.name.lower() != "readme.md"
+        and path.name.lower() not in excluded
     )
     return files + extra
 
@@ -191,12 +198,12 @@ def build_prompt(
 - Недозвон, короткий звонок без содержательной расшифровки и пустая CRM-активность — только попытка связи. Не выдавай их за разговор, договорённость или слова клиента.
 - CRM-задачи, комментарии менеджера и внутренние чаты не являются клиентской коммуникацией и не могут быть цитатой-доказательством.
 - История нужна, чтобы понять, какие договорённости и данные менеджер должен был актуализировать. Оценки и цитаты подтверждай только фактической клиентской коммуникацией.
-- status="assessed" ставь, если есть хотя бы одно содержательное касание. Тогда каждый criterion.score — строго 0 или 1.
+- status="assessed" ставь, если есть хотя бы одно содержательное касание. Тогда каждый criterion.score — строго JSON number 0 или 1, НЕ строка "0"/"1".
 - next_action=1 только если менеджер сам зафиксировал конкретный следующий шаг с точной датой и временем; иначе 0.
 - value_development=1 только если касание имело конкретный информационный повод, добавляло ценность или уточняло производство, сроки либо бюджет; пустое «не надумали?» — 0.
 - data_collection=1 только если менеджер, опираясь на историю, собрал или актуализировал необходимые технические, логистические, реквизитные данные либо сведения о ЛПР; игнорирование существенного пробела — 0.
 - Для каждого критерия с 0 добавь отдельный zero_reason: criterion, короткая ошибка и короткая дословная цитата из звонка/переписки. Для критериев с 1 zero_reason не добавляй.
-- Если содержательной коммуникации нет, верни status="insufficient_evidence", все score=null, zero_reasons=[], summary_for_rop=null и объясни insufficient_reason. Не оценивай недозвон как разговор.
+- Если содержательной коммуникации нет, верни status="insufficient_evidence", все score=JSON null, zero_reasons=[], summary_for_rop=null и объясни insufficient_reason. null запрещён при status="assessed". Не оценивай недозвон как разговор.
 - summary_for_rop при assessed — 1-2 предложения: реальный статус клиента и конкретный следующий шаг менеджера для продвижения сделки.
 - scope_summary кратко перечисляет, какие виды коммуникаций реально учтены, без выдуманных количеств и дат.
 </communication_quality_audit_rules>
@@ -206,9 +213,9 @@ def build_prompt(
     "status": "assessed|insufficient_evidence",
     "scope_summary": "какие содержательные коммуникации и попытки учтены",
     "criteria": {
-      "next_action": {"score": "0|1|null"},
-      "value_development": {"score": "0|1|null"},
-      "data_collection": {"score": "0|1|null"}
+      "next_action": {"score": 0},
+      "value_development": {"score": 1},
+      "data_collection": {"score": 1}
     },
     "zero_reasons": [
       {"criterion": "next_action|value_development|data_collection", "explanation": "где менеджер ошибся", "quote": "короткая цитата из клиентской коммуникации"}

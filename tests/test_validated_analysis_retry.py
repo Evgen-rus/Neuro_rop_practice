@@ -59,6 +59,19 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
         self.assertEqual(result_metadata["usage"]["total_tokens"], 30)
         self.assertEqual(result_metadata["usage"]["input_tokens_details"]["cache_write_tokens"], 6)
         self.assertEqual(result_metadata["estimated_cost_rub"], 22.5)
+        attempts = result_metadata["semantic_attempts"]
+        self.assertEqual([item["attempt_number"] for item in attempts], [1, 2])
+        self.assertEqual([item["validation_passed"] for item in attempts], [False, True])
+        self.assertFalse(attempts[0]["semantic_correction_retry"])
+        self.assertTrue(attempts[1]["semantic_correction_retry"])
+        self.assertEqual(attempts[0]["input_tokens"], 10)
+        self.assertEqual(attempts[0]["cached_tokens"], 1)
+        self.assertEqual(attempts[0]["cache_write_tokens"], 3)
+        self.assertEqual(attempts[0]["output_tokens"], 5)
+        self.assertEqual(attempts[0]["reasoning_tokens"], 2)
+        self.assertIn("ok must be true", attempts[0]["validation_error"])
+        self.assertIsNone(attempts[1]["validation_error"])
+        self.assertNotIn("raw_output_text", attempts[0])
 
     def test_invalid_json_gets_one_correction_attempt(self) -> None:
         calls = 0
@@ -79,6 +92,11 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"])
         self.assertEqual(result_metadata["semantic_attempt_count"], 2)
+        self.assertEqual(
+            result_metadata["semantic_attempts"][0]["validation_error"],
+            "ModelJsonParseError: invalid JSON response",
+        )
+        self.assertNotIn("{bad", result_metadata["semantic_attempts"][0]["validation_error"])
 
     def test_two_invalid_attempts_raise_final_failure(self) -> None:
         def caller(_prompt: str, **_kwargs):
@@ -94,6 +112,10 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
             )
         self.assertEqual(context.exception.metadata["semantic_attempt_count"], 2)
         self.assertEqual(context.exception.analysis, {"ok": False})
+        self.assertEqual(
+            [item["validation_passed"] for item in context.exception.metadata["semantic_attempts"]],
+            [False, False],
+        )
 
 
 if __name__ == "__main__":

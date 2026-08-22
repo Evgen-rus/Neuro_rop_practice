@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from openai_api.llm.analyze_deal import knowledge_files
 from openai_api.llm.attention_delta_knowledge import ORIGINAL_OKF_FILES, select_attention_delta_knowledge
 from openai_api.llm.prompt_budget import build_prompt_budget
 
@@ -14,6 +15,22 @@ KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 
 
 class AttentionDeltaKnowledgeTests(unittest.TestCase):
+    def test_full_analysis_excludes_attention_delta_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in (
+                "index.md",
+                "custom_rules.md",
+                "attention_delta_core.md",
+                "attention_delta_lead.md",
+                "attention_delta_deal.md",
+            ):
+                (root / filename).write_text(filename, encoding="utf-8")
+
+            selected_names = [path.name for path in knowledge_files(root)]
+
+            self.assertEqual(selected_names, ["index.md", "custom_rules.md"])
+
     def test_selection_depends_only_on_entity_type(self) -> None:
         lead_first = select_attention_delta_knowledge("lead", KNOWLEDGE_DIR)
         lead_second = select_attention_delta_knowledge("lead", KNOWLEDGE_DIR)
