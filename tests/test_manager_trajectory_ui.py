@@ -101,6 +101,20 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertIn("после просмотра", call["temporal_relation"]["text"])
         self.assertNotIn("вызвал", call["temporal_relation"]["text"])
 
+    def test_entity_communications_can_load_saved_content_lazily(self) -> None:
+        self._event("deal", "101", "email", START + timedelta(minutes=25), "a4")
+        entity = build_entity_projection(
+            entity_type="deal", entity_id="101", value=DAY, db_path=self.db_path,
+        )
+
+        communications = {
+            item["label"]: item for item in entity["chronology"]
+            if item["label"] in {"Звонок", "Письмо"}
+        }
+        self.assertTrue(communications["Звонок"]["expandable"])
+        self.assertEqual(communications["Звонок"]["duration_seconds"], 65)
+        self.assertTrue(communications["Письмо"]["expandable"])
+
     def test_filters_and_entity_projection_are_lazy(self) -> None:
         day = build_day_projection(value=DAY, category="leads", query="Бета", db_path=self.db_path)
         self.assertEqual(day["totals"]["events"], 1)

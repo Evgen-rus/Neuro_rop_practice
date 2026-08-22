@@ -274,7 +274,7 @@ export function ManagerTrajectory() {
         <button type="button" onClick={() => entity ? setEntity(null) : setWindowData(null)} aria-label={entity ? 'Назад к событиям' : 'Закрыть'}>{entity ? '←' : '×'}</button>
       </div>
       {drawerLoading ? <div className="trajectory-loading"><span className="dc-spinner" />Загрузка…</div> : null}
-      {!drawerLoading && entity ? <EntityDetail entity={entity} /> : null}
+      {!drawerLoading && entity ? <EntityDetail entity={entity} date={date} /> : null}
       {!drawerLoading && windowData && !entity ? <div className="trajectory-event-list">
         <div className="trajectory-window-summary"><b>{windowData.events.length}</b> событий · <b>{windowData.entities}</b> сущностей</div>
         {!windowData.events.length ? <p className="trajectory-empty">В этом интервале нет событий выбранного типа.</p> : null}
@@ -313,25 +313,29 @@ function TrajectoryEventRow({
   managerId,
   date,
   onOpenEntity,
+  entityContext = false,
 }: {
   event: TrajectoryEvent
   managerId: string
   date: string
-  onOpenEntity: (event: TrajectoryEvent) => Promise<void>
+  onOpenEntity?: (event: TrajectoryEvent) => Promise<void>
+  entityContext?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<TrajectoryEventDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const isCall = event.label === 'Звонок'
-  const expandable = Boolean(event.expandable && event.event_id !== null)
+  const expandable = Boolean(event.expandable && event.event_id !== null && managerId)
   const summary = isCall
     ? `${directionLabel(event.direction)} · ${durationLabel(event.duration_seconds)}`
-    : event.entity_title || event.subject || event.description || 'Без краткого описания'
+    : entityContext
+      ? event.subject || event.description || 'Без краткого описания'
+      : event.entity_title || event.subject || event.description || 'Без краткого описания'
 
   async function toggle() {
     if (!expandable) {
-      if (event.entity_id) await onOpenEntity(event)
+      if (event.entity_id && onOpenEntity) await onOpenEntity(event)
       return
     }
     const next = !open
@@ -351,7 +355,7 @@ function TrajectoryEventRow({
   return <article className={`trajectory-event-wrap event-${event.category} ${open ? 'open' : ''}`}>
     <button type="button" className="trajectory-event" onClick={() => void toggle()}>
       <time>{timeLabel(event.occurred_at)}</time><span className="trajectory-event-icon">{eventIcon(event)}</span>
-      <div><strong>{event.label}</strong>{event.entity_id ? <small className={`entity-${event.entity_type}`}>{event.entity_type?.toUpperCase()} #{event.entity_id}</small> : null}
+      <div><strong>{event.label}</strong>{!entityContext && event.entity_id ? <small className={`entity-${event.entity_type}`}>{event.entity_type?.toUpperCase()} #{event.entity_id}</small> : null}
       <p>{summary}</p>
       {event.stage_name ? <small>{event.stage_name}</small> : null}
       {event.temporal_relation ? <em>{event.temporal_relation.text}</em> : null}</div>
@@ -365,13 +369,13 @@ function TrajectoryEventRow({
         {detail.subject ? <p><b>{detail.subject}</b></p> : null}
         {detail.description ? <p className="trajectory-full-event-text">{detail.description}</p> : null}
         {detail.transcript_text ? <details className="trajectory-transcript"><summary>Расшифровка звонка</summary><pre>{detail.transcript_text}</pre>{detail.transcript_truncated ? <small>Показан первый 1 000 000 символов.</small> : null}</details> : null}
-        {event.entity_id ? <button type="button" className="trajectory-open-entity" onClick={() => void onOpenEntity(event)}>Открыть {event.entity_type?.toUpperCase()} #{event.entity_id}</button> : null}
+        {!entityContext && event.entity_id && onOpenEntity ? <button type="button" className="trajectory-open-entity" onClick={() => void onOpenEntity(event)}>Открыть {event.entity_type?.toUpperCase()} #{event.entity_id}</button> : null}
       </> : null}
     </div> : null}
   </article>
 }
 
-function EntityDetail({ entity }: { entity: TrajectoryEntity }) {
+function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string }) {
   const fields = Object.entries(entity.relevant_fields || {}).filter(([, value]) => value !== null && value !== '')
   return <div className="trajectory-entity-detail">
     <div className="trajectory-entity-meta">
@@ -382,9 +386,13 @@ function EntityDetail({ entity }: { entity: TrajectoryEntity }) {
     {fields.length ? <details><summary>Актуальные CRM-поля ({fields.length})</summary><dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl></details> : null}
     <h3>Хронология дня</h3>
     <div className="trajectory-entity-chronology">
-      {entity.chronology.map((event, index) => <div key={`${event.event_id}-${index}`}>
-        <time>{timeLabel(event.occurred_at)}</time><i>{eventIcon(event)}</i><p><b>{event.label}</b><span>{event.subject || event.description || event.stage_name || 'Без краткого описания'}</span>{event.temporal_relation ? <em>{event.temporal_relation.text}</em> : null}</p>
-      </div>)}
+      {entity.chronology.map((event, index) => <TrajectoryEventRow
+        event={event}
+        managerId={entity.manager_id || ''}
+        date={date}
+        entityContext
+        key={`${event.event_id}-${index}`}
+      />)}
     </div>
   </div>
 }

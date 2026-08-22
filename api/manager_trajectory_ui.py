@@ -118,7 +118,7 @@ def _base_event(
         "completed": action.get("completed"),
         "duration_seconds": call.get("duration_seconds"),
         "expandable": (
-            str(action.get("activity_kind") or "").lower() == "call"
+            str(action.get("activity_kind") or "").lower() in {"call", "email", "message"}
             or str(action.get("action_type") or "").lower() == "timeline_comment"
         ),
         "temporal_relation": None,
