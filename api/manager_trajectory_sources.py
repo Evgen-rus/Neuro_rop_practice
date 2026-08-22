@@ -261,6 +261,20 @@ def _errors_add(errors: dict[str, Any], key: str, response: dict[str, Any]) -> N
         errors[key] = response.get("error") or "Bitrix source unavailable"
 
 
+def _safe_list_many(
+    client: Any,
+    requests_to_run: list[tuple[str, str, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """Use Bitrix batch when available, preserving sequential test/custom clients."""
+    batch = getattr(client, "safe_batch_list", None)
+    if callable(batch):
+        return batch(requests_to_run)
+    return {
+        key: client.safe_list_all(method, payload)
+        for key, method, payload in requests_to_run
+    }
+
+
 def fetch_activity_facts(client: Any, manager_ids: list[str], start: datetime, end: datetime) -> dict[str, Any]:
     response = client.safe_list_all(
         "crm.activity.list",
@@ -325,19 +339,33 @@ def collect_timeline_comment_facts(client: Any, entity_refs: Iterable[Any], mana
     facts: list[dict[str, Any]] = []
     errors: dict[str, Any] = {}
     seen: set[str] = set()
+    refs: list[tuple[str, str, str | None]] = []
+    ref_keys: set[str] = set()
     for raw_ref in entity_refs:
         ref = _entity_ref(raw_ref)
         if ref is None:
             continue
         entity_type, entity_id, _ref_manager = ref
-        response = client.safe_list_all(
+        key = f"{entity_type}:{entity_id}"
+        if key in ref_keys:
+            continue
+        ref_keys.add(key)
+        refs.append(ref)
+    requests_to_run = [
+        (
+            f"{entity_type}:{entity_id}",
             "crm.timeline.comment.list",
             {
                 "order": {"CREATED": "ASC", "ID": "ASC"},
                 "filter": {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id},
             },
         )
+        for entity_type, entity_id, _ref_manager in refs
+    ]
+    responses = _safe_list_many(client, requests_to_run)
+    for entity_type, entity_id, _ref_manager in refs:
         key = f"{entity_type}:{entity_id}"
+        response = responses[key]
         _errors_add(errors, key, response)
         for item in _result_items(response):
             comment_id = _string(item.get("ID"))
@@ -388,11 +416,13 @@ def collect_task_history_facts(client: Any, activities: Iterable[dict[str, Any]]
 
     facts: list[dict[str, Any]] = []
     errors: dict[str, Any] = {}
+    requests_to_run = [
+        (f"task:{task_id}", "task.ctasklogitem.list", {"TASKID": task_id})
+        for task_id in sorted(task_context)
+    ]
+    responses = _safe_list_many(client, requests_to_run)
     for task_id, (entity_key, _fallback_manager) in sorted(task_context.items()):
-        response = client.safe_list_all(
-            "task.ctasklogitem.list",
-            {"TASKID": task_id},
-        )
+        response = responses[f"task:{task_id}"]
         _errors_add(errors, f"task:{task_id}", response)
         if not response.get("ok"):
             continue
@@ -439,16 +469,24 @@ def collect_stage_history_facts(client: Any, entity_refs: Iterable[Any]) -> dict
     facts: list[dict[str, Any]] = []
     errors: dict[str, Any] = {}
     seen: set[str] = set()
+    refs: list[tuple[str, str, str | None]] = []
+    ref_keys: set[str] = set()
     for raw_ref in entity_refs:
         ref = _entity_ref(raw_ref)
         if ref is None:
             continue
         entity_type, entity_id, manager_id = ref
-        entity_type_id = LEAD_OWNER_TYPE_ID if entity_type == "lead" else DEAL_OWNER_TYPE_ID
-        response = client.safe_list_all(
+        key = f"{entity_type}:{entity_id}"
+        if key in ref_keys:
+            continue
+        ref_keys.add(key)
+        refs.append((entity_type, entity_id, manager_id))
+    requests_to_run = [
+        (
+            f"{entity_type}:{entity_id}",
             "crm.stagehistory.list",
             {
-                "entityTypeId": entity_type_id,
+                "entityTypeId": LEAD_OWNER_TYPE_ID if entity_type == "lead" else DEAL_OWNER_TYPE_ID,
                 "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
                 "filter": {"OWNER_ID": entity_id},
                 "select": [
@@ -457,6 +495,11 @@ def collect_stage_history_facts(client: Any, entity_refs: Iterable[Any]) -> dict
                 ],
             },
         )
+        for entity_type, entity_id, _manager_id in refs
+    ]
+    responses = _safe_list_many(client, requests_to_run)
+    for entity_type, entity_id, manager_id in refs:
+        response = responses[f"{entity_type}:{entity_id}"]
         key = f"{entity_type}:{entity_id}"
         _errors_add(errors, key, response)
         for item in _result_items(response):

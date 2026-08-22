@@ -50,6 +50,42 @@ def task_response(
 
 
 class DealOperationalFetchTests(unittest.TestCase):
+    def test_users_and_task_details_use_batch_when_available(self) -> None:
+        class BatchClient:
+            def __init__(self) -> None:
+                self.requests: list[list[tuple[str, str, dict[str, Any]]]] = []
+
+            def safe_batch_call(self, requests_to_run):
+                self.requests.append(requests_to_run)
+                result = {}
+                for key, method, payload in requests_to_run:
+                    if method == "user.get":
+                        raw = [{"ID": payload["ID"], "NAME": "Иван"}]
+                    elif method == "tasks.task.get":
+                        raw = {"task": {"id": payload["taskId"], "status": "5"}}
+                    else:
+                        raise AssertionError(method)
+                    result[key] = {"ok": True, "method": method, "payload": payload, "response": {"result": raw}}
+                return result
+
+        client = BatchClient()
+        users = fetch.fetch_users(client, ["10", "20", "10"])
+        tasks, open_ids, chats = fetch.fetch_task_context(
+            client,
+            [
+                {"PROVIDER_ID": "CRM_TASKS_TASK", "ASSOCIATED_ENTITY_ID": "700"},
+                {"PROVIDER_ID": "CRM_TASKS_TASK", "ASSOCIATED_ENTITY_ID": "701"},
+            ],
+        )
+
+        self.assertEqual(set(users), {"10", "20"})
+        self.assertEqual(set(tasks), {"700", "701"})
+        self.assertEqual(open_ids, [])
+        self.assertEqual(chats, {})
+        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(len(client.requests[0]), 2)
+        self.assertEqual(len(client.requests[1]), 2)
+
     def test_selects_three_nearest_open_tasks(self) -> None:
         tasks = {
             "1": task_response("1", deadline="2026-08-03T10:00:00+03:00"),

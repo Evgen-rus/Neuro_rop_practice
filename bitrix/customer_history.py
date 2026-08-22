@@ -728,9 +728,23 @@ def resolve_lead_ids_by_fallback(
 
 
 def fetch_contacts(client: BitrixReadOnlyClient, contact_ids: list[str]) -> dict[str, Any]:
+    ids = sorted({str(item).strip() for item in contact_ids if is_real_id(item)})
+    requests_to_run = [
+        (f"contact:{contact_id}", "crm.contact.get", {"id": contact_id})
+        for contact_id in ids
+    ]
+    batch = getattr(client, "safe_batch_call", None)
+    responses = (
+        batch(requests_to_run)
+        if callable(batch)
+        else {
+            key: client.safe_call(method, payload)
+            for key, method, payload in requests_to_run
+        }
+    )
     return {
-        contact_id: fetch_entity_by_id(client, "crm.contact.get", contact_id)
-        for contact_id in sorted({str(item).strip() for item in contact_ids if is_real_id(item)})
+        contact_id: responses[f"contact:{contact_id}"]
+        for contact_id in ids
     }
 
 

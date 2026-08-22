@@ -6,6 +6,7 @@ from typing import Any
 from bitrix.customer_history import (
     activity_details_from_list,
     build_customer_history_bundle,
+    fetch_contacts,
     fetch_entity_history,
     history_period,
     incremental_since,
@@ -31,6 +32,30 @@ class RecordingClient:
 
 
 class CrmIncrementalSyncTests(unittest.TestCase):
+    def test_contact_details_use_batch_when_available(self) -> None:
+        class BatchClient:
+            def __init__(self) -> None:
+                self.requests = []
+
+            def safe_batch_call(self, requests_to_run):
+                self.requests.append(requests_to_run)
+                return {
+                    key: {
+                        "ok": True,
+                        "method": method,
+                        "payload": payload,
+                        "response": {"result": {"ID": payload["id"]}},
+                    }
+                    for key, method, payload in requests_to_run
+                }
+
+        client = BatchClient()
+        contacts = fetch_contacts(client, ["20", "10", "20"])
+
+        self.assertEqual(set(contacts), {"10", "20"})
+        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(len(client.requests[0]), 2)
+
     def test_activity_details_are_projected_from_list_without_api_call(self) -> None:
         activity = {"ID": "42", "FILES": [{"id": "7"}], "SUBJECT": "call"}
 

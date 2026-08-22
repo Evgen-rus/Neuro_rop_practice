@@ -10,6 +10,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -18,6 +19,8 @@ from bitrix.usage_trace import append_trace_event, build_trace_event
 
 
 PAGE_SIZE = 50
+BATCH_REQUEST_LIMIT = 50
+DEFAULT_BATCH_CHUNK_SIZE = 20
 
 
 class BitrixTransientError(RuntimeError):
@@ -114,8 +117,8 @@ class BitrixReadOnlyClient:
 
     def list_all(self, method: str, payload: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        start: int | str = 0
         base_payload = dict(payload or {})
+        start: int | str = base_payload.pop("start", 0)
 
         while True:
             page_payload = dict(base_payload)
@@ -140,6 +143,155 @@ class BitrixReadOnlyClient:
             start = next_start
 
         return items
+
+    @staticmethod
+    def _batch_command(method: str, payload: dict[str, Any] | None = None) -> str:
+        """Encode one read-only REST command for Bitrix batch."""
+        pairs: list[tuple[str, Any]] = []
+
+        def append(prefix: str, value: Any) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    append(f"{prefix}[{key}]" if prefix else str(key), child)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    append(f"{prefix}[]", child)
+                return
+            if value is None:
+                return
+            if isinstance(value, bool):
+                value = "1" if value else "0"
+            pairs.append((prefix, value))
+
+        for key, value in (payload or {}).items():
+            append(str(key), value)
+        query = urlencode(pairs)
+        return f"{method}?{query}" if query else method
+
+    @staticmethod
+    def _batch_items(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, dict) and isinstance(value.get("items"), list):
+            rows = value["items"]
+        elif isinstance(value, dict):
+            rows = list(value.values())
+        elif isinstance(value, list):
+            rows = value
+        else:
+            rows = []
+        return [item for item in rows if isinstance(item, dict)]
+
+    def safe_batch_call(
+        self,
+        requests_to_run: list[tuple[str, str, dict[str, Any]]],
+        *,
+        chunk_size: int = DEFAULT_BATCH_CHUNK_SIZE,
+    ) -> dict[str, dict[str, Any]]:
+        """Run independent read calls through batch and preserve ``safe_call`` shape."""
+        size = max(1, min(int(chunk_size), BATCH_REQUEST_LIMIT))
+        normalized: list[tuple[str, str, dict[str, Any]]] = []
+        seen_keys: set[str] = set()
+        for key, method, payload in requests_to_run:
+            normalized_key = str(key).strip()
+            if not normalized_key or normalized_key in seen_keys:
+                raise ValueError("Batch request keys must be non-empty and unique")
+            seen_keys.add(normalized_key)
+            normalized.append((normalized_key, str(method).strip(), dict(payload or {})))
+
+        results: dict[str, dict[str, Any]] = {}
+        for offset in range(0, len(normalized), size):
+            chunk = normalized[offset:offset + size]
+            batch_keys = {
+                key: f"r{offset + index}"
+                for index, (key, _method, _payload) in enumerate(chunk)
+            }
+            commands = {
+                batch_keys[key]: self._batch_command(method, payload)
+                for key, method, payload in chunk
+            }
+            outer = self.safe_call("batch", {"halt": 0, "cmd": commands})
+            if not outer.get("ok"):
+                error = str(outer.get("error") or "Bitrix batch unavailable")
+                for key, method, payload in chunk:
+                    results[key] = {
+                        "ok": False,
+                        "method": method,
+                        "payload": payload,
+                        "error": error,
+                    }
+                continue
+
+            response = (outer.get("response") or {}).get("result")
+            container = response if isinstance(response, dict) else {}
+            raw_results = container.get("result") if isinstance(container.get("result"), dict) else {}
+            raw_errors = container.get("result_error") if isinstance(container.get("result_error"), dict) else {}
+            raw_next = container.get("result_next") if isinstance(container.get("result_next"), dict) else {}
+            for key, method, payload in chunk:
+                batch_key = batch_keys[key]
+                if batch_key in raw_errors:
+                    raw_error = raw_errors.get(batch_key)
+                    if isinstance(raw_error, dict):
+                        error = raw_error.get("error_description") or raw_error.get("error")
+                    else:
+                        error = raw_error
+                    results[key] = {
+                        "ok": False,
+                        "method": method,
+                        "payload": payload,
+                        "error": str(error or "Bitrix batch item unavailable"),
+                    }
+                    continue
+
+                if batch_key not in raw_results:
+                    results[key] = {
+                        "ok": False,
+                        "method": method,
+                        "payload": payload,
+                        "error": "Bitrix batch item missing from response",
+                    }
+                    continue
+
+                results[key] = {
+                    "ok": True,
+                    "method": method,
+                    "payload": payload,
+                    "response": {"result": raw_results.get(batch_key)},
+                    "next": raw_next.get(batch_key),
+                }
+        return results
+
+    def safe_batch_list(
+        self,
+        requests_to_run: list[tuple[str, str, dict[str, Any]]],
+        *,
+        chunk_size: int = DEFAULT_BATCH_CHUNK_SIZE,
+    ) -> dict[str, dict[str, Any]]:
+        """Run independent list reads through batch and finish paginated tails normally."""
+        batched = self.safe_batch_call(requests_to_run, chunk_size=chunk_size)
+        results: dict[str, dict[str, Any]] = {}
+        for key, method, payload in requests_to_run:
+            response = batched[key]
+            if not response.get("ok"):
+                results[key] = {**response, "items": []}
+                continue
+            raw_result = (response.get("response") or {}).get("result")
+            items = self._batch_items(raw_result)
+            next_start = response.get("next")
+            if next_start is not None:
+                tail_payload = dict(payload)
+                tail_payload["start"] = next_start
+                tail = self.safe_list_all(method, tail_payload)
+                if not tail.get("ok"):
+                    results[key] = tail
+                    continue
+                items.extend(tail.get("items") or [])
+            results[key] = {
+                "ok": True,
+                "method": method,
+                "payload": payload,
+                "items": items,
+            }
+        return results
 
     def safe_list_all(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:

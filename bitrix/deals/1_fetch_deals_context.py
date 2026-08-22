@@ -125,8 +125,22 @@ def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any
 
 def fetch_users(client: BitrixReadOnlyClient, ids: list[Any]) -> dict[str, Any]:
     users: dict[str, Any] = {}
-    for user_id in sorted({str(item) for item in ids if item}):
-        response = client.safe_call("user.get", {"ID": user_id})
+    user_ids = sorted({str(item) for item in ids if item})
+    requests_to_run = [
+        (f"user:{user_id}", "user.get", {"ID": user_id})
+        for user_id in user_ids
+    ]
+    batch = getattr(client, "safe_batch_call", None)
+    responses = (
+        batch(requests_to_run)
+        if callable(batch)
+        else {
+            key: client.safe_call(method, payload)
+            for key, method, payload in requests_to_run
+        }
+    )
+    for user_id in user_ids:
+        response = responses[f"user:{user_id}"]
         result = get_result(response)
         users[user_id] = {
             "response": response,
@@ -332,9 +346,23 @@ def fetch_task_context(
     client: BitrixReadOnlyClient,
     activities: list[dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, dict[str, Any]]]:
+    task_ids = task_ids_from_activities(activities)
+    requests_to_run = [
+        (f"task:{task_id}", "tasks.task.get", {"taskId": task_id, "select": ["*"]})
+        for task_id in task_ids
+    ]
+    batch = getattr(client, "safe_batch_call", None)
+    responses = (
+        batch(requests_to_run)
+        if callable(batch)
+        else {
+            key: client.safe_call(method, payload)
+            for key, method, payload in requests_to_run
+        }
+    )
     task_responses = {
-        task_id: client.safe_call("tasks.task.get", {"taskId": task_id, "select": ["*"]})
-        for task_id in task_ids_from_activities(activities)
+        task_id: responses[f"task:{task_id}"]
+        for task_id in task_ids
     }
     open_task_ids = select_open_task_ids(task_responses)
     task_chats: dict[str, dict[str, Any]] = {}
