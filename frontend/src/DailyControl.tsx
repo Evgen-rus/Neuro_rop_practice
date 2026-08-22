@@ -9,6 +9,7 @@ import {
   type DailyControlHistory,
   type DailyControlManager,
   type DailyControlReport,
+  type DailyControlSnapshot,
   type DailyControlStatus,
 } from './api'
 import { copyTextToClipboard } from './contextPersist'
@@ -28,6 +29,14 @@ const STATUS_FILTERS: Array<{ id: 'all' | DailyControlStatus; label: string }> =
   { id: 'yellow', label: 'Жёлтые' },
   { id: 'green', label: 'Зелёные' },
 ]
+type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
+const TIME_FILTERS: Array<{ id: DailyControlTimeFilter; label: string; hint: string }> = [
+  { id: 'all', label: 'Все', hint: 'Все сделки команды в этом отчёте' },
+  { id: 'today', label: 'Сегодня', hint: 'Задачи на сегодня, уже просроченные и сделки без открытой задачи Bitrix' },
+  { id: 'tomorrow', label: 'Завтра', hint: 'Сделки с открытой задачей Bitrix на завтра' },
+  { id: 'future', label: 'Будущие', hint: 'Сделки с открытой задачей Bitrix позже завтра' },
+]
+const OPEN_BITRIX_TIME_BUCKETS = new Set(['overdue', 'today', 'tomorrow', 'future', 'unscheduled', 'missing'])
 
 function formatClock(value?: string | null) {
   if (!value) return ''
@@ -103,6 +112,85 @@ function readStoredWidth() {
   }
 }
 
+function dealTimeBucket(deal: DailyControlDeal) {
+  const value = deal.bitrix_task_time_bucket
+  return typeof value === 'string' && OPEN_BITRIX_TIME_BUCKETS.has(value) ? value : null
+}
+
+function snapshotHasTimeBuckets(deals: DailyControlDeal[]) {
+  return deals.some((deal) => dealTimeBucket(deal) !== null)
+}
+
+function dealMatchesTime(deal: DailyControlDeal, filter: DailyControlTimeFilter) {
+  if (filter === 'all') return true
+  const bucket = dealTimeBucket(deal) || 'missing'
+  // Пункт «Сегодня» специально включает просроченные и сделки без открытой задачи Bitrix.
+  if (filter === 'today') return bucket === 'missing' || bucket === 'overdue' || bucket === 'today'
+  if (filter === 'tomorrow') return bucket === 'tomorrow'
+  return bucket === 'future' || bucket === 'unscheduled'
+}
+
+function summarizeDailyControl(deals: DailyControlDeal[]): {
+  team: DailyControlSnapshot['team']
+  managers: DailyControlManager[]
+} {
+  const managersById = new Map<string, DailyControlManager>()
+  let noMovement = 0
+  let movementScope = 0
+  for (const deal of deals) {
+    const managerId = String(deal.manager_id || '') || 'unassigned'
+    const current = managersById.get(managerId) || {
+      manager_id: deal.manager_id,
+      manager_name: deal.manager_name || 'Без ответственного',
+      deals_count: 0,
+      checklist_completed: 0,
+      checklist_total: 0,
+      calls: 0,
+      messages: 0,
+      talk_seconds: 0,
+      red: 0,
+      yellow: 0,
+      green: 0,
+    }
+    current.deals_count += 1
+    current.checklist_completed += Number(deal.checklist?.completed || 0)
+    current.checklist_total += Number(deal.checklist?.total || 0)
+    const communications = deal.communications_today
+    if (communications?.unavailable) {
+      /* Коммуникации недоступны: это не нулевая активность. */
+    } else {
+      movementScope += 1
+      if (Number(communications?.completed || 0) === 0) noMovement += 1
+      current.calls += Number(communications?.calls || 0)
+      current.messages += Number(communications?.messages || 0)
+      current.talk_seconds += Number(communications?.duration_seconds || 0)
+    }
+    current[deal.status] += 1
+    managersById.set(managerId, current)
+  }
+  const managers = [...managersById.values()].sort((left, right) => (
+    (right.red - left.red)
+    || (right.yellow - left.yellow)
+    || left.manager_name.localeCompare(right.manager_name, 'ru')
+    || String(left.manager_id || '').localeCompare(String(right.manager_id || ''))
+  ))
+  return {
+    team: {
+      traffic_light: {
+        red: deals.filter((deal) => deal.status === 'red').length,
+        yellow: deals.filter((deal) => deal.status === 'yellow').length,
+        green: deals.filter((deal) => deal.status === 'green').length,
+      },
+      deals_total: deals.length,
+      no_movement: { count: noMovement, total: movementScope },
+      calls: managers.reduce((sum, item) => sum + item.calls, 0),
+      messages: managers.reduce((sum, item) => sum + item.messages, 0),
+      talk_seconds: managers.reduce((sum, item) => sum + item.talk_seconds, 0),
+    },
+    managers,
+  }
+}
+
 export function DailyControl({ user: _user }: { user: AuthUser }) {
   const [history, setHistory] = useState<DailyControlHistory | null>(null)
   const [report, setReport] = useState<DailyControlReport | null>(null)
@@ -112,6 +200,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   const [managerId, setManagerId] = useState('')
   const [dealId, setDealId] = useState('')
   const [filter, setFilter] = useState<'all' | DailyControlStatus>('all')
+  const [timeFilter, setTimeFilter] = useState<DailyControlTimeFilter>('all')
   const [asked, setAsked] = useState<Record<string, [boolean, boolean]>>({})
   const [leftWidth, setLeftWidth] = useState(SPLITTER_DEFAULT)
   const [dragging, setDragging] = useState(false)
@@ -124,12 +213,22 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   const generating = generation?.status === 'running' || generation?.status === 'queued'
 
   const snapshot = report?.snapshot
-  const managers = snapshot?.managers || []
+  const allDeals = snapshot?.deals
+  const hasTimeBuckets = snapshotHasTimeBuckets(allDeals || [])
+  const activeTimeFilter: DailyControlTimeFilter = hasTimeBuckets ? timeFilter : 'all'
+  const timeFilteredDeals = useMemo(
+    () => (allDeals || []).filter((deal) => dealMatchesTime(deal, activeTimeFilter)),
+    [activeTimeFilter, allDeals],
+  )
+  const { team, managers } = useMemo(
+    () => summarizeDailyControl(timeFilteredDeals),
+    [timeFilteredDeals],
+  )
   const selectedManager = managers.find((item) => String(item.manager_id || '') === managerId) || managers[0] || null
   const managerDeals = useMemo(() => {
     const wanted = String(selectedManager?.manager_id || '')
-    return (snapshot?.deals || []).filter((deal) => String(deal.manager_id || '') === wanted)
-  }, [selectedManager, snapshot])
+    return timeFilteredDeals.filter((deal) => String(deal.manager_id || '') === wanted)
+  }, [selectedManager, timeFilteredDeals])
   const visibleDeals = useMemo(
     () => managerDeals.filter((deal) => filter === 'all' || deal.status === filter),
     [filter, managerDeals],
@@ -174,6 +273,10 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   }, [loadHistory, loadReport])
 
   useEffect(() => {
+    setTimeFilter('all')
+  }, [report?.id])
+
+  useEffect(() => {
     if (!generating) return
     const timer = window.setInterval(() => {
       void (async () => {
@@ -210,7 +313,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
 
   useLayoutEffect(() => {
     dealScrollRef.current?.scrollTo({ top: 0 })
-  }, [filter, managerId])
+  }, [filter, managerId, timeFilter])
 
   useEffect(() => {
     if (!dragging) return
@@ -235,7 +338,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   function selectManager(next: DailyControlManager) {
     setManagerId(String(next.manager_id || ''))
     setFilter('all')
-    const first = (snapshot?.deals || []).find((deal) => String(deal.manager_id || '') === String(next.manager_id || ''))
+    const first = timeFilteredDeals.find((deal) => String(deal.manager_id || '') === String(next.manager_id || ''))
     setDealId(first?.deal_id || '')
   }
 
@@ -253,20 +356,13 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
     setDealId(nextId)
   }
 
-  function resetView() {
-    const first = managers[0]
-    setManagerId(String(first?.manager_id || ''))
-    setFilter('all')
-    const firstDeal = (snapshot?.deals || []).find((deal) => String(deal.manager_id || '') === String(first?.manager_id || ''))
-    setDealId(firstDeal?.deal_id || '')
-    setAsked({})
-  }
-
   function startReview() {
-    const redManager = managers.find((item) => item.red > 0) || managers[0]
+    setTimeFilter('all')
+    setFilter('all')
+    const sourceManagers = snapshot?.managers || []
+    const redManager = sourceManagers.find((item) => item.red > 0) || sourceManagers[0]
     if (!redManager) return
     setManagerId(String(redManager.manager_id || ''))
-    setFilter('all')
     const redDeal = (snapshot?.deals || []).find(
       (deal) => String(deal.manager_id || '') === String(redManager.manager_id || '') && deal.status === 'red',
     ) || (snapshot?.deals || []).find((deal) => String(deal.manager_id || '') === String(redManager.manager_id || ''))
@@ -362,7 +458,21 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
             <span>{report?.position || 0} из {report?.total || history?.total || 0}</span>
             <button type="button" disabled={!report?.next_id} onClick={() => void openReport(report?.next_id)} aria-label="Следующий отчёт">→</button>
           </nav>
-          <button type="button" className="dc-button" onClick={resetView} disabled={!snapshot}>Сбросить просмотр</button>
+          {hasTimeBuckets ? (
+            <select
+              className="dc-daily-time-filter"
+              aria-label="Срок открытой задачи Bitrix"
+              title={TIME_FILTERS.find((item) => item.id === activeTimeFilter)?.hint}
+              value={activeTimeFilter}
+              onChange={(event) => setTimeFilter(event.target.value as DailyControlTimeFilter)}
+            >
+              {TIME_FILTERS.map((item) => (
+                <option value={item.id} key={item.id} title={item.hint}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <button type="button" className="dc-button primary" onClick={startReview} disabled={!snapshot}>Начать разбор</button>
           <button type="button" className="dc-button" onClick={() => void generate()} disabled={generating}>
             {generating ? <><span className="dc-spinner" />Формируем отчёт…</> : 'Сформировать отчёт'}
@@ -390,14 +500,14 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
             </header>
             <div className="dc-daily-traffic">
               <div className="dc-daily-lamp" aria-hidden="true">
-                <span className="red">{snapshot.team.traffic_light.red}</span>
-                <span className="yellow">{snapshot.team.traffic_light.yellow}</span>
-                <span className="green">{snapshot.team.traffic_light.green}</span>
+                <span className="red">{team.traffic_light.red}</span>
+                <span className="yellow">{team.traffic_light.yellow}</span>
+                <span className="green">{team.traffic_light.green}</span>
               </div>
               <ul>
-                <li className="red"><b>{snapshot.team.traffic_light.red}</b><span>Срочно <small>решить с РОПом</small></span></li>
-                <li className="yellow"><b>{snapshot.team.traffic_light.yellow}</b><span>Проверить <small>нужен контроль</small></span></li>
-                <li className="green"><b>{snapshot.team.traffic_light.green}</b><span>В норме <small>движется по плану</small></span></li>
+                <li className="red"><b>{team.traffic_light.red}</b><span>Срочно <small>решить с РОПом</small></span></li>
+                <li className="yellow"><b>{team.traffic_light.yellow}</b><span>Проверить <small>нужен контроль</small></span></li>
+                <li className="green"><b>{team.traffic_light.green}</b><span>В норме <small>движется по плану</small></span></li>
               </ul>
             </div>
           </article>
@@ -409,30 +519,30 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
             <div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="briefcase" /></span>
-                <span><strong>{snapshot.team.deals_total}</strong><small>Всего сделок</small></span>
+                <span><strong>{team.deals_total}</strong><small>Всего сделок</small></span>
               </div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="pause" /></span>
-                <span><strong>{snapshot.team.no_movement.count} из {snapshot.team.no_movement.total || snapshot.team.deals_total}</strong><small>Без движения</small></span>
+                <span><strong>{team.no_movement.count} из {team.no_movement.total || team.deals_total}</strong><small>Без движения</small></span>
               </div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="phone" /></span>
-                <span><strong>{snapshot.team.calls}</strong><small>Звонков</small></span>
+                <span><strong>{team.calls}</strong><small>Звонков</small></span>
               </div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="message" /></span>
-                <span><strong>{snapshot.team.messages}</strong><small>Сообщений</small></span>
+                <span><strong>{team.messages}</strong><small>Сообщений</small></span>
               </div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="clock" /></span>
-                <span><strong>{talkTime(snapshot.team.talk_seconds)}</strong><small>В разговорах</small></span>
+                <span><strong>{talkTime(team.talk_seconds)}</strong><small>В разговорах</small></span>
               </div>
             </div>
           </article>
         </section>
 
         <section className="dc-daily-managers" aria-label="Менеджеры">
-          {managers.map((manager) => {
+          {managers.length ? managers.map((manager) => {
             const id = String(manager.manager_id || '')
             const selected = id === String(selectedManager?.manager_id || '')
             return (
@@ -456,7 +566,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
                 </em>
               </button>
             )
-          })}
+          }) : <p className="dc-daily-empty-list">В выбранном сроке сделок нет.</p>}
         </section>
 
         <div

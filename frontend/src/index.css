@@ -7874,7 +7874,7 @@ ul.facts.bad li:before {
 
 .dc-daily-head {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 16px;
@@ -7893,6 +7893,15 @@ ul.facts.bad li:before {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.dc-daily-head-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .dc-daily-head-copy h1 {
@@ -7943,13 +7952,6 @@ ul.facts.bad li:before {
 .dc-daily-pill.yellow { color: var(--daily-yellow); background: var(--daily-yellow-soft); }
 .dc-daily-pill.green { color: var(--daily-green); background: var(--daily-green-soft); }
 
-.dc-daily-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
 .dc-daily-history {
   display: flex;
   align-items: center;
@@ -7970,6 +7972,18 @@ ul.facts.bad li:before {
 
 .dc-daily-history button:disabled { opacity: .35; cursor: default; }
 .dc-daily-history span { font-size: 12px; font-weight: 700; color: #38516d; }
+
+.dc-daily-time-filter {
+  min-height: 40px;
+  min-width: 118px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--dc-text);
+  font-size: 13px;
+  font-weight: 750;
+}
 
 .dc-daily-banner {
   padding: 10px 12px;
@@ -8187,6 +8201,11 @@ ul.facts.bad li:before {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+}
+
+.dc-daily-managers > .dc-daily-empty-list {
+  margin: 0;
+  padding: 8px 0 12px;
 }
 
 .dc-daily-managers button {
@@ -8986,7 +9005,12 @@ ul.facts.bad li:before {
 
 @media (max-width: 900px) {
   .dc-daily-head {
+    flex-wrap: wrap;
     padding-inline: 12px;
+  }
+
+  .dc-daily-head-actions {
+    flex-wrap: wrap;
   }
 
   .dc-daily > :not(.dc-daily-head) {

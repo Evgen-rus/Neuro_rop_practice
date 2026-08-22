@@ -195,6 +195,26 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
     return "green", STATUS_LABELS["green"]
 
 
+_OPEN_BITRIX_TIME_BUCKETS = {"overdue", "today", "tomorrow", "future", "unscheduled"}
+
+
+def _bitrix_task_time_bucket(deal: dict[str, Any]) -> str:
+    """Frozen open-Bitrix-task deadline bucket for daily-control filtering.
+
+    Closed or missing Bitrix tasks are `missing`, so the ROP time filter can
+    put them with today and overdue. Local Neuro ROP due dates are ignored.
+    """
+    bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
+    if not bitrix_task:
+        return "missing"
+    if str(bitrix_task.get("completion_state") or "open") != "open":
+        return "missing"
+    bucket = str(bitrix_task.get("time_bucket") or "")
+    if bucket in _OPEN_BITRIX_TIME_BUCKETS:
+        return bucket
+    return "unscheduled"
+
+
 def _audit_scores(audit: dict[str, Any]) -> dict[str, int | None]:
     criteria = audit.get("criteria") if isinstance(audit.get("criteria"), dict) else {}
     scores: dict[str, int | None] = {}
@@ -467,6 +487,7 @@ def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
         "checklist": _project_checklist(deal.get("checklist")),
         "has_analysis": bool(coaching.get("report_id")),
         "analysis_created_at": coaching.get("analysis_created_at"),
+        "bitrix_task_time_bucket": _bitrix_task_time_bucket(deal),
     }
 
 

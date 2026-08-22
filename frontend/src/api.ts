@@ -814,6 +814,7 @@ export type DailyControlDeal = {
   }
   has_analysis: boolean
   analysis_created_at?: string | null
+  bitrix_task_time_bucket?: 'overdue' | 'today' | 'tomorrow' | 'future' | 'unscheduled' | 'missing'
 }
 
 export type DealControlDeal = {

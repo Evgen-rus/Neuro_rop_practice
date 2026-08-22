@@ -276,6 +276,40 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertEqual(card["pipeline_name"], "Основные продажи")
         self.assertEqual(card["stage_id"], "C15:NEW")
 
+    def test_snapshot_keeps_frozen_bitrix_task_time_bucket(self) -> None:
+        snapshot = build_daily_control_snapshot({
+            "deals": [
+                _deal_row(deal_id="101", primary_bitrix_task={"time_bucket": "today", "completion_state": "open"}),
+                _deal_row(deal_id="102", title="Сделка 102", primary_bitrix_task=None),
+            ],
+        })
+        buckets = {item["deal_id"]: item["bitrix_task_time_bucket"] for item in snapshot["deals"]}
+        self.assertEqual(buckets["101"], "today")
+        self.assertEqual(buckets["102"], "missing")
+
+    def test_review_card_stores_open_bitrix_task_time_bucket(self) -> None:
+        self.assertEqual(project_deal_review_card(_deal_row())["bitrix_task_time_bucket"], "missing")
+        self.assertEqual(
+            project_deal_review_card(_deal_row(primary_bitrix_task={
+                "time_bucket": "tomorrow",
+                "completion_state": "open",
+            }))["bitrix_task_time_bucket"],
+            "tomorrow",
+        )
+        self.assertEqual(
+            project_deal_review_card(_deal_row(primary_bitrix_task={
+                "time_bucket": "today",
+                "completion_state": "bitrix",
+            }))["bitrix_task_time_bucket"],
+            "missing",
+        )
+        self.assertEqual(
+            project_deal_review_card(_deal_row(primary_bitrix_task={
+                "time_bucket": "overdue",
+            }))["bitrix_task_time_bucket"],
+            "overdue",
+        )
+
     def test_review_script_is_manager_coaching_not_client_call_script(self) -> None:
         card = project_deal_review_card(_deal_row(coaching={
             "report_id": 1,
