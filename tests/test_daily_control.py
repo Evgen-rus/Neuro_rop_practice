@@ -150,14 +150,21 @@ def _seed_deal(db_path: Path, *, deal_id="101", manager_id="10", title="Сдел
 
 
 class ClassifierTests(unittest.TestCase):
-    def test_overdue_control_and_two_zero_scores_are_red(self) -> None:
-        status, label = classify_deal_status(_deal_row(current_task={"time_bucket": "overdue"}))
-        self.assertEqual(status, "red")
-        self.assertEqual(label, "Требует решения РОПа")
-        status, _ = classify_deal_status(_deal_row(
+    def test_overdue_local_rop_task_does_not_force_red(self) -> None:
+        status, label = classify_deal_status(_deal_row(
+            current_task={"time_bucket": "overdue"},
+            coaching={"report_id": 1, "communication_quality_audit": _audit()},
+            checklist={"completed": 2, "total": 2, "items": []},
+        ))
+        self.assertEqual(status, "green")
+        self.assertEqual(label, "В норме")
+
+    def test_two_zero_scores_are_red(self) -> None:
+        status, label = classify_deal_status(_deal_row(
             coaching={"report_id": 1, "communication_quality_audit": _audit(next_action=0, value=0)},
         ))
         self.assertEqual(status, "red")
+        self.assertEqual(label, "Требует решения РОПа")
 
     def test_missing_next_step_or_no_analysis_is_yellow(self) -> None:
         status, label = classify_deal_status(_deal_row(

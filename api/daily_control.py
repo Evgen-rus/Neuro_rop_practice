@@ -158,7 +158,6 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
         if isinstance(coaching.get("communication_quality_audit"), dict)
         else {}
     )
-    current_task = deal.get("current_task") if isinstance(deal.get("current_task"), dict) else {}
     bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
     communications = (
         deal.get("communications_today")
@@ -171,7 +170,6 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
     next_action_zero = scores.get("next_action") == 0
     assessed = audit.get("status") == "assessed"
     insufficient = audit.get("status") == "insufficient_evidence"
-    overdue_control = str(current_task.get("time_bucket") or "") == "overdue"
     overdue_bitrix = (
         str(bitrix_task.get("time_bucket") or "") == "overdue"
         and str(bitrix_task.get("completion_state") or "open") == "open"
@@ -181,7 +179,9 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
     no_movement = comms_available and int(communications.get("completed") or 0) == 0
     open_checklist = int(checklist.get("total") or 0) > int(checklist.get("completed") or 0)
 
-    if overdue_control or (assessed and zero_count >= 2) or (overdue_bitrix and next_action_zero):
+    # Локальное поручение РОПа не красит светофор: в UI рабочий объект — открытая
+    # задача Bitrix. Скрытый AI-срок не должен зажигать красный.
+    if (assessed and zero_count >= 2) or (overdue_bitrix and next_action_zero):
         return "red", STATUS_LABELS["red"]
     if (
         no_analysis
