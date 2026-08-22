@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from api.deal_manager_quick_help import _load_local_communications
-from bitrix.workspace import deal_workspace_dir
+from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT, deal_workspace_dir, entity_workspace_dir
 
 
 MAX_TRANSCRIPT_CHARS = 1_000_000
@@ -44,8 +44,14 @@ def _read_transcript(path: Path) -> str:
         return ""
 
 
-def _transcript_paths(deal_id: str, activity_id: str) -> list[Path]:
-    directory = deal_workspace_dir(str(deal_id)) / "transcripts"
+def _transcript_paths(entity_id: str, activity_id: str, *, entity_type: str = "deal") -> list[Path]:
+    directory = (
+        deal_workspace_dir(str(entity_id))
+        if entity_type == "deal"
+        else entity_workspace_dir(
+            str(entity_id), entity_type="lead", workspace_root=DEFAULT_LEAD_WORKSPACE_ROOT,
+        )
+    ) / "transcripts"
     if not directory.is_dir():
         return []
     prefix = f"call_{activity_id}"
@@ -61,6 +67,27 @@ def _transcript_paths(deal_id: str, activity_id: str) -> list[Path]:
         return []
     priority = {".json": 0, ".txt": 1, ".md": 2}
     return sorted(matches, key=lambda path: (priority.get(path.suffix.lower(), 9), path.name))
+
+
+def find_call_transcript(entity_type: str, entity_id: str, activity_id: str) -> dict[str, Any] | None:
+    """Find a saved transcript by an already verified CRM activity reference."""
+
+    normalized_type = str(entity_type or "").lower()
+    normalized_activity_id = str(activity_id or "").strip()
+    if normalized_type not in {"deal", "lead"} or not _SAFE_ACTIVITY_ID.fullmatch(normalized_activity_id):
+        return None
+    for path in _transcript_paths(
+        str(entity_id), normalized_activity_id, entity_type=normalized_type,
+    ):
+        text = _read_transcript(path)
+        if not text:
+            continue
+        truncated = len(text) > MAX_TRANSCRIPT_CHARS
+        return {
+            "text": text[:MAX_TRANSCRIPT_CHARS],
+            "truncated": truncated,
+        }
+    return None
 
 
 def get_deal_call_transcript(deal_id: str, event_id: str) -> dict[str, Any]:
@@ -82,15 +109,11 @@ def get_deal_call_transcript(deal_id: str, event_id: str) -> dict[str, Any]:
     if not activity_id:
         raise DealCallTranscriptNotFound("Для звонка отсутствует идентификатор CRM-активности")
 
-    for path in _transcript_paths(str(deal_id), activity_id):
-        text = _read_transcript(path)
-        if not text:
-            continue
-        truncated = len(text) > MAX_TRANSCRIPT_CHARS
+    transcript = find_call_transcript("deal", str(deal_id), activity_id)
+    if transcript:
         return {
             "deal_id": str(deal_id),
             "event_id": wanted_event_id,
-            "text": text[:MAX_TRANSCRIPT_CHARS],
-            "truncated": truncated,
+            **transcript,
         }
     raise DealCallTranscriptNotFound("Расшифровка этого звонка пока недоступна")

@@ -20,6 +20,18 @@ CALL_EVENT = {
 
 
 class DealCallTranscriptTests(unittest.TestCase):
+    def test_finds_saved_lead_transcript_by_verified_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lead_dir = Path(directory)
+            transcripts = lead_dir / "transcripts"
+            transcripts.mkdir()
+            (transcripts / "call_88_transcript.txt").write_text(
+                "Расшифровка звонка по лиду", encoding="utf-8",
+            )
+            with patch.object(transcript_api, "entity_workspace_dir", return_value=lead_dir):
+                result = transcript_api.find_call_transcript("lead", "202", "88")
+        self.assertEqual(result["text"], "Расшифровка звонка по лиду")
+
     def test_reads_full_json_transcript_for_deal_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             deal_dir = Path(directory)

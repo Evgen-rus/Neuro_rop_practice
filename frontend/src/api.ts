@@ -15,6 +15,110 @@ export type AuthMeResponse = {
   user: AuthUser
 }
 
+export type TrajectoryCategory = 'all' | 'deals' | 'leads' | 'communications' | 'tasks' | 'crm' | 'neurorop'
+
+export type TrajectoryTotals = {
+  events: number
+  deals: number
+  leads: number
+  calls: number
+  tasks: number
+  communications: number
+  crm: number
+  neurorop: number
+}
+
+export type TrajectoryBucket = {
+  from: string
+  to: string
+  count: number
+  density: 'none' | 'moderate' | 'high' | 'peak'
+  lanes: Record<Exclude<TrajectoryCategory, 'all'>, number>
+}
+
+export type TrajectoryManager = {
+  manager_id: string
+  manager_name: string
+  totals: TrajectoryTotals
+  attention: {
+    distribution: { deals: number; leads: number; other: number }
+    context_switches: {
+      deal_to_lead: number
+      lead_to_deal: number
+      deal_to_deal: number
+      lead_to_lead: number
+      deal_lead_total: number
+    }
+  }
+  buckets: TrajectoryBucket[]
+}
+
+export type TrajectoryDay = {
+  date: string
+  timezone: 'Europe/Moscow'
+  bucket_minutes: 15 | 30 | 60
+  period: { from: string; to: string }
+  axis: { from: string; to: string; slots: Array<{ from: string; to: string; label: string }> }
+  collection: {
+    status: string
+    last_success_at: string | null
+    last_attempt_at: string | null
+    is_current_day: boolean
+  }
+  totals: TrajectoryTotals
+  managers: TrajectoryManager[]
+  warnings: string[]
+}
+
+export type TrajectoryEvent = {
+  event_id: number | string | null
+  activity_id?: string | null
+  occurred_at: string
+  category: Exclude<TrajectoryCategory, 'all'>
+  event_type: string
+  label: string
+  entity_type: 'deal' | 'lead' | null
+  entity_id: string | null
+  entity_title: string | null
+  pipeline_name: string | null
+  stage_name: string | null
+  subject: string | null
+  description: string | null
+  direction?: string | null
+  completed?: boolean | null
+  duration_seconds?: number | null
+  expandable?: boolean
+  temporal_relation?: { kind: 'after_recommendation_view'; minutes: number; text: string } | null
+}
+
+export type TrajectoryEventDetail = TrajectoryEvent & {
+  transcript_text?: string | null
+  transcript_truncated?: boolean
+}
+
+export type TrajectoryWindow = {
+  manager_id: string
+  manager_name: string
+  period: { from: string; to: string }
+  events: TrajectoryEvent[]
+  entities: number
+}
+
+export type TrajectoryEntity = {
+  entity_type: 'deal' | 'lead'
+  entity_id: string
+  title: string | null
+  pipeline_id: string | null
+  pipeline_name: string | null
+  stage_id: string | null
+  stage_name: string | null
+  manager_id: string | null
+  manager_name: string | null
+  period: { from: string; to: string }
+  relevant_fields: Record<string, unknown>
+  chronology: TrajectoryEvent[]
+}
+
 export class ApiError extends Error {
   readonly status: number
   readonly retryAfter: string | null
@@ -2214,6 +2318,54 @@ export function saveCompactFeedback(
   return api<{ ok: boolean; feedback: Record<string, unknown> }>(
     `/api/entity/${entityType}/${entityId}/compact-runs/${runId}/feedback`,
     { method: 'PUT', body: JSON.stringify({ result, reason: reason || null, comment: comment || null }) },
+  )
+}
+
+export function fetchTrajectoryDay(params: {
+  date: string
+  bucket_minutes: 15 | 30 | 60
+  manager_id?: string
+  category?: TrajectoryCategory
+  q?: string
+}) {
+  const query = new URLSearchParams({
+    date: params.date,
+    bucket_minutes: String(params.bucket_minutes),
+  })
+  if (params.manager_id) query.set('manager_id', params.manager_id)
+  if (params.category && params.category !== 'all') query.set('category', params.category)
+  if (params.q?.trim()) query.set('q', params.q.trim())
+  return api<TrajectoryDay>(`/api/admin/trajectory/day?${query.toString()}`)
+}
+
+export function fetchTrajectoryWindow(params: {
+  manager_id: string
+  from: string
+  to: string
+  category?: TrajectoryCategory
+  q?: string
+}) {
+  const query = new URLSearchParams({
+    manager_id: params.manager_id,
+    from: params.from,
+    to: params.to,
+  })
+  if (params.category && params.category !== 'all') query.set('category', params.category)
+  if (params.q?.trim()) query.set('q', params.q.trim())
+  return api<TrajectoryWindow>(`/api/admin/trajectory/window?${query.toString()}`)
+}
+
+export function fetchTrajectoryEntity(entityType: 'deal' | 'lead', entityId: string, date: string) {
+  const query = new URLSearchParams({ date })
+  return api<TrajectoryEntity>(
+    `/api/admin/trajectory/entity/${entityType}/${encodeURIComponent(entityId)}?${query.toString()}`,
+  )
+}
+
+export function fetchTrajectoryEvent(eventId: number | string, managerId: string, date: string) {
+  const query = new URLSearchParams({ manager_id: managerId, date })
+  return api<TrajectoryEventDetail>(
+    `/api/admin/trajectory/event/${encodeURIComponent(String(eventId))}?${query.toString()}`,
   )
 }
 

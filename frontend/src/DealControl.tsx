@@ -102,11 +102,12 @@ import {
 import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
+import { ManagerTrajectory } from './ManagerTrajectory'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 
-type DealControlView = 'dashboard' | 'rop' | 'daily' | 'manager'
+type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
 const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
@@ -130,6 +131,10 @@ const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = 
   daily: {
     title: 'Ежедневный контроль',
     subtitle: 'Срез команды к планёрке: кого разбирать и какие вопросы задать',
+  },
+  trajectory: {
+    title: 'Траектория',
+    subtitle: 'Наблюдаемая активность менеджеров в течение рабочего дня',
   },
   manager: {
     title: 'Мои задачи',
@@ -545,6 +550,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setTimeView('all')
   }
 
+  function openTrajectoryView() {
+    setView('trajectory')
+    setManagerFilter('')
+    setTimeView('all')
+  }
+
   function openManagerView() {
     setView('manager')
     setManagerFilter(user.role === 'manager'
@@ -951,6 +962,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Ежедневный контроль">
           <span>▣</span><b>Ежедневный контроль</b><small>Разбор команды к планёрке</small>
         </button> : null}
+        {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Траектория">
+          <span>⌁</span><b>Траектория</b><small>Рабочий день менеджеров</small>
+        </button> : null}
         {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
           <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
         </button> : null}
@@ -960,7 +974,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content">
-      {view === 'daily' ? <DailyControl user={user} /> : <>
+      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} />

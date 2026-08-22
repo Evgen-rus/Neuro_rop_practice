@@ -113,6 +113,12 @@ from api.daily_control import (
     report_payload as daily_control_report_payload,
     start_manual_daily_control_report,
 )
+from api.manager_trajectory_ui import (
+    build_day_projection as build_manager_trajectory_day,
+    build_entity_projection as build_manager_trajectory_entity,
+    build_event_detail_projection as build_manager_trajectory_event_detail,
+    build_window_projection as build_manager_trajectory_window,
+)
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
 from storage import rop_db as storage
@@ -755,6 +761,75 @@ def automatic_analysis_latest() -> dict[str, Any]:
     items = list_automatic_analysis_items(DEFAULT_DB_PATH, int(run["id"]))
     visible = scoped_automatic_analysis_items(items, user)
     return {"latest": automatic_analysis_latest_payload(run, visible)}
+
+
+@app.get("/api/admin/trajectory/day")
+def manager_trajectory_day_get(
+    date_: date = Query(alias="date"),
+    bucket_minutes: int = Query(default=30),
+    manager_id: str | None = None,
+    category: Literal["all", "deals", "leads", "communications", "tasks", "crm", "neurorop"] = "all",
+    q: str = Query(default="", max_length=120),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_manager_trajectory_day(
+            value=date_, bucket_minutes=bucket_minutes,
+            manager_ids=[manager_id] if manager_id else None,
+            category=category, query=q,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/admin/trajectory/window")
+def manager_trajectory_window_get(
+    manager_id: str,
+    from_at: datetime = Query(alias="from"),
+    to_at: datetime = Query(alias="to"),
+    category: Literal["all", "deals", "leads", "communications", "tasks", "crm", "neurorop"] = "all",
+    q: str = Query(default="", max_length=120),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_manager_trajectory_window(
+            manager_id=manager_id, from_at=from_at, to_at=to_at,
+            category=category, query=q,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/admin/trajectory/entity/{entity_type}/{entity_id}")
+def manager_trajectory_entity_get(
+    entity_type: Literal["deal", "lead"],
+    entity_id: str,
+    date_: date = Query(alias="date"),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_manager_trajectory_entity(
+            entity_type=entity_type, entity_id=entity_id, value=date_,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/admin/trajectory/event/{event_id}")
+def manager_trajectory_event_get(
+    event_id: str,
+    manager_id: str,
+    date_: date = Query(alias="date"),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_manager_trajectory_event_detail(
+            manager_id=manager_id, event_id=event_id, value=date_,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.get("/api/deal-control")
