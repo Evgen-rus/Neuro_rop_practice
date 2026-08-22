@@ -23,6 +23,7 @@ from openai_api.audio.build_deal_transcript_context import build_all_deal_transc
 from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
+from openai_api.llm.deal_call_projection import project_transcript_for_deal_prompt
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
@@ -113,13 +114,23 @@ def resolve_transcript(value: str, deal_dir: Path) -> Path | None:
     return path
 
 
-def transcript_text_for_prompt(transcript_path: Path | None, transcript_text: str) -> str:
+def transcript_text_for_prompt(
+    transcript_path: Path | None,
+    transcript_text: str,
+    *,
+    deal_id: str | None = None,
+) -> str:
     """Keep all-calls transcript text append-only so earlier calls remain cacheable."""
     if transcript_path is None or AGGREGATE_STEM not in transcript_path.stem:
         return transcript_text
     marker = "## Тексты звонков"
     marker_index = transcript_text.find(marker)
-    return transcript_text[marker_index:] if marker_index >= 0 else transcript_text
+    prompt_text = transcript_text[marker_index:] if marker_index >= 0 else transcript_text
+    return (
+        project_transcript_for_deal_prompt(prompt_text, deal_id=deal_id)
+        if deal_id
+        else prompt_text
+    )
 
 
 def deal_prompt_cache_markers(transcript_text: str) -> list[str]:
@@ -1625,7 +1636,11 @@ def main() -> None:
     log_model_file_payload(logger, title="deal history input", model=args.model, path=history_path)
     if transcript_path:
         log_model_file_payload(logger, title="deal transcript input", model=args.model, path=transcript_path)
-        transcript_text = transcript_text_for_prompt(transcript_path, read_text(transcript_path))
+        transcript_text = transcript_text_for_prompt(
+            transcript_path,
+            read_text(transcript_path),
+            deal_id=str(args.deal_id),
+        )
     else:
         transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
 
