@@ -139,32 +139,29 @@ def resolve_history_path(deal_dir: Path, deal_id: str) -> Path:
     return deal_dir / "history" / f"deal_{deal_id}_customer_path.md"
 
 
-def knowledge_files(knowledge_dir: Path) -> list[Path]:
-    priority = [
-        "index.md",
+FULL_ANALYSIS_KNOWLEDGE_FILES = {
+    "lead": (
         "qualification.md",
+        "technical_data.md",
+        "call_attempt_rules.md",
+        "risk_signals.md",
+    ),
+    "deal": (
         "technical_data.md",
         "risk_signals.md",
         "call_attempt_rules.md",
         "commercial_offer_followup.md",
         "objections.md",
         "funnel.md",
-    ]
-    files = [knowledge_dir / name for name in priority if (knowledge_dir / name).exists()]
-    excluded = {
-        "attention_delta_core.md",
-        "attention_delta_deal.md",
-        "attention_delta_lead.md",
-        "manager_texts.md",
-    }
-    extra = sorted(
-        path
-        for path in knowledge_dir.glob("*.md")
-        if path.name not in set(priority)
-        and path.name.lower() != "readme.md"
-        and path.name.lower() not in excluded
-    )
-    return files + extra
+    ),
+}
+
+
+def knowledge_files(knowledge_dir: Path, *, entity_type: str) -> list[Path]:
+    filenames = FULL_ANALYSIS_KNOWLEDGE_FILES.get(entity_type)
+    if filenames is None:
+        raise ValueError(f"Unsupported full-analysis entity_type: {entity_type!r}")
+    return [knowledge_dir / name for name in filenames if (knowledge_dir / name).is_file()]
 
 
 def build_prompt(
@@ -1633,7 +1630,7 @@ def main() -> None:
         transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
 
     okf_sections: list[tuple[Path, str]] = []
-    for path in knowledge_files(knowledge_dir):
+    for path in knowledge_files(knowledge_dir, entity_type="deal"):
         log_model_file_payload(logger, title="OKF knowledge input", model=args.model, path=path)
         okf_sections.append((path, read_text(path)))
 

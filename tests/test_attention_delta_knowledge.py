@@ -15,11 +15,18 @@ KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 
 
 class AttentionDeltaKnowledgeTests(unittest.TestCase):
-    def test_full_analysis_excludes_attention_delta_packs(self) -> None:
+    def test_full_analysis_uses_entity_specific_allowlists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for filename in (
                 "index.md",
+                "qualification.md",
+                "technical_data.md",
+                "risk_signals.md",
+                "call_attempt_rules.md",
+                "commercial_offer_followup.md",
+                "objections.md",
+                "funnel.md",
                 "custom_rules.md",
                 "attention_delta_core.md",
                 "attention_delta_lead.md",
@@ -28,9 +35,28 @@ class AttentionDeltaKnowledgeTests(unittest.TestCase):
             ):
                 (root / filename).write_text(filename, encoding="utf-8")
 
-            selected_names = [path.name for path in knowledge_files(root)]
+            lead_names = [path.name for path in knowledge_files(root, entity_type="lead")]
+            deal_names = [path.name for path in knowledge_files(root, entity_type="deal")]
 
-            self.assertEqual(selected_names, ["index.md", "custom_rules.md"])
+            self.assertEqual(
+                lead_names,
+                ["qualification.md", "technical_data.md", "call_attempt_rules.md", "risk_signals.md"],
+            )
+            self.assertEqual(
+                deal_names,
+                [
+                    "technical_data.md",
+                    "risk_signals.md",
+                    "call_attempt_rules.md",
+                    "commercial_offer_followup.md",
+                    "objections.md",
+                    "funnel.md",
+                ],
+            )
+
+    def test_full_analysis_rejects_unknown_entity_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported full-analysis entity_type"):
+            knowledge_files(Path("knowledge"), entity_type="contact")
 
     def test_selection_depends_only_on_entity_type(self) -> None:
         lead_first = select_attention_delta_knowledge("lead", KNOWLEDGE_DIR)

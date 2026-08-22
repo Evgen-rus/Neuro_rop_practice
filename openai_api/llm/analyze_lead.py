@@ -837,7 +837,7 @@ def main() -> None:
         transcript_text = "Транскрибация не предоставлена. Анализируй историю лида, активности и комментарии."
 
     okf_sections: list[tuple[Path, str]] = []
-    for path in knowledge_files(knowledge_dir):
+    for path in knowledge_files(knowledge_dir, entity_type="lead"):
         log_model_file_payload(logger, title="OKF knowledge input", model=args.model, path=path)
         okf_sections.append((path, read_text(path)))
 
