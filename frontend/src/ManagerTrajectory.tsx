@@ -153,9 +153,16 @@ export function ManagerTrajectory() {
   }
 
   const lastSuccess = day?.collection.last_success_at
-  const updatedLabel = lastSuccess
-    ? `Данные на ${timeLabel(lastSuccess)}`
-    : day?.collection.status === 'unknown' ? 'Сбор ещё не выполнялся' : 'Нет успешного сбора'
+  const today = moscowDateInputValue()
+  const isFutureDay = date > today
+  const isCurrentDay = day?.date === date ? day.collection.is_current_day : date === today
+  const updatedLabel = isFutureDay
+    ? 'Данных ещё нет'
+    : !isCurrentDay
+      ? 'Данные за день'
+      : lastSuccess
+        ? `Данные на ${timeLabel(lastSuccess)}`
+        : day?.collection.status === 'unknown' ? 'Сбор ещё не выполнялся' : 'Нет успешного сбора'
 
   return <div className="trajectory-page">
     <header className="trajectory-header">
@@ -172,8 +179,8 @@ export function ManagerTrajectory() {
     <div className="trajectory-toolbar">
       <div className="trajectory-date-nav">
         <button type="button" onClick={() => setDate(shiftDate(date, -1))} aria-label="Предыдущий день">‹</button>
-        <label><span>Дата</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-        <button type="button" onClick={() => setDate(shiftDate(date, 1))} aria-label="Следующий день">›</button>
+        <label><span>Дата</span><input type="date" max={today} value={date} onChange={(event) => setDate(event.target.value)} /></label>
+        <button type="button" disabled={date >= today} onClick={() => setDate(shiftDate(date, 1))} aria-label="Следующий день">›</button>
         <button type="button" className="today" onClick={() => setDate(moscowDateInputValue())}>Сегодня</button>
       </div>
       <div className="trajectory-filter-row">
@@ -236,11 +243,12 @@ export function ManagerTrajectory() {
                 })}
               </div>
             </div>
-            <div className="trajectory-manager-stats">
-              <span>Deals <b>{manager.attention.distribution.deals}%</b></span>
-              <span>Leads <b>{manager.attention.distribution.leads}%</b></span>
-              <span>Other <b>{manager.attention.distribution.other}%</b></span>
-              <span className="switches">Deal ↔ Lead <b>{manager.attention.context_switches.deal_lead_total}</b></span>
+            <div className="trajectory-manager-stats" title="Доля наблюдаемых событий Bitrix, не оценка затраченного рабочего времени.">
+              <span className="trajectory-manager-stats-label">Активность по сущностям</span>
+              <span>Сделки <b>{manager.attention.distribution.deals}%</b></span>
+              <span>Лиды <b>{manager.attention.distribution.leads}%</b></span>
+              <span>Другое <b>{manager.attention.distribution.other}%</b></span>
+              <span className="switches" title="Последовательные наблюдаемые события Bitrix по разным типам сущностей. Не является точным измерением переключения внимания человека.">Смен активной сущности Deal ↔ Lead: <b>{manager.attention.context_switches.deal_lead_total}</b></span>
             </div>
             {isExpanded ? <div className="trajectory-lanes">
               {LANES.map(([key, label, icon]) => <div className={`trajectory-lane lane-${key}`} key={key}>
@@ -368,6 +376,7 @@ function TrajectoryEventRow({
         {isCall ? <div className="trajectory-call-facts"><span><small>Направление</small><b>{directionLabel(detail.direction)}</b></span><span><small>Длительность</small><b>{durationLabel(detail.duration_seconds)}</b></span></div> : null}
         {detail.subject ? <p><b>{detail.subject}</b></p> : null}
         {detail.description ? <p className="trajectory-full-event-text">{detail.description}</p> : null}
+        {detail.details?.length ? <dl className="trajectory-event-facts">{detail.details.map((item, index) => <div key={`${item.label}-${index}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl> : null}
         {detail.transcript_text ? <details className="trajectory-transcript"><summary>Расшифровка звонка</summary><pre>{detail.transcript_text}</pre>{detail.transcript_truncated ? <small>Показан первый 1 000 000 символов.</small> : null}</details> : null}
         {!entityContext && event.entity_id && onOpenEntity ? <button type="button" className="trajectory-open-entity" onClick={() => void onOpenEntity(event)}>Открыть {event.entity_type?.toUpperCase()} #{event.entity_id}</button> : null}
       </> : null}

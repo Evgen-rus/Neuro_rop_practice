@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -46,6 +47,55 @@ def _short(value: Any, limit: int = 220) -> str | None:
     if not text:
         return None
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _detail_value(value: Any, limit: int = 20_000) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    elif isinstance(value, bool):
+        text = "Да" if value else "Нет"
+    else:
+        text = str(value).strip()
+    if not text:
+        return None
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _event_detail_items(action: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+    kind = str(action.get("activity_kind") or action.get("action_type") or "").lower()
+    action_type = str(action.get("action_type") or "").lower()
+    raw_items: list[tuple[str, Any]] = []
+    if kind == "task":
+        raw_items.extend([
+            ("Состояние", "Завершена" if action.get("completed") else "Не завершена"),
+            ("ID задачи", action.get("associated_entity_id")),
+        ])
+    if action_type == "task_history" or kind == "task_history":
+        raw_items.extend([
+            ("ID задачи", payload.get("task_id")),
+            ("Изменённое поле", payload.get("field")),
+            ("Было", payload.get("from_value")),
+            ("Стало", payload.get("to_value")),
+        ])
+    if action_type == "business_field_change" or kind == "business_field_change":
+        raw_items.extend([
+            ("Поле", payload.get("field_label") or payload.get("field_name")),
+            ("Было", payload.get("from_value")),
+            ("Стало", payload.get("to_value")),
+        ])
+    if action_type == "stage_change" or kind in {"stage_change", "stage_history"}:
+        raw_items.extend([
+            ("Предыдущая стадия", action.get("from_stage_name") or action.get("from_stage_id")),
+            ("Новая стадия", action.get("to_stage_name") or action.get("to_stage_id")),
+        ])
+    result: list[dict[str, str]] = []
+    for label, raw_value in raw_items:
+        value = _detail_value(raw_value)
+        if value is not None:
+            result.append({"label": label, "value": value})
+    return result
 
 
 def _entity_meta(manager: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -100,6 +150,12 @@ def _base_event(
         before = action.get("from_stage_name") or action.get("from_stage_id")
         after = action.get("to_stage_name") or action.get("to_stage_id")
         description = f"{before or '—'} → {after or '—'}"
+    kind = str(action.get("activity_kind") or "").lower()
+    action_type = str(action.get("action_type") or "").lower()
+    has_saved_detail = bool(subject or description) or any(
+        payload.get(key) not in (None, "")
+        for key in ("task_id", "field", "field_name", "from_value", "to_value")
+    )
     return {
         "event_id": action.get("event_id"),
         "occurred_at": occurred_at,
@@ -118,8 +174,9 @@ def _base_event(
         "completed": action.get("completed"),
         "duration_seconds": call.get("duration_seconds"),
         "expandable": (
-            str(action.get("activity_kind") or "").lower() in {"call", "email", "message"}
-            or str(action.get("action_type") or "").lower() == "timeline_comment"
+            kind in {"call", "email", "message", "meeting", "task", "task_history", "stage_history"}
+            or action_type in {"timeline_comment", "task_history", "business_field_change", "stage_change"}
+            or has_saved_detail
         ),
         "temporal_relation": None,
     }
@@ -325,10 +382,6 @@ def build_day_projection(
                 item["lanes"]["leads"] += 1
             if event.get("category") in item["lanes"]:
                 item["lanes"][event["category"]] += 1
-        maximum = max((item["count"] for item in buckets.values()), default=0)
-        for item in buckets.values():
-            ratio = item["count"] / maximum if maximum else 0
-            item["density"] = "peak" if ratio >= .75 else "high" if ratio >= .45 else "moderate" if item["count"] else "none"
         activity_kinds = [str(item.get("label") or "") for item in events]
         projected_managers.append({
             "manager_id": manager.get("manager_id"),
@@ -346,6 +399,19 @@ def build_day_projection(
             "attention": _attention(events),
             "buckets": list(buckets.values()),
         })
+    maximum = max(
+        (bucket["count"] for manager in projected_managers for bucket in manager["buckets"]),
+        default=0,
+    )
+    for manager in projected_managers:
+        for bucket in manager["buckets"]:
+            ratio = bucket["count"] / maximum if maximum else 0
+            bucket["density"] = (
+                "peak" if ratio >= .75
+                else "high" if ratio >= .45
+                else "moderate" if bucket["count"]
+                else "none"
+            )
     state = report.get("collection_status") or {}
     last_success = state.get("last_success_at")
     return {
@@ -481,6 +547,7 @@ def build_event_detail_projection(
                     **event,
                     "subject": action.get("subject") or event.get("subject"),
                     "description": str(full_description).strip() if full_description is not None else None,
+                    "details": _event_detail_items(action, payload),
                     "transcript_text": transcript.get("text") if transcript else None,
                     "transcript_truncated": bool(transcript and transcript.get("truncated")),
                 }

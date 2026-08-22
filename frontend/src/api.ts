@@ -92,6 +92,7 @@ export type TrajectoryEvent = {
 }
 
 export type TrajectoryEventDetail = TrajectoryEvent & {
+  details?: Array<{ label: string; value: string }>
   transcript_text?: string | null
   transcript_truncated?: boolean
 }

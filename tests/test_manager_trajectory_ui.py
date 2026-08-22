@@ -64,14 +64,26 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _event(self, entity_type: str, entity_id: str, kind: str, at: datetime, activity_id: str) -> None:
+    def _event(
+        self,
+        entity_type: str,
+        entity_id: str,
+        kind: str,
+        at: datetime,
+        activity_id: str,
+        *,
+        manager_id: str = "10",
+        description: str | None = None,
+    ) -> None:
         record_manager_trajectory_event(
-            self.db_path, entity_type=entity_type, entity_id=entity_id, manager_id="10",
+            self.db_path, entity_type=entity_type, entity_id=entity_id, manager_id=manager_id,
             event_type="crm_activity_observed", source="bitrix",
             source_event_key=f"activity:{activity_id}", occurred_at=at.isoformat(),
             payload={
                 "activity_id": activity_id, "activity_kind": kind,
                 "last_updated": at.isoformat(), "subject": f"Событие {activity_id}",
+                "description": description,
+                "completed": kind == "task",
                 "call": {"duration_seconds": 65} if kind == "call" else {},
             },
         )
@@ -87,6 +99,31 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertEqual([item["count"] for item in manager["buckets"]], [3, 1])
         self.assertNotIn("chronology", manager)
         self.assertNotIn("description", manager["buckets"][0])
+        self.assertFalse(result["collection"]["is_current_day"])
+        self.assertIsNotNone(result["collection"]["last_success_at"])
+
+    def test_density_uses_one_maximum_across_visible_managers(self) -> None:
+        save_deal_control_scope(
+            self.db_path, initial_deal_ids=["101", "303"], manager_ids=["10", "20"], pipeline_id="15",
+        )
+        upsert_deal_control_deal(
+            self.db_path, deal_id="303", source="manager", title="ООО Гамма",
+            manager_id="20", manager_name="Анна Смирнова", stage_id="NEW",
+            stage_name="Новая", pipeline_id="15", amount="100", currency_id="RUB",
+            created_at_crm=START.isoformat(), modified_at_crm=START.isoformat(), is_active=True,
+        )
+        for index in range(8):
+            self._event(
+                "deal", "303", "call", START + timedelta(minutes=index), f"m20-{index}",
+                manager_id="20",
+            )
+
+        result = build_day_projection(value=DAY, bucket_minutes=30, db_path=self.db_path)
+        managers = {item["manager_id"]: item for item in result["managers"]}
+
+        self.assertEqual(managers["20"]["buckets"][0]["density"], "peak")
+        self.assertEqual(managers["10"]["buckets"][0]["count"], 3)
+        self.assertEqual(managers["10"]["buckets"][0]["density"], "moderate")
 
     def test_window_adds_only_temporal_relation_not_causality(self) -> None:
         result = build_window_projection(
@@ -102,18 +139,62 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
         self.assertNotIn("вызвал", call["temporal_relation"]["text"])
 
     def test_entity_communications_can_load_saved_content_lazily(self) -> None:
-        self._event("deal", "101", "email", START + timedelta(minutes=25), "a4")
+        self._event(
+            "deal", "101", "email", START + timedelta(minutes=25), "a4",
+            description="Полный текст письма",
+        )
+        self._event(
+            "deal", "101", "message", START + timedelta(minutes=26), "a5",
+            description="Полный текст сообщения",
+        )
         entity = build_entity_projection(
             entity_type="deal", entity_id="101", value=DAY, db_path=self.db_path,
         )
 
         communications = {
             item["label"]: item for item in entity["chronology"]
-            if item["label"] in {"Звонок", "Письмо"}
+            if item["label"] in {"Звонок", "Письмо", "Сообщение", "Задача"}
         }
         self.assertTrue(communications["Звонок"]["expandable"])
         self.assertEqual(communications["Звонок"]["duration_seconds"], 65)
         self.assertTrue(communications["Письмо"]["expandable"])
+        self.assertTrue(communications["Сообщение"]["expandable"])
+        self.assertTrue(communications["Задача"]["expandable"])
+
+        with patch("api.manager_trajectory_ui.find_call_transcript") as transcript_lookup:
+            email_detail = build_event_detail_projection(
+                manager_id="10", event_id=str(communications["Письмо"]["event_id"]),
+                value=DAY, db_path=self.db_path,
+            )
+        self.assertEqual(email_detail["description"], "Полный текст письма")
+        transcript_lookup.assert_not_called()
+
+        task_detail = build_event_detail_projection(
+            manager_id="10", event_id=str(communications["Задача"]["event_id"]),
+            value=DAY, db_path=self.db_path,
+        )
+        self.assertIn({"label": "Состояние", "value": "Завершена"}, task_detail["details"])
+
+    def test_business_field_change_detail_is_human_readable(self) -> None:
+        observed = observe_manager_trajectory_business_snapshot(
+            self.db_path, entity_type="lead", entity_id="202", manager_id="10",
+            snapshot={"TITLE": "Лид Бета", "STATUS_ID": "IN_PROCESS"},
+            modified_at=(START + timedelta(minutes=45)).isoformat(),
+            field_allowlist=["TITLE", "STATUS_ID"],
+        )
+        status_change = next(
+            item for item in observed["events"]
+            if item["payload"]["field_name"] == "STATUS_ID"
+        )
+
+        detail = build_event_detail_projection(
+            manager_id="10", event_id=str(status_change["id"]), value=DAY, db_path=self.db_path,
+        )
+
+        facts = {item["label"]: item["value"] for item in detail["details"]}
+        self.assertEqual(facts["Поле"], "STATUS_ID")
+        self.assertEqual(facts["Было"], "NEW")
+        self.assertEqual(facts["Стало"], "IN_PROCESS")
 
     def test_filters_and_entity_projection_are_lazy(self) -> None:
         day = build_day_projection(value=DAY, category="leads", query="Бета", db_path=self.db_path)
