@@ -215,7 +215,8 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   const snapshot = report?.snapshot
   const allDeals = snapshot?.deals
   const hasTimeBuckets = snapshotHasTimeBuckets(allDeals || [])
-  const activeTimeFilter: DailyControlTimeFilter = hasTimeBuckets ? timeFilter : 'all'
+  const showTimeFilter = hasTimeBuckets && report?.freshness?.is_latest === true
+  const activeTimeFilter: DailyControlTimeFilter = showTimeFilter ? timeFilter : 'all'
   const timeFilteredDeals = useMemo(
     () => (allDeals || []).filter((deal) => dealMatchesTime(deal, activeTimeFilter)),
     [activeTimeFilter, allDeals],
@@ -458,7 +459,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
             <span>{report?.position || 0} из {report?.total || history?.total || 0}</span>
             <button type="button" disabled={!report?.next_id} onClick={() => void openReport(report?.next_id)} aria-label="Следующий отчёт">→</button>
           </nav>
-          {hasTimeBuckets ? (
+          {showTimeFilter ? (
             <select
               className="dc-daily-time-filter"
               aria-label="Срок открытой задачи Bitrix"
