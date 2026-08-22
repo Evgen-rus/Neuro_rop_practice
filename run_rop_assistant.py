@@ -302,6 +302,36 @@ def workspace_dir(entity_type: str, entity_id: str) -> Path:
     return workspace_root(entity_type) / f"{entity_type}_{entity_id}"
 
 
+def analysis_error_file_signature(entity_type: str, entity_id: str) -> tuple[int, int] | None:
+    error_path = workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_analysis_error.json"
+    try:
+        stat = error_path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def analysis_failure_error_message(
+    entity_type: str,
+    entity_id: str,
+    returncode: int,
+    *,
+    error_signature_before: tuple[int, int] | None,
+) -> str:
+    error_path = workspace_dir(entity_type, entity_id) / "analysis" / f"{entity_type}_{entity_id}_analysis_error.json"
+    error_signature_after = analysis_error_file_signature(entity_type, entity_id)
+    if error_signature_after is not None and error_signature_after != error_signature_before:
+        try:
+            payload = json.loads(error_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            message = str(payload.get("error") or "").strip()
+            if message:
+                return message
+    return f"exit code {returncode}"
+
+
 def lead_history_bundle_path(lead_id: str) -> Path:
     return workspace_dir("lead", lead_id) / "raw" / f"lead_{lead_id}_customer_history_bundle.json"
 
@@ -739,12 +769,19 @@ def run_analysis(options: WorkflowOptions) -> list[AnalysisFailure]:
     failures: list[AnalysisFailure] = []
     for entity_id in options.entity_ids:
         emit_progress(options.entity_type, entity_id, "llm_analysis", detail="Готовит анализ")
+        error_signature_before = analysis_error_file_signature(options.entity_type, entity_id)
         try:
             run_command(analyze_command(options, entity_id), f"LLM-анализ {options.entity_type}_{entity_id}")
         except subprocess.CalledProcessError as error:
             failures.append(AnalysisFailure(options.entity_type, entity_id, error.returncode))
+            error_message = analysis_failure_error_message(
+                options.entity_type,
+                entity_id,
+                error.returncode,
+                error_signature_before=error_signature_before,
+            )
             print(
-                f"Ошибка анализа {options.entity_type}_{entity_id}: exit code {error.returncode}. "
+                f"Ошибка анализа {options.entity_type}_{entity_id}: {error_message}. "
                 "Продолжаю остальные сущности."
             )
             emit_progress(
@@ -753,7 +790,7 @@ def run_analysis(options: WorkflowOptions) -> list[AnalysisFailure]:
                 "error",
                 status="error",
                 detail="Анализ не сформирован",
-                error=f"exit code {error.returncode}",
+                error=error_message,
             )
         else:
             emit_progress(

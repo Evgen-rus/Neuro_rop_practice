@@ -9,7 +9,14 @@ from pathlib import Path
 from unittest.mock import call, patch
 
 from api.jobs import AnalyzeOptions, JobState, _JOBS, _run_job
-from run_rop_assistant import WorkflowOptions, refresh_workspace_after_transcription, run_analysis, transcribable_gaps
+from run_rop_assistant import (
+    WorkflowOptions,
+    analysis_error_file_signature,
+    analysis_failure_error_message,
+    refresh_workspace_after_transcription,
+    run_analysis,
+    transcribable_gaps,
+)
 
 
 def workflow_options() -> WorkflowOptions:
@@ -122,6 +129,43 @@ class AnalysisBatchResilienceTests(unittest.TestCase):
 
         self.assertEqual(attempted, ["LLM-анализ lead_1", "LLM-анализ lead_2", "LLM-анализ lead_3"])
         self.assertEqual([(item.entity_id, item.returncode) for item in failures], [("2", 1)])
+
+    def test_analysis_failure_reads_saved_validation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            error_path = root / "deal_42" / "analysis" / "deal_42_analysis_error.json"
+            error_path.parent.mkdir(parents=True)
+            error_path.write_text(
+                json.dumps({"error": "Invalid deal analysis: bad enum"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with patch("run_rop_assistant.workspace_root", return_value=root):
+                message = analysis_failure_error_message(
+                    "deal", "42", 1, error_signature_before=None
+                )
+                missing = analysis_failure_error_message(
+                    "deal", "99", 1, error_signature_before=None
+                )
+
+        self.assertEqual(message, "Invalid deal analysis: bad enum")
+        self.assertEqual(missing, "exit code 1")
+
+    def test_analysis_failure_ignores_unchanged_error_from_previous_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            error_path = root / "deal_42" / "analysis" / "deal_42_analysis_error.json"
+            error_path.parent.mkdir(parents=True)
+            error_path.write_text(
+                json.dumps({"error": "Previous validation failure"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with patch("run_rop_assistant.workspace_root", return_value=root):
+                signature_before = analysis_error_file_signature("deal", "42")
+                message = analysis_failure_error_message(
+                    "deal", "42", 1, error_signature_before=signature_before
+                )
+
+        self.assertEqual(message, "exit code 1")
 
     def test_api_job_collects_partial_results_after_cli_failure(self) -> None:
         job_id = "partial-test"

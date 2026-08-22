@@ -136,16 +136,23 @@ def _set_value_at_path(value: dict[str, Any], path: str, new_value: Any) -> None
         current[parts[-1]] = new_value
 
 
+TURNING_POINT_STATUS_ALIASES = {
+    "current": "active",
+}
+
+
 def normalize_analysis_for_validation(
     analysis: dict[str, Any],
     *,
     allow_legacy_qualification_assessment: bool = False,
 ) -> list[dict[str, Any]]:
-    """Clamp model lists and normalize only schema-safe qualification defaults.
+    """Clamp model lists and normalize schema-safe defaults.
 
     ``allow_legacy_qualification_assessment`` is for already saved reports created
     before the qualification block existed. New model responses keep the block
     mandatory and are rejected by ``validate_lead_analysis`` when it is absent.
+    Nearby deal_context enum aliases are rewritten only when the meaning is the
+    same, so a one-token mix-up does not spend a second paid correction call.
     """
 
     changes: list[dict[str, Any]] = []
@@ -154,6 +161,7 @@ def normalize_analysis_for_validation(
         changes,
         allow_legacy_qualification_assessment=allow_legacy_qualification_assessment,
     )
+    _normalize_deal_context_enum_aliases(analysis, changes)
     if allow_legacy_qualification_assessment:
         if "deal_state" in analysis and "recommendation_feedback" not in analysis:
             analysis["recommendation_feedback"] = {
@@ -297,6 +305,36 @@ def _legacy_qualification_assessment() -> dict[str, Any]:
             "evidence": [],
         },
     }
+
+
+def _normalize_deal_context_enum_aliases(
+    analysis: dict[str, Any],
+    changes: list[dict[str, Any]],
+) -> None:
+    context = analysis.get("deal_context")
+    if not isinstance(context, dict):
+        return
+    turning_points = context.get("turning_points")
+    if not isinstance(turning_points, list):
+        return
+    for index, raw in enumerate(turning_points):
+        if not isinstance(raw, dict):
+            continue
+        status = raw.get("status")
+        if not isinstance(status, str):
+            continue
+        mapped = TURNING_POINT_STATUS_ALIASES.get(status.strip())
+        if mapped is None or mapped == status:
+            continue
+        raw["status"] = mapped
+        changes.append(
+            {
+                "path": f"deal_context.turning_points[{index}].status",
+                "action": "enum_alias",
+                "from": status,
+                "to": mapped,
+            }
+        )
 
 
 def _normalize_qualification_assessment(

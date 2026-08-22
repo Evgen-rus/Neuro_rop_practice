@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from openai_api.llm.validation import _validate_deal_context
+from openai_api.llm.validation import _validate_deal_context, normalize_analysis_for_validation
 
 
 def deal_context() -> dict:
@@ -127,6 +127,29 @@ class DealContextSnapshotTests(unittest.TestCase):
         errors: list[str] = []
         _validate_deal_context(value, errors)
         self.assertTrue(any("at least 2 items" in error for error in errors))
+
+    def test_turning_point_current_status_is_normalized_to_active(self) -> None:
+        context = deal_context()
+        context["turning_points"][0]["status"] = "current"
+        analysis = {"deal_context": context}
+
+        changes = normalize_analysis_for_validation(analysis)
+
+        self.assertEqual(analysis["deal_context"]["turning_points"][0]["status"], "active")
+        self.assertEqual(
+            changes,
+            [
+                {
+                    "path": "deal_context.turning_points[0].status",
+                    "action": "enum_alias",
+                    "from": "current",
+                    "to": "active",
+                }
+            ],
+        )
+        errors: list[str] = []
+        _validate_deal_context(analysis["deal_context"], errors)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
