@@ -928,6 +928,41 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 PRIMARY KEY(entity_type, entity_id)
             );
 
+            CREATE TABLE IF NOT EXISTS deal_semantic_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                source_analysis_run_id INTEGER,
+                source_fingerprint TEXT NOT NULL,
+                semantic_state_json TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(source_analysis_run_id) REFERENCES analysis_runs(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_deal_semantic_checkpoints_entity
+                ON deal_semantic_checkpoints(entity_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS deal_incremental_v2_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                source_analysis_run_id INTEGER,
+                source_fingerprint TEXT,
+                semantic_schema_version TEXT,
+                evidence_ids_json TEXT NOT NULL,
+                changed_domains_json TEXT NOT NULL,
+                affected_sections_json TEXT NOT NULL,
+                telemetry_json TEXT NOT NULL,
+                semantic_validation TEXT,
+                final_validation TEXT,
+                fallback_reason TEXT,
+                artifact_path TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(source_analysis_run_id) REFERENCES analysis_runs(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_deal_incremental_v2_runs_entity
+                ON deal_incremental_v2_runs(entity_id, id DESC);
+
             CREATE TABLE IF NOT EXISTS manager_trajectory_presence_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 manager_id TEXT NOT NULL,
@@ -2302,6 +2337,97 @@ def _insert_ui_report(
         ),
     )
     return int(cursor.lastrowid)
+
+
+def save_deal_semantic_checkpoint(
+    db_path: str | Path,
+    *,
+    entity_id: str,
+    schema_version: str,
+    source_analysis_run_id: int | None,
+    source_fingerprint: str,
+    semantic_state: dict[str, Any],
+    mode: str,
+) -> int:
+    if mode not in {"shadow", "on"}:
+        raise ValueError("V2 checkpoint mode must be shadow or on")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_semantic_checkpoints (
+                entity_id, schema_version, source_analysis_run_id,
+                source_fingerprint, semantic_state_json, mode, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(entity_id), str(schema_version), source_analysis_run_id,
+                str(source_fingerprint), dumps_json(semantic_state), mode, utcish_now(),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def get_latest_deal_semantic_checkpoint(
+    db_path: str | Path,
+    entity_id: str,
+    *,
+    schema_version: str | None = None,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    query = "SELECT * FROM deal_semantic_checkpoints WHERE entity_id = ?"
+    params: list[Any] = [str(entity_id)]
+    if schema_version is not None:
+        query += " AND schema_version = ?"
+        params.append(str(schema_version))
+    query += " ORDER BY id DESC LIMIT 1"
+    with connect(db_path) as conn:
+        row = conn.execute(query, params).fetchone()
+    if row is None:
+        return None
+    value = dict(row)
+    value["semantic_state"] = loads_json(value.pop("semantic_state_json"), {})
+    return value
+
+
+def save_deal_incremental_v2_run(
+    db_path: str | Path,
+    *,
+    entity_id: str,
+    mode: str,
+    source_analysis_run_id: int | None = None,
+    source_fingerprint: str | None = None,
+    semantic_schema_version: str | None = None,
+    evidence_ids: list[str] | None = None,
+    changed_domains: list[str] | None = None,
+    affected_sections: list[str] | None = None,
+    telemetry: dict[str, Any] | None = None,
+    semantic_validation: str | None = None,
+    final_validation: str | None = None,
+    fallback_reason: str | None = None,
+    artifact_path: str | None = None,
+) -> int:
+    if mode not in {"shadow", "on"}:
+        raise ValueError("V2 run mode must be shadow or on")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO deal_incremental_v2_runs (
+                entity_id, mode, source_analysis_run_id, source_fingerprint,
+                semantic_schema_version, evidence_ids_json, changed_domains_json,
+                affected_sections_json, telemetry_json, semantic_validation,
+                final_validation, fallback_reason, artifact_path, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(entity_id), mode, source_analysis_run_id, source_fingerprint,
+                semantic_schema_version, dumps_json(evidence_ids or []), dumps_json(changed_domains or []),
+                dumps_json(affected_sections or []), dumps_json(telemetry or {}), semantic_validation,
+                final_validation, fallback_reason, artifact_path, utcish_now(),
+            ),
+        )
+        return int(cursor.lastrowid)
 
 
 def get_or_create_ui_report_for_analysis_run(

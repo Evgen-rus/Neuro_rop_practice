@@ -12,6 +12,7 @@ from setup import BASE_DIR, get_logger
 
 
 load_dotenv(BASE_DIR / ".env")
+logger = get_logger("openai")
 
 
 def read_bool_env(name: str, default: bool) -> bool:
@@ -53,4 +54,21 @@ CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK = read_bool_env(
     True,
 )
 
-logger = get_logger("openai")
+
+def read_choice_env(name: str, default: str, allowed: set[str]) -> str:
+    value = (os.getenv(name, default) or default).strip().lower()
+    if value not in allowed:
+        logger.warning("Invalid %s=%r; using %s", name, value, default)
+        return default
+    return value
+
+
+# Incremental Deal Analysis V2 is isolated from the V1 flags above. ``off`` is
+# deliberately side-effect free: it neither routes through V2 nor writes V2
+# checkpoints. ``shadow`` may spend tokens but can only persist diagnostic V2
+# artifacts; ``on`` may publish only after the current deal validator passes.
+DEAL_INCREMENTAL_V2_MODE = read_choice_env(
+    "DEAL_INCREMENTAL_V2_MODE",
+    "off",
+    {"off", "shadow", "on"},
+)

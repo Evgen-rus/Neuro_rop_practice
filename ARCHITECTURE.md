@@ -23,7 +23,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Транскрибация | `openai_api/audio/*` |
 | Полный LLM-анализ и его рендеринг | `openai_api/llm/analyze_lead.py`, `openai_api/llm/analyze_deal.py` |
 | LLM-вызов, JSON-парсинг, validation и стоимость | `openai_api/llm/llm_client.py`, `openai_api/llm/validation.py`, `openai_api/pricing.py`, человеческий дневник — `openai_api/spend_diary.py` |
-| Change detection | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py` |
+| Change detection и Incremental Deal Analysis V2 | `openai_api/change_detection/*`, `openai_api/llm/analyze_*_if_changed.py`; deal V2 — `openai_api/llm/deal_evidence.py`, `deal_semantic_state.py`, `deal_semantic_dependencies.py`, `deal_incremental_v2.py` |
 | Контроль сделки, живая карта контекста и приоритеты рычагов, дневной чек-лист менеджера, исходы задач, дневные коммуникации, Quick Help, полный скрипт разговора и ежедневный контроль РОПа | `openai_api/llm/analyze_deal.py`, `api/deal_control.py`, `api/daily_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `storage/rop_db.py` |
 | Developer/admin telemetry использования рекомендаций и manager-wide CRM-фактов | `api/manager_trajectory.py`, `scripts/manager_trajectory.py`, `storage/rop_db.py`; лёгкие admin-only UI-проекции — `api/manager_trajectory_ui.py`, `api/app.py`, `frontend/src/ManagerTrajectory.tsx`, `frontend/src/api.ts` |
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
@@ -56,6 +56,7 @@ ROP Assistant помогает руководителю продаж разби�
 - Исход deal-control должен содержать достаточно данных для своего состояния: попытка без ответа и незавершённый результат требуют следующего шага со сроком, подтверждённый контакт — описания ответа, отказ — причины. Перенос срока РОПом требует причины; роль автора сохраняется в истории. Отменённые задачи учитываются отдельно и не входят в знаменатель метрик исходов или сравнение AI/no-AI.
 - Полный Markdown-отчёт создаётся только после успешной бизнес-валидации JSON. OKF/knowledge задают правила оценки, но не являются фактами конкретной сущности.
 - Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
+- `DEAL_INCREMENTAL_V2_MODE=off` сохраняет текущую deal-маршрутизацию и не создаёт semantic checkpoint. `shadow` может выполнять платный V2 и сохранять только отдельные диагностические artifacts/telemetry, но не меняет `entity_state`, UI-report, checklist, recommendation feedback или materialization. `on` публикует V2 только после текущих normalize/validation; любая недоказуемая delta, ошибка semantic/materialization или финальной validation ведёт в существующий FULL. Lead-контур V2 не использует.
 - У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
 - Ручной change-aware анализ сделки доступен всем ролям в пределах серверного deal-scope: `admin` — для всех сделок, `rop` — для сделок своей команды, `manager` — только для собственных. Это отдельное право от прочих платных AI-действий; подтверждение возможного платного запуска, `force_llm=False` и FULL/MINI/skip остаются обязательными.
 - AI-подсказка к задаче РОПа запускается только явно, привязывается к ревизии задачи и последнему полному deal-анализу; устаревшую подсказку нельзя показывать менеджеру как актуальную.
@@ -97,6 +98,8 @@ Lead и deal preparation scripts получают raw context, подготав�
 `snapshot.py` извлекает стабильный, компактный снимок CRM-фактов; длинные тексты в нём хэшируются. `decision_engine.py` выбирает первый полный анализ, полный анализ при значимом изменении, локальную mini-рекомендацию при детерминированном риске без изменения или пропуск без изменений. Не подменяй эту логику одной лишь `DATE_MODIFY` и не обходи её прямым LLM-вызовом.
 
 `stage_policy.py` определяет семантику стадий для решения. `crm_pipeline_map.json` — только локальная карта реальных Bitrix IDs и имён для UI/фильтров; изменения в ней не меняют бизнес-семантику closed stages.
+
+Deal V2 является изолированным evolution-layer над текущим решением `INCREMENTAL_LLM_ANALYSIS`. Он идентифицирует звонки, входящие email и сообщения по CRM activity (`call:<id>`, `email:<id>`, `message:<id>`), а не по пути/mtime transcript-файла. Versioned `deal-semantic-state-v1` хранит компактную бизнес-преемственность и evidence coverage отдельно от полного `analysis.json`; append-only checkpoints и privacy-safe run telemetry доступны только через `storage/rop_db.py`. Semantic updater возвращает полный новый checkpoint, явная dependency map выбирает affected sections, partial materialization заменяет только их, после чего кандидат обязательно проходит текущие `normalize_analysis_for_validation()` и `validate_deal_analysis()`. Downstream по-прежнему получает один полный validated deal analysis.
 
 ### 5. SQLite, кандидаты и daily summary
 

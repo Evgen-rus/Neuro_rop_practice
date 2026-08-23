@@ -249,6 +249,8 @@ def call_analysis_json(
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
     defer_usage_trace: bool = False,
+    preview_prompt: bool = True,
+    preview_response_errors: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
     request_input, cache_options, cache_metadata = _cache_request(
@@ -259,19 +261,25 @@ def call_analysis_json(
         cache_prefixes=cache_prefixes,
         disable_implicit_cache=False,
     )
-    log_model_text_payload(
-        logger,
-        title="deal analysis prompt",
-        model=model,
-        text=prompt,
-        metadata={
-            "api": "responses.create",
-            "response_format": "json_object",
-            "reasoning_effort": ANALYSIS_REASONING_EFFORT,
-            "call_type": call_type,
-            "prompt_cache": cache_metadata,
-        },
-    )
+    if preview_prompt:
+        log_model_text_payload(
+            logger,
+            title="deal analysis prompt",
+            model=model,
+            text=prompt,
+            metadata={
+                "api": "responses.create",
+                "response_format": "json_object",
+                "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+                "call_type": call_type,
+                "prompt_cache": cache_metadata,
+            },
+        )
+    else:
+        logger.info(
+            "OpenAI request preview disabled: call_type=%s model=%s chars=%s sha256_16=%s",
+            call_type, model, len(prompt), hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+        )
     requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started_at = perf_counter()
     transport_events: list[dict[str, Any]] = []
@@ -365,7 +373,7 @@ def call_analysis_json(
                 entity_id=trace_entity_id,
                 error_type="ModelJsonParseError",
             )
-        preview = text[:500].replace("\n", "\\n")
+        preview = text[:500].replace("\n", "\\n") if preview_response_errors else "<preview disabled>"
         raise ModelJsonParseError(
             f"Model returned invalid JSON: {error}. Raw output preview: {preview}",
             raw_output_text=text,
@@ -511,6 +519,8 @@ def call_validated_analysis_json(
     prompt_cache_markers: list[str] | None = None,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
+    preview_prompt: bool = True,
+    preview_response_errors: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
     current_prompt = prompt
@@ -547,6 +557,10 @@ def call_validated_analysis_json(
             }
             if deferred_trace:
                 caller_options["defer_usage_trace"] = True
+            if not preview_prompt:
+                caller_options["preview_prompt"] = False
+            if not preview_response_errors:
+                caller_options["preview_response_errors"] = False
             analysis, metadata = analysis_caller(current_prompt, **caller_options)
             final_raw = str(metadata.get("raw_output_text") or "")
             final_analysis = analysis
