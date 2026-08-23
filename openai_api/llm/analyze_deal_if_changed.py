@@ -29,6 +29,7 @@ from openai_api.change_detection.decision_engine import (
     ERROR,
     FIRST_FULL_ANALYSIS,
     FULL_LLM_ANALYSIS,
+    INCREMENTAL_LLM_ANALYSIS,
     MINI_RECOMMENDATION_NO_LLM,
     SKIPPED_NO_CHANGES,
     ProcessingDecision,
@@ -36,6 +37,12 @@ from openai_api.change_detection.decision_engine import (
     render_mini_recommendation,
     save_mini_recommendation_markdown,
 )
+from openai_api.config import (
+    CONTEXT_MEMORY_OPTIMIZATION_ENABLED,
+    CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK,
+    CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE,
+)
+from openai_api.llm.deal_incremental import IncrementalContextError, build_incremental_context
 from openai_api.change_detection.snapshot import (
     build_deal_snapshot,
     compare_snapshots,
@@ -141,10 +148,16 @@ def analysis_paths(current_deal_dir: Path, deal_id: str) -> dict[str, Path]:
         "raw": analysis_dir / f"deal_{deal_id}_raw_model_output.txt",
         "snapshot": analysis_dir / f"deal_{deal_id}_snapshot.json",
         "mini": analysis_dir / f"deal_{deal_id}_mini_recommendation.md",
+        "incremental_context": analysis_dir / f"deal_{deal_id}_incremental_context.json",
     }
 
 
-def run_existing_analyzer(args: argparse.Namespace, transcript_arg: str) -> None:
+def run_existing_analyzer(
+    args: argparse.Namespace,
+    transcript_arg: str,
+    *,
+    incremental_context_path: Path | None = None,
+) -> None:
     command = [
         sys.executable,
         str(PROJECT_ROOT / "openai_api" / "llm" / "analyze_deal.py"),
@@ -158,9 +171,20 @@ def run_existing_analyzer(args: argparse.Namespace, transcript_arg: str) -> None
     ]
     if args.model:
         command.extend(["--model", str(args.model)])
+    if incremental_context_path is not None:
+        command.extend(["--incremental-context", str(incremental_context_path)])
 
     logger.info("Running existing deal analyzer: %s", " ".join(command))
     subprocess.run(command, cwd=BASE_DIR, check=True)
+
+
+def full_fallback_decision(decision: ProcessingDecision, reason: str) -> ProcessingDecision:
+    return ProcessingDecision(
+        status=FULL_LLM_ANALYSIS,
+        reasons=[*decision.reasons, f"Безопасный FULL fallback: {reason}."],
+        triggers=decision.triggers,
+        diff=decision.diff,
+    )
 
 
 def load_analysis_payload(path: Path) -> dict[str, Any]:
@@ -232,7 +256,11 @@ def persist_successful_llm_run(
             payload,
             fingerprint=fingerprint,
             decision_reason=decision_reason,
-            prompt_version="neuro-rop:full-deal:v2",
+            prompt_version=(
+                "neuro-rop:incremental-deal:v1"
+                if decision_status == INCREMENTAL_LLM_ANALYSIS
+                else "neuro-rop:full-deal:v2"
+            ),
             model_override=args.model,
         ),
     )
@@ -380,6 +408,65 @@ def main() -> None:
             return
 
         save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
+
+        if decision.status == INCREMENTAL_LLM_ANALYSIS:
+            incremental_context_path: Path | None = None
+            if CONTEXT_MEMORY_OPTIMIZATION_ENABLED or CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE:
+                try:
+                    incremental_context = build_incremental_context(
+                        previous_state=previous_state,
+                        previous_snapshot=previous_snapshot,
+                        current_snapshot=snapshot,
+                        diff=diff,
+                        raw_bundle=raw_bundle,
+                        transcript_path=transcript_path,
+                    )
+                    save_json(paths["incremental_context"], incremental_context)
+                    incremental_context_path = paths["incremental_context"]
+                except IncrementalContextError as error:
+                    decision = full_fallback_decision(decision, str(error))
+            else:
+                decision = full_fallback_decision(decision, "optimization_disabled")
+
+            if decision.status == INCREMENTAL_LLM_ANALYSIS and (
+                CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE
+                or CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK
+            ):
+                mode_reason = (
+                    "shadow_mode"
+                    if CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE
+                    else "force_full_fallback"
+                )
+                decision = full_fallback_decision(decision, mode_reason)
+
+            if decision.status == INCREMENTAL_LLM_ANALYSIS:
+                try:
+                    run_existing_analyzer(
+                        args,
+                        "none",
+                        incremental_context_path=incremental_context_path,
+                    )
+                except subprocess.CalledProcessError:
+                    decision = full_fallback_decision(decision, "incremental_analyzer_failed")
+                else:
+                    run_id = persist_successful_llm_run(
+                        db_path=db_path,
+                        args=args,
+                        fingerprint=fingerprint,
+                        snapshot=snapshot,
+                        decision_status=decision.status,
+                        paths=paths,
+                        decision_reason=decision.as_dict(),
+                    )
+                    emit_deal_publish_ready(
+                        str(args.deal_id),
+                        analysis_run_id=run_id,
+                        engine_status=decision.status,
+                    )
+                    print(f"{decision.status}: LLM analysis completed for deal {args.deal_id}")
+                    print(f"Analysis saved: {paths['analysis']}")
+                    print(f"ROP report saved: {paths['report']}")
+                    return
 
         if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS}:
             run_existing_analyzer(args, analyzer_transcript_arg)

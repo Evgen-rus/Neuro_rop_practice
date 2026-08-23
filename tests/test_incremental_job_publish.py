@@ -48,6 +48,7 @@ class IncrementalJobPublishTests(unittest.TestCase):
     def test_compact_decision_status_maps_engine_values(self) -> None:
         self.assertEqual(compact_decision_status("FIRST_FULL_ANALYSIS"), "full")
         self.assertEqual(compact_decision_status("FULL_LLM_ANALYSIS"), "full")
+        self.assertEqual(compact_decision_status("INCREMENTAL_LLM_ANALYSIS"), "full")
         self.assertEqual(compact_decision_status("MINI_RECOMMENDATION_NO_LLM"), "mini")
         self.assertEqual(compact_decision_status("SKIPPED_NO_CHANGES"), "skip")
         self.assertEqual(compact_decision_status("ERROR"), "error")

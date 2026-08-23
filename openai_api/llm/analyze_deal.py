@@ -41,6 +41,7 @@ from storage.rop_db import (
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
 DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v2"
+DEAL_INCREMENTAL_PROMPT_CACHE_KEY = "neuro-rop:incremental-deal:v1"
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
 
@@ -64,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         help="Processed OKF knowledge folder.",
     )
     parser.add_argument("--model", default=ANALYSIS_MODEL, help="OpenAI analysis model")
+    parser.add_argument(
+        "--incremental-context",
+        default=None,
+        help="Prepared incremental context JSON. Omit for canonical FULL analysis.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -184,6 +190,7 @@ def build_prompt(
     stage_policy: dict[str, Any],
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
     daily_checklist_context: dict[str, Any] | None = None,
+    incremental_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -199,6 +206,39 @@ def build_prompt(
         ensure_ascii=False,
         indent=2,
     )
+    incremental_rules = ""
+    evidence_sections = f"""{TRANSCRIPT_SECTION_MARKER}
+
+{transcript_text.strip()}
+
+{HISTORY_SECTION_MARKER}
+
+{history_text.strip()}"""
+    if incremental_context is not None:
+        previous_analysis_text = json.dumps(incremental_context.get("previous_analysis"), ensure_ascii=False, indent=2)
+        new_events_text = json.dumps(incremental_context.get("new_events"), ensure_ascii=False, indent=2)
+        crm_delta_text = json.dumps(incremental_context.get("crm_delta"), ensure_ascii=False, indent=2)
+        incremental_rules = """
+<incremental_analysis_rules>
+PREVIOUS_ANALYSIS — бизнес-состояние сделки на момент последнего успешного анализа, а не новое evidence.
+Сохраняй ранее подтверждённые факты, если NEW_EVENTS или CRM_DELTA им не противоречат. Не превращай прежние гипотезы модели в доказанные факты.
+Новый evidence имеет приоритет только когда он действительно подтверждает изменение. При противоречии пересмотри вывод и все зависимые рекомендации.
+CRM_STAGE_POLICY, PRIOR_NEURO_ROP_RECOMMENDATION и CURRENT_DAILY_MANAGER_CHECKLIST переданы в актуальном состоянии и имеют приоритет над старыми значениями.
+Верни полный актуальный analysis JSON того же контракта, включая все обязательные блоки. Не возвращай patch, diff или сокращённый отчёт.
+Старая raw-история намеренно не повторяется. Её отсутствие в prompt не означает, что старых событий не было или что прошлый контекст был полным.
+</incremental_analysis_rules>
+"""
+        evidence_sections = f"""## PREVIOUS_ANALYSIS
+
+{previous_analysis_text}
+
+## NEW_EVENTS
+
+{new_events_text}
+
+## CRM_DELTA
+
+{crm_delta_text}"""
     communication_audit_rules = """
 <communication_quality_audit_rules>
 Сформируй один текущий аудит качества ведения сделки для РОПа по всей доступной клиентской коммуникации, а не отдельный отчёт на каждый звонок или сообщение.
@@ -473,6 +513,7 @@ competitor_defense_checklist внутри deal_context: они уже счита
 - Не предлагай скидку первым действием. Не спорь с клиентом, не обесценивай конкурента/Китай и не выдумывай факты о бюджете, ЛПР, конкуренте или сроках.
 </management_blocks_rules>
 {communication_audit_rules}
+{incremental_rules}
 
 Правила:
 1. Не выдумывай факты.
@@ -885,13 +926,7 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
 
 {deal_id}
 
-{TRANSCRIPT_SECTION_MARKER}
-
-{transcript_text.strip()}
-
-{HISTORY_SECTION_MARKER}
-
-{history_text.strip()}
+{evidence_sections}
 
 ## ДИАГНОСТИКА ПОЛНОТЫ КОНТЕКСТА
 
@@ -1607,6 +1642,13 @@ def main() -> None:
         )
 
     deal_dir = Path(args.deal_root) / f"deal_{args.deal_id}"
+    incremental_context_path_arg = getattr(args, "incremental_context", None)
+    incremental_context = None
+    if incremental_context_path_arg:
+        loaded_incremental = json.loads(Path(incremental_context_path_arg).read_text(encoding="utf-8"))
+        if not isinstance(loaded_incremental, dict):
+            raise ValueError("Incremental context должен быть JSON-объектом")
+        incremental_context = loaded_incremental
     history_path = resolve_history_path(deal_dir, str(args.deal_id))
     transcript_path = resolve_transcript(args.transcript, deal_dir)
     knowledge_dir = Path(args.knowledge_dir)
@@ -1633,23 +1675,26 @@ def main() -> None:
     if not knowledge_dir.exists():
         raise FileNotFoundError(f"Knowledge dir not found: {knowledge_dir}")
 
-    log_model_file_payload(logger, title="deal history input", model=args.model, path=history_path)
-    if transcript_path:
+    if incremental_context is None:
+        log_model_file_payload(logger, title="deal history input", model=args.model, path=history_path)
+    if transcript_path and incremental_context is None:
         log_model_file_payload(logger, title="deal transcript input", model=args.model, path=transcript_path)
         transcript_text = transcript_text_for_prompt(
             transcript_path,
             read_text(transcript_path),
             deal_id=str(args.deal_id),
         )
-    else:
+    elif incremental_context is None:
         transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
+    else:
+        transcript_text = ""
 
     okf_sections: list[tuple[Path, str]] = []
     for path in knowledge_files(knowledge_dir, entity_type="deal"):
         log_model_file_payload(logger, title="OKF knowledge input", model=args.model, path=path)
         okf_sections.append((path, read_text(path)))
 
-    history_text = read_text(history_path)
+    history_text = read_text(history_path) if incremental_context is None else ""
     prompt = build_prompt(
         args.deal_id,
         history_text,
@@ -1659,6 +1704,7 @@ def main() -> None:
         stage_policy,
         prior_neuro_rop_recommendation,
         daily_checklist_context,
+        incremental_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -1710,9 +1756,17 @@ def main() -> None:
                 "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
             ),
             analysis_caller=call_analysis_json,
-            call_type="full_deal_analysis",
-            prompt_cache_key=DEAL_PROMPT_CACHE_KEY,
-            prompt_cache_markers=deal_prompt_cache_markers(transcript_text),
+            call_type="incremental_deal_analysis" if incremental_context is not None else "full_deal_analysis",
+            prompt_cache_key=(
+                DEAL_INCREMENTAL_PROMPT_CACHE_KEY
+                if incremental_context is not None
+                else DEAL_PROMPT_CACHE_KEY
+            ),
+            prompt_cache_markers=(
+                [DEAL_ID_SECTION_MARKER]
+                if incremental_context is not None
+                else deal_prompt_cache_markers(transcript_text)
+            ),
             trace_entity_type="deal",
             trace_entity_id=str(args.deal_id),
         )
@@ -1744,14 +1798,16 @@ def main() -> None:
         "generated_at": generated_at,
         "deal_id": str(args.deal_id),
         "input_files": {
-            "history": str(history_path),
+            "history": str(history_path) if incremental_context is None else None,
             "transcript": str(transcript_path) if transcript_path else None,
+            "incremental_context": str(incremental_context_path_arg) if incremental_context is not None else None,
             "context_diagnostics": context_diagnostics_paths,
             "knowledge": [str(path) for path, _text in okf_sections],
         },
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
         "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist_context,
+        "analysis_mode": "incremental" if incremental_context is not None else "full",
         "model_metadata": {
             key: value for key, value in metadata.items() if key != "raw_output_text"
         },

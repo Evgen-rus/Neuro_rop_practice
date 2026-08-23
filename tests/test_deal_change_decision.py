@@ -4,6 +4,7 @@ import unittest
 
 from openai_api.change_detection.decision_engine import (
     FULL_LLM_ANALYSIS,
+    INCREMENTAL_LLM_ANALYSIS,
     MINI_RECOMMENDATION_NO_LLM,
     decide_deal_processing,
 )
@@ -47,8 +48,8 @@ class DealChangeDecisionTests(unittest.TestCase):
             {"changes": ["new_activity", "new_email"], "details": {"new_activity_ids": ["2"]}},
             snapshot(activities=[{"id": "2", "kind": "email", "direction": "1"}]),
         )
-        self.assertEqual(transcript.status, FULL_LLM_ANALYSIS)
-        self.assertEqual(message.status, FULL_LLM_ANALYSIS)
+        self.assertEqual(transcript.status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(message.status, INCREMENTAL_LLM_ANALYSIS)
 
     def test_outgoing_message_and_internal_comment_stay_local(self):
         outgoing = decision(
