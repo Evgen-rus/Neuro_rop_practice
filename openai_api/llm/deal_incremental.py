@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from openai_api.change_detection.snapshot import activity_kind, result_item, result_items
+from openai_api.llm.deal_evidence import transcript_evidence_ids_for_input
 from openai_api.llm.validation import normalize_analysis_for_validation, validate_deal_analysis
 
 
@@ -72,6 +73,7 @@ def build_incremental_context(
     changes = set(diff.get("changes") or [])
     details = diff.get("details") or {}
     new_events: list[dict[str, Any]] = []
+    evidence_ids_included: set[str] = set()
 
     if "transcript_changed" in changes:
         previous_transcript = (previous_snapshot or {}).get("transcript") or {}
@@ -82,8 +84,17 @@ def build_incremental_context(
             raise IncrementalContextError("new_transcript_unavailable")
         if previous_path and previous_path == current_path:
             raise IncrementalContextError("transcript_changed_in_place")
+        transcript_evidence_ids = transcript_evidence_ids_for_input(
+            transcript_path.parent,
+            deal_id=str(current_snapshot.get("deal", {}).get("id") or raw_bundle.get("deal_id") or ""),
+            transcript_path=transcript_path,
+        )
+        if not transcript_evidence_ids:
+            raise IncrementalContextError("transcript_evidence_identity_missing")
+        evidence_ids_included.update(transcript_evidence_ids)
         new_events.append({
             "type": "transcript",
+            "evidence_ids": transcript_evidence_ids,
             "source_path_name": transcript_path.name,
             "text": transcript_path.read_text(encoding="utf-8"),
         })
@@ -92,7 +103,9 @@ def build_incremental_context(
     activity_rows = _activity_rows(raw_bundle)
     for activity in activity_rows:
         if activity["id"] in new_ids and activity["kind"] in {"email", "message"} and _is_inbound(activity["direction"]):
-            new_events.append({"type": "inbound_communication", **activity})
+            evidence_id = f"{activity['kind']}:{activity['id']}"
+            evidence_ids_included.add(evidence_id)
+            new_events.append({"type": "inbound_communication", "evidence_id": evidence_id, **activity})
 
     if not new_events:
         raise IncrementalContextError("no_materialized_new_events")
@@ -113,6 +126,7 @@ def build_incremental_context(
     return {
         "previous_analysis": previous_analysis,
         "new_events": new_events,
+        "evidence_ids_included": sorted(evidence_ids_included),
         "crm_delta": crm_delta,
         "context_diagnostics": {
             "baseline_kind": "last_successful_analysis",

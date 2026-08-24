@@ -507,7 +507,7 @@ def call_validated_analysis_json(
     prompt: str,
     *,
     validator: Callable[[dict[str, Any]], None],
-    normalizer: Callable[[dict[str, Any]], list[str]],
+    normalizer: Callable[[dict[str, Any]], list[Any]],
     validation_error_types: tuple[type[BaseException], ...],
     model: str = ANALYSIS_MODEL,
     retry_callback: RetryCallback | None = None,
@@ -521,6 +521,7 @@ def call_validated_analysis_json(
     trace_entity_id: str | None = None,
     preview_prompt: bool = True,
     preview_response_errors: bool = True,
+    correction_prompt_builder: Callable[[str, str, str], str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
     current_prompt = prompt
@@ -631,7 +632,8 @@ def call_validated_analysis_json(
                         "delay_seconds": 0,
                     }
                 )
-            current_prompt = _correction_prompt(prompt, final_error, final_raw)
+            builder = correction_prompt_builder or _correction_prompt
+            current_prompt = builder(prompt, final_error, final_raw)
             continue
 
         failed_metadata = _aggregate_attempt_metadata(attempts, metadata)

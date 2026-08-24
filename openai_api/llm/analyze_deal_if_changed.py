@@ -34,8 +34,10 @@ from openai_api.change_detection.decision_engine import (
     SKIPPED_NO_CHANGES,
     ProcessingDecision,
     decide_deal_processing,
+    mini_triggers,
     render_mini_recommendation,
     save_mini_recommendation_markdown,
+    soft_diff_triggers,
 )
 from openai_api.config import (
     ANALYSIS_MODEL,
@@ -46,10 +48,23 @@ from openai_api.config import (
 )
 from openai_api.llm.deal_incremental import IncrementalContextError, build_incremental_context
 from openai_api.llm.deal_incremental import previous_business_analysis
-from openai_api.llm.deal_evidence import collect_deal_evidence, coverage_from_evidence, evidence_delta
-from openai_api.llm.deal_incremental_v2 import IncrementalV2Result, run_incremental_v2
+from openai_api.llm.deal_evidence import (
+    collect_deal_evidence,
+    coverage_from_evidence,
+    evidence_delta,
+)
+from openai_api.llm.deal_incremental_v2 import (
+    IncrementalV2Result,
+    build_v2_compact_diagnostics,
+    build_v2_compact_policy,
+    render_v2_compact_diagnostics,
+    run_incremental_v2,
+)
+from openai_api.llm.analyze_deal import (
+    load_context_diagnostics_for_analysis,
+    render_report,
+)
 from openai_api.llm.deal_semantic_state import SCHEMA_VERSION, bootstrap_semantic_state
-from openai_api.llm.analyze_deal import build_deal_stage_policy, render_report
 from openai_api.change_detection.snapshot import (
     build_deal_snapshot,
     compare_snapshots,
@@ -62,6 +77,7 @@ from progress_events import compact_decision_status, emit_progress
 from setup import BASE_DIR, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    get_analysis_run_evidence_ids,
     get_today_mini_trigger_types,
     get_entity_memory,
     get_entity_state,
@@ -180,14 +196,22 @@ def _v2_crm_delta(snapshot: dict[str, Any], diff: dict[str, Any]) -> dict[str, A
 def _trusted_v2_checkpoint(
     db_path: Path, deal_id: str, previous_state: dict[str, Any] | None
 ) -> dict[str, Any] | None:
+    """Trust ties the checkpoint to its source analysis run, not to polling state.
+
+    MINI/SKIP runs move ``entity_state.current_fingerprint`` forward without any
+    LLM analysis, so a fingerprint mismatch alone must not invalidate a
+    checkpoint whose source analysis is still the latest one. A checkpoint
+    without the baseline snapshot cannot build a cumulative delta and falls
+    back to FULL safely.
+    """
     checkpoint = get_latest_deal_semantic_checkpoint(db_path, deal_id, schema_version=SCHEMA_VERSION)
     if not checkpoint or not previous_state:
         return None
     payload = previous_state.get("last_analysis") if isinstance(previous_state.get("last_analysis"), dict) else {}
-    run_id = payload.get("analysis_run_id")
-    if checkpoint.get("source_analysis_run_id") != run_id:
+    run_id = _int_or_none(payload.get("analysis_run_id"))
+    if run_id is None or checkpoint.get("source_analysis_run_id") != run_id:
         return None
-    if str(checkpoint.get("source_fingerprint") or "") != str(previous_state.get("current_fingerprint") or ""):
+    if not isinstance(checkpoint.get("baseline_snapshot"), dict):
         return None
     return checkpoint
 
@@ -195,24 +219,50 @@ def _trusted_v2_checkpoint(
 def _save_v2_checkpoint_from_analysis(
     *, db_path: Path, deal_id: str, payload: dict[str, Any], fingerprint: str,
     raw_bundle: dict[str, Any], transcripts_dir: Path, mode: str,
+    transcript_path: Path | None = None, snapshot: dict[str, Any] | None = None,
 ) -> int:
+    """Bootstrap a V2 checkpoint from a proven analysis run.
+
+    Coverage is built only from evidence the analysis provably received
+    (recorded in ``analysis_runs.evidence_ids_included_json``). Legacy analyses
+    without provenance must not be guessed: no trusted checkpoint is created
+    and the next incremental run falls back to FULL.
+    """
     analysis = extract_analysis(payload)
-    evidence = collect_deal_evidence(raw_bundle, transcripts_dir)
+    source_run_id = _int_or_none(payload.get("analysis_run_id"))
+    included_ids = (
+        get_analysis_run_evidence_ids(db_path, source_run_id)
+        if source_run_id is not None
+        else None
+    )
+    if included_ids is None:
+        logger.warning(
+            "Deal %s has no evidence provenance for run %s; skipping V2 checkpoint bootstrap.",
+            deal_id,
+            source_run_id,
+        )
+        return 0
+    available = {str(item["evidence_id"]): item for item in collect_deal_evidence(raw_bundle, transcripts_dir)}
+    covered = {
+        evidence_id: coverage_from_evidence([available[evidence_id]])[evidence_id]
+        for evidence_id in sorted(set(included_ids) & set(available))
+    }
     state = bootstrap_semantic_state(
         analysis,
         deal_id=deal_id,
-        source_analysis_run_id=_int_or_none(payload.get("analysis_run_id")),
+        source_analysis_run_id=source_run_id,
         source_fingerprint=fingerprint,
-        evidence_coverage=coverage_from_evidence(evidence),
+        evidence_coverage=covered,
     )
     return save_deal_semantic_checkpoint(
         db_path,
         entity_id=deal_id,
         schema_version=SCHEMA_VERSION,
-        source_analysis_run_id=_int_or_none(payload.get("analysis_run_id")),
+        source_analysis_run_id=source_run_id,
         source_fingerprint=fingerprint,
         semantic_state=state,
         mode=mode,
+        baseline_snapshot=snapshot,
     )
 
 
@@ -239,12 +289,22 @@ def _write_v2_candidate(
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_recommendation,
         "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist,
+        "evidence_ids_included": sorted(result.semantic_state.get("evidence_coverage") or {}),
         "analysis": result.analysis,
     }
     target = paths["analysis"] if production else paths["v2_shadow"]
     save_json(target, payload)
     if production:
-        paths["report"].write_text(render_report(result.analysis, result.metadata, None), encoding="utf-8")
+        _, context_diagnostics_payload, _ = load_context_diagnostics_for_analysis(
+            entity_type="deal",
+            entity_id=str(args.deal_id),
+            workspace_root=Path(args.deal_root),
+        )
+        report_metadata = dict(result.metadata)
+        paths["report"].write_text(
+            render_report(result.analysis, report_metadata, context_diagnostics_payload),
+            encoding="utf-8",
+        )
         raw_outputs = [str(value) for value in result.metadata.get("_raw_outputs", [])]
         paths["raw"].write_text("\n\n--- V2 CALL ---\n\n".join(raw_outputs), encoding="utf-8")
     return payload
@@ -328,9 +388,12 @@ def persist_successful_llm_run(
     paths: dict[str, Path],
     decision_reason: dict[str, Any],
     prompt_version: str | None = None,
+    evidence_ids_included: list[str] | None = None,
 ) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
+    if evidence_ids_included is None and isinstance(payload.get("evidence_ids_included"), list):
+        evidence_ids_included = [str(item) for item in payload["evidence_ids_included"]]
     memory_update = analysis.get("memory_update") if isinstance(analysis, dict) else None
 
     if isinstance(memory_update, dict):
@@ -351,6 +414,7 @@ def persist_successful_llm_run(
         report_path=str(paths["report"]),
         raw_path=str(paths["raw"]),
         decision_reason=decision_reason,
+        evidence_ids_included=evidence_ids_included,
         **analysis_run_provenance(
             payload,
             fingerprint=fingerprint,
@@ -470,6 +534,39 @@ def filter_today_mini_triggers(db_path: Path, deal_id: str, triggers: list[dict[
     return filtered
 
 
+def duplicate_evidence_legacy_decision(
+    *, diff: dict[str, Any], snapshot: dict[str, Any], previous_state: dict[str, Any] | None,
+    last_memory: dict[str, Any] | None,
+) -> ProcessingDecision:
+    remaining_triggers = (
+        soft_diff_triggers(diff)
+        + mini_triggers(
+            current_snapshot=snapshot,
+            previous_state=previous_state,
+            last_memory=last_memory,
+            last_analysis=(previous_state or {}).get("last_analysis"),
+        )
+    )
+    if remaining_triggers:
+        return ProcessingDecision(
+            status=MINI_RECOMMENDATION_NO_LLM,
+            reasons=[
+                "V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом.",
+                "После отсечения ложного transcript change остались soft-изменения или контрольные триггеры: MINI-рекомендация без LLM.",
+            ],
+            triggers=remaining_triggers,
+            diff=diff,
+        )
+    return ProcessingDecision(
+        status=SKIPPED_NO_CHANGES,
+        reasons=[
+            "V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом."
+        ],
+        triggers=[],
+        diff=diff,
+    )
+
+
 def main() -> None:
     args = parse_args()
     load_dotenv(BASE_DIR / ".env")
@@ -534,18 +631,33 @@ def main() -> None:
                 daily_checklist = get_deal_daily_checklist_analysis_projection(
                     db_path, str(args.deal_id)
                 )
+                context_diagnostics = load_context_diagnostics_for_analysis(
+                    entity_type="deal",
+                    entity_id=str(args.deal_id),
+                    workspace_root=Path(args.deal_root),
+                )[1]
+                compact_policy = build_v2_compact_policy(
+                    deal_dir=current_deal_dir,
+                    deal_id=str(args.deal_id),
+                )
+                compact_diagnostics_text = render_v2_compact_diagnostics(
+                    build_v2_compact_diagnostics(context_diagnostics)
+                )
+                cumulative_diff = compare_snapshots(checkpoint["baseline_snapshot"], snapshot)
                 v2_result = run_incremental_v2(
                     deal_id=str(args.deal_id),
                     previous_analysis=previous_analysis,
                     previous_semantic_state=checkpoint["semantic_state"],
                     evidence_delta=delta,
                     next_evidence_coverage=next_coverage,
-                    crm_delta=_v2_crm_delta(snapshot, diff),
+                    crm_delta=_v2_crm_delta(snapshot, cumulative_diff),
                     stage_policy=stage_policy,
                     prior_recommendation=prior_recommendation,
                     daily_checklist=daily_checklist,
                     source_fingerprint=fingerprint,
                     model=str(args.model or ANALYSIS_MODEL),
+                    compact_policy=compact_policy,
+                    compact_diagnostics_text=compact_diagnostics_text,
                 )
                 payload = _write_v2_candidate(
                     paths=paths,
@@ -584,6 +696,7 @@ def main() -> None:
                         paths=paths,
                         decision_reason={**decision.as_dict(), "incremental_version": "v2"},
                         prompt_version="neuro-rop:incremental-deal:v2",
+                        evidence_ids_included=None,
                     )
                     payload["analysis_run_id"] = run_id
                     save_json(paths["analysis"], payload)
@@ -597,6 +710,7 @@ def main() -> None:
                         source_fingerprint=fingerprint,
                         semantic_state=semantic_state,
                         mode="on",
+                        baseline_snapshot=snapshot,
                     )
                     emit_deal_publish_ready(
                         str(args.deal_id), analysis_run_id=run_id, engine_status=decision.status
@@ -619,13 +733,15 @@ def main() -> None:
                     fallback_reason=safe_reason,
                 )
                 if DEAL_INCREMENTAL_V2_MODE == "on" and str(error) == "no_genuinely_new_or_revised_evidence":
-                    decision = ProcessingDecision(
-                        status=SKIPPED_NO_CHANGES,
-                        reasons=[
-                            "V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом."
-                        ],
-                        triggers=[],
+                    # The transcript change was only a representation change, but the
+                    # snapshot may still hold real changes or deterministic risks:
+                    # re-evaluate them deterministically instead of a blind SKIP or
+                    # a paid FULL.
+                    decision = duplicate_evidence_legacy_decision(
                         diff=diff,
+                        snapshot=snapshot,
+                        previous_state=previous_state,
+                        last_memory=last_memory,
                     )
                 elif DEAL_INCREMENTAL_V2_MODE == "on":
                     decision = full_fallback_decision(decision, f"v2:{safe_reason}")
@@ -678,6 +794,7 @@ def main() -> None:
                         decision_status=decision.status,
                         paths=paths,
                         decision_reason=decision.as_dict(),
+                        evidence_ids_included=None,
                     )
                     if DEAL_INCREMENTAL_V2_MODE == "shadow":
                         _save_v2_checkpoint_from_analysis(
@@ -688,6 +805,7 @@ def main() -> None:
                             raw_bundle=raw_bundle,
                             transcripts_dir=current_deal_dir / "transcripts",
                             mode="shadow",
+                            snapshot=snapshot,
                         )
                     emit_deal_publish_ready(
                         str(args.deal_id),
@@ -709,6 +827,7 @@ def main() -> None:
                 decision_status=decision.status,
                 paths=paths,
                 decision_reason=decision.as_dict(),
+                evidence_ids_included=None,
             )
             if DEAL_INCREMENTAL_V2_MODE in {"shadow", "on"}:
                 _save_v2_checkpoint_from_analysis(
@@ -719,6 +838,7 @@ def main() -> None:
                     raw_bundle=raw_bundle,
                     transcripts_dir=current_deal_dir / "transcripts",
                     mode=DEAL_INCREMENTAL_V2_MODE,
+                    snapshot=snapshot,
                 )
             emit_deal_publish_ready(
                 str(args.deal_id),

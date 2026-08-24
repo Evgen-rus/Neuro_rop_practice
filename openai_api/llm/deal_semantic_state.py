@@ -18,6 +18,13 @@ CONTINUITY_LISTS = (
     "active_pressure_levers",
     "open_questions",
 )
+SEMANTIC_DOMAINS = frozenset({
+    "current_truth", "critical_facts", "commitments", "decision_path",
+    "open_questions", "source_conflicts", "qualification", "commercial_state",
+    "payment_state", "competitor_state", "money_path", "risk_state",
+    "turning_points", "active_pain_points", "active_pressure_levers",
+    "communication_profile", "continuity_summary",
+})
 
 
 class SemanticStateValidationError(ValueError):
@@ -206,3 +213,9 @@ def semantic_changed_domains(previous: dict[str, Any], current: dict[str, Any]) 
         if _canonical(previous.get(key)) != _canonical(current.get(key)):
             domains.append(key)
     return domains
+
+
+def semantic_domain_changed(previous: dict[str, Any], current: dict[str, Any], domain: str) -> bool:
+    if domain not in SEMANTIC_DOMAINS:
+        raise ValueError(f"unknown semantic domain: {domain}")
+    return _canonical(previous.get(domain)) != _canonical(current.get(domain))

@@ -7,9 +7,10 @@ the same ``call:<activity_id>`` evidence.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from openai_api.audio.transcript_context import transcript_items
+from openai_api.audio.transcript_context import AGGREGATE_STEM, transcript_items
 from openai_api.change_detection.snapshot import activity_kind, result_item, result_items, text_hash
 
 
@@ -119,3 +120,85 @@ def evidence_delta(
             "occurred_at": str(item.get("occurred_at") or ""),
         }
     return delta, next_coverage
+
+
+def evidence_ids_included_from_context(
+    raw_bundle: dict[str, Any],
+    transcripts_dir: Any,
+    *,
+    transcript_path: Any = None,
+) -> list[str]:
+    """Deterministically list the client evidence ids a FULL/V1 analysis received.
+
+    Mirrors the selection of the compact deal LLM context: the chosen transcript
+    bundle plus inbound emails/messages from the raw bundle. Ids only — no texts.
+    """
+    included: set[str] = set(transcript_evidence_ids_for_input(
+        transcripts_dir,
+        deal_id=str(raw_bundle.get("deal_id") or ""),
+        transcript_path=transcript_path,
+    ))
+    for row in _activity_rows(raw_bundle):
+        if row["kind"] not in {"email", "message"} or not _is_inbound(row["direction"]):
+            continue
+        prefix = "email" if row["kind"] == "email" else "message"
+        included.add(f"{prefix}:{row['activity_id']}")
+    return sorted(included)
+
+
+def transcript_evidence_ids_for_input(
+    transcripts_dir: Any,
+    *,
+    deal_id: str,
+    transcript_path: Any,
+) -> list[str]:
+    """Return call identities proven to be present in one resolved transcript input.
+
+    This inspects the resolved prompt input itself. It never treats unrelated
+    files in ``transcripts_dir`` as covered evidence.
+    """
+    if transcript_path is None:
+        return []
+    selected_path = Path(transcript_path).resolve()
+    items = transcript_items(Path(transcripts_dir), "deal", str(deal_id))
+    if AGGREGATE_STEM in selected_path.stem:
+        return sorted({
+            f"call:{str(item.get('activity_id') or '').strip()}"
+            for item in items
+            if str(item.get("activity_id") or "").strip()
+        })
+    included: set[str] = set()
+    for item in items:
+        candidates = []
+        for key in ("json_path", "md_path"):
+            value = item.get(key)
+            if value:
+                candidates.append(Path(value).resolve())
+        json_path = item.get("json_path")
+        if json_path:
+            candidates.append(Path(json_path).with_suffix(".md").resolve())
+        if selected_path in candidates:
+            activity_id = str(item.get("activity_id") or "").strip()
+            if activity_id:
+                included.add(f"call:{activity_id}")
+    return sorted(included)
+
+
+def inbound_evidence_ids_present_in_prompt(
+    raw_bundle: dict[str, Any],
+    prompt_text: str,
+) -> list[str]:
+    """Return inbound evidence identities whose activity and text are in prompt.
+
+    Requiring both the activity id and its client text avoids guessing coverage
+    merely because an activity exists in the local workspace.
+    """
+    included: set[str] = set()
+    for item in collect_deal_evidence(raw_bundle, Path("__no_transcripts__")):
+        if item.get("kind") not in {"inbound_email", "inbound_message"}:
+            continue
+        activity_id = str(item.get("activity_id") or "").strip()
+        evidence_text = str(item.get("text") or "").strip()
+        if activity_id and evidence_text and activity_id in prompt_text and evidence_text in prompt_text:
+            included.add(str(item["evidence_id"]))
+    return sorted(included)

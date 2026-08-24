@@ -36,6 +36,16 @@ COMMON_REQUIRED_FIELDS = {
     "memory_update",
 }
 
+DEAL_RECOMMENDED_CHANNELS = frozenset({"email", "phone", "messenger", "crm_task"})
+DEAL_CONTROL_BRIEF_LIST_LIMITS = {
+    "strengths": 5,
+    "weaknesses": 5,
+    "known_facts": 5,
+    "missing_facts": 5,
+    "contact_questions": 5,
+    "call_opening_variants": 2,
+}
+
 DEAL_REQUIRED_FIELDS = COMMON_REQUIRED_FIELDS | {
     "deal_id",
     "deal_state",
@@ -140,6 +150,10 @@ TURNING_POINT_STATUS_ALIASES = {
     "current": "active",
 }
 
+RECOMMENDATION_FEEDBACK_STATUSES = frozenset({
+    "not_done", "attempted", "contacted", "achieved", "unconfirmed",
+})
+
 COMMUNICATION_QUALITY_CRITERIA = (
     "next_action",
     "value_development",
@@ -233,6 +247,7 @@ def normalize_analysis_for_validation(
     analysis: dict[str, Any],
     *,
     allow_legacy_qualification_assessment: bool = False,
+    truncate_lists: bool = True,
 ) -> list[dict[str, Any]]:
     """Clamp model lists and normalize schema-safe defaults.
 
@@ -300,20 +315,21 @@ def normalize_analysis_for_validation(
                 loss["route_quality"] = "unknown"
             if isinstance(call_attempt, dict):
                 call_attempt["cycle_status"] = "unknown"
-    for path, limit in MAX_LIST_LIMITS.items():
-        value = _value_at_path(analysis, path)
-        if not isinstance(value, list) or len(value) <= limit:
-            continue
-        _set_value_at_path(analysis, path, value[:limit])
-        changes.append(
-            {
-                "path": path,
-                "action": "truncated_list",
-                "max_items": limit,
-                "original_items": len(value),
-                "removed_items": len(value) - limit,
-            }
-        )
+    if truncate_lists:
+        for path, limit in MAX_LIST_LIMITS.items():
+            value = _value_at_path(analysis, path)
+            if not isinstance(value, list) or len(value) <= limit:
+                continue
+            _set_value_at_path(analysis, path, value[:limit])
+            changes.append(
+                {
+                    "path": path,
+                    "action": "truncated_list",
+                    "max_items": limit,
+                    "original_items": len(value),
+                    "removed_items": len(value) - limit,
+                }
+            )
     return changes
 
 
@@ -628,7 +644,7 @@ def _validate_recommendation_feedback(value: Any, errors: list[str]) -> None:
     ):
         errors.append(f"expected positive integer or null at {path}.source_report_id")
     status = feedback.get("status")
-    _expect_enum(status, f"{path}.status", {"not_done", "attempted", "contacted", "achieved", "unconfirmed"}, errors)
+    _expect_enum(status, f"{path}.status", RECOMMENDATION_FEEDBACK_STATUSES, errors)
     for field in ("contact_confirmed", "target_result_achieved", "next_action_required"):
         _expect_bool(feedback.get(field), f"{path}.{field}", errors)
     what_manager_did = feedback.get("what_manager_did")
@@ -1429,7 +1445,7 @@ def _validate_deal_recommendation_materialization_fields(
     _expect_enum(
         recommended_channel,
         "manager_action_block.recommended_channel",
-        {"email", "phone", "messenger", "crm_task"},
+        DEAL_RECOMMENDED_CHANNELS,
         errors,
     )
 
@@ -1798,12 +1814,17 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
         ):
             _expect_non_empty_string(control_brief.get(field), f"deal_control_brief.{field}", errors)
         for field in ("strengths", "weaknesses", "known_facts", "missing_facts", "contact_questions"):
-            _validate_short_text_list(control_brief.get(field), f"deal_control_brief.{field}", 5, errors)
+            _validate_short_text_list(
+                control_brief.get(field),
+                f"deal_control_brief.{field}",
+                DEAL_CONTROL_BRIEF_LIST_LIMITS[field],
+                errors,
+            )
         opening_variants = control_brief.get("call_opening_variants")
         _validate_short_text_list(
             opening_variants,
             "deal_control_brief.call_opening_variants",
-            2,
+            DEAL_CONTROL_BRIEF_LIST_LIMITS["call_opening_variants"],
             errors,
         )
         manager_action = analysis.get("manager_action_block")

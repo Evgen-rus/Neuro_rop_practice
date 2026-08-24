@@ -31,6 +31,31 @@ def metadata(cost: float, raw: str = "{}") -> dict:
 
 
 class ValidatedAnalysisRetryTests(unittest.TestCase):
+    def test_custom_correction_prompt_builder_replaces_generic_full_prompt(self) -> None:
+        calls: list[str] = []
+
+        def caller(prompt: str, **_kwargs):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return {"ok": False}, metadata(0.1, '{"ok":false}')
+            return {"ok": True}, metadata(0.1, '{"ok":true}')
+
+        result, _metadata = call_validated_analysis_json(
+            "LARGE_ORIGINAL_PROMPT",
+            validator=lambda value: None if value.get("ok") else (_ for _ in ()).throw(
+                FakeValidationError("repair this")
+            ),
+            normalizer=lambda _value: [],
+            validation_error_types=(FakeValidationError,),
+            analysis_caller=caller,
+            correction_prompt_builder=lambda _original, error, raw: f"REPAIR|{error}|{raw}",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0], "LARGE_ORIGINAL_PROMPT")
+        self.assertIn("REPAIR|repair this|", calls[1])
+        self.assertNotIn("LARGE_ORIGINAL_PROMPT", calls[1])
+
     def test_validation_failure_gets_one_correction_attempt(self) -> None:
         calls: list[str] = []
 

@@ -24,6 +24,10 @@ from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
 from openai_api.llm.deal_call_projection import project_transcript_for_deal_prompt
+from openai_api.llm.deal_evidence import (
+    inbound_evidence_ids_present_in_prompt,
+    transcript_evidence_ids_for_input,
+)
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
@@ -154,6 +158,17 @@ def resolve_history_path(deal_dir: Path, deal_id: str) -> Path:
     if compact_path.exists():
         return compact_path
     return deal_dir / "history" / f"deal_{deal_id}_customer_path.md"
+
+
+def load_raw_bundle_for_prompt_provenance(deal_dir: Path, deal_id: str) -> dict[str, Any]:
+    path = deal_dir / "raw" / f"deal_{deal_id}_context.json"
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 FULL_ANALYSIS_KNOWLEDGE_FILES = {
@@ -1808,6 +1823,25 @@ def main() -> None:
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
         "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist_context,
         "analysis_mode": "incremental" if incremental_context is not None else "full",
+        "evidence_ids_included": sorted(set(
+            (
+                list(incremental_context.get("evidence_ids_included") or [])
+                if incremental_context is not None
+                else transcript_evidence_ids_for_input(
+                    deal_dir / "transcripts",
+                    deal_id=str(args.deal_id),
+                    transcript_path=transcript_path,
+                )
+            )
+            + (
+                []
+                if incremental_context is not None
+                else inbound_evidence_ids_present_in_prompt(
+                    load_raw_bundle_for_prompt_provenance(deal_dir, str(args.deal_id)),
+                    prompt,
+                )
+            )
+        )),
         "model_metadata": {
             key: value for key, value in metadata.items() if key != "raw_output_text"
         },

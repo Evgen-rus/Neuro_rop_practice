@@ -94,6 +94,17 @@ class DealIncrementalV2Tests(unittest.TestCase):
         )
         new_state = json.loads(json.dumps(previous_state, ensure_ascii=False))
         new_state["risk_state"] = {"risk_level": "high"}
+        semantic_envelope = {
+            "changed_domains": ["risk_state"],
+            "change_reasons": {
+                "risk_state": {
+                    "reason": "new call changes risk",
+                    "evidence_refs": ["call:2"],
+                    "crm_change_types": [],
+                }
+            },
+            "semantic_state": new_state,
+        }
         materialized = {
             "sections": {
                 key: ({"risk_level": "high"} if key == "main_risk" else {})
@@ -101,13 +112,13 @@ class DealIncrementalV2Tests(unittest.TestCase):
             }
         }
         with (
-            patch("openai_api.llm.deal_incremental_v2.call_validated_analysis_json", side_effect=[(new_state, {}), (materialized, {})]),
+            patch("openai_api.llm.deal_incremental_v2.call_validated_analysis_json", side_effect=[(semantic_envelope, {}), (materialized, {})]),
             patch("openai_api.llm.deal_incremental_v2.normalize_analysis_for_validation"),
             patch("openai_api.llm.deal_incremental_v2.validate_deal_analysis"),
         ):
             result = run_incremental_v2(
                 deal_id="7", previous_analysis=previous_analysis, previous_semantic_state=previous_state,
-                evidence_delta=[{"evidence_id": "call:2", "text": "new"}], next_evidence_coverage={},
+                evidence_delta=[{"evidence_id": "call:2", "kind": "call_transcript", "delta_kind": "new_evidence", "text": "new"}], next_evidence_coverage={},
                 crm_delta={}, stage_policy={}, prior_recommendation=None, daily_checklist=None,
                 source_fingerprint="new", model="test-model",
             )

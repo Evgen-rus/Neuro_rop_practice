@@ -70,6 +70,16 @@ DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
     ),
     ("candidate_review_state", "DELETE FROM candidate_review_state WHERE entity_type = 'deal'"),
     ("daily_summary_items", "DELETE FROM daily_summary_items WHERE entity_type = 'deal'"),
+    (
+        "deal_incremental_v2_runs",
+        "DELETE FROM deal_incremental_v2_runs WHERE source_analysis_run_id IS NULL OR "
+        "source_analysis_run_id IN (SELECT id FROM analysis_runs WHERE entity_type = 'deal')",
+    ),
+    (
+        "deal_semantic_checkpoints",
+        "DELETE FROM deal_semantic_checkpoints WHERE source_analysis_run_id IS NULL OR "
+        "source_analysis_run_id IN (SELECT id FROM analysis_runs WHERE entity_type = 'deal')",
+    ),
     ("ui_reports", "DELETE FROM ui_reports WHERE entity_type = 'deal'"),
     ("mini_recommendations", "DELETE FROM mini_recommendations WHERE entity_type = 'deal'"),
     ("analysis_runs", "DELETE FROM analysis_runs WHERE entity_type = 'deal'"),
@@ -214,6 +224,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 logic_version TEXT,
                 provenance_json TEXT,
                 error TEXT,
+                evidence_ids_included_json TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -935,6 +946,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 source_analysis_run_id INTEGER,
                 source_fingerprint TEXT NOT NULL,
                 semantic_state_json TEXT NOT NULL,
+                baseline_snapshot_json TEXT,
                 mode TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(source_analysis_run_id) REFERENCES analysis_runs(id)
@@ -1045,6 +1057,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "analysis_runs", "prompt_version", "TEXT")
         _ensure_column(conn, "analysis_runs", "logic_version", "TEXT")
         _ensure_column(conn, "analysis_runs", "provenance_json", "TEXT")
+        _ensure_column(conn, "analysis_runs", "evidence_ids_included_json", "TEXT")
+        _ensure_column(conn, "deal_semantic_checkpoints", "baseline_snapshot_json", "TEXT")
         _ensure_column(conn, "ui_reports", "analysis_run_id", "INTEGER")
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
         _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
@@ -2000,6 +2014,7 @@ def save_analysis_run(
     prompt_version: str | None = None,
     logic_version: str | None = None,
     provenance: dict[str, Any] | None = None,
+    evidence_ids_included: list[str] | None = None,
     error: str | None = None,
 ) -> int:
     if provenance is not None and not isinstance(provenance, dict):
@@ -2022,10 +2037,11 @@ def save_analysis_run(
                 prompt_version,
                 logic_version,
                 provenance_json,
+                evidence_ids_included_json,
                 error,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -2041,11 +2057,32 @@ def save_analysis_run(
                 str(prompt_version).strip() or None if prompt_version is not None else None,
                 str(logic_version).strip() or None if logic_version is not None else None,
                 dumps_json(provenance) if provenance is not None else None,
+                dumps_json(evidence_ids_included) if evidence_ids_included is not None else None,
                 error,
                 utcish_now(),
             ),
         )
         return int(cursor.lastrowid)
+
+
+def get_analysis_run_evidence_ids(db_path: str | Path, analysis_run_id: int) -> list[str] | None:
+    """Return the privacy-safe evidence id list recorded for a full/incremental analysis.
+
+    ``None`` means the run predates evidence provenance and its coverage must
+    not be guessed.
+    """
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT evidence_ids_included_json FROM analysis_runs WHERE id = ?",
+            (int(analysis_run_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    value = loads_json(row[0], None)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return None
 
 
 def list_analysis_runs(
@@ -2348,6 +2385,7 @@ def save_deal_semantic_checkpoint(
     source_fingerprint: str,
     semantic_state: dict[str, Any],
     mode: str,
+    baseline_snapshot: dict[str, Any] | None = None,
 ) -> int:
     if mode not in {"shadow", "on"}:
         raise ValueError("V2 checkpoint mode must be shadow or on")
@@ -2357,12 +2395,14 @@ def save_deal_semantic_checkpoint(
             """
             INSERT INTO deal_semantic_checkpoints (
                 entity_id, schema_version, source_analysis_run_id,
-                source_fingerprint, semantic_state_json, mode, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                source_fingerprint, semantic_state_json, baseline_snapshot_json, mode, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(entity_id), str(schema_version), source_analysis_run_id,
-                str(source_fingerprint), dumps_json(semantic_state), mode, utcish_now(),
+                str(source_fingerprint), dumps_json(semantic_state),
+                dumps_json(baseline_snapshot) if baseline_snapshot is not None else None,
+                mode, utcish_now(),
             ),
         )
         return int(cursor.lastrowid)
@@ -2387,6 +2427,7 @@ def get_latest_deal_semantic_checkpoint(
         return None
     value = dict(row)
     value["semantic_state"] = loads_json(value.pop("semantic_state_json"), {})
+    value["baseline_snapshot"] = loads_json(value.pop("baseline_snapshot_json", None), None)
     return value
 
 

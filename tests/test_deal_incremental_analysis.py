@@ -26,8 +26,16 @@ class DealIncrementalContextTests(unittest.TestCase):
 
     def test_new_transcript_and_inbound_message_are_materialized_without_old_history(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            transcript = Path(directory) / "call_new.md"
+            transcript = Path(directory) / "call_77.md"
             transcript.write_text("Новый разговор с клиентом", encoding="utf-8")
+            (Path(directory) / "call_77.json").write_text(
+                json.dumps({
+                    "metadata": {"activity_id": "77", "call_start": "2026-08-23T10:00:00+03:00"},
+                    "transcript_md_path": str(transcript),
+                    "text": "Новый разговор с клиентом",
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
             previous_snapshot = {"transcript": {"path": str(Path(directory) / "call_old.md"), "content_hash": "old"}}
             current_snapshot = {
                 "deal": {"id": "101", "stage_id": "C15:NEW", "opportunity": "120000"},
@@ -41,6 +49,7 @@ class DealIncrementalContextTests(unittest.TestCase):
                 },
             }
             raw = {
+                "deal_id": "101",
                 "activities": activity_container([{
                     "ID": "55", "TYPE_ID": "4", "DIRECTION": "1",
                     "SUBJECT": "Ответ клиента", "DESCRIPTION": "Просит уточнить срок",
@@ -60,6 +69,7 @@ class DealIncrementalContextTests(unittest.TestCase):
         self.assertNotIn("technical-envelope-value", encoded_previous)
         self.assertNotIn("model_metadata", encoded_previous)
         self.assertEqual([event["type"] for event in context["new_events"]], ["transcript", "inbound_communication"])
+        self.assertEqual(context["evidence_ids_included"], ["call:77", "email:55"])
         self.assertEqual(context["crm_delta"]["current_deal"]["stage_id"], "C15:NEW")
 
         prompt = build_prompt(
