@@ -2346,6 +2346,44 @@ export function fetchTrajectoryDay(params: {
   return api<TrajectoryDay>(`/api/admin/trajectory/day?${query.toString()}`)
 }
 
+export async function fetchTrajectoryDayExport(params: {
+  date: string
+  manager_id?: string
+  category?: TrajectoryCategory
+  q?: string
+}) {
+  const query = new URLSearchParams({ date: params.date })
+  if (params.manager_id) query.set('manager_id', params.manager_id)
+  if (params.category) query.set('category', params.category)
+  if (params.q?.trim()) query.set('q', params.q.trim())
+  const response = await fetch(`/api/admin/trajectory/export/day?${query.toString()}`, {
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      const payload = await response.json()
+      detail = typeof payload.detail === 'string' ? payload.detail : response.statusText
+    } catch {
+      // ignore
+    }
+    if (response.status === 401) unauthorizedHandler?.()
+    const message = response.status === 403
+      ? 'Недостаточно прав для этого действия'
+      : detail || 'Request failed'
+    throw new ApiError(message, response.status, response.headers.get('Retry-After'))
+  }
+  const fallback = params.manager_id
+    ? `trajectory-${params.date}-manager-${params.manager_id}.json`
+    : `trajectory-${params.date}-all-managers.json`
+  const header = response.headers.get('Content-Disposition') || ''
+  const quoted = /filename="([^"]+)"/i.exec(header)
+  return {
+    blob: await response.blob(),
+    filename: quoted?.[1] || fallback,
+  }
+}
+
 export function fetchTrajectoryWindow(params: {
   manager_id: string
   from: string
@@ -2358,7 +2396,7 @@ export function fetchTrajectoryWindow(params: {
     from: params.from,
     to: params.to,
   })
-  if (params.category && params.category !== 'all') query.set('category', params.category)
+  if (params.category) query.set('category', params.category)
   if (params.q?.trim()) query.set('q', params.q.trim())
   return api<TrajectoryWindow>(`/api/admin/trajectory/window?${query.toString()}`)
 }

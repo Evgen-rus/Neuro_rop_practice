@@ -1,14 +1,19 @@
+import inspect
+import json
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from api.manager_trajectory import build_manager_trajectory_report
 from api.manager_trajectory_ui import (
+    build_day_export,
     build_day_projection,
     build_entity_projection,
     build_event_detail_projection,
     build_window_projection,
+    day_export_filename,
 )
 from setup import MSK_TZ
 from storage.rop_db import (
@@ -25,7 +30,7 @@ DAY = date(2026, 8, 20)
 START = datetime(2026, 8, 20, 9, 0, tzinfo=MSK_TZ)
 
 
-class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
+class _ManagerTrajectoryUiFixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "trajectory-ui.sqlite"
@@ -91,6 +96,8 @@ class ManagerTrajectoryUiProjectionTests(unittest.TestCase):
             },
         )
 
+
+class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
     def test_day_is_lightweight_and_counts_deals_leads_density_and_switches(self) -> None:
         result = build_day_projection(value=DAY, bucket_minutes=30, db_path=self.db_path)
 
@@ -474,6 +481,202 @@ class ManagerTrajectoryUiAccessTests(unittest.TestCase):
                 api_app.manager_trajectory_event_get("1", manager_id="10", date_=DAY),
                 payload,
             )
+
+
+class ManagerTrajectoryDayExportTests(_ManagerTrajectoryUiFixture):
+    def _export(self, **kwargs):
+        return build_day_export(value=DAY, db_path=self.db_path, **kwargs)
+
+    def _crm_actions(self, payload: dict, entity_type: str | None = None) -> list[dict]:
+        actions = []
+        for manager in payload.get("managers") or []:
+            for entity in manager.get("workday", {}).get("entities") or []:
+                if entity_type and entity.get("entity_type") != entity_type:
+                    continue
+                actions.extend(entity.get("crm_actions") or [])
+        return actions
+
+    def test_historical_day_export_uses_the_whole_day(self) -> None:
+        occurred_at = datetime(2026, 8, 20, 17, 12, tzinfo=MSK_TZ)
+        self._event("lead", "202", "call", occurred_at, "historical-export-1712")
+
+        with patch(
+            "api.manager_trajectory_ui._now_moscow",
+            return_value=datetime(2026, 8, 22, 8, 30, tzinfo=MSK_TZ),
+        ):
+            payload = self._export()
+
+        self.assertEqual(payload["period"]["from"], "2026-08-20T00:00:00+03:00")
+        self.assertEqual(payload["period"]["to"], "2026-08-21T00:00:00+03:00")
+        activity_ids = {item.get("activity_id") for item in self._crm_actions(payload)}
+        self.assertIn("historical-export-1712", activity_ids)
+
+    def test_current_day_export_is_clipped_to_now(self) -> None:
+        now = datetime(2026, 8, 20, 8, 30, tzinfo=MSK_TZ)
+
+        with patch("api.manager_trajectory_ui._now_moscow", return_value=now):
+            payload = self._export()
+
+        self.assertEqual(payload["period"]["to"], "2026-08-20T08:30:00+03:00")
+        self.assertEqual(self._crm_actions(payload), [])
+        self.assertEqual(payload["summary"]["unique_crm_actions"], 0)
+
+    def test_manager_id_keeps_only_that_manager(self) -> None:
+        save_deal_control_scope(
+            self.db_path, initial_deal_ids=["101", "303"], manager_ids=["10", "20"], pipeline_id="15",
+        )
+        upsert_deal_control_deal(
+            self.db_path, deal_id="303", source="manager", title="ООО Гамма",
+            manager_id="20", manager_name="Анна Смирнова", stage_id="NEW",
+            stage_name="Новая", pipeline_id="15", amount="100", currency_id="RUB",
+            created_at_crm=START.isoformat(), modified_at_crm=START.isoformat(), is_active=True,
+        )
+        self._event("deal", "303", "call", START + timedelta(minutes=3), "m20-call", manager_id="20")
+
+        payload = self._export(manager_ids=["10"])
+
+        self.assertEqual([item["manager_id"] for item in payload["managers"]], ["10"])
+        self.assertEqual(payload["export"]["filters"]["manager_id"], "10")
+        self.assertEqual(day_export_filename(DAY, "10"), "trajectory-2026-08-20-manager-10.json")
+
+    def test_category_deals_drops_lead_only_data(self) -> None:
+        payload = self._export(category="deals")
+        entities = [
+            entity
+            for manager in payload["managers"]
+            for entity in manager.get("workday", {}).get("entities") or []
+        ]
+        self.assertTrue(entities)
+        self.assertTrue(all(item.get("entity_type") == "deal" for item in entities))
+        self.assertEqual(payload["managers"][0]["workday"]["leads_touched"], 0)
+        self.assertFalse(any(item.get("entity_type") == "lead" for item in self._crm_actions(payload)))
+
+    def test_category_communications_keeps_full_communication_payload(self) -> None:
+        long_text = "Полный технический текст письма клиента про поставку и оплату. " * 8
+        self._event(
+            "deal", "101", "email", START + timedelta(minutes=12), "full-mail",
+            description=long_text,
+        )
+
+        payload = self._export(category="communications")
+        mail = next(item for item in self._crm_actions(payload) if item.get("activity_id") == "full-mail")
+        call = next(item for item in self._crm_actions(payload) if item.get("activity_id") == "a1")
+
+        self.assertGreater(len(long_text), 220)
+        self.assertEqual(mail["description"], long_text)
+        self.assertFalse(str(mail["description"]).endswith("…"))
+        self.assertEqual(call["call"]["duration_seconds"], 65)
+        self.assertEqual(call["subject"], "Событие a1")
+        task_ids = {item.get("activity_id") for item in self._crm_actions(payload)}
+        self.assertNotIn("a3", task_ids)
+        self.assertEqual(payload["managers"][0]["workday"]["task_history_events"], 0)
+        self.assertEqual(payload["managers"][0]["product_usage"]["viewed"], 0)
+
+    def test_query_filters_by_entity_id_and_title(self) -> None:
+        by_title = self._export(query="Бета")
+        by_id = self._export(query="101")
+
+        titles = [
+            entity.get("title")
+            for manager in by_title["managers"]
+            for entity in manager.get("workday", {}).get("entities") or []
+        ]
+        self.assertEqual(titles, ["Лид Бета"])
+        ids = [
+            entity.get("entity_id")
+            for manager in by_id["managers"]
+            for entity in manager.get("workday", {}).get("entities") or []
+        ]
+        self.assertEqual(ids, ["101"])
+
+    def test_unfiltered_export_keeps_full_technical_report(self) -> None:
+        start = datetime(2026, 8, 20, 0, 0, tzinfo=MSK_TZ)
+        end = datetime(2026, 8, 21, 0, 0, tzinfo=MSK_TZ)
+        with patch(
+            "api.manager_trajectory_ui._now_moscow",
+            return_value=datetime(2026, 8, 22, 12, 0, tzinfo=MSK_TZ),
+        ):
+            payload = self._export()
+            report = build_manager_trajectory_report(
+                db_path=self.db_path, from_at=start, to_at=end,
+            )
+        content = {key: value for key, value in payload.items() if key != "export"}
+        self.assertEqual(content, report)
+        call = next(item for item in self._crm_actions(payload) if item.get("activity_id") == "a1")
+        self.assertEqual(call["call"]["duration_seconds"], 65)
+        self.assertIn("payload", call)
+        self.assertEqual(payload["export"]["filters"], {
+            "manager_id": None, "category": "all", "q": "",
+        })
+        self.assertEqual(payload["export"]["timezone"], "Europe/Moscow")
+
+    def test_bucket_minutes_is_not_part_of_export_contract(self) -> None:
+        from api import app as api_app
+
+        self.assertNotIn(
+            "bucket_minutes",
+            inspect.signature(api_app.manager_trajectory_export_day_get).parameters,
+        )
+        self.assertNotIn(
+            "bucket_minutes",
+            inspect.signature(build_day_export).parameters,
+        )
+
+        admin = {
+            "id": 1, "login": "admin", "role": "admin",
+            "manager_id": None, "is_active": True,
+        }
+        with patch.object(api_app, "authenticate_request", return_value=admin), patch.object(
+            api_app, "build_manager_trajectory_day_export", return_value={"ok": True},
+        ) as build:
+            from fastapi.testclient import TestClient
+            response = TestClient(api_app.app).get(
+                "/api/admin/trajectory/export/day?date=2026-08-20&bucket_minutes=30",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("bucket_minutes", build.call_args.kwargs)
+
+    def test_export_endpoint_requires_admin_and_sets_download_headers(self) -> None:
+        from fastapi.testclient import TestClient
+        from api import app as api_app
+
+        with patch.object(api_app, "auth_current_user", return_value={"role": "rop"}):
+            with self.assertRaises(api_app.HTTPException) as raised:
+                api_app.manager_trajectory_export_day_get(date_=DAY)
+        self.assertEqual(raised.exception.status_code, 403)
+
+        admin = {
+            "id": 1, "login": "admin", "role": "admin",
+            "manager_id": None, "is_active": True,
+        }
+        with patch.object(api_app, "authenticate_request", return_value=admin), patch.object(
+            api_app, "build_manager_trajectory_day_export",
+            return_value={"title": "ООО Альфа", "note": "Кириллица"},
+        ):
+            response = TestClient(api_app.app).get(
+                "/api/admin/trajectory/export/day?date=2026-08-20&manager_id=10",
+            )
+
+        body = response.content.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/json", response.headers["content-type"])
+        self.assertIn("charset=utf-8", response.headers["content-type"])
+        self.assertEqual(
+            response.headers["content-disposition"],
+            'attachment; filename="trajectory-2026-08-20-manager-10.json"',
+        )
+        self.assertIn("ООО Альфа", body)
+        self.assertNotIn("\\u041e", body)
+        self.assertEqual(json.loads(body)["title"], "ООО Альфа")
+
+    def test_frontend_window_loads_all_categories_then_filters_locally(self) -> None:
+        source = Path("frontend/src/ManagerTrajectory.tsx").read_text(encoding="utf-8")
+        self.assertIn("category: 'all'", source)
+        self.assertIn("filterWindowEvents(windowData.events, selected)", source)
+        self.assertIn("fetchTrajectoryDayExport", source)
+        export_helper = Path("frontend/src/api.ts").read_text(encoding="utf-8").split("fetchTrajectoryDayExport")[1].split("fetchTrajectoryWindow")[0]
+        self.assertNotIn("bucket_minutes", export_helper)
 
 
 if __name__ == "__main__":

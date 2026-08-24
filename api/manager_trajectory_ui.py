@@ -15,6 +15,10 @@ from storage.rop_db import DEFAULT_DB_PATH
 
 BUCKET_MINUTES = {30, 60}
 UI_CATEGORIES = {"all", "deals", "leads", "communications", "tasks", "crm", "neurorop"}
+ENTITY_EVENT_KEYS = (
+    "crm_actions", "stage_changes", "task_history", "timeline_comments",
+    "business_field_changes", "stage_history",
+)
 NEUROROP_EVENT_LABELS = {
     "generated": "Рекомендация сформирована",
     "shown": "Рекомендация показана",
@@ -593,3 +597,231 @@ def build_event_detail_projection(
                     "transcript_truncated": bool(transcript and transcript.get("truncated")),
                 }
     raise LookupError("Событие не найдено в траектории выбранного дня")
+
+
+def day_export_filename(value: date, manager_id: str | None = None) -> str:
+    if manager_id:
+        return f"trajectory-{value.isoformat()}-manager-{manager_id}.json"
+    return f"trajectory-{value.isoformat()}-all-managers.json"
+
+
+def _event_like(
+    item: dict[str, Any],
+    *,
+    entity_title: Any = None,
+    category: str | None = None,
+    entity_type: Any = None,
+    entity_id: Any = None,
+    subject: Any = None,
+    description: Any = None,
+) -> dict[str, Any]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return {
+        "entity_type": entity_type if entity_type is not None else item.get("entity_type"),
+        "entity_id": entity_id if entity_id is not None else item.get("entity_id"),
+        "entity_title": entity_title,
+        "category": category or _action_category(item),
+        "subject": subject if subject is not None else item.get("subject") or payload.get("subject"),
+        "description": (
+            description if description is not None
+            else item.get("description") or payload.get("description") or payload.get("comment")
+        ),
+    }
+
+
+def _export_summary(managers: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "managers": len(managers),
+        "unique_crm_actions": sum(item.get("workday", {}).get("unique_crm_actions", 0) for item in managers),
+        "recommendations_generated": sum(item.get("product_usage", {}).get("generated", 0) for item in managers),
+        "recommendations_shown": sum(item.get("product_usage", {}).get("shown", 0) for item in managers),
+        "recommendations_viewed": sum(item.get("product_usage", {}).get("viewed", 0) for item in managers),
+        "quick_help_opened": sum(item.get("product_usage", {}).get("quick_help_opened", 0) for item in managers),
+    }
+
+
+def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, Any]:
+    workday = dict(manager.get("workday") or {})
+    entities = list(workday.get("entities") or [])
+    crm_actions = [item for entity in entities for item in entity.get("crm_actions") or []]
+    stage_changes = [item for entity in entities for item in entity.get("stage_changes") or []]
+    task_history = [item for entity in entities for item in entity.get("task_history") or []]
+    timeline_comments = [item for entity in entities for item in entity.get("timeline_comments") or []]
+    business_field_changes = [
+        item for entity in entities for item in entity.get("business_field_changes") or []
+    ]
+    stage_history = [item for entity in entities for item in entity.get("stage_history") or []]
+    product_usage = dict(manager.get("product_usage") or {})
+    recommendations = list(product_usage.get("recommendations") or [])
+    openings = list(product_usage.get("quick_help_openings") or [])
+    activity_counts: dict[str, int] = {}
+    for action in crm_actions:
+        kind = str(action.get("activity_kind") or "other")
+        activity_counts[kind] = activity_counts.get(kind, 0) + 1
+    counts: dict[str, int] = {}
+    if crm_actions:
+        counts["crm_activity_observed"] = len(crm_actions)
+    for item in stage_changes:
+        key = "deal_stage_changed" if item.get("entity_type") == "deal" else "lead_stage_changed"
+        counts[key] = counts.get(key, 0) + 1
+    if task_history:
+        counts["crm_task_history_observed"] = len(task_history)
+    if timeline_comments:
+        counts["crm_timeline_comment_observed"] = len(timeline_comments)
+    if business_field_changes:
+        counts["crm_business_field_changed"] = len(business_field_changes)
+    if stage_history:
+        counts["crm_stage_history_observed"] = len(stage_history)
+    generated = sum(len(item.get("generated_at") or []) for item in recommendations)
+    shown = sum(len(item.get("shown_at") or []) for item in recommendations)
+    viewed = sum(len(item.get("view_occurrences") or item.get("viewed_at") or []) for item in recommendations)
+    if generated:
+        counts["recommendation_generated"] = generated
+    if shown:
+        counts["recommendation_shown"] = shown
+    if viewed:
+        counts["recommendation_viewed"] = viewed
+    if openings:
+        counts["quick_help_opened"] = len(openings)
+    entity_keys = {(item.get("entity_type"), str(item.get("entity_id") or "")) for item in entities}
+    entity_keys.update(("deal", str(item.get("deal_id") or "")) for item in recommendations if item.get("deal_id"))
+    entity_keys.update(("deal", str(item.get("deal_id") or "")) for item in openings if item.get("deal_id"))
+    workday.update({
+        "unique_crm_actions": len(crm_actions),
+        "activity_counts": activity_counts,
+        "stage_changes": len(stage_changes),
+        "task_history_events": len(task_history),
+        "timeline_comments": len(timeline_comments),
+        "business_field_changes": len(business_field_changes),
+        "stage_history_events": len(stage_history),
+        "system_creation_events": 0,
+        "presence_snapshots": [],
+        "deals_touched": sum(item.get("entity_type") == "deal" for item in entities),
+        "leads_touched": sum(item.get("entity_type") == "lead" for item in entities),
+        "entities": entities,
+    })
+    product_usage.update({
+        "recommendations": recommendations,
+        "quick_help_openings": openings,
+        "generated": generated,
+        "shown": shown,
+        "viewed": viewed,
+        "quick_help_opened": len(openings),
+    })
+    return {
+        **manager,
+        "counts": counts,
+        "entities": len(entity_keys),
+        "quick_help_generated": sum(
+            len(item.get("generated_at") or [])
+            for item in recommendations
+            if item.get("recommendation_kind") == "quick_help"
+        ),
+        "viewed_windows_60m": [],
+        "workday": workday,
+        "product_usage": product_usage,
+        "correlations": [],
+    }
+
+
+def _filter_manager_report(manager: dict[str, Any], *, category: str, query: str) -> dict[str, Any]:
+    workday = dict(manager.get("workday") or {})
+    original_entities = list(workday.get("entities") or [])
+    titles = {
+        (str(item.get("entity_type") or ""), str(item.get("entity_id") or "")): item.get("title")
+        for item in original_entities
+    }
+    filtered_entities: list[dict[str, Any]] = []
+    for entity in original_entities:
+        title = entity.get("title")
+        kept = dict(entity)
+        has_match = False
+        for key in ENTITY_EVENT_KEYS:
+            matched = [
+                item for item in entity.get(key) or []
+                if _matches(_event_like(item, entity_title=title), category=category, query=query)
+            ]
+            kept[key] = matched
+            has_match = has_match or bool(matched)
+        if has_match:
+            filtered_entities.append(kept)
+    recommendations = [
+        item for item in (manager.get("product_usage") or {}).get("recommendations") or []
+        if _matches(
+            _event_like(
+                item,
+                entity_title=titles.get(("deal", str(item.get("deal_id") or ""))),
+                category="neurorop",
+                entity_type="deal",
+                entity_id=str(item.get("deal_id") or ""),
+                subject=item.get("recommendation_kind"),
+            ),
+            category=category,
+            query=query,
+        )
+    ]
+    openings = [
+        item for item in (manager.get("product_usage") or {}).get("quick_help_openings") or []
+        if _matches(
+            _event_like(
+                item,
+                entity_title=titles.get(("deal", str(item.get("deal_id") or ""))),
+                category="neurorop",
+                entity_type="deal",
+                entity_id=str(item.get("deal_id") or ""),
+                subject=item.get("entrypoint"),
+            ),
+            category=category,
+            query=query,
+        )
+    ]
+    return _recompute_manager_export_aggregates({
+        **manager,
+        "workday": {**workday, "entities": filtered_entities},
+        "product_usage": {
+            **(manager.get("product_usage") or {}),
+            "recommendations": recommendations,
+            "quick_help_openings": openings,
+        },
+    })
+
+
+def _filter_full_report(report: dict[str, Any], *, category: str, query: str) -> dict[str, Any]:
+    managers = [
+        _filter_manager_report(item, category=category, query=query)
+        for item in report.get("managers") or []
+    ]
+    return {
+        **report,
+        "managers": managers,
+        "summary": _export_summary(managers),
+    }
+
+
+def build_day_export(
+    *,
+    value: date,
+    manager_ids: list[str] | None = None,
+    category: str = "all",
+    query: str = "",
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    if category not in UI_CATEGORIES:
+        raise ValueError("Неизвестный фильтр событий")
+    report, _start, _end = _report(db_path, value, manager_ids)
+    if category != "all" or query.strip():
+        report = _filter_full_report(report, category=category, query=query)
+    manager_id = manager_ids[0] if manager_ids and len(manager_ids) == 1 else None
+    return {
+        "export": {
+            "generated_at": _now_moscow().isoformat(timespec="seconds"),
+            "date": value.isoformat(),
+            "timezone": "Europe/Moscow",
+            "filters": {
+                "manager_id": manager_id,
+                "category": category,
+                "q": query.strip(),
+            },
+        },
+        **report,
+    }

@@ -114,10 +114,12 @@ from api.daily_control import (
     start_manual_daily_control_report,
 )
 from api.manager_trajectory_ui import (
+    build_day_export as build_manager_trajectory_day_export,
     build_day_projection as build_manager_trajectory_day,
     build_entity_projection as build_manager_trajectory_entity,
     build_event_detail_projection as build_manager_trajectory_event_detail,
     build_window_projection as build_manager_trajectory_window,
+    day_export_filename as manager_trajectory_day_export_filename,
 )
 from openai_api.bitrix_links import bitrix_entity_url
 from setup import BASE_DIR, MSK_TZ
@@ -780,6 +782,32 @@ def manager_trajectory_day_get(
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/admin/trajectory/export/day")
+def manager_trajectory_export_day_get(
+    date_: date = Query(alias="date"),
+    manager_id: str | None = None,
+    category: Literal["all", "deals", "leads", "communications", "tasks", "crm", "neurorop"] = "all",
+    q: str = Query(default="", max_length=120),
+) -> Response:
+    _require_admin()
+    try:
+        payload = build_manager_trajectory_day_export(
+            value=date_,
+            manager_ids=[manager_id] if manager_id else None,
+            category=category,
+            query=q,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    filename = manager_trajectory_day_export_filename(date_, manager_id)
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/admin/trajectory/window")

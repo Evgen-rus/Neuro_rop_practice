@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import {
   fetchTrajectoryDay,
+  fetchTrajectoryDayExport,
   fetchTrajectoryEntity,
   fetchTrajectoryEvent,
   fetchTrajectoryWindow,
@@ -14,6 +15,20 @@ import {
   type TrajectoryWindow,
 } from './api'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
+import {
+  WINDOW_EVENT_CATEGORIES,
+  allWindowCategoriesSelected,
+  buildWindowExport,
+  defaultWindowCategories,
+  downloadJsonObject,
+  filterWindowEvents,
+  saveBlobDownload,
+  toggleAllWindowCategories,
+  toggleWindowCategory,
+  windowExportFilename,
+  windowVisibleSummary,
+  type WindowEventCategory,
+} from './trajectoryWindow'
 
 const CATEGORIES: Array<[TrajectoryCategory, string]> = [
   ['all', 'Все события'],
@@ -24,6 +39,15 @@ const CATEGORIES: Array<[TrajectoryCategory, string]> = [
   ['crm', 'CRM'],
   ['neurorop', 'НейроРОП'],
 ]
+
+const WINDOW_CATEGORY_LABELS: Record<WindowEventCategory, string> = {
+  deals: 'Deals',
+  leads: 'Leads',
+  communications: 'Коммуникации',
+  tasks: 'Задачи',
+  crm: 'CRM',
+  neurorop: 'НейроРОП',
+}
 
 const LANES: Array<[Exclude<TrajectoryCategory, 'all'>, string, string]> = [
   ['deals', 'Deals', '▣'],
@@ -99,8 +123,10 @@ export function ManagerTrajectory() {
   const [managerOptions, setManagerOptions] = useState<Array<[string, string]>>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [windowData, setWindowData] = useState<TrajectoryWindow | null>(null)
+  const [windowCategories, setWindowCategories] = useState<WindowEventCategory[]>([...WINDOW_EVENT_CATEGORIES])
   const [entity, setEntity] = useState<TrajectoryEntity | null>(null)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
   const [drawerLoading, setDrawerLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -141,18 +167,37 @@ export function ManagerTrajectory() {
     setDrawerLoading(true)
     setEntity(null)
     setError('')
+    setWindowCategories(defaultWindowCategories(category))
     try {
       setWindowData(await fetchTrajectoryWindow({
         manager_id: manager.manager_id,
         from: bucket.from,
         to: bucket.to,
-        category,
+        category: 'all',
         q: appliedQuery,
       }))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setDrawerLoading(false)
+    }
+  }
+
+  async function downloadDayJson() {
+    setExporting(true)
+    setError('')
+    try {
+      const result = await fetchTrajectoryDayExport({
+        date,
+        manager_id: managerId || undefined,
+        category,
+        q: appliedQuery,
+      })
+      saveBlobDownload(result.filename, result.blob)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -221,6 +266,9 @@ export function ManagerTrajectory() {
           {CATEGORIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select></label>
         <label className="trajectory-search">Поиск<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ID или название" /></label>
+        <button type="button" className="trajectory-json-btn" disabled={exporting || loading} onClick={() => void downloadDayJson()}>
+          {exporting ? 'Скачиваем…' : 'Скачать JSON'}
+        </button>
       </div>
     </div>
 
@@ -309,18 +357,85 @@ export function ManagerTrajectory() {
       </div>
       {drawerLoading ? <div className="trajectory-loading"><span className="dc-spinner" />Загрузка…</div> : null}
       {!drawerLoading && entity ? <EntityDetail entity={entity} date={date} /> : null}
-      {!drawerLoading && windowData && !entity ? <div className="trajectory-event-list">
-        <div className="trajectory-window-summary"><b>{windowData.events.length}</b> событий · <b>{windowData.entities}</b> сущностей</div>
-        {!windowData.events.length ? <p className="trajectory-empty">В этом интервале нет событий выбранного типа.</p> : null}
-        {windowData.events.map((event, index) => <TrajectoryEventRow
-          event={event}
-          managerId={windowData.manager_id}
-          date={date}
-          onOpenEntity={openEntity}
-          key={`${event.event_id}-${index}`}
-        />)}
-      </div> : null}
+      {!drawerLoading && windowData && !entity ? <WindowEventList
+        windowData={windowData}
+        date={date}
+        query={appliedQuery}
+        selected={windowCategories}
+        onSelectedChange={setWindowCategories}
+        onOpenEntity={openEntity}
+      /> : null}
     </aside> : null}
+  </div>
+}
+
+function WindowEventList({
+  windowData,
+  date,
+  query,
+  selected,
+  onSelectedChange,
+  onOpenEntity,
+}: {
+  windowData: TrajectoryWindow
+  date: string
+  query: string
+  selected: WindowEventCategory[]
+  onSelectedChange: (value: WindowEventCategory[]) => void
+  onOpenEntity: (event: TrajectoryEvent) => Promise<void>
+}) {
+  const visibleEvents = filterWindowEvents(windowData.events, selected)
+  const summary = windowVisibleSummary(visibleEvents)
+  const allSelected = allWindowCategoriesSelected(selected)
+
+  function downloadWindowJson() {
+    downloadJsonObject(
+      windowExportFilename(windowData.manager_id, windowData.period.from, windowData.period.to),
+      buildWindowExport({
+        manager_id: windowData.manager_id,
+        manager_name: windowData.manager_name,
+        period: windowData.period,
+        categories: selected,
+        q: query,
+        events: visibleEvents,
+      }),
+    )
+  }
+
+  return <div className="trajectory-event-list">
+    <div className="trajectory-window-summary">
+      <div>
+        <b>{summary.events}</b> событий · <b>{summary.entities}</b> сущностей
+      </div>
+      <button type="button" className="trajectory-json-btn" onClick={downloadWindowJson}>Скачать JSON</button>
+    </div>
+    <details className="trajectory-window-filters">
+      <summary>{allSelected ? 'Все события' : `${selected.length} из ${WINDOW_EVENT_CATEGORIES.length} категорий`}</summary>
+      <label>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={() => onSelectedChange(toggleAllWindowCategories(selected))}
+        />
+        Все события
+      </label>
+      {WINDOW_EVENT_CATEGORIES.map((value) => <label key={value}>
+        <input
+          type="checkbox"
+          checked={selected.includes(value)}
+          onChange={() => onSelectedChange(toggleWindowCategory(selected, value))}
+        />
+        {WINDOW_CATEGORY_LABELS[value]}
+      </label>)}
+    </details>
+    {!visibleEvents.length ? <p className="trajectory-empty">В этом интервале нет событий выбранного типа.</p> : null}
+    {visibleEvents.map((event, index) => <TrajectoryEventRow
+      event={event}
+      managerId={windowData.manager_id}
+      date={date}
+      onOpenEntity={onOpenEntity}
+      key={`${event.event_id}-${index}`}
+    />)}
   </div>
 }
 
