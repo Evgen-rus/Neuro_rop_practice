@@ -145,6 +145,7 @@ def _production_result(entry: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+QH_UPSTREAM_REQUIRED = "Сначала получите Quick Help этой ветки на текущем контексте"
 QH_MODES = ("push", "reanimator")
 
 
@@ -153,26 +154,74 @@ def normalize_quick_help_mode(value: str | None) -> str | None:
     return mode if mode in QH_MODES else None
 
 
+def qh_upstream_matches(
+    run: dict[str, Any] | None,
+    *,
+    deal_id: str,
+    branch: str,
+    snapshot_id: int,
+    mode: str,
+) -> bool:
+    expected_key = f"quick_help.{normalize_quick_help_mode(mode) or ''}"
+    if not isinstance(run, dict):
+        return False
+    try:
+        run_snapshot = int(run.get("snapshot_id") or 0)
+        run_id = int(run.get("id") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        run_id > 0
+        and str(run.get("deal_id") or "") == str(deal_id)
+        and str(run.get("branch") or "") == str(branch)
+        and run_snapshot == int(snapshot_id)
+        and str(run.get("module_key") or "") == expected_key
+        and str(run.get("status") or "") == "success"
+    )
+
+
 def select_qh_upstream_run(
     runs: list[dict[str, Any]],
     *,
     branch: str,
     mode: str,
+    deal_id: str,
+    snapshot_id: int,
 ) -> dict[str, Any] | None:
-    module_key = f"quick_help.{normalize_quick_help_mode(mode) or ''}"
     for item in runs:
-        if (
-            str(item.get("module_key") or "") != module_key
-            or str(item.get("branch") or "") != branch
-            or str(item.get("status") or "") != "success"
+        if qh_upstream_matches(
+            item,
+            deal_id=str(deal_id),
+            branch=str(branch),
+            snapshot_id=int(snapshot_id),
+            mode=mode,
         ):
-            continue
-        try:
-            if int(item.get("id") or 0) > 0:
-                return item
-        except (TypeError, ValueError):
-            continue
+            return item
     return None
+
+
+def require_qh_upstream(
+    *,
+    lab_db_path: Path,
+    upstream_run_id: int | None,
+    deal_id: str,
+    branch: str,
+    snapshot_id: int,
+    mode: str | None,
+) -> dict[str, Any]:
+    normalized = normalize_quick_help_mode(mode)
+    if upstream_run_id is None or normalized is None:
+        raise ValueError(QH_UPSTREAM_REQUIRED)
+    upstream = lab_db.get_run(lab_db_path, int(upstream_run_id))
+    if not qh_upstream_matches(
+        upstream,
+        deal_id=str(deal_id),
+        branch=str(branch),
+        snapshot_id=int(snapshot_id),
+        mode=normalized,
+    ):
+        raise ValueError(QH_UPSTREAM_REQUIRED)
+    return upstream
 
 
 def _production_current(
@@ -452,20 +501,30 @@ def import_production_current(
     upstream_run_id = None
     linked = current.get("production_quick_help")
     if spec["requires_upstream_quick_help"] and isinstance(linked, dict):
-        qh_key = f"quick_help.{linked.get('mode') or 'push'}"
-        qh_spec = get_module(qh_key)
-        qh_current = _production_current(db_path, context, qh_spec)
-        qh_run = _materialize_production_run(
-            lab_db_path=lab_db_path,
-            deal_id=str(deal_id),
-            spec=qh_spec,
-            current=qh_current,
-            snapshot=snapshot,
-            selected_strategy=None,
-            upstream_run_id=None,
-        )
-        if qh_run:
-            upstream_run_id = int(qh_run["id"])
+        mode = normalize_quick_help_mode(quick_help_mode) or normalize_quick_help_mode(str(linked.get("mode") or ""))
+        if mode:
+            qh_spec = get_module(f"quick_help.{mode}")
+            qh_current = _production_current(db_path, context, qh_spec)
+            qh_run = _materialize_production_run(
+                lab_db_path=lab_db_path,
+                deal_id=str(deal_id),
+                spec=qh_spec,
+                current=qh_current,
+                snapshot=snapshot,
+                selected_strategy=None,
+                upstream_run_id=None,
+            )
+            if qh_upstream_matches(
+                qh_run,
+                deal_id=str(deal_id),
+                branch="current",
+                snapshot_id=int(snapshot["id"]),
+                mode=mode,
+            ):
+                upstream_run_id = int(qh_run["id"])
+    if spec["requires_upstream_quick_help"] and upstream_run_id is None:
+        current["lab_run"] = None
+        return current, snapshot
     lab_run = _materialize_production_run(
         lab_db_path=lab_db_path,
         deal_id=str(deal_id),
@@ -663,6 +722,7 @@ def _run_lab_job(
     upstream_run_id: int | None,
     manager_note: str,
     previous_message: str,
+    quick_help_mode: str | None = None,
 ) -> None:
     with _LOCK:
         job = _JOBS[job_id]
@@ -690,11 +750,14 @@ def _run_lab_job(
             "previous_message": previous_message,
         }
         if spec["requires_upstream_quick_help"]:
-            if upstream_run_id is None:
-                raise ValueError("Сначала получите Quick Help этой ветки")
-            upstream = lab_db.get_run(lab_db_path, int(upstream_run_id))
-            if not upstream or upstream.get("status") != "success":
-                raise ValueError("Upstream Quick Help этой ветки ещё не готов")
+            upstream = require_qh_upstream(
+                lab_db_path=lab_db_path,
+                upstream_run_id=upstream_run_id,
+                deal_id=str(deal_id),
+                branch=str(branch),
+                snapshot_id=int(snapshot_id),
+                mode=quick_help_mode,
+            )
             extra["quick_help"] = upstream.get("result") or {}
         template = prompt_template or production_prompt_template(module_key, manager_note=manager_note)
         kwargs = _generate_kwargs(spec, snapshot, extra, prompt_template=template)
@@ -794,6 +857,7 @@ def start_lab_run(
     manager_note: str = "",
     previous_message: str = "",
     reuse_existing: bool | None = None,
+    quick_help_mode: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
 ) -> dict[str, Any]:
@@ -815,6 +879,15 @@ def start_lab_run(
     snapshot = lab_db.get_snapshot(lab_db_path, int(snapshot_id)) if snapshot_id else None
     if snapshot is None:
         snapshot = get_or_create_snapshot(deal_id=str(deal_id), db_path=db_path, lab_db_path=lab_db_path)
+    if spec["requires_upstream_quick_help"]:
+        require_qh_upstream(
+            lab_db_path=lab_db_path,
+            upstream_run_id=upstream_run_id,
+            deal_id=str(deal_id),
+            branch=str(branch),
+            snapshot_id=int(snapshot["id"]),
+            mode=quick_help_mode,
+        )
     fingerprints = {
         "prompt_hash": sha256_text(template),
         "snapshot_hash": snapshot["snapshot_hash"],
@@ -893,6 +966,7 @@ def start_lab_run(
             "upstream_run_id": upstream_run_id,
             "manager_note": str(manager_note or ""),
             "previous_message": str(previous_message or ""),
+            "quick_help_mode": quick_help_mode,
         },
         daemon=True,
     )

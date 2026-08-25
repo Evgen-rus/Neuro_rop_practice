@@ -2561,6 +2561,7 @@ export function startPromptLabRun(body: {
   question?: string
   selected_strategy?: ManagerQuickHelpStrategy | null
   upstream_run_id?: number | null
+  quick_help_mode?: ManagerAssistantMode | null
   manager_note?: string
   previous_message?: string
   reuse_existing?: boolean | null

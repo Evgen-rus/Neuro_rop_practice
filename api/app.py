@@ -353,6 +353,7 @@ class PromptLabRunRequest(BaseModel):
     question: str = Field(default="", max_length=4000)
     selected_strategy: Literal["primary", "alternative", "pattern_break"] | None = None
     upstream_run_id: int | None = Field(default=None, ge=1)
+    quick_help_mode: Literal["push", "reanimator"] | None = None
     manager_note: str = Field(default="", max_length=4000)
     previous_message: str = Field(default="", max_length=1200)
     reuse_existing: bool | None = None
@@ -1429,6 +1430,7 @@ def prompt_lab_run_start(body: PromptLabRunRequest) -> dict[str, Any]:
             question=body.question,
             selected_strategy=body.selected_strategy,
             upstream_run_id=body.upstream_run_id,
+            quick_help_mode=body.quick_help_mode,
             manager_note=body.manager_note,
             previous_message=body.previous_message,
             reuse_existing=body.reuse_existing,

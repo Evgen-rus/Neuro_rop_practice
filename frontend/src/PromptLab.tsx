@@ -131,7 +131,9 @@ export function PromptLabWorkspace({
     setCurrentRun(imported)
     setExperimentRun(null)
     setQhUpstream({ current: null, experiment: null })
-    if (imported && imported.id > 0) {
+    const snapshotId = payload.snapshot.id || null
+    const importedMatchesSnapshot = Boolean(imported && imported.id > 0 && (snapshotId == null || imported.snapshot_id === snapshotId))
+    if (importedMatchesSnapshot && imported) {
       setQhUpstream({
         current: nextModule.startsWith('quick_help.') ? imported.id : (imported.upstream_run_id || null),
         experiment: null,
@@ -141,10 +143,24 @@ export function PromptLabWorkspace({
     setHistory(runs.runs)
     if (nextModule.startsWith('full_script.') || nextModule.startsWith('quick_help.')) {
       const qhKey = nextModule.startsWith('quick_help.') ? nextModule : (`quick_help.${mode}` as PromptLabModuleKey)
-      const qhRuns = nextModule.startsWith('quick_help.') ? runs : await fetchPromptLabRuns({ deal_id: dealId, module_key: qhKey })
-      const successful = qhRuns.runs.filter((item) => item.status === 'success' && item.id > 0 && item.module_key === qhKey)
+      const qhRuns = await fetchPromptLabRuns({
+        deal_id: dealId,
+        module_key: qhKey,
+        ...(snapshotId ? { snapshot_id: snapshotId } : {}),
+      })
+      const successful = qhRuns.runs.filter((item) => (
+        item.status === 'success'
+        && item.id > 0
+        && item.module_key === qhKey
+        && item.deal_id === dealId
+        && item.branch
+        && (snapshotId == null || item.snapshot_id === snapshotId)
+      ))
+      const currentIds = new Set(successful.filter((item) => item.branch === 'current').map((item) => item.id))
       setQhUpstream((value) => ({
-        current: value.current || successful.find((item) => item.branch === 'current')?.id || null,
+        current: (value.current && currentIds.has(value.current))
+          ? value.current
+          : (successful.find((item) => item.branch === 'current')?.id || null),
         experiment: successful.find((item) => item.branch === 'experiment')?.id || null,
       }))
     }
@@ -170,10 +186,14 @@ export function PromptLabWorkspace({
     const useProduction = payload.production_current.exists || Boolean(payload.production_current.lab_run)
     setCurrentModel(useProduction ? payload.production_current.model : payload.runtime.model)
     setCurrentReasoning(useProduction ? payload.production_current.reasoning : payload.runtime.reasoning)
-    if (payload.production_current.lab_run?.upstream_run_id) {
+    const imported = payload.production_current.lab_run
+    if (
+      imported?.upstream_run_id
+      && (payload.snapshot.id == null || imported.snapshot_id === payload.snapshot.id)
+    ) {
       setQhUpstream((value) => ({
         ...value,
-        current: payload.production_current.lab_run?.upstream_run_id || value.current,
+        current: imported.upstream_run_id || value.current,
       }))
     }
   }
@@ -267,12 +287,13 @@ export function PromptLabWorkspace({
       question,
       selected_strategy: family === 'full_script' ? strategy : null,
       upstream_run_id: family === 'full_script' ? (isCurrent ? qhUpstream.current : qhUpstream.experiment) : null,
+      quick_help_mode: family === 'full_script' ? qhMode : null,
       manager_note: family === 'companion' ? managerNote : '',
       previous_message: family === 'companion' ? previousMessage : '',
       reuse_existing: options.force ? false : options.silentReuse ? true : null,
     }
     if (family === 'full_script' && (!body.upstream_run_id || body.upstream_run_id <= 0)) {
-      setError('Сначала сгенерируйте Quick Help этой ветки')
+      setError('Сначала получите Quick Help этой ветки на текущем контексте')
       return
     }
     const job = await startPromptLabRun(body)

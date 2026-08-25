@@ -73,13 +73,68 @@ def _qh_entry(mode: str, entry_id: int) -> dict:
     }
 
 
-def _save_lab_run(db: Path, snapshot_id: int, *, module_key: str, branch: str, result: dict, fingerprint: str, upstream_run_id: int | None = None) -> dict:
+def _save_lab_snapshot(db: Path, *, deal_id: str = "101", snapshot_hash: str = "snap") -> dict:
+    return lab_db.save_snapshot(
+        db,
+        deal_id=deal_id,
+        source_report_id=17,
+        analysis_run_id=44,
+        situation_id=9,
+        situation_status="confirmed",
+        snapshot_hash=snapshot_hash,
+        provenance={"deal_id": deal_id},
+        context={
+            "deal": {"deal_id": deal_id, "title": "Тест"},
+            "deal_projection": {"deal_id": deal_id},
+            "analysis_projection": CONTEXT["analysis_projection"],
+            "situation_projection": CONTEXT["situation_projection"],
+            "current_bitrix_task": None,
+            "communication_pattern_context": {},
+            "checklist": {},
+            "last_contact": {},
+            "objection_handling": {"items": []},
+            "manager_tactics_hash": "t",
+        },
+    )
+
+
+def _start_email(
+    lab_path: Path,
+    *,
+    snapshot_id: int,
+    upstream_run_id: int | None,
+    branch: str = "experiment",
+    quick_help_mode: str | None = "reanimator",
+    deal_id: str = "101",
+) -> dict:
+    return lab.start_lab_run(
+        deal_id=deal_id,
+        module_key="full_script.email",
+        branch=branch,
+        snapshot_id=int(snapshot_id),
+        upstream_run_id=upstream_run_id,
+        quick_help_mode=quick_help_mode,
+        reuse_existing=False,
+        prompt_template="SYSTEM_RULES:\ntest",
+        model=MANAGER_MODEL,
+        reasoning=MANAGER_REASONING_EFFORT,
+        selected_strategy="primary",
+        lab_db_path=lab_path,
+        db_path=lab_path.parent / "unused.sqlite",
+    )
+
+
+def _qh_result(mode: str) -> dict:
+    return {"mode": mode, "client_messages": {"primary": mode.upper()}}
+
+
+def _save_lab_run(db: Path, snapshot_id: int, *, module_key: str, branch: str, result: dict, fingerprint: str, upstream_run_id: int | None = None, deal_id: str = "101") -> dict:
     return lab_db.save_run(
         db,
         session_id=None,
         turn_id=None,
         snapshot_id=int(snapshot_id),
-        deal_id="101",
+        deal_id=str(deal_id),
         module_key=module_key,
         branch=branch,
         prompt_version_id=None,
@@ -566,7 +621,7 @@ class PromptLabStorageTests(unittest.TestCase):
             ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"), patch.object(
                 lab, "generate_deal_manager_email"
             ) as generate:
-                current, _snapshot = lab.import_production_current(
+                current, snapshot = lab.import_production_current(
                     deal_id="101",
                     module_key="full_script.email",
                     context=CONTEXT,
@@ -579,8 +634,11 @@ class PromptLabStorageTests(unittest.TestCase):
             run = current["lab_run"]
             self.assertGreater(int(run["id"]), 0)
             self.assertEqual(run["result"]["subject"], "Тема")
-            self.assertEqual(run["upstream_run_id"], current["lab_run"]["upstream_run_id"])
             self.assertIsNotNone(run["upstream_run_id"])
+            upstream = lab_db.get_run(lab_path, int(run["upstream_run_id"]))
+            self.assertEqual(upstream["module_key"], "quick_help.push")
+            self.assertEqual(int(upstream["snapshot_id"]), int(snapshot["id"]))
+            self.assertEqual(upstream["branch"], "current")
 
     def test_generate_both_orchestration_shares_one_snapshot_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -707,7 +765,7 @@ class PromptLabStorageTests(unittest.TestCase):
             ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
                 lab, "find_last_contact", return_value=None
             ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"):
-                current, _snapshot = lab.import_production_current(
+                current, snapshot = lab.import_production_current(
                     deal_id="101",
                     module_key="full_script.email",
                     context=CONTEXT,
@@ -723,47 +781,40 @@ class PromptLabStorageTests(unittest.TestCase):
             self.assertEqual(current["lab_run"]["result"]["subject"], "REANIMATOR MAIL")
             upstream = lab_db.get_run(lab_path, int(current["lab_run"]["upstream_run_id"]))
             self.assertEqual(upstream["module_key"], "quick_help.reanimator")
+            self.assertEqual(upstream["deal_id"], "101")
+            self.assertEqual(upstream["branch"], "current")
+            self.assertEqual(int(upstream["snapshot_id"]), int(snapshot["id"]))
+            self.assertEqual(upstream["status"], "success")
 
     def test_experiment_downstream_selects_same_quick_help_mode(self) -> None:
         mixed = [
-            {"id": 11, "module_key": "quick_help.push", "branch": "experiment", "status": "success"},
-            {"id": 22, "module_key": "quick_help.reanimator", "branch": "experiment", "status": "success"},
-            {"id": 33, "module_key": "quick_help.reanimator", "branch": "current", "status": "success"},
+            {"id": 11, "deal_id": "101", "snapshot_id": 1, "module_key": "quick_help.push", "branch": "experiment", "status": "success"},
+            {"id": 22, "deal_id": "101", "snapshot_id": 1, "module_key": "quick_help.reanimator", "branch": "experiment", "status": "success"},
+            {"id": 33, "deal_id": "101", "snapshot_id": 1, "module_key": "quick_help.reanimator", "branch": "current", "status": "success"},
+            {"id": 44, "deal_id": "101", "snapshot_id": 2, "module_key": "quick_help.reanimator", "branch": "experiment", "status": "success"},
         ]
-        chosen = lab.select_qh_upstream_run(mixed, branch="experiment", mode="reanimator")
+        chosen = lab.select_qh_upstream_run(
+            mixed,
+            branch="experiment",
+            mode="reanimator",
+            deal_id="101",
+            snapshot_id=1,
+        )
         self.assertEqual(chosen["id"], 22)
-        self.assertEqual(lab.select_qh_upstream_run(mixed, branch="experiment", mode="push")["id"], 11)
+        self.assertEqual(
+            lab.select_qh_upstream_run(mixed, branch="experiment", mode="push", deal_id="101", snapshot_id=1)["id"],
+            11,
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             lab_path = Path(directory) / "lab.sqlite"
-            snapshot = lab_db.save_snapshot(
-                lab_path,
-                deal_id="101",
-                source_report_id=17,
-                analysis_run_id=44,
-                situation_id=9,
-                situation_status="confirmed",
-                snapshot_hash="snap",
-                provenance={"deal_id": "101"},
-                context={
-                    "deal": CONTEXT["deal"],
-                    "deal_projection": CONTEXT["deal_projection"],
-                    "analysis_projection": CONTEXT["analysis_projection"],
-                    "situation_projection": CONTEXT["situation_projection"],
-                    "current_bitrix_task": None,
-                    "communication_pattern_context": {},
-                    "checklist": {},
-                    "last_contact": {},
-                    "objection_handling": {"items": []},
-                    "manager_tactics_hash": "t",
-                },
-            )
+            snapshot = _save_lab_snapshot(lab_path)
             _save_lab_run(
                 lab_path,
                 int(snapshot["id"]),
                 module_key="quick_help.push",
                 branch="experiment",
-                result={"mode": "push", "client_messages": {"primary": "PUSH"}},
+                result=_qh_result("push"),
                 fingerprint="fp-push",
             )
             reanimator = _save_lab_run(
@@ -771,13 +822,15 @@ class PromptLabStorageTests(unittest.TestCase):
                 int(snapshot["id"]),
                 module_key="quick_help.reanimator",
                 branch="experiment",
-                result={"mode": "reanimator", "client_messages": {"primary": "REANIMATOR"}},
+                result=_qh_result("reanimator"),
                 fingerprint="fp-reanimator",
             )
             selected = lab.select_qh_upstream_run(
                 lab_db.list_runs(lab_path, deal_id="101"),
                 branch="experiment",
                 mode="reanimator",
+                deal_id="101",
+                snapshot_id=int(snapshot["id"]),
             )
             self.assertEqual(int(selected["id"]), int(reanimator["id"]))
             captured: dict = {}
@@ -798,6 +851,7 @@ class PromptLabStorageTests(unittest.TestCase):
                     branch="experiment",
                     snapshot_id=int(snapshot["id"]),
                     upstream_run_id=int(selected["id"]),
+                    quick_help_mode="reanimator",
                     reuse_existing=False,
                     prompt_template="SYSTEM_RULES:\ntest",
                     model=MANAGER_MODEL,
@@ -811,6 +865,134 @@ class PromptLabStorageTests(unittest.TestCase):
                     if current and current["status"] in {"done", "error"}:
                         break
                     time.sleep(0.02)
+            self.assertEqual(captured["quick_help"]["mode"], "reanimator")
+            self.assertEqual(captured["quick_help"]["client_messages"]["primary"], "REANIMATOR")
+
+    def test_downstream_rejects_old_experiment_quick_help_of_other_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            old_snapshot = _save_lab_snapshot(lab_path, snapshot_hash="old")
+            current_snapshot = _save_lab_snapshot(lab_path, snapshot_hash="current")
+            old_qh = _save_lab_run(
+                lab_path,
+                int(old_snapshot["id"]),
+                module_key="quick_help.reanimator",
+                branch="experiment",
+                result=_qh_result("reanimator"),
+                fingerprint="fp-old-reanimator",
+            )
+            with self.assertRaises(ValueError) as raised:
+                _start_email(
+                    lab_path,
+                    snapshot_id=int(current_snapshot["id"]),
+                    upstream_run_id=int(old_qh["id"]),
+                    quick_help_mode="reanimator",
+                )
+            self.assertEqual(str(raised.exception), lab.QH_UPSTREAM_REQUIRED)
+
+    def test_downstream_rejects_current_run_as_experiment_upstream(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            snapshot = _save_lab_snapshot(lab_path)
+            current_qh = _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.reanimator",
+                branch="current",
+                result=_qh_result("reanimator"),
+                fingerprint="fp-current-reanimator",
+            )
+            with self.assertRaises(ValueError) as raised:
+                _start_email(
+                    lab_path,
+                    snapshot_id=int(snapshot["id"]),
+                    upstream_run_id=int(current_qh["id"]),
+                    branch="experiment",
+                    quick_help_mode="reanimator",
+                )
+            self.assertEqual(str(raised.exception), lab.QH_UPSTREAM_REQUIRED)
+
+    def test_downstream_rejects_push_when_active_mode_is_reanimator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            snapshot = _save_lab_snapshot(lab_path)
+            push_qh = _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.push",
+                branch="experiment",
+                result=_qh_result("push"),
+                fingerprint="fp-push",
+            )
+            with self.assertRaises(ValueError) as raised:
+                _start_email(
+                    lab_path,
+                    snapshot_id=int(snapshot["id"]),
+                    upstream_run_id=int(push_qh["id"]),
+                    quick_help_mode="reanimator",
+                )
+            self.assertEqual(str(raised.exception), lab.QH_UPSTREAM_REQUIRED)
+
+    def test_downstream_rejects_quick_help_from_another_deal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            snapshot = _save_lab_snapshot(lab_path)
+            other_qh = _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.reanimator",
+                branch="experiment",
+                result=_qh_result("reanimator"),
+                fingerprint="fp-other-deal",
+                deal_id="202",
+            )
+            with self.assertRaises(ValueError) as raised:
+                _start_email(
+                    lab_path,
+                    snapshot_id=int(snapshot["id"]),
+                    upstream_run_id=int(other_qh["id"]),
+                    quick_help_mode="reanimator",
+                    deal_id="101",
+                )
+            self.assertEqual(str(raised.exception), lab.QH_UPSTREAM_REQUIRED)
+
+    def test_downstream_accepts_same_deal_branch_snapshot_and_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            snapshot = _save_lab_snapshot(lab_path)
+            matching = _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.reanimator",
+                branch="experiment",
+                result=_qh_result("reanimator"),
+                fingerprint="fp-matching",
+            )
+            captured: dict = {}
+
+            def fake_email(**kwargs):
+                captured["quick_help"] = kwargs.get("quick_help")
+                return (
+                    _email_content("ok"),
+                    {"call_type": "prompt_lab_full_script", "usage": {}, "latency_seconds": 0.01, "response_status": "completed"},
+                )
+
+            with patch.object(lab, "_effective_prompt", return_value="SYSTEM_RULES:\ntest"), patch.object(
+                lab, "generate_deal_manager_email", side_effect=fake_email
+            ):
+                job = _start_email(
+                    lab_path,
+                    snapshot_id=int(snapshot["id"]),
+                    upstream_run_id=int(matching["id"]),
+                    quick_help_mode="reanimator",
+                )
+                for _ in range(80):
+                    current = lab.get_lab_job(job["job_id"])
+                    if current and current["status"] in {"done", "error"}:
+                        break
+                    time.sleep(0.02)
+            finished = lab.get_lab_job(job["job_id"])
+            self.assertEqual(finished["status"], "done")
             self.assertEqual(captured["quick_help"]["mode"], "reanimator")
             self.assertEqual(captured["quick_help"]["client_messages"]["primary"], "REANIMATOR")
 
@@ -841,7 +1023,7 @@ class PromptLabStorageTests(unittest.TestCase):
             ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
                 lab, "find_last_contact", return_value=None
             ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"):
-                current, _snapshot = lab.import_production_current(
+                current, snapshot = lab.import_production_current(
                     deal_id="101",
                     module_key="full_script.call",
                     context=CONTEXT,
@@ -854,6 +1036,10 @@ class PromptLabStorageTests(unittest.TestCase):
             upstream = lab_db.get_run(lab_path, int(current["lab_run"]["upstream_run_id"]))
             self.assertEqual(upstream["module_key"], "quick_help.reanimator")
             self.assertEqual(upstream["result"]["mode"], "reanimator")
+            self.assertEqual(upstream["deal_id"], "101")
+            self.assertEqual(upstream["branch"], "current")
+            self.assertEqual(int(upstream["snapshot_id"]), int(snapshot["id"]))
+            self.assertEqual(upstream["status"], "success")
 
 
 if __name__ == "__main__":
