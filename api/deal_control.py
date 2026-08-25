@@ -18,6 +18,7 @@ from api.candidates import (
 from api.jobs import unwrap_analysis_payload
 from bitrix.customer_history import activity_type, build_normalized_communications
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
+from progress_events import compact_decision_status
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -26,6 +27,7 @@ from storage.rop_db import (
     get_deal_manager_situation_state,
     get_deal_control_scope,
     get_deal_control_metrics,
+    get_entity_state,
     get_latest_deal_manager_situation_review,
     get_latest_ui_report,
     get_or_create_deal_daily_checklist,
@@ -681,9 +683,12 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
             ],
             2,
         )
+    check = _analysis_check_fields(db_path, deal_id)
     coaching = {
         "report_id": report.get("id") if report else None,
         "analysis_created_at": report.get("created_at") if report else None,
+        "analysis_checked_at": check["analysis_checked_at"],
+        "analysis_check_status": check["analysis_check_status"],
         "current_situation": str(brief.get("current_situation") or deal_state.get("summary") or ""),
         "strengths": strengths,
         "weaknesses": weaknesses,
@@ -724,6 +729,19 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         if _has_refined_value(value):
             coaching[field] = value
     return coaching
+
+
+def _analysis_check_fields(db_path: str | Path, deal_id: str) -> dict[str, Any]:
+    """Last change-aware pass: entity_state.updated_at, not the UI-report created_at."""
+    state = get_entity_state(db_path, "deal", str(deal_id))
+    if not isinstance(state, dict):
+        return {"analysis_checked_at": None, "analysis_check_status": None}
+    status = compact_decision_status(str(state.get("last_analysis_status") or ""))
+    checked_at = str(state.get("updated_at") or "").strip()
+    return {
+        "analysis_checked_at": checked_at or None,
+        "analysis_check_status": status or None,
+    }
 
 
 def _has_refined_value(value: Any) -> bool:

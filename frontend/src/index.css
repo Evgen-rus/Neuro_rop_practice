@@ -3377,7 +3377,7 @@ textarea {
 
 .dc-analysis-ready > div {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   color: #147441;
   min-width: 0;
@@ -3388,6 +3388,7 @@ textarea {
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
+  margin-top: 1px;
   place-items: center;
   border-radius: 50%;
   color: #fff;
@@ -3403,18 +3404,25 @@ textarea {
 
 .dc-analysis-ready > div strong {
   font-size: 12px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .dc-analysis-ready > div small {
   color: #58706a;
   font-size: 11px;
-  line-height: 1.2;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.dc-analysis-ready > div small.dc-analysis-check {
+  margin-top: 2px;
+  color: #17643e;
+  font-weight: 600;
 }
 
 .dc-analysis-ready > .dc-button {
   min-height: 30px;
+  align-self: center;
   margin-left: auto;
   padding: 5px 10px;
   border-color: #a9c8ba;

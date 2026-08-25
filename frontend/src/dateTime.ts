@@ -47,3 +47,26 @@ export function moscowDateInputValue(value: DateTimeValue = new Date()): string 
   const { year, month, day } = moscowDateParts(value)
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
+
+export function formatMoscowReviewStamp(value: DateTimeValue, now: DateTimeValue = new Date()): string | null {
+  const date = formatMoscowDateTime(value, { day: 'numeric', month: 'long' })
+  const time = formatMoscowDateTime(value, { hour: '2-digit', minute: '2-digit' })
+  if (!date || !time) return null
+  const valueYear = moscowDateParts(value).year
+  const nowYear = moscowDateParts(now).year
+  const yearPart = valueYear !== nowYear ? ` ${valueYear}` : ''
+  return `${date}${yearPart}, ${time}`
+}
+
+export function moscowDateTimesOnSameDay(left: DateTimeValue, right: DateTimeValue = new Date()): boolean {
+  const a = moscowDateParts(left)
+  const b = moscowDateParts(right)
+  return a.year === b.year && a.month === b.month && a.day === b.day
+}
+
+export function isMoscowDateTimeOnOrAfter(value: DateTimeValue, reference: DateTimeValue): boolean {
+  const left = parseMoscowDateTime(value).getTime()
+  const right = parseMoscowDateTime(reference).getTime()
+  if (Number.isNaN(left) || Number.isNaN(right)) return false
+  return left >= right
+}

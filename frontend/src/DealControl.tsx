@@ -64,6 +64,7 @@ import {
   isCallScriptContent,
   isNeuroRopTask,
 } from './api'
+import { laterCheckCopy, reviewFromLabel } from './analysisReviewBanner'
 import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
@@ -1594,13 +1595,18 @@ function DealDetail(props: {
         : <>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
     </button>
   )
+  const laterCheck = laterCheckCopy({
+    createdAt: coaching.analysis_created_at,
+    checkedAt: coaching.analysis_checked_at,
+    checkStatus: coaching.analysis_check_status,
+  })
   const analysisReady = (
     <div className="dc-analysis-ready">
       <div>
         <span>✓</span>
         <div>
-          <strong>AI-анализ проведён</strong>
-          {coaching.analysis_created_at ? <small>{dateTime(coaching.analysis_created_at)}</small> : null}
+          <strong>{reviewFromLabel(coaching.analysis_created_at)}</strong>
+          {laterCheck ? <small className="dc-analysis-check">{laterCheck}</small> : null}
         </div>
       </div>
       <button className="dc-button" disabled={analysisBusy} onClick={() => void props.onAnalyze(deal)}>

@@ -814,6 +814,8 @@ export type DailyControlDeal = {
   }
   has_analysis: boolean
   analysis_created_at?: string | null
+  analysis_checked_at?: string | null
+  analysis_check_status?: string | null
   bitrix_task_time_bucket?: 'overdue' | 'today' | 'tomorrow' | 'future' | 'unscheduled' | 'missing'
 }
 
@@ -851,6 +853,8 @@ export type DealControlDeal = {
   coaching: {
     report_id?: number | null
     analysis_created_at?: string | null
+    analysis_checked_at?: string | null
+    analysis_check_status?: string | null
     current_situation?: string
     strengths: string[]
     weaknesses: string[]

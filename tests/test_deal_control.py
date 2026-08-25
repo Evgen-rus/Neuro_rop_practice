@@ -35,6 +35,7 @@ from storage.rop_db import (
     set_deal_control_bitrix_task_completion,
     update_deal_control_task,
     upsert_deal_control_deal,
+    upsert_entity_state,
 )
 
 
@@ -412,6 +413,35 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
             self.assertEqual(coaching["communication_quality_audit"]["status"], "insufficient_evidence")
             self.assertTrue(coaching["analysis_created_at"])
+            self.assertIsNone(coaching["analysis_checked_at"])
+            self.assertIsNone(coaching["analysis_check_status"])
+
+    def test_analysis_coaching_exposes_later_skip_check_without_rewriting_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            with patch("storage.rop_db.utcish_now", return_value="2026-08-20T16:39:00+03:00"):
+                save_ui_report(
+                    db_path,
+                    entity_type="deal",
+                    entity_id="101",
+                    report_json={"deal_control_brief": {"current_situation": "Клиент получил КП."}},
+                )
+            with patch("storage.rop_db.utcish_now", return_value="2026-08-25T12:10:00+03:00"):
+                upsert_entity_state(
+                    db_path,
+                    entity_type="deal",
+                    entity_id="101",
+                    fingerprint="skip-check",
+                    snapshot={"deal_id": "101"},
+                    last_analysis_status="SKIPPED_NO_CHANGES",
+                    last_analysis_at="2026-08-20T16:39:00+03:00",
+                )
+
+            coaching = _analysis_coaching(db_path, "101")
+
+            self.assertEqual(coaching["analysis_created_at"], "2026-08-20T16:39:00+03:00")
+            self.assertEqual(coaching["analysis_checked_at"], "2026-08-25T12:10:00+03:00")
+            self.assertEqual(coaching["analysis_check_status"], "skip")
 
     def test_live_dashboard_reuses_daily_review_card_projection(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -487,6 +487,8 @@ def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
         "checklist": _project_checklist(deal.get("checklist")),
         "has_analysis": bool(coaching.get("report_id")),
         "analysis_created_at": coaching.get("analysis_created_at"),
+        "analysis_checked_at": coaching.get("analysis_checked_at"),
+        "analysis_check_status": coaching.get("analysis_check_status"),
         "bitrix_task_time_bucket": _bitrix_task_time_bucket(deal),
     }
 

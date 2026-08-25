@@ -55,6 +55,8 @@ class DealChangeCliTests(unittest.TestCase):
             patch.object(analyze_deal_if_changed, "CONTEXT_MEMORY_OPTIMIZATION_ENABLED", enabled),
             patch.object(analyze_deal_if_changed, "CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE", shadow),
             patch.object(analyze_deal_if_changed, "CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK", force_full),
+            # Этот файл проверяет старый V1 incremental-контур, не публикацию V2.
+            patch.object(analyze_deal_if_changed, "DEAL_INCREMENTAL_V2_MODE", "off"),
         )
         for item in patches:
             item.start()
