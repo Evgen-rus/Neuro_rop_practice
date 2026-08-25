@@ -26,6 +26,13 @@ import {
 } from './api'
 import { formatMoscowDateTime } from './dateTime'
 import { CompanionResultView, FollowupsResultView, FullScriptResultView, QuickHelpResultView } from './managerResults'
+import {
+  PROMPT_LAB_LOADING_TEXT,
+  jobMatchesModule,
+  labResultKind,
+  runMatchesModule,
+  visibleLabRun,
+} from './promptLabWorkspace'
 
 type Layout = 'current' | 'experiment' | 'both'
 type PendingNav =
@@ -94,9 +101,13 @@ export function PromptLabWorkspace({
   const [previousMessage, setPreviousMessage] = useState('')
   const [qhUpstream, setQhUpstream] = useState<{ current: number | null; experiment: number | null }>({ current: null, experiment: null })
   const [qhMode, setQhMode] = useState<ManagerAssistantMode>(productionMode === 'reanimator' ? 'reanimator' : 'push')
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
   const unsaved = experimentPrompt !== savedExperiment
   const strategyRef = useRef(strategy)
   strategyRef.current = strategy
+  const moduleKeyRef = useRef(moduleKey)
+  moduleKeyRef.current = moduleKey
+  const bootstrapSeqRef = useRef(0)
 
   useEffect(() => { onLeaveAttempt?.(unsaved) }, [onLeaveAttempt, unsaved])
 
@@ -106,7 +117,8 @@ export function PromptLabWorkspace({
     else onConfirmLeave?.()
   }, [leaveRequest, onConfirmLeave, unsaved])
 
-  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey, selectedStrategy?: ManagerQuickHelpStrategy, activeQhMode?: ManagerAssistantMode) => {
+  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey, selectedStrategy?: ManagerQuickHelpStrategy, activeQhMode?: ManagerAssistantMode, requestId?: number) => {
+    const seq = requestId ?? ++bootstrapSeqRef.current
     const mode = activeQhMode || qhMode
     const payload = await fetchPromptLabBootstrap(
       dealId,
@@ -114,6 +126,7 @@ export function PromptLabWorkspace({
       nextModule.startsWith('full_script.') ? (selectedStrategy || 'primary') : null,
       nextModule.startsWith('full_script.') ? mode : null,
     )
+    if (seq !== bootstrapSeqRef.current || moduleKeyRef.current !== nextModule || payload.module !== nextModule) return
     setBootstrap(payload)
     setCurrentPrompt(payload.production_current.prompt_template)
     setExperimentPrompt(payload.production_current.prompt_template)
@@ -127,7 +140,7 @@ export function PromptLabWorkspace({
     setExperimentReasoning(reasoning)
     setVersions(payload.versions)
     setSelectedVersionId(null)
-    const imported = payload.production_current.lab_run || null
+    const imported = visibleLabRun(payload.production_current.lab_run || null, nextModule)
     setCurrentRun(imported)
     setExperimentRun(null)
     setQhUpstream({ current: null, experiment: null })
@@ -139,7 +152,9 @@ export function PromptLabWorkspace({
         experiment: null,
       })
     }
+    setWorkspaceLoading(false)
     const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: nextModule })
+    if (seq !== bootstrapSeqRef.current || moduleKeyRef.current !== nextModule) return
     setHistory(runs.runs)
     if (nextModule.startsWith('full_script.') || nextModule.startsWith('quick_help.')) {
       const qhKey = nextModule.startsWith('quick_help.') ? nextModule : (`quick_help.${mode}` as PromptLabModuleKey)
@@ -148,6 +163,7 @@ export function PromptLabWorkspace({
         module_key: qhKey,
         ...(snapshotId ? { snapshot_id: snapshotId } : {}),
       })
+      if (seq !== bootstrapSeqRef.current || moduleKeyRef.current !== nextModule) return
       const successful = qhRuns.runs.filter((item) => (
         item.status === 'success'
         && item.id > 0
@@ -167,26 +183,53 @@ export function PromptLabWorkspace({
   }, [dealId, qhMode])
 
   function applyModule(next: PromptLabModuleKey) {
+    bootstrapSeqRef.current += 1
     if (next.startsWith('quick_help.')) {
       setQhMode(next === 'quick_help.reanimator' ? 'reanimator' : 'push')
     }
     setModuleKey(next)
+    setWorkspaceLoading(true)
+    setBootstrap(null)
+    setCurrentPrompt('')
+    setExperimentPrompt('')
+    setSavedExperiment('')
+    setCurrentRun(null)
+    setExperimentRun(null)
+    setCurrentJob(null)
+    setExperimentJob(null)
+    setQhUpstream({ current: null, experiment: null })
+    setExistingJob(null)
+    setError('')
+    setHistory([])
+    setCurrentModel('')
+    setExperimentModel('')
+    setCurrentReasoning('')
+    setExperimentReasoning('')
+    setVersions([])
   }
 
   useEffect(() => {
-    void loadBootstrap(moduleKey, strategyRef.current).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+    setWorkspaceLoading(true)
+    const requestId = ++bootstrapSeqRef.current
+    void loadBootstrap(moduleKey, strategyRef.current, undefined, requestId).catch((reason) => {
+      if (requestId !== bootstrapSeqRef.current) return
+      setWorkspaceLoading(false)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
   }, [dealId, loadBootstrap, moduleKey])
 
   async function changeStrategy(next: ManagerQuickHelpStrategy) {
     setStrategy(next)
-    if (!moduleKey.startsWith('full_script.')) return
+    if (!moduleKey.startsWith('full_script.') || workspaceLoading) return
+    const requestId = bootstrapSeqRef.current
     const payload = await fetchPromptLabBootstrap(dealId, moduleKey, next, qhMode)
+    if (requestId !== bootstrapSeqRef.current || moduleKeyRef.current !== moduleKey || payload.module !== moduleKey) return
     setBootstrap(payload)
-    setCurrentRun(payload.production_current.lab_run || null)
+    setCurrentRun(visibleLabRun(payload.production_current.lab_run || null, moduleKey))
     const useProduction = payload.production_current.exists || Boolean(payload.production_current.lab_run)
     setCurrentModel(useProduction ? payload.production_current.model : payload.runtime.model)
     setCurrentReasoning(useProduction ? payload.production_current.reasoning : payload.runtime.reasoning)
-    const imported = payload.production_current.lab_run
+    const imported = visibleLabRun(payload.production_current.lab_run || null, moduleKey)
     if (
       imported?.upstream_run_id
       && (payload.snapshot.id == null || imported.snapshot_id === payload.snapshot.id)
@@ -201,28 +244,35 @@ export function PromptLabWorkspace({
   useEffect(() => {
     const jobs: Array<['current' | 'experiment', PromptLabJob | null]> = [['current', currentJob], ['experiment', experimentJob]]
     const timers: number[] = []
+    const activeModule = moduleKey
     for (const [branch, job] of jobs) {
       if (!job || !['queued', 'running'].includes(job.status)) continue
+      if (!jobMatchesModule(job, activeModule)) continue
       const timer = window.setTimeout(async () => {
         const next = await fetchPromptLabJob(job.job_id)
+        if (!jobMatchesModule(next, moduleKeyRef.current)) return
         if (branch === 'current') setCurrentJob(next)
         else setExperimentJob(next)
-        if (next.run) {
-          if (branch === 'current') setCurrentRun(next.run)
-          else setExperimentRun(next.run)
-          if (moduleKey.startsWith('quick_help.') && next.run.id > 0) {
-            setQhUpstream((value) => ({ ...value, [branch]: next.run?.id || null }))
+        const nextRun = next.run || null
+        if (nextRun) {
+          if (!runMatchesModule(nextRun, moduleKeyRef.current)) return
+          if (branch === 'current') setCurrentRun(nextRun)
+          else setExperimentRun(nextRun)
+          if (moduleKeyRef.current.startsWith('quick_help.') && nextRun.id > 0) {
+            setQhUpstream((value) => ({ ...value, [branch]: nextRun.id }))
           }
         } else if (next.run_id) {
           const run = await fetchPromptLabRun(next.run_id)
+          if (!runMatchesModule(run, moduleKeyRef.current)) return
           if (branch === 'current') setCurrentRun(run)
           else setExperimentRun(run)
-          if (moduleKey.startsWith('quick_help.') && run.id > 0) {
+          if (moduleKeyRef.current.startsWith('quick_help.') && run.id > 0) {
             setQhUpstream((value) => ({ ...value, [branch]: run.id }))
           }
         }
         if (next.status === 'done' || next.status === 'error' || next.status === 'exists') {
-          const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: moduleKey })
+          const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: moduleKeyRef.current })
+          if (moduleKeyRef.current !== activeModule) return
           setHistory(runs.runs)
         }
       }, 800)
@@ -268,8 +318,9 @@ export function PromptLabWorkspace({
   }
 
   async function generate(branch: PromptLabBranch, options: { force?: boolean; silentReuse?: boolean; snapshotId?: number | null } = {}) {
-    if (!bootstrap?.gate.ok && family !== 'companion') {
-      setError(bootstrap?.gate.reason || 'Prompt Lab заблокирован')
+    if (workspaceLoading || !bootstrap) return
+    if (!bootstrap.gate.ok && family !== 'companion') {
+      setError(bootstrap.gate.reason || 'Prompt Lab заблокирован')
       return
     }
     setError('')
@@ -296,17 +347,19 @@ export function PromptLabWorkspace({
       setError('Сначала получите Quick Help этой ветки на текущем контексте')
       return
     }
+    const activeModule = moduleKey
     const job = await startPromptLabRun(body)
+    if (!jobMatchesModule(job, moduleKeyRef.current) || moduleKeyRef.current !== activeModule) return
     if (job.status === 'exists') {
       setExistingJob(job)
       return
     }
     if (isCurrent) setCurrentJob(job)
     else setExperimentJob(job)
-    if (job.run) {
+    if (job.run && runMatchesModule(job.run, moduleKeyRef.current)) {
       if (isCurrent) setCurrentRun(job.run)
       else setExperimentRun(job.run)
-      if (family === 'quick_help' && job.run.id > 0) {
+      if (moduleKeyRef.current.startsWith('quick_help.') && job.run.id > 0) {
         setQhUpstream((value) => ({ ...value, [branch]: job.run?.id || null }))
       }
     }
@@ -413,10 +466,13 @@ export function PromptLabWorkspace({
 
   const currentBusy = Boolean(currentJob && ['queued', 'running'].includes(currentJob.status))
   const experimentBusy = Boolean(experimentJob && ['queued', 'running'].includes(experimentJob.status))
+  const generateLocked = workspaceLoading || !bootstrap || currentBusy || experimentBusy
+  const currentVisibleRun = visibleLabRun(currentRun, moduleKey)
+  const experimentVisibleRun = visibleLabRun(experimentRun, moduleKey)
 
   return <div className="dc-prompt-lab">
-    {!bootstrap?.gate.ok && family !== 'companion' ? <p className="dc-manager-error" role="alert">{bootstrap?.gate.reason || 'Prompt Lab заблокирован'}</p> : null}
-    {bootstrap?.production_current.stale ? <p className="dc-prompt-lab-stale">Создан на предыдущем контексте</p> : null}
+    {!workspaceLoading && !bootstrap?.gate.ok && family !== 'companion' ? <p className="dc-manager-error" role="alert">{bootstrap?.gate.reason || 'Prompt Lab заблокирован'}</p> : null}
+    {!workspaceLoading && bootstrap?.production_current.stale ? <p className="dc-prompt-lab-stale">Создан на предыдущем контексте</p> : null}
     {error ? <p className="dc-manager-error">{error}</p> : null}
     <div className="dc-prompt-lab-toolbar">
       <label>Модуль
@@ -433,13 +489,14 @@ export function PromptLabWorkspace({
       <label className="dc-prompt-lab-question">Вопрос менеджера
         <input value={question} maxLength={4000} onChange={(event) => onQuestion(event.target.value)} placeholder="Один вопрос для CURRENT и EXPERIMENT" />
       </label>
-      <button type="button" className="dc-button" onClick={() => void refreshSnapshot()}>Обновить</button>
-      <button type="button" className="dc-button primary" disabled={currentBusy || experimentBusy} onClick={() => void generateBoth()}>Сгенерировать оба</button>
+      <button type="button" className="dc-button" onClick={() => void refreshSnapshot()} disabled={workspaceLoading}>Обновить</button>
+      <button type="button" className="dc-button primary" disabled={generateLocked} onClick={() => void generateBoth()}>Сгенерировать оба</button>
     </div>
     <div className={`dc-prompt-lab-grid ${layout}`}>
       {layout !== 'experiment' ? <BranchPanel
         title="CURRENT"
         readOnlyPrompt
+        loading={workspaceLoading}
         prompt={currentPrompt}
         onPrompt={setCurrentPrompt}
         model={currentModel}
@@ -450,7 +507,7 @@ export function PromptLabWorkspace({
         onReasoning={setCurrentReasoning}
         busy={currentBusy}
         job={currentJob}
-        run={currentRun}
+        run={currentVisibleRun}
         moduleKey={moduleKey}
         strategy={strategy}
         onStrategy={changeStrategy}
@@ -461,6 +518,7 @@ export function PromptLabWorkspace({
       /> : null}
       {layout !== 'current' ? <BranchPanel
         title="EXPERIMENT"
+        loading={workspaceLoading}
         prompt={experimentPrompt}
         onPrompt={setExperimentPrompt}
         model={experimentModel}
@@ -471,7 +529,7 @@ export function PromptLabWorkspace({
         onReasoning={setExperimentReasoning}
         busy={experimentBusy}
         job={experimentJob}
-        run={experimentRun}
+        run={experimentVisibleRun}
         moduleKey={moduleKey}
         strategy={strategy}
         onStrategy={changeStrategy}
@@ -509,10 +567,10 @@ export function PromptLabWorkspace({
       <button type="button" onClick={() => void exportVersions('candidates_module')}>Экспорт ★ модуля</button>
       <button type="button" onClick={() => void exportVersions('candidates_all')}>Экспорт всех ★</button>
     </div>
-    {currentRun && currentRun.id > 0 && experimentRun && experimentRun.id > 0 ? <div className="dc-prompt-lab-review">
+    {currentVisibleRun && currentVisibleRun.id > 0 && experimentVisibleRun && experimentVisibleRun.id > 0 ? <div className="dc-prompt-lab-review">
       <span>A/B</span>
       {([['current_better', 'CURRENT лучше'], ['same', 'Одинаково'], ['experiment_better', 'EXPERIMENT лучше'], ['both_bad', 'Оба плохие']] as const).map(([verdict, label]) => (
-        <button key={verdict} type="button" onClick={() => void savePromptLabReview({ current_run_id: currentRun.id, experiment_run_id: experimentRun.id, prompt_version_id: selectedVersionId, verdict })}>{label}</button>
+        <button key={verdict} type="button" onClick={() => void savePromptLabReview({ current_run_id: currentVisibleRun.id, experiment_run_id: experimentVisibleRun.id, prompt_version_id: selectedVersionId, verdict })}>{label}</button>
       ))}
     </div> : null}
     {history.length ? <details className="dc-prompt-lab-history"><summary>История runs</summary>
@@ -529,8 +587,8 @@ export function PromptLabWorkspace({
     {existingJob ? <div className="dc-prompt-lab-modal" role="dialog">
       <p>Такая конфигурация уже запускалась.</p>
       <button type="button" className="dc-button primary" onClick={() => {
-        if (existingJob.run && existingJob.branch === 'current') setCurrentRun(existingJob.run)
-        if (existingJob.run && existingJob.branch === 'experiment') setExperimentRun(existingJob.run)
+        if (existingJob.run && jobMatchesModule(existingJob, moduleKey) && runMatchesModule(existingJob.run, moduleKey) && existingJob.branch === 'current') setCurrentRun(existingJob.run)
+        if (existingJob.run && jobMatchesModule(existingJob, moduleKey) && runMatchesModule(existingJob.run, moduleKey) && existingJob.branch === 'experiment') setExperimentRun(existingJob.run)
         setExistingJob(null)
       }}>Использовать результат</button>
       <button type="button" className="dc-button" onClick={() => { const branch = existingJob.branch; setExistingJob(null); void generate(branch, { force: true }) }}>Запустить заново</button>
@@ -541,6 +599,7 @@ export function PromptLabWorkspace({
 function BranchPanel(props: {
   title: string
   readOnlyPrompt?: boolean
+  loading?: boolean
   prompt: string
   onPrompt: (value: string) => void
   model: string
@@ -562,17 +621,18 @@ function BranchPanel(props: {
   extraActions?: React.ReactNode
 }) {
   const mode: ManagerAssistantMode = props.moduleKey === 'quick_help.push' ? 'push' : 'reanimator'
+  const visibleRun = visibleLabRun(props.run, props.moduleKey)
   return <section className="dc-prompt-lab-branch">
     <header>
       <strong>{props.title}</strong>
-      <span>{props.job?.status === 'error' ? `✕ ${props.job.error || props.job.detail}` : props.busy ? props.job?.detail || 'Генерация…' : props.run?.status === 'success' ? '✓ Готово' : props.run?.status === 'error' ? `✕ ${props.run.error}` : 'Нет результата'}</span>
+      <span>{props.loading ? PROMPT_LAB_LOADING_TEXT : props.job?.status === 'error' ? `✕ ${props.job.error || props.job.detail}` : props.busy ? props.job?.detail || 'Генерация…' : visibleRun?.status === 'success' ? '✓ Готово' : visibleRun?.status === 'error' ? `✕ ${visibleRun.error}` : 'Нет результата'}</span>
     </header>
     <label>Prompt
-      <textarea readOnly={props.readOnlyPrompt} value={props.prompt} onChange={(event) => props.onPrompt(event.target.value)} />
+      <textarea readOnly={props.readOnlyPrompt || props.loading} value={props.loading ? PROMPT_LAB_LOADING_TEXT : props.prompt} onChange={(event) => props.onPrompt(event.target.value)} />
     </label>
     <div className="dc-prompt-lab-config">
       <label>Model
-        <select value={props.model} onChange={(event) => {
+        <select value={props.model} disabled={props.loading} onChange={(event) => {
           props.onModel(event.target.value)
           const allowed = props.models.find((item) => item.id === event.target.value)?.reasoning || []
           if (!allowed.includes(props.reasoning)) props.onReasoning(allowed[0] || 'low')
@@ -581,26 +641,26 @@ function BranchPanel(props: {
         </select>
       </label>
       <label>Reasoning
-        <select value={props.reasoning} onChange={(event) => props.onReasoning(event.target.value)}>
+        <select value={props.reasoning} disabled={props.loading} onChange={(event) => props.onReasoning(event.target.value)}>
           {props.reasoningOptions.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
       </label>
-      <button type="button" className="dc-button primary" disabled={props.busy} onClick={props.onGenerate}>Сгенерировать</button>
+      <button type="button" className="dc-button primary" disabled={props.busy || props.loading} onClick={props.onGenerate}>Сгенерировать</button>
     </div>
     {props.extraActions}
-    <LabResult run={props.run} moduleKey={props.moduleKey} mode={mode} strategy={props.strategy} onStrategy={props.onStrategy} onCopy={props.onCopy} />
+    <LabResult run={visibleRun} moduleKey={props.moduleKey} mode={mode} strategy={props.strategy} onStrategy={props.onStrategy} onCopy={props.onCopy} />
     <button type="button" className="dc-link-button" onClick={props.onToggleAdvanced}>{props.advanced ? 'Скрыть Advanced' : 'Advanced'}</button>
-    {props.advanced && props.run ? <pre className="dc-prompt-lab-advanced">{JSON.stringify({
-      effective_prompt: props.run.effective_prompt,
-      prompt_hash: props.run.prompt_hash,
-      model: props.run.model,
-      reasoning: props.run.reasoning,
-      schema_version: props.run.schema_version,
-      usage: props.run.usage,
-      cost: props.run.cost,
-      latency_seconds: props.run.latency_seconds,
-      response_status: props.run.response_status,
-      error: props.run.error,
+    {props.advanced && visibleRun ? <pre className="dc-prompt-lab-advanced">{JSON.stringify({
+      effective_prompt: visibleRun.effective_prompt,
+      prompt_hash: visibleRun.prompt_hash,
+      model: visibleRun.model,
+      reasoning: visibleRun.reasoning,
+      schema_version: visibleRun.schema_version,
+      usage: visibleRun.usage,
+      cost: visibleRun.cost,
+      latency_seconds: visibleRun.latency_seconds,
+      response_status: visibleRun.response_status,
+      error: visibleRun.error,
     }, null, 2)}</pre> : null}
   </section>
 }
@@ -620,24 +680,26 @@ function LabResult({
   onStrategy: (value: ManagerQuickHelpStrategy) => void
   onCopy: (text: string, label: string) => Promise<void>
 }) {
-  if (!run) return <p className="empty">Результат ещё не сформирован</p>
-  if (run.status === 'error') return <p className="dc-manager-error">{run.error || 'Ошибка генерации'}</p>
-  const result = run.result
+  const visible = visibleLabRun(run, moduleKey)
+  const kind = labResultKind(visible, moduleKey)
+  if (!visible || kind === 'empty') return <p className="empty">Результат ещё не сформирован</p>
+  if (kind === 'error') return <p className="dc-manager-error">{visible.error || 'Ошибка генерации'}</p>
+  const result = visible.result
   if (!result) return <p className="empty">Результат ещё не сформирован</p>
-  if (moduleKey.startsWith('quick_help.')) {
+  if (kind === 'quick_help') {
     return <QuickHelpResultView
-      entry={{ content: result as unknown as ManagerQuickHelpContent, created_at: run.created_at }}
+      entry={{ content: result as unknown as ManagerQuickHelpContent, created_at: visible.created_at }}
       mode={mode}
       selectedStrategy={strategy}
       onSelectedStrategy={onStrategy}
       onCopy={onCopy}
     />
   }
-  if (moduleKey === 'followups') {
-    return <FollowupsResultView record={{ id: run.id, created_at: run.created_at, content: result as unknown as ManagerFollowupsRecord['content'] }} />
+  if (kind === 'followups') {
+    return <FollowupsResultView record={{ id: visible.id, created_at: visible.created_at, content: result as unknown as ManagerFollowupsRecord['content'] }} />
   }
-  if (moduleKey === 'companion') {
-    return <CompanionResultView companion={{ id: run.id, created_at: run.created_at, content: result as unknown as ManagerCompanionRecord['content'] } as ManagerCompanionRecord} onCopy={(text) => void onCopy(text, 'Сопроводительный текст')} />
+  if (kind === 'companion') {
+    return <CompanionResultView companion={{ id: visible.id, created_at: visible.created_at, content: result as unknown as ManagerCompanionRecord['content'] } as ManagerCompanionRecord} onCopy={(text) => void onCopy(text, 'Сопроводительный текст')} />
   }
   return <FullScriptResultView script={result as unknown as ManagerFullScriptContent} onCopy={onCopy} />
 }
