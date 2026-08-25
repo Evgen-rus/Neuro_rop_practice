@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from setup import BASE_DIR, get_logger
 from bitrix.customer_history import DEFAULT_HISTORY_DAYS
+from bitrix.deals.download_deals_call_audio import MAX_VOICE_LOOKBACK_DAYS
 from progress_events import emit_progress
 
 
@@ -66,6 +67,12 @@ def parse_args() -> argparse.Namespace:
         "--include-internal-context",
         action="store_true",
         help="Include timeline comments/internal notes in full customer history.",
+    )
+    parser.add_argument(
+        "--max-voice-lookback-days",
+        type=int,
+        default=MAX_VOICE_LOOKBACK_DAYS,
+        help=f"Max voice history window in days. Default: {MAX_VOICE_LOOKBACK_DAYS}",
     )
     return parser.parse_args()
 
@@ -143,6 +150,8 @@ def main() -> None:
                 str(raw_dir),
                 "--audio-dir",
                 str(audio_dir),
+                "--max-voice-lookback-days",
+                str(args.max_voice_lookback_days),
                 *(["--redownload"] if args.redownload_audio else []),
             ]
         )

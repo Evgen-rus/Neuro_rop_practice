@@ -10,7 +10,10 @@ from unittest.mock import patch
 from bitrix.deals.download_deals_call_audio import (
     audio_file_discovery_expired,
     existing_transcriptions_by_activity,
+    max_voice_messages,
+    max_voice_urls,
     process_call,
+    process_max_voice,
     recording_readiness,
     record_transcribed_and_purged,
     should_recheck_recording,
@@ -37,6 +40,84 @@ class RecordingClient:
 
 
 class AudioRetentionTests(unittest.TestCase):
+    def test_max_voice_extraction_keeps_client_and_manager_messages_in_30_day_window(self) -> None:
+        icon = "https://static.wazzup24.com/images/bitrix/max.png"
+        client_voice = "https://store.wazzup24.com/client-voice"
+        manager_voice = "https://store.wazzup24.com/manager-voice"
+        bundle = {
+            "normalized_communications": [
+                {
+                    "channel": "max",
+                    "source_ids": ["100"],
+                    "occurred_at": "2026-08-24T10:00:00+03:00",
+                    "entity_type": "deal",
+                    "entity_id": "42",
+                    "direction": "incoming",
+                    "participant_role": "client",
+                    "participant_name": "Клиент",
+                },
+                {
+                    "channel": "max",
+                    "source_ids": ["101"],
+                    "occurred_at": "2026-08-23T10:00:00+03:00",
+                    "entity_type": "deal",
+                    "entity_id": "42",
+                    "direction": "unknown",
+                    "participant_role": "unknown",
+                    "participant_name": "Менеджер",
+                },
+                {
+                    "channel": "max",
+                    "source_ids": ["old"],
+                    "occurred_at": "2026-07-01T10:00:00+03:00",
+                    "entity_type": "deal",
+                    "entity_id": "42",
+                },
+            ],
+            "internal_context": [
+                {"id": "100", "raw": {"COMMENT": f"[img]{icon}[/img] [url={client_voice}]voice[/url]"}},
+                {"id": "101", "raw": {"COMMENT": f"[img]{icon}[/img] {manager_voice} {manager_voice}"}},
+                {"id": "old", "raw": {"COMMENT": "https://store.wazzup24.com/old"}},
+            ],
+        }
+
+        messages = max_voice_messages(
+            bundle,
+            now=datetime(2026, 8, 25, 12, 0, tzinfo=MSK_TZ),
+            lookback_days=30,
+        )
+
+        self.assertEqual(len(messages), 2)
+        self.assertEqual({item["direction"] for item in messages}, {"incoming", "unknown"})
+        self.assertTrue(all(item["activity_id"].startswith("max_") for item in messages))
+        self.assertEqual(max_voice_urls(f"{icon} {client_voice}"), [client_voice])
+
+    def test_max_voice_download_is_manifest_managed_and_always_transcribable(self) -> None:
+        downloaded = {
+            "ok": True,
+            "status": "downloaded",
+            "local_path": "voice.mp3",
+            "duration_seconds": 8.0,
+            "is_short_no_answer": True,
+            "skip_transcribe": True,
+        }
+        message = {
+            "activity_id": "max_100_abc",
+            "timeline_comment_id": "100",
+            "entity_id": "42",
+            "start_time": "2026-08-24T10:00:00+03:00",
+            "direction": "incoming",
+            "url": "https://store.wazzup24.com/voice",
+            "url_fingerprint": "abc",
+        }
+        with patch("bitrix.deals.download_deals_call_audio.try_download_url", return_value=downloaded):
+            result = process_max_voice(Path("unused"), message, missing_only=True)
+
+        self.assertEqual(result["audio_kind"], "max_voice")
+        self.assertEqual(result["status"], "downloaded")
+        self.assertTrue(result["downloads"][0]["recording_ready_for_transcription"])
+        self.assertFalse(result["downloads"][0]["skip_transcribe"])
+
     def test_recorded_purge_keeps_missing_only_from_downloading_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

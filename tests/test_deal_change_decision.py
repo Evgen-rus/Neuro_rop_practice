@@ -51,6 +51,10 @@ class DealChangeDecisionTests(unittest.TestCase):
         self.assertEqual(transcript.status, INCREMENTAL_LLM_ANALYSIS)
         self.assertEqual(message.status, INCREMENTAL_LLM_ANALYSIS)
 
+    def test_non_meaningful_transcript_change_stays_local(self):
+        result = decision({"changes": ["transcript_changed_non_meaningful"], "details": {}}, snapshot())
+        self.assertEqual(result.status, MINI_RECOMMENDATION_NO_LLM)
+
     def test_outgoing_message_and_internal_comment_stay_local(self):
         outgoing = decision(
             {"changes": ["new_activity", "new_message"], "details": {"new_activity_ids": ["2"]}},

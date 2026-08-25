@@ -16,6 +16,7 @@ manifest and still existing on disk are not downloaded again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import mimetypes
 import re
 import sys
@@ -47,6 +48,8 @@ EVENING_RECHECK_START = time(17, 30)
 FIRST_MORNING_RECHECK_END = time(8, 30)
 RECORDING_DURATION_RATIO = 0.80
 RECORDING_DURATION_TOLERANCE_SECONDS = 5.0
+MAX_VOICE_LOOKBACK_DAYS = 30
+MAX_VOICE_HOSTS = frozenset({"store.wazzup24.com"})
 
 logger = get_logger(__file__)
 
@@ -61,7 +64,95 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Download even if manifest already has an existing successful local file.",
     )
+    parser.add_argument(
+        "--max-voice-lookback-days",
+        type=int,
+        default=MAX_VOICE_LOOKBACK_DAYS,
+        help=f"Download Max voice messages from the last N days. Default: {MAX_VOICE_LOOKBACK_DAYS}",
+    )
     return parser.parse_args()
+
+
+def _raw_comment_text(item: dict[str, Any]) -> str:
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    return str(
+        raw.get("COMMENT")
+        or raw.get("TEXT")
+        or raw.get("DESCRIPTION")
+        or item.get("text")
+        or ""
+    )
+
+
+def max_voice_urls(text: Any) -> list[str]:
+    """Return allowlisted Wazzup Max voice URLs without treating icons as audio."""
+    candidates = re.findall(r"https?://[^\s\]\[<>\"']+", str(text or ""), flags=re.I)
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        cleaned = candidate.rstrip(".,;:)")
+        parsed = urlparse(cleaned)
+        if parsed.scheme.lower() not in {"http", "https"} or (parsed.hostname or "").lower() not in MAX_VOICE_HOSTS:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def max_voice_messages(
+    customer_history_bundle: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    lookback_days: int = MAX_VOICE_LOOKBACK_DAYS,
+) -> list[dict[str, Any]]:
+    """Extract stable, source-linked Max voice messages from CRM timeline mirrors."""
+    current = now or datetime.now(MSK_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MSK_TZ)
+    cutoff = current.astimezone(MSK_TZ) - timedelta(days=max(1, int(lookback_days)))
+    internal_by_id = {
+        str(item.get("id") or ""): item
+        for item in customer_history_bundle.get("internal_context") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    messages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in customer_history_bundle.get("normalized_communications") or []:
+        if not isinstance(event, dict) or str(event.get("channel") or "").lower() != "max":
+            continue
+        occurred_at = parse_bitrix_datetime(event.get("occurred_at"))
+        if occurred_at is None or occurred_at.astimezone(MSK_TZ) < cutoff:
+            continue
+        for source_id in event.get("source_ids") or []:
+            source_id = str(source_id or "")
+            source = internal_by_id.get(source_id)
+            if not source:
+                continue
+            for url in max_voice_urls(_raw_comment_text(source)):
+                parsed_url = urlparse(url)
+                stable_url_identity = f"{(parsed_url.hostname or '').lower()}{parsed_url.path}"
+                url_fingerprint = hashlib.sha256(stable_url_identity.encode("utf-8")).hexdigest()[:12]
+                audio_event_id = f"max_{source_id}_{url_fingerprint}"
+                if audio_event_id in seen:
+                    continue
+                seen.add(audio_event_id)
+                messages.append(
+                    {
+                        "activity_id": audio_event_id,
+                        "timeline_comment_id": source_id,
+                        "start_time": event.get("occurred_at"),
+                        "entity_type": event.get("entity_type"),
+                        "entity_id": event.get("entity_id"),
+                        "direction": event.get("direction") or "unknown",
+                        "participant_role": event.get("participant_role") or "unknown",
+                        "participant_name": event.get("participant_name"),
+                        "url": url,
+                        "url_fingerprint": url_fingerprint,
+                    }
+                )
+    return sorted(messages, key=lambda item: (str(item.get("start_time") or ""), str(item["activity_id"])))
 
 
 def result_item(call_container: dict[str, Any] | None) -> dict[str, Any]:
@@ -686,6 +777,63 @@ def process_call(
     return row
 
 
+def process_max_voice(
+    deal_audio_dir: Path,
+    message: dict[str, Any],
+    *,
+    retry_callback: Any = None,
+    existing_downloads: list[dict[str, Any]] | None = None,
+    existing_transcription: dict[str, Any] | None = None,
+    missing_only: bool = True,
+) -> dict[str, Any]:
+    activity_id = str(message.get("activity_id") or "")
+    row: dict[str, Any] = {
+        "activity_id": activity_id,
+        "audio_kind": "max_voice",
+        "channel": "max",
+        "source": "deal",
+        "source_label": f"deal:{message.get('entity_id') or ''}",
+        "owner_type_id": "2",
+        "owner_id": str(message.get("entity_id") or ""),
+        "timeline_comment_id": str(message.get("timeline_comment_id") or ""),
+        "subject": "Голосовое сообщение Max",
+        "start_time": message.get("start_time"),
+        "direction": message.get("direction") or "unknown",
+        "participant_role": message.get("participant_role") or "unknown",
+        "participant_name": message.get("participant_name"),
+        "url_fingerprint": message.get("url_fingerprint"),
+        "downloads": [],
+    }
+    if missing_only and existing_transcription:
+        row["transcription"] = existing_transcription
+        row["status"] = "transcribed_and_purged"
+        return row
+    if missing_only and existing_downloads:
+        row["downloads"] = mark_existing_downloads(existing_downloads)
+        row["status"] = "already_downloaded"
+        return row
+
+    fallback_name = f"max_voice_{message.get('timeline_comment_id') or activity_id}"
+    try:
+        result = try_download_url(
+            str(message.get("url") or ""),
+            deal_audio_dir,
+            fallback_name,
+            retry_callback,
+        )
+    except requests.RequestException as error:
+        result = {"ok": False, "status": "download_request_error", "error": str(error)}
+    result["source"] = "wazzup_max"
+    result["url_fingerprint"] = message.get("url_fingerprint")
+    if result.get("ok"):
+        result["recording_ready_for_transcription"] = True
+        result["skip_transcribe"] = False
+        result.pop("skip_transcribe_reason", None)
+    row["downloads"].append(result)
+    row["status"] = "downloaded" if result.get("ok") else "not_downloaded"
+    return row
+
+
 def build_manifest(
     *,
     client: BitrixReadOnlyClient,
@@ -694,6 +842,7 @@ def build_manifest(
     deal_audio_dir: Path,
     existing_manifest: dict[str, Any],
     missing_only: bool,
+    max_voice_lookback_days: int = MAX_VOICE_LOOKBACK_DAYS,
 ) -> dict[str, Any]:
     bundle = load_json(raw_path)
     calls = call_activities(bundle)
@@ -719,12 +868,36 @@ def build_manifest(
                 missing_only=missing_only,
             )
         )
+    customer_history_path = raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json")
+    customer_history = load_json(customer_history_path) if customer_history_path.exists() else {}
+    voices = max_voice_messages(customer_history, lookback_days=max_voice_lookback_days)
+    for index, message in enumerate(voices, start=1):
+        emit_progress(
+            "deal",
+            deal_id,
+            "audio_download",
+            detail=f"Проверяет голосовое Max {index} из {len(voices)}",
+            current=index,
+            total=len(voices),
+        )
+        activity_id = str(message.get("activity_id") or "")
+        processed_calls.append(
+            process_max_voice(
+                deal_audio_dir,
+                message,
+                retry_callback=client.retry_callback,
+                existing_downloads=existing_by_activity.get(activity_id),
+                existing_transcription=existing_transcriptions.get(activity_id),
+                missing_only=missing_only,
+            )
+        )
     return {
         "deal_id": str(deal_id),
         "generated_at": datetime.now(MSK_TZ).isoformat(timespec="seconds"),
         "raw_path": str(raw_path),
         "audio_dir": str(deal_audio_dir),
         "missing_only": bool(missing_only),
+        "max_voice_lookback_days": max(1, int(max_voice_lookback_days)),
         "calls": processed_calls,
     }
 
@@ -776,6 +949,7 @@ def main() -> None:
                 deal_audio_dir=audio_dir / f"deal_{deal_id}",
                 existing_manifest=existing_manifest,
                 missing_only=missing_only,
+                max_voice_lookback_days=args.max_voice_lookback_days,
             )
         )
         save_json(manifest_path, manifest)

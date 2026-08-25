@@ -537,6 +537,8 @@ def short_no_answer_activity_ids(entity_type: str, entity_id: str) -> set[str]:
     for call in manifest.get("calls") or []:
         if not isinstance(call, dict):
             continue
+        if call.get("audio_kind") == "max_voice":
+            continue
         activity_id = str(call.get("activity_id") or "")
         if not activity_id:
             continue
@@ -612,14 +614,15 @@ def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]
     for call in manifest_calls(entity_type, entity_id):
         activity_id = str(call.get("activity_id") or "")
         transcription = call.get("transcription") if isinstance(call.get("transcription"), dict) else {}
+        candidates = audio_paths.get(activity_id) or []
+        is_new_max_voice = call.get("audio_kind") == "max_voice" and not transcription and bool(candidates)
         if (
             not activity_id
             or activity_id in seen_ids
-            or transcription.get("status") != "stale_source_grew"
+            or (transcription.get("status") != "stale_source_grew" and not is_new_max_voice)
             or activity_id in pending_ids
         ):
             continue
-        candidates = audio_paths.get(activity_id) or []
         if not candidates:
             continue
         rows.append(
@@ -630,7 +633,14 @@ def transcribable_gaps(entity_type: str, entity_id: str) -> list[dict[str, Any]]
                 "source_entity_type": call.get("source"),
                 "source_entity_id": call.get("owner_id"),
                 "audio_path": str(candidates[0]),
-                "reason": "Исходный файл вырос после предыдущей транскрибации.",
+                "reason": (
+                    "Новое голосовое сообщение Max."
+                    if is_new_max_voice
+                    else "Исходный файл вырос после предыдущей транскрибации."
+                ),
+                "audio_kind": call.get("audio_kind"),
+                "direction": call.get("direction"),
+                "participant_role": call.get("participant_role"),
             }
         )
     return rows
@@ -645,6 +655,11 @@ def transcribe_command(entity_type: str, entity_id: str, gap: dict[str, Any]) ->
     )
     if gap.get("subject"):
         subject = f"{subject}; {gap.get('subject')}"
+    if gap.get("audio_kind") == "max_voice":
+        subject = (
+            f"Max voice; direction={gap.get('direction') or 'unknown'}; "
+            f"participant_role={gap.get('participant_role') or 'unknown'}"
+        )
 
     command = [
         python_executable(),

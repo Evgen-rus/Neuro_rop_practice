@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from openai_api.audio.transcript_quality import is_meaningful_transcript
+
 
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -306,12 +308,59 @@ def transcript_snapshot(transcript_path: Path | None) -> dict[str, Any] | None:
             "content_hash": None,
         }
     text = transcript_path.read_text(encoding="utf-8")
+    meaningful_items: list[dict[str, Any]] = []
+    for item_path in sorted(transcript_path.parent.glob("*.json")):
+        if "all_calls_transcript" in item_path.stem:
+            continue
+        try:
+            payload = load_json(item_path)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(payload, dict) or not is_meaningful_transcript(payload.get("text")):
+            continue
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        meaningful_items.append(
+            {
+                "activity_id": str(metadata.get("activity_id") or item_path.stem),
+                "content_hash": text_hash(payload.get("text")),
+                "mtime": item_path.stat().st_mtime,
+            }
+        )
     return {
         "path": str(transcript_path),
         "exists": True,
         "mtime": transcript_path.stat().st_mtime,
         "content_hash": text_hash(text),
+        "meaningful_content_hash": stable_hash(
+            [{"activity_id": item["activity_id"], "content_hash": item["content_hash"]} for item in meaningful_items]
+        ),
+        "meaningful_items": meaningful_items,
     }
+
+
+def transcript_change_type(previous: dict[str, Any], current: dict[str, Any]) -> str | None:
+    if previous.get("content_hash") == current.get("content_hash"):
+        return None
+    previous_meaningful_hash = previous.get("meaningful_content_hash")
+    if previous_meaningful_hash is not None:
+        return (
+            "transcript_changed"
+            if previous_meaningful_hash != current.get("meaningful_content_hash")
+            else "transcript_changed_non_meaningful"
+        )
+
+    # Backward compatibility for snapshots written before per-transcript quality
+    # existed: only a newly modified meaningful bundle is allowed to trigger LLM.
+    try:
+        previous_mtime = float(previous.get("mtime") or 0)
+    except (TypeError, ValueError):
+        previous_mtime = 0.0
+    has_new_meaningful_item = any(
+        float(item.get("mtime") or 0) > previous_mtime
+        for item in current.get("meaningful_items") or []
+        if isinstance(item, dict)
+    )
+    return "transcript_changed" if has_new_meaningful_item else "transcript_changed_non_meaningful"
 
 
 def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None = None) -> dict[str, Any]:
@@ -559,8 +608,9 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
 
     previous_transcript = previous.get("transcript") or {}
     current_transcript = current.get("transcript") or {}
-    if previous_transcript.get("content_hash") != current_transcript.get("content_hash"):
-        changes.append("transcript_changed")
+    transcript_change = transcript_change_type(previous_transcript, current_transcript)
+    if transcript_change:
+        changes.append(transcript_change)
 
     only_date_modify_changed = (
         not changes

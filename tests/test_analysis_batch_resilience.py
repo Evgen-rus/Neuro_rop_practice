@@ -36,6 +36,50 @@ def workflow_options() -> WorkflowOptions:
 
 
 class AnalysisBatchResilienceTests(unittest.TestCase):
+    def test_new_short_max_voice_is_transcribable_without_diagnostic_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entity_dir = root / "deal_42"
+            audio_dir = entity_dir / "audio"
+            diagnostics_dir = entity_dir / "diagnostics"
+            audio_dir.mkdir(parents=True)
+            diagnostics_dir.mkdir()
+            audio_path = audio_dir / "max_voice_100.mp3"
+            audio_path.write_bytes(b"short-voice")
+            (diagnostics_dir / "context_gaps.json").write_text(json.dumps({"gaps": []}), encoding="utf-8")
+            (audio_dir / "deal_42_call_audio_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "calls": [{
+                            "activity_id": "max_100_abc",
+                            "audio_kind": "max_voice",
+                            "direction": "incoming",
+                            "participant_name": "Клиент",
+                            "source": "deal",
+                            "owner_id": "42",
+                            "start_time": "2026-08-24T10:00:00+03:00",
+                            "downloads": [{
+                                "ok": True,
+                                "local_path": str(audio_path),
+                                "duration_seconds": 8.0,
+                                "is_short_no_answer": True,
+                                "recording_ready_for_transcription": True,
+                            }],
+                        }]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("run_rop_assistant.workspace_root", return_value=root):
+                gaps = transcribable_gaps("deal", "42")
+
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["activity_id"], "max_100_abc")
+        self.assertEqual(gaps[0]["audio_kind"], "max_voice")
+        self.assertEqual(gaps[0]["direction"], "incoming")
+
     def test_grown_source_makes_stale_transcript_transcribable_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

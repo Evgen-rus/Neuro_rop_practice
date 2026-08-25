@@ -68,6 +68,17 @@ def enrich_manifest_calls(manifest: dict[str, Any]) -> dict[str, Any]:
             for item in (row.get("downloads") or [])
         ]
         row["downloads"] = downloads
+        if row.get("audio_kind") == "max_voice":
+            if any(isinstance(item, dict) and item.get("ok") for item in downloads):
+                row["call_quality"] = "voice_message"
+                row["skip_transcribe"] = False
+                for item in downloads:
+                    if isinstance(item, dict) and item.get("ok"):
+                        item["recording_ready_for_transcription"] = True
+                        item["skip_transcribe"] = False
+                        item.pop("skip_transcribe_reason", None)
+            calls.append(row)
+            continue
         pending_stability = [
             item
             for item in downloads
