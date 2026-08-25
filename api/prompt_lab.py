@@ -65,6 +65,7 @@ class PromptLabJob:
 
 _JOBS: dict[str, PromptLabJob] = {}
 _LOCK = threading.Lock()
+_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -127,12 +128,36 @@ def _analysis_run_id(report: dict[str, Any] | None) -> int | None:
     return None
 
 
-def _production_current(db_path: Path, context: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
+def _entry_model_reasoning(entry: dict[str, Any], runtime: dict[str, str]) -> tuple[str, str]:
+    meta = entry.get("model_meta") if isinstance(entry.get("model_meta"), dict) else {}
+    model = str(meta.get("model") or runtime["model"])
+    reasoning = str(meta.get("reasoning_effort") or meta.get("reasoning") or runtime["reasoning"])
+    try:
+        return validate_model_reasoning(model, reasoning)
+    except ValueError:
+        return model, reasoning
+
+
+def _production_result(entry: dict[str, Any]) -> dict[str, Any] | None:
+    content = entry.get("content")
+    if isinstance(content, dict):
+        return content
+    return None
+
+
+def _production_current(
+    db_path: Path,
+    context: dict[str, Any],
+    spec: dict[str, Any],
+    *,
+    selected_strategy: str | None = None,
+) -> dict[str, Any]:
     deal_id = str(context["deal"]["deal_id"])
     report_id = context.get("source_report_id")
     situation_id = context.get("situation_id")
     entry = None
     stale = False
+    production_quick_help = None
     try:
         if spec["family"] == "quick_help" and report_id is not None and situation_id is not None:
             entry = _storage_call(
@@ -171,17 +196,52 @@ def _production_current(db_path: Path, context: dict[str, Any], spec: dict[str, 
                         source_report_id=int(report_id),
                         last_event_id=event_id,
                     )
+        elif spec["family"] == "full_script" and report_id is not None and situation_id is not None:
+            strategy = selected_strategy or "primary"
+            getter = {
+                "message": "get_deal_manager_full_script",
+                "call": "get_deal_manager_call_script",
+                "email": "get_deal_manager_email_script",
+            }.get(str(spec.get("script_mode") or "message"), "get_deal_manager_full_script")
+            for mode in ("push", "reanimator"):
+                quick_help = _storage_call(
+                    "get_current_deal_manager_quick_help",
+                    db_path,
+                    deal_id=deal_id,
+                    source_report_id=int(report_id),
+                    situation_review_id=int(situation_id),
+                    mode=mode,
+                )
+                if not isinstance(quick_help, dict) or not quick_help.get("id"):
+                    continue
+                material = _storage_call(
+                    getter,
+                    db_path,
+                    deal_id=deal_id,
+                    source_report_id=int(report_id),
+                    situation_review_id=int(situation_id),
+                    quick_help_id=int(quick_help["id"]),
+                    selected_strategy=strategy,
+                )
+                if isinstance(material, dict):
+                    entry = material
+                    production_quick_help = quick_help
+                    break
     except Exception:
         logger.exception("Prompt Lab could not read production CURRENT")
         entry = None
     runtime = resolved_runtime_config()
     prompt_template = production_prompt_template(spec["key"])
+    model, reasoning = runtime["model"], runtime["reasoning"]
+    if isinstance(entry, dict):
+        model, reasoning = _entry_model_reasoning(entry, runtime)
     return {
         "exists": isinstance(entry, dict),
         "stale": stale,
         "entry": entry if isinstance(entry, dict) else None,
-        "model": runtime["model"],
-        "reasoning": runtime["reasoning"],
+        "production_quick_help": production_quick_help if isinstance(production_quick_help, dict) else None,
+        "model": model,
+        "reasoning": reasoning,
         "prompt_template": prompt_template,
         "prompt_hash": sha256_text(prompt_template),
     }
@@ -217,53 +277,195 @@ def _snapshot_context(db_path: Path, deal_id: str) -> dict[str, Any]:
 
 
 def create_snapshot(*, deal_id: str, db_path: Path = DEFAULT_DB_PATH, lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH) -> dict[str, Any]:
-    packed = _snapshot_context(db_path, str(deal_id))
-    bounded = packed["bounded"]
-    snapshot_hash = sha256_json({
-        "analysis_projection": bounded["analysis_projection"],
-        "situation_projection": bounded["situation_projection"],
-        "deal_projection": bounded["deal_projection"],
-        "current_bitrix_task": bounded["current_bitrix_task"],
-        "communication_pattern_context": bounded["communication_pattern_context"],
-        "checklist": bounded["checklist"],
-        "last_contact": bounded["last_contact"],
-        "manager_tactics_hash": bounded["manager_tactics_hash"],
-    })
-    provenance = {
-        "deal_id": str(deal_id),
-        "source_report_id": bounded.get("source_report_id"),
-        "analysis_run_id": bounded.get("analysis_run_id"),
-        "situation_id": bounded.get("situation_id"),
-        "situation_status": bounded.get("situation_status"),
-        "snapshot_hash": snapshot_hash,
-        "manager_tactics_hash": bounded.get("manager_tactics_hash"),
-        "created_at": _now(),
+    return get_or_create_snapshot(deal_id=deal_id, db_path=db_path, lab_db_path=lab_db_path)
+
+
+def get_or_create_snapshot(*, deal_id: str, db_path: Path = DEFAULT_DB_PATH, lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH) -> dict[str, Any]:
+    with _SNAPSHOT_LOCK:
+        packed = _snapshot_context(db_path, str(deal_id))
+        bounded = packed["bounded"]
+        snapshot_hash = sha256_json({
+            "analysis_projection": bounded["analysis_projection"],
+            "situation_projection": bounded["situation_projection"],
+            "deal_projection": bounded["deal_projection"],
+            "current_bitrix_task": bounded["current_bitrix_task"],
+            "communication_pattern_context": bounded["communication_pattern_context"],
+            "checklist": bounded["checklist"],
+            "last_contact": bounded["last_contact"],
+            "manager_tactics_hash": bounded["manager_tactics_hash"],
+        })
+        latest = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
+        if latest and latest.get("snapshot_hash") == snapshot_hash:
+            return latest
+        provenance = {
+            "deal_id": str(deal_id),
+            "source_report_id": bounded.get("source_report_id"),
+            "analysis_run_id": bounded.get("analysis_run_id"),
+            "situation_id": bounded.get("situation_id"),
+            "situation_status": bounded.get("situation_status"),
+            "snapshot_hash": snapshot_hash,
+            "manager_tactics_hash": bounded.get("manager_tactics_hash"),
+            "created_at": _now(),
+        }
+        return lab_db.save_snapshot(
+            lab_db_path,
+            deal_id=str(deal_id),
+            source_report_id=bounded.get("source_report_id"),
+            analysis_run_id=bounded.get("analysis_run_id"),
+            situation_id=bounded.get("situation_id"),
+            situation_status=bounded.get("situation_status"),
+            snapshot_hash=snapshot_hash,
+            provenance=provenance,
+            context=bounded,
+        )
+
+
+def _materialize_production_run(
+    *,
+    lab_db_path: Path,
+    deal_id: str,
+    spec: dict[str, Any],
+    current: dict[str, Any],
+    snapshot: dict[str, Any],
+    selected_strategy: str | None,
+    upstream_run_id: int | None,
+    question: str = "",
+) -> dict[str, Any] | None:
+    entry = current.get("entry")
+    if not isinstance(entry, dict):
+        return None
+    result = _production_result(entry)
+    if not isinstance(result, dict):
+        return None
+    fingerprints = {
+        "prompt_hash": current["prompt_hash"],
+        "snapshot_hash": snapshot["snapshot_hash"],
+        "schema_version": spec["schema_version"],
+        "material_revision": spec["material_revision"],
+        "manager_tactics_hash": (snapshot.get("context") or {}).get("manager_tactics_hash"),
+        "model": current["model"],
+        "reasoning": current["reasoning"],
+        "question": str(entry.get("question") or question or ""),
+        "selected_strategy": selected_strategy,
+        "upstream_run_id": upstream_run_id,
+        "manager_note": "",
+        "previous_message": "",
     }
-    return lab_db.save_snapshot(
+    fingerprint = _fingerprint(fingerprints)
+    existing = lab_db.find_run_by_fingerprint(lab_db_path, fingerprint, branch="current")
+    if existing is not None:
+        return existing
+    stored = {
+        **fingerprints,
+        "origin": "production_reference",
+        "production_id": entry.get("id"),
+        "zero_cost": True,
+        "source_report_id": snapshot.get("source_report_id"),
+        "situation_id": snapshot.get("situation_id"),
+    }
+    return lab_db.save_run(
         lab_db_path,
+        session_id=None,
+        turn_id=None,
+        snapshot_id=int(snapshot["id"]),
         deal_id=str(deal_id),
-        source_report_id=bounded.get("source_report_id"),
-        analysis_run_id=bounded.get("analysis_run_id"),
-        situation_id=bounded.get("situation_id"),
-        situation_status=bounded.get("situation_status"),
-        snapshot_hash=snapshot_hash,
-        provenance=provenance,
-        context=bounded,
+        module_key=spec["key"],
+        branch="current",
+        prompt_version_id=None,
+        prompt_hash=current["prompt_hash"],
+        prompt_text=current["prompt_template"],
+        effective_prompt=None,
+        dependency_fingerprints=stored,
+        schema_version=spec["schema_version"],
+        material_revision=spec["material_revision"],
+        model=current["model"],
+        reasoning=current["reasoning"],
+        max_output_tokens=spec["max_output_tokens"],
+        question=str(entry.get("question") or question or ""),
+        selected_strategy=selected_strategy,
+        upstream_run_id=upstream_run_id,
+        fingerprint=fingerprint,
+        status="success",
+        error=None,
+        result=result,
+        usage={},
+        cost={"estimated_cost": 0, "estimated_cost_usd": 0, "estimated_cost_rub": 0},
+        latency_seconds=0,
+        response_status="imported",
+        semantic_attempt_count=0,
+        call_type=spec["call_type"],
     )
+
+
+def import_production_current(
+    *,
+    deal_id: str,
+    module_key: str,
+    context: dict[str, Any],
+    selected_strategy: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+    lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    spec = get_module(module_key)
+    current = _production_current(db_path, context, spec, selected_strategy=selected_strategy)
+    if not current["exists"]:
+        snapshot = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
+        return current, None if snapshot is None else snapshot
+    snapshot = get_or_create_snapshot(deal_id=str(deal_id), db_path=db_path, lab_db_path=lab_db_path)
+    upstream_run_id = None
+    linked = current.get("production_quick_help")
+    if spec["requires_upstream_quick_help"] and isinstance(linked, dict):
+        qh_key = f"quick_help.{linked.get('mode') or 'push'}"
+        qh_spec = get_module(qh_key)
+        qh_current = _production_current(db_path, context, qh_spec)
+        qh_run = _materialize_production_run(
+            lab_db_path=lab_db_path,
+            deal_id=str(deal_id),
+            spec=qh_spec,
+            current=qh_current,
+            snapshot=snapshot,
+            selected_strategy=None,
+            upstream_run_id=None,
+        )
+        if qh_run:
+            upstream_run_id = int(qh_run["id"])
+    lab_run = _materialize_production_run(
+        lab_db_path=lab_db_path,
+        deal_id=str(deal_id),
+        spec=spec,
+        current=current,
+        snapshot=snapshot,
+        selected_strategy=selected_strategy if spec["family"] == "full_script" else None,
+        upstream_run_id=upstream_run_id,
+        question=str((current.get("entry") or {}).get("question") or ""),
+    )
+    current["lab_run"] = lab_run
+    return current, snapshot
 
 
 def bootstrap_prompt_lab(
     *,
     deal_id: str,
     module_key: str = "quick_help.push",
+    selected_strategy: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
 ) -> dict[str, Any]:
     spec = get_module(module_key)
+    lab_run = None
+    snapshot = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
     try:
         context = load_manager_screen_context(db_path, str(deal_id), require_confirmed_situation=False)
         gate = _gate_state(context, spec)
-        current = _production_current(db_path, context, spec)
+        current, snapshot = import_production_current(
+            deal_id=str(deal_id),
+            module_key=module_key,
+            context=context,
+            selected_strategy=selected_strategy,
+            db_path=db_path,
+            lab_db_path=lab_db_path,
+        )
+        lab_run = current.get("lab_run")
     except ValueError as error:
         gate = {
             "ok": False,
@@ -278,19 +480,30 @@ def bootstrap_prompt_lab(
             "exists": False,
             "stale": False,
             "entry": None,
+            "lab_run": None,
             "model": runtime["model"],
             "reasoning": runtime["reasoning"],
             "prompt_template": prompt_template,
             "prompt_hash": sha256_text(prompt_template),
         }
-    snapshot = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
+    if snapshot is None:
+        snapshot = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
     return {
         "module": spec["key"],
         "modules": public_modules(),
         "models": list_lab_models(),
         "runtime": resolved_runtime_config(),
         "gate": gate,
-        "production_current": current,
+        "production_current": {
+            "exists": current["exists"],
+            "stale": current.get("stale") or False,
+            "entry": current.get("entry"),
+            "lab_run": lab_run,
+            "model": current["model"],
+            "reasoning": current["reasoning"],
+            "prompt_template": current["prompt_template"],
+            "prompt_hash": current["prompt_hash"],
+        },
         "snapshot": {
             "id": snapshot.get("id") if snapshot else None,
             "created_at": snapshot.get("created_at") if snapshot else None,
@@ -560,9 +773,9 @@ def start_lab_run(
         template = version["prompt_text"]
     if not template:
         template = production_prompt_template(module_key, manager_note=manager_note)
-    snapshot = lab_db.get_snapshot(lab_db_path, int(snapshot_id)) if snapshot_id else lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
+    snapshot = lab_db.get_snapshot(lab_db_path, int(snapshot_id)) if snapshot_id else None
     if snapshot is None:
-        snapshot = create_snapshot(deal_id=str(deal_id), db_path=db_path, lab_db_path=lab_db_path)
+        snapshot = get_or_create_snapshot(deal_id=str(deal_id), db_path=db_path, lab_db_path=lab_db_path)
     fingerprints = {
         "prompt_hash": sha256_text(template),
         "snapshot_hash": snapshot["snapshot_hash"],
@@ -577,7 +790,7 @@ def start_lab_run(
         "manager_note": str(manager_note or ""),
         "previous_message": str(previous_message or ""),
     }
-    existing = lab_db.find_run_by_fingerprint(lab_db_path, _fingerprint(fingerprints))
+    existing = lab_db.find_run_by_fingerprint(lab_db_path, _fingerprint(fingerprints), branch=branch)
     if existing is not None and reuse_existing is not False:
         job = PromptLabJob(
             job_id=str(uuid.uuid4()),
@@ -673,12 +886,18 @@ def export_payload(
     *,
     mode: str,
     prompt_key: str | None = None,
+    version_id: int | None = None,
     lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
 ) -> dict[str, Any]:
     if mode == "current":
-        if not prompt_key:
-            raise ValueError("Нужен prompt_key текущей версии")
-        versions = lab_db.list_prompt_versions(lab_db_path, prompt_key=prompt_key)[:1]
+        if version_id is None:
+            raise ValueError("Нужен version_id выбранной версии")
+        version = lab_db.get_prompt_version(lab_db_path, int(version_id))
+        if version is None:
+            raise ValueError("Версия prompt не найдена")
+        if prompt_key and version["prompt_key"] != prompt_key:
+            raise ValueError("Версия prompt относится к другому модулю")
+        versions = [version]
     elif mode == "candidates_module":
         if not prompt_key:
             raise ValueError("Нужен prompt_key модуля")

@@ -1,7 +1,10 @@
-"""Central model/reasoning capability map for Prompt Lab.
+"""Verified model/reasoning capability map for Prompt Lab.
 
 UI labels stay human-readable. Backend always uses real API ids from this
 project's runtime/pricing table, never guessed marketing names.
+
+Reasoning values are taken from OpenAI model cards for the ids this project
+already prices, not from a generic GPT-5 list.
 """
 
 from __future__ import annotations
@@ -10,15 +13,31 @@ from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONI
 from openai_api.pricing import ANALYSIS_MODEL_PRICES_USD_PER_1M
 
 
-REASONING_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("none", "Без рассуждений"),
-    ("minimal", "Minimal"),
-    ("low", "Low"),
-    ("medium", "Medium"),
-    ("high", "High"),
-    ("xhigh", "Very High"),
-)
-ALLOWED_REASONING = {item[0] for item in REASONING_OPTIONS}
+REASONING_LABELS: dict[str, str] = {
+    "none": "Без рассуждений",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Very High",
+    "max": "Max",
+}
+
+# OpenAI model cards (2026):
+# gpt-5.6-terra / gpt-5.6-luna: none, low, medium, high, xhigh, max
+# gpt-5.4: none, low, medium, high, xhigh
+# gpt-5.4-mini / gpt-5.5: same family as 5.4 (no max). Mini has no xhigh on its card.
+GPT56_REASONING = ("none", "low", "medium", "high", "xhigh", "max")
+GPT54_REASONING = ("none", "low", "medium", "high", "xhigh")
+GPT54_MINI_REASONING = ("none", "low", "medium", "high")
+
+MODEL_REASONING: dict[str, tuple[str, ...]] = {
+    "gpt-5.6-terra": GPT56_REASONING,
+    "gpt-5.6-luna": GPT56_REASONING,
+    "gpt-5.5": GPT54_REASONING,
+    "gpt-5.4": GPT54_REASONING,
+    "gpt-5.4-mini": GPT54_MINI_REASONING,
+}
 
 _MODEL_LABELS = {
     "gpt-5.6-terra": "Terra",
@@ -34,10 +53,10 @@ def _label_for(model_id: str) -> str:
 
 
 def _reasoning_for(model_id: str) -> list[str]:
-    # GPT-5.x in this project already forwards none/low/medium/high/xhigh.
-    # Mini keeps the same set so CURRENT runtime values stay selectable.
-    del model_id
-    return [item[0] for item in REASONING_OPTIONS]
+    allowed = list(MODEL_REASONING.get(model_id) or ("low", "medium", "high"))
+    if model_id == MANAGER_MODEL and MANAGER_REASONING_EFFORT not in allowed:
+        allowed.append(MANAGER_REASONING_EFFORT)
+    return allowed
 
 
 def list_lab_models(*, include_runtime: bool = True) -> list[dict[str, object]]:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createPromptLabSnapshot,
   deletePromptLabVersion,
@@ -28,7 +28,10 @@ import { formatMoscowDateTime } from './dateTime'
 import { CompanionResultView, FollowupsResultView, FullScriptResultView, QuickHelpResultView } from './managerResults'
 
 type Layout = 'current' | 'experiment' | 'both'
-type PendingNav = { kind: 'module' | 'leave'; next?: PromptLabModuleKey } | null
+type PendingNav =
+  | { kind: 'module'; next: PromptLabModuleKey }
+  | { kind: 'leave' }
+  | { kind: 'version'; nextVersionId: number | null }
 
 const MODULES: Array<{ key: PromptLabModuleKey; label: string }> = [
   { key: 'quick_help.push', label: 'Дожим' },
@@ -84,13 +87,15 @@ export function PromptLabWorkspace({
   const [versions, setVersions] = useState<PromptLabVersion[]>([])
   const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null)
   const [note, setNote] = useState('')
-  const [pending, setPending] = useState<PendingNav>(null)
+  const [pending, setPending] = useState<PendingNav | null>(null)
   const [existingJob, setExistingJob] = useState<PromptLabJob | null>(null)
   const [history, setHistory] = useState<PromptLabRun[]>([])
   const [managerNote, setManagerNote] = useState('')
   const [previousMessage, setPreviousMessage] = useState('')
   const [qhUpstream, setQhUpstream] = useState<{ current: number | null; experiment: number | null }>({ current: null, experiment: null })
   const unsaved = experimentPrompt !== savedExperiment
+  const strategyRef = useRef(strategy)
+  strategyRef.current = strategy
 
   useEffect(() => { onLeaveAttempt?.(unsaved) }, [onLeaveAttempt, unsaved])
 
@@ -100,8 +105,12 @@ export function PromptLabWorkspace({
     else onConfirmLeave?.()
   }, [leaveRequest, onConfirmLeave, unsaved])
 
-  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey) => {
-    const payload = await fetchPromptLabBootstrap(dealId, nextModule)
+  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey, selectedStrategy?: ManagerQuickHelpStrategy) => {
+    const payload = await fetchPromptLabBootstrap(
+      dealId,
+      nextModule,
+      nextModule.startsWith('full_script.') ? (selectedStrategy || 'primary') : null,
+    )
     setBootstrap(payload)
     setCurrentPrompt(payload.production_current.prompt_template)
     setExperimentPrompt(payload.production_current.prompt_template)
@@ -111,22 +120,15 @@ export function PromptLabWorkspace({
     setCurrentReasoning(payload.runtime.reasoning)
     setExperimentReasoning(payload.runtime.reasoning)
     setVersions(payload.versions)
-    setCurrentRun(null)
+    setSelectedVersionId(null)
+    const imported = payload.production_current.lab_run || null
+    setCurrentRun(imported)
     setExperimentRun(null)
-    if (payload.production_current.exists && payload.production_current.entry && nextModule.startsWith('quick_help.')) {
-      setCurrentRun({
-        id: 0,
-        deal_id: dealId,
-        module_key: nextModule,
-        branch: 'current',
-        snapshot_id: payload.snapshot.id || 0,
-        prompt_hash: payload.production_current.prompt_hash,
-        model: payload.production_current.model,
-        reasoning: payload.production_current.reasoning,
-        question: '',
-        status: 'success',
-        result: (payload.production_current.entry as { content: ManagerQuickHelpContent }).content as unknown as Record<string, unknown>,
-        created_at: (payload.production_current.entry as { created_at?: string }).created_at || '',
+    setQhUpstream({ current: null, experiment: null })
+    if (imported && imported.id > 0) {
+      setQhUpstream({
+        current: nextModule.startsWith('quick_help.') ? imported.id : (imported.upstream_run_id || null),
+        experiment: null,
       })
     }
     const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: nextModule })
@@ -137,16 +139,30 @@ export function PromptLabWorkspace({
         fetchPromptLabRuns({ deal_id: dealId, module_key: 'quick_help.reanimator' }),
       ])
       const successful = [...pushRuns.runs, ...reanimatorRuns.runs].filter((item) => item.status === 'success' && item.id > 0)
-      setQhUpstream({
-        current: successful.find((item) => item.branch === 'current')?.id || null,
+      setQhUpstream((value) => ({
+        current: value.current || successful.find((item) => item.branch === 'current')?.id || null,
         experiment: successful.find((item) => item.branch === 'experiment')?.id || null,
-      })
+      }))
     }
   }, [dealId])
 
   useEffect(() => {
-    void loadBootstrap(moduleKey).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+    void loadBootstrap(moduleKey, strategyRef.current).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [dealId, loadBootstrap, moduleKey])
+
+  async function changeStrategy(next: ManagerQuickHelpStrategy) {
+    setStrategy(next)
+    if (!moduleKey.startsWith('full_script.')) return
+    const payload = await fetchPromptLabBootstrap(dealId, moduleKey, next)
+    setBootstrap(payload)
+    setCurrentRun(payload.production_current.lab_run || null)
+    if (payload.production_current.lab_run?.upstream_run_id) {
+      setQhUpstream((value) => ({
+        ...value,
+        current: payload.production_current.lab_run?.upstream_run_id || value.current,
+      }))
+    }
+  }
 
   useEffect(() => {
     const jobs: Array<['current' | 'experiment', PromptLabJob | null]> = [['current', currentJob], ['experiment', experimentJob]]
@@ -202,18 +218,34 @@ export function PromptLabWorkspace({
     await loadBootstrap(moduleKey)
   }
 
-  async function generate(branch: PromptLabBranch, force = false) {
+  async function ensureSnapshotId() {
+    if (bootstrap?.snapshot.id) return bootstrap.snapshot.id
+    const created = await createPromptLabSnapshot(dealId)
+    setBootstrap((current) => current ? {
+      ...current,
+      snapshot: {
+        id: created.id,
+        created_at: created.created_at,
+        snapshot_hash: created.snapshot_hash,
+        provenance: created.provenance,
+      },
+    } : current)
+    return created.id
+  }
+
+  async function generate(branch: PromptLabBranch, options: { force?: boolean; silentReuse?: boolean; snapshotId?: number | null } = {}) {
     if (!bootstrap?.gate.ok && family !== 'companion') {
       setError(bootstrap?.gate.reason || 'Prompt Lab заблокирован')
       return
     }
     setError('')
     const isCurrent = branch === 'current'
+    const snapshotId = options.snapshotId ?? bootstrap?.snapshot.id ?? null
     const body = {
       deal_id: dealId,
       module_key: moduleKey,
       branch,
-      snapshot_id: bootstrap?.snapshot.id,
+      snapshot_id: snapshotId,
       prompt_template: isCurrent ? currentPrompt : experimentPrompt,
       prompt_version_id: !isCurrent ? selectedVersionId : null,
       model: isCurrent ? currentModel : experimentModel,
@@ -223,7 +255,7 @@ export function PromptLabWorkspace({
       upstream_run_id: family === 'full_script' ? (isCurrent ? qhUpstream.current : qhUpstream.experiment) : null,
       manager_note: family === 'companion' ? managerNote : '',
       previous_message: family === 'companion' ? previousMessage : '',
-      reuse_existing: force ? false : null,
+      reuse_existing: options.force ? false : options.silentReuse ? true : null,
     }
     if (family === 'full_script' && (!body.upstream_run_id || body.upstream_run_id <= 0)) {
       setError('Сначала сгенерируйте Quick Help этой ветки')
@@ -246,7 +278,44 @@ export function PromptLabWorkspace({
   }
 
   async function generateBoth() {
-    await Promise.all([generate('current', true), generate('experiment', true)])
+    const snapshotId = await ensureSnapshotId()
+    await Promise.all([
+      generate('current', { silentReuse: true, snapshotId }),
+      generate('experiment', { force: true, snapshotId }),
+    ])
+  }
+
+  function applyVersion(id: number | null) {
+    setSelectedVersionId(id)
+    if (!id) {
+      const text = bootstrap?.production_current.prompt_template || currentPrompt
+      setExperimentPrompt(text)
+      setSavedExperiment(text)
+      return
+    }
+    const version = versions.find((item) => item.id === id)
+    if (!version) return
+    setExperimentPrompt(version.prompt_text)
+    setSavedExperiment(version.prompt_text)
+  }
+
+  function requestVersion(id: number | null) {
+    if (id === selectedVersionId) return
+    if (unsaved) {
+      setPending({ kind: 'version', nextVersionId: id })
+      return
+    }
+    applyVersion(id)
+  }
+
+  async function resolvePending(action: 'save' | 'continue') {
+    if (!pending) return
+    const next = pending
+    if (action === 'save') await saveVersion()
+    if (next.kind === 'leave') onConfirmLeave?.()
+    else if (next.kind === 'module') setModuleKey(next.next)
+    else applyVersion(next.nextVersionId)
+    setPending(null)
   }
 
   async function saveVersion() {
@@ -274,7 +343,20 @@ export function PromptLabWorkspace({
   }
 
   async function exportVersions(mode: 'current' | 'candidates_module' | 'candidates_all') {
-    const payload = await fetchPromptLabExport(mode, moduleKey)
+    if (mode === 'current') {
+      if (unsaved) {
+        downloadMarkdown(`prompt-lab-${moduleKey}-draft.md`, experimentPrompt)
+        return
+      }
+      if (!selectedVersionId) {
+        downloadMarkdown(
+          `prompt-lab-${moduleKey}-production.md`,
+          experimentPrompt || bootstrap?.production_current.prompt_template || currentPrompt,
+        )
+        return
+      }
+    }
+    const payload = await fetchPromptLabExport(mode, moduleKey, mode === 'current' ? selectedVersionId : null)
     const lines = ['# Prompt Lab candidates', '']
     for (const item of payload.items) {
       lines.push(`## ${String(item.prompt_key)} v${String(item.version)}`)
@@ -336,7 +418,7 @@ export function PromptLabWorkspace({
         run={currentRun}
         moduleKey={moduleKey}
         strategy={strategy}
-        onStrategy={setStrategy}
+        onStrategy={changeStrategy}
         onGenerate={() => void generate('current')}
         onCopy={onCopy}
         advanced={advanced === 'current'}
@@ -357,7 +439,7 @@ export function PromptLabWorkspace({
         run={experimentRun}
         moduleKey={moduleKey}
         strategy={strategy}
-        onStrategy={setStrategy}
+        onStrategy={changeStrategy}
         onGenerate={() => void generate('experiment')}
         onCopy={onCopy}
         advanced={advanced === 'experiment'}
@@ -375,14 +457,8 @@ export function PromptLabWorkspace({
     <div className="dc-prompt-lab-versions">
       <strong>Версии prompt</strong>
       <select value={selectedVersionId || ''} onChange={(event) => {
-        const id = Number(event.target.value) || null
-        setSelectedVersionId(id)
-        const version = versions.find((item) => item.id === id)
-        if (version) {
-          if (unsaved) { setPending({ kind: 'module', next: moduleKey }); return }
-          setExperimentPrompt(version.prompt_text)
-          setSavedExperiment(version.prompt_text)
-        }
+        const raw = event.target.value
+        requestVersion(raw ? Number(raw) : null)
       }}>
         <option value="">production / несохранённый</option>
         {versions.map((item) => <option key={item.id} value={item.id}>v{item.version_number} · {moscowStamp(item.created_at)} МСК{item.candidate ? ' ★' : ''}{item.verified ? ' ✓' : ''}</option>)}
@@ -411,17 +487,8 @@ export function PromptLabWorkspace({
     </details> : null}
     {pending ? <div className="dc-prompt-lab-modal" role="dialog">
       <p>Есть несохранённые изменения.</p>
-      <button type="button" className="dc-button primary" onClick={() => void saveVersion().then(() => {
-        if (pending.kind === 'leave') onConfirmLeave?.()
-        else if (pending.next) setModuleKey(pending.next)
-        setPending(null)
-      })}>Сохранить новую версию</button>
-      <button type="button" className="dc-button" onClick={() => {
-        setSavedExperiment(experimentPrompt)
-        if (pending.kind === 'leave') onConfirmLeave?.()
-        else if (pending.next) setModuleKey(pending.next)
-        setPending(null)
-      }}>Продолжить без сохранения</button>
+      <button type="button" className="dc-button primary" onClick={() => void resolvePending('save')}>Сохранить новую версию</button>
+      <button type="button" className="dc-button" onClick={() => void resolvePending('continue')}>Продолжить без сохранения</button>
       <button type="button" onClick={() => setPending(null)}>Отмена</button>
     </div> : null}
     {existingJob ? <div className="dc-prompt-lab-modal" role="dialog">
@@ -431,7 +498,7 @@ export function PromptLabWorkspace({
         if (existingJob.run && existingJob.branch === 'experiment') setExperimentRun(existingJob.run)
         setExistingJob(null)
       }}>Использовать результат</button>
-      <button type="button" className="dc-button" onClick={() => { const branch = existingJob.branch; setExistingJob(null); void generate(branch, true) }}>Запустить заново</button>
+      <button type="button" className="dc-button" onClick={() => { const branch = existingJob.branch; setExistingJob(null); void generate(branch, { force: true }) }}>Запустить заново</button>
     </div> : null}
   </div>
 }

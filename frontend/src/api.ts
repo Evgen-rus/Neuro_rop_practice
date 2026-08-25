@@ -2518,6 +2518,7 @@ export type PromptLabBootstrap = {
     exists: boolean
     stale: boolean
     entry: ManagerQuickHelpEntry | ManagerFollowupsRecord | ManagerCompanionRecord | Record<string, unknown> | null
+    lab_run?: PromptLabRun | null
     model: string
     reasoning: string
     prompt_template: string
@@ -2527,8 +2528,9 @@ export type PromptLabBootstrap = {
   versions: PromptLabVersion[]
 }
 
-export function fetchPromptLabBootstrap(dealId: string, moduleKey: string) {
+export function fetchPromptLabBootstrap(dealId: string, moduleKey: string, selectedStrategy?: string | null) {
   const query = new URLSearchParams({ deal_id: dealId, module_key: moduleKey })
+  if (selectedStrategy) query.set('selected_strategy', selectedStrategy)
   return api<PromptLabBootstrap>(`/api/prompt-lab/bootstrap?${query.toString()}`)
 }
 
@@ -2620,9 +2622,10 @@ export function savePromptLabReview(body: {
   })
 }
 
-export function fetchPromptLabExport(mode: 'current' | 'candidates_module' | 'candidates_all', promptKey?: string) {
+export function fetchPromptLabExport(mode: 'current' | 'candidates_module' | 'candidates_all', promptKey?: string, versionId?: number | null) {
   const query = new URLSearchParams({ mode })
   if (promptKey) query.set('prompt_key', promptKey)
+  if (versionId) query.set('version_id', String(versionId))
   return api<{ mode: string; items: Array<Record<string, unknown>> }>(`/api/prompt-lab/export?${query.toString()}`)
 }
 

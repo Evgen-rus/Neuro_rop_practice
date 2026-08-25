@@ -1386,11 +1386,12 @@ def _require_prompt_lab_deal(deal_id: str) -> dict[str, Any]:
 def prompt_lab_bootstrap_get(
     deal_id: str = Query(min_length=1),
     module_key: str = Query(default="quick_help.push"),
+    selected_strategy: str | None = Query(default=None),
 ) -> dict[str, Any]:
     _require_prompt_lab_deal(deal_id)
     try:
         get_module(module_key)
-        return bootstrap_prompt_lab(deal_id=deal_id, module_key=module_key)
+        return bootstrap_prompt_lab(deal_id=deal_id, module_key=module_key, selected_strategy=selected_strategy)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -1562,10 +1563,11 @@ def prompt_lab_review_create(body: PromptLabReviewRequest) -> dict[str, Any]:
 def prompt_lab_export_get(
     mode: str = Query(default="current"),
     prompt_key: str | None = Query(default=None),
+    version_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, Any]:
     _require_admin()
     try:
-        return export_payload(mode=mode, prompt_key=prompt_key)
+        return export_payload(mode=mode, prompt_key=prompt_key, version_id=version_id)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

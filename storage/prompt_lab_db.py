@@ -525,15 +525,25 @@ def get_run(db_path: str | Path, run_id: int) -> dict[str, Any] | None:
         return _run_row(conn.execute("SELECT * FROM runs WHERE id = ?", (int(run_id),)).fetchone())
 
 
-def find_run_by_fingerprint(db_path: str | Path, fingerprint: str) -> dict[str, Any] | None:
+def find_run_by_fingerprint(
+    db_path: str | Path,
+    fingerprint: str,
+    *,
+    branch: str | None = None,
+) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:
-        return _run_row(
-            conn.execute(
+        if branch:
+            row = conn.execute(
+                "SELECT * FROM runs WHERE fingerprint = ? AND branch = ? ORDER BY id DESC LIMIT 1",
+                (str(fingerprint), str(branch)),
+            ).fetchone()
+        else:
+            row = conn.execute(
                 "SELECT * FROM runs WHERE fingerprint = ? ORDER BY id DESC LIMIT 1",
                 (str(fingerprint),),
             ).fetchone()
-        )
+        return _run_row(row)
 
 
 def list_runs(

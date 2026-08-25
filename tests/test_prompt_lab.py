@@ -5,6 +5,7 @@ import inspect
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from fastapi import HTTPException
 from api import app as api_app
 from api import prompt_lab as lab
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT
-from openai_api.llm.prompt_lab_models import validate_model_reasoning
+from openai_api.llm.prompt_lab_models import list_lab_models, validate_model_reasoning
 from openai_api.llm.prompt_parts import sha256_text
 from storage import prompt_lab_db as lab_db
 
@@ -405,6 +406,228 @@ class PromptLabStorageTests(unittest.TestCase):
     def test_prompt_hash_helper_is_stable(self) -> None:
         self.assertEqual(sha256_text("привет"), sha256_text("привет"))
         self.assertNotEqual(sha256_text("привет"), sha256_text("пока"))
+
+    def test_verified_capability_map_rejects_unsupported_reasoning(self) -> None:
+        from openai_api.llm.prompt_lab_models import MODEL_REASONING
+        with self.assertRaises(ValueError):
+            validate_model_reasoning("gpt-5.4-mini", "xhigh")
+        with self.assertRaises(ValueError):
+            validate_model_reasoning("gpt-5.4", "max")
+        self.assertEqual(MODEL_REASONING["gpt-5.4-mini"], ("none", "low", "medium", "high"))
+        self.assertNotIn("max", MODEL_REASONING["gpt-5.4"])
+        ids = {item["id"] for item in list_lab_models()}
+        self.assertNotIn("gpt-5.6-terra-mini", ids)
+        self.assertFalse(any("terra mini" in str(item["label"]).lower() for item in list_lab_models()))
+
+    def test_export_current_uses_selected_version_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "lab.sqlite"
+            first = lab.save_version(prompt_key="quick_help.push", prompt_text="первая версия", lab_db_path=db)
+            second = lab.save_version(prompt_key="quick_help.push", prompt_text="выбранная версия", lab_db_path=db)
+            with self.assertRaises(ValueError):
+                lab.export_payload(mode="current", prompt_key="quick_help.push", lab_db_path=db)
+            payload = lab.export_payload(
+                mode="current",
+                prompt_key="quick_help.push",
+                version_id=int(first["id"]),
+                lab_db_path=db,
+            )
+            self.assertEqual(len(payload["items"]), 1)
+            self.assertEqual(payload["items"][0]["prompt_text"], "первая версия")
+            self.assertNotEqual(payload["items"][0]["prompt_text"], second["prompt_text"])
+
+    def test_import_production_current_is_zero_cost_lab_run(self) -> None:
+        entry = {
+            "id": 88,
+            "content": {"mode": "push", "situation_summary": "КП отправлено"},
+            "model_meta": {"model": MANAGER_MODEL, "reasoning_effort": MANAGER_REASONING_EFFORT},
+            "question": "как дожать",
+        }
+
+        def storage(name, *_args, **_kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return entry
+            return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", side_effect=storage
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"), patch.object(
+                lab, "generate_deal_manager_quick_help"
+            ) as generate:
+                current, snapshot = lab.import_production_current(
+                    deal_id="101",
+                    module_key="quick_help.push",
+                    context=CONTEXT,
+                    db_path=Path(directory) / "unused.sqlite",
+                    lab_db_path=lab_path,
+                )
+            generate.assert_not_called()
+            run = current["lab_run"]
+            self.assertIsNotNone(snapshot)
+            self.assertIsNotNone(run)
+            self.assertGreater(int(run["id"]), 0)
+            self.assertEqual(run["branch"], "current")
+            self.assertEqual(run["response_status"], "imported")
+            self.assertEqual(run["cost"]["estimated_cost_usd"], 0)
+            self.assertEqual(run["dependency_fingerprints"]["origin"], "production_reference")
+            self.assertEqual(run["dependency_fingerprints"]["production_id"], 88)
+
+    def test_import_production_email_reuses_get_helpers(self) -> None:
+        quick_help = {"id": 12, "mode": "push", "content": {"mode": "push", "client_messages": {"primary": "текст"}}}
+        email = {
+            "id": 4,
+            "content": {
+                "email_contract": "v1",
+                "subject": "Тема",
+                "greeting": "Здравствуйте",
+                "context": "КП отправлено",
+                "questions": [],
+                "value_point": "польза",
+                "call_to_action": "ответьте",
+                "closing": "спасибо",
+            },
+            "model_meta": {"model": MANAGER_MODEL, "reasoning_effort": MANAGER_REASONING_EFFORT},
+        }
+
+        def storage(name, *_args, **_kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return quick_help
+            if name == "get_deal_manager_email_script":
+                return email
+            return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", side_effect=storage
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"), patch.object(
+                lab, "generate_deal_manager_email"
+            ) as generate:
+                current, _snapshot = lab.import_production_current(
+                    deal_id="101",
+                    module_key="full_script.email",
+                    context=CONTEXT,
+                    selected_strategy="primary",
+                    db_path=Path(directory) / "unused.sqlite",
+                    lab_db_path=lab_path,
+                )
+            generate.assert_not_called()
+            run = current["lab_run"]
+            self.assertGreater(int(run["id"]), 0)
+            self.assertEqual(run["result"]["subject"], "Тема")
+            self.assertEqual(run["upstream_run_id"], current["lab_run"]["upstream_run_id"])
+            self.assertIsNotNone(run["upstream_run_id"])
+
+    def test_generate_both_orchestration_shares_one_snapshot_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            saved_ids: list[int] = []
+            original_save = lab_db.save_snapshot
+
+            def tracking_save(*args, **kwargs):
+                row = original_save(*args, **kwargs)
+                saved_ids.append(int(row["id"]))
+                return row
+
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", return_value=None
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"), patch.object(
+                lab_db, "save_snapshot", side_effect=tracking_save
+            ), patch.object(lab, "_effective_prompt", return_value="SYSTEM_RULES:\ntest"), patch.object(
+                lab,
+                "generate_deal_manager_quick_help",
+                return_value=({"mode": "push"}, {"call_type": "prompt_lab_quick_help", "usage": {}, "latency_seconds": 0.01, "response_status": "completed"}),
+            ):
+                snapshot = lab.get_or_create_snapshot(
+                    deal_id="101",
+                    db_path=Path(directory) / "unused.sqlite",
+                    lab_db_path=lab_path,
+                )
+                snapshot_id = int(snapshot["id"])
+
+                def start(branch: str) -> dict:
+                    return lab.start_lab_run(
+                        deal_id="101",
+                        module_key="quick_help.push",
+                        branch=branch,
+                        snapshot_id=snapshot_id,
+                        reuse_existing=False,
+                        prompt_template="SYSTEM_RULES:\ntest",
+                        model=MANAGER_MODEL,
+                        reasoning=MANAGER_REASONING_EFFORT,
+                        db_path=Path(directory) / "unused.sqlite",
+                        lab_db_path=lab_path,
+                    )
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    jobs = list(pool.map(start, ("current", "experiment")))
+                for job in jobs:
+                    for _ in range(80):
+                        current = lab.get_lab_job(job["job_id"])
+                        if current and current["status"] in {"done", "error"}:
+                            break
+                        time.sleep(0.02)
+            runs = lab_db.list_runs(lab_path, deal_id="101")
+            self.assertEqual(len(saved_ids), 1)
+            self.assertEqual({int(item["snapshot_id"]) for item in runs}, {snapshot_id})
+            self.assertEqual({item["branch"] for item in runs}, {"current", "experiment"})
+
+    def test_parallel_start_without_snapshot_id_does_not_create_two_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            saved_ids: list[int] = []
+            original_save = lab_db.save_snapshot
+
+            def slow_save(*args, **kwargs):
+                time.sleep(0.04)
+                row = original_save(*args, **kwargs)
+                saved_ids.append(int(row["id"]))
+                return row
+
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", return_value=None
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"), patch.object(
+                lab_db, "save_snapshot", side_effect=slow_save
+            ), patch.object(lab, "_effective_prompt", return_value="SYSTEM_RULES:\ntest"), patch.object(
+                lab,
+                "generate_deal_manager_quick_help",
+                return_value=({"mode": "push"}, {"call_type": "prompt_lab_quick_help", "usage": {}, "latency_seconds": 0.01, "response_status": "completed"}),
+            ):
+                def start(branch: str) -> dict:
+                    return lab.start_lab_run(
+                        deal_id="101",
+                        module_key="quick_help.push",
+                        branch=branch,
+                        snapshot_id=None,
+                        reuse_existing=False,
+                        prompt_template="SYSTEM_RULES:\ntest",
+                        model=MANAGER_MODEL,
+                        reasoning=MANAGER_REASONING_EFFORT,
+                        db_path=Path(directory) / "unused.sqlite",
+                        lab_db_path=lab_path,
+                    )
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    jobs = list(pool.map(start, ("current", "experiment")))
+                for job in jobs:
+                    for _ in range(80):
+                        current = lab.get_lab_job(job["job_id"])
+                        if current and current["status"] in {"done", "error"}:
+                            break
+                        time.sleep(0.02)
+            runs = lab_db.list_runs(lab_path, deal_id="101")
+            self.assertEqual(len(saved_ids), 1)
+            self.assertEqual(len({int(item["snapshot_id"]) for item in runs}), 1)
 
 
 if __name__ == "__main__":
