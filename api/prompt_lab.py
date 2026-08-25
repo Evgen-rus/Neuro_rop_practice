@@ -145,12 +145,43 @@ def _production_result(entry: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+QH_MODES = ("push", "reanimator")
+
+
+def normalize_quick_help_mode(value: str | None) -> str | None:
+    mode = str(value or "").strip()
+    return mode if mode in QH_MODES else None
+
+
+def select_qh_upstream_run(
+    runs: list[dict[str, Any]],
+    *,
+    branch: str,
+    mode: str,
+) -> dict[str, Any] | None:
+    module_key = f"quick_help.{normalize_quick_help_mode(mode) or ''}"
+    for item in runs:
+        if (
+            str(item.get("module_key") or "") != module_key
+            or str(item.get("branch") or "") != branch
+            or str(item.get("status") or "") != "success"
+        ):
+            continue
+        try:
+            if int(item.get("id") or 0) > 0:
+                return item
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _production_current(
     db_path: Path,
     context: dict[str, Any],
     spec: dict[str, Any],
     *,
     selected_strategy: str | None = None,
+    quick_help_mode: str | None = None,
 ) -> dict[str, Any]:
     deal_id = str(context["deal"]["deal_id"])
     report_id = context.get("source_report_id")
@@ -198,12 +229,13 @@ def _production_current(
                     )
         elif spec["family"] == "full_script" and report_id is not None and situation_id is not None:
             strategy = selected_strategy or "primary"
+            mode = normalize_quick_help_mode(quick_help_mode)
             getter = {
                 "message": "get_deal_manager_full_script",
                 "call": "get_deal_manager_call_script",
                 "email": "get_deal_manager_email_script",
             }.get(str(spec.get("script_mode") or "message"), "get_deal_manager_full_script")
-            for mode in ("push", "reanimator"):
+            if mode:
                 quick_help = _storage_call(
                     "get_current_deal_manager_quick_help",
                     db_path,
@@ -212,21 +244,19 @@ def _production_current(
                     situation_review_id=int(situation_id),
                     mode=mode,
                 )
-                if not isinstance(quick_help, dict) or not quick_help.get("id"):
-                    continue
-                material = _storage_call(
-                    getter,
-                    db_path,
-                    deal_id=deal_id,
-                    source_report_id=int(report_id),
-                    situation_review_id=int(situation_id),
-                    quick_help_id=int(quick_help["id"]),
-                    selected_strategy=strategy,
-                )
-                if isinstance(material, dict):
-                    entry = material
-                    production_quick_help = quick_help
-                    break
+                if isinstance(quick_help, dict) and quick_help.get("id"):
+                    material = _storage_call(
+                        getter,
+                        db_path,
+                        deal_id=deal_id,
+                        source_report_id=int(report_id),
+                        situation_review_id=int(situation_id),
+                        quick_help_id=int(quick_help["id"]),
+                        selected_strategy=strategy,
+                    )
+                    if isinstance(material, dict):
+                        entry = material
+                        production_quick_help = quick_help
     except Exception:
         logger.exception("Prompt Lab could not read production CURRENT")
         entry = None
@@ -403,11 +433,18 @@ def import_production_current(
     module_key: str,
     context: dict[str, Any],
     selected_strategy: str | None = None,
+    quick_help_mode: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     spec = get_module(module_key)
-    current = _production_current(db_path, context, spec, selected_strategy=selected_strategy)
+    current = _production_current(
+        db_path,
+        context,
+        spec,
+        selected_strategy=selected_strategy,
+        quick_help_mode=quick_help_mode,
+    )
     if not current["exists"]:
         snapshot = lab_db.latest_snapshot(lab_db_path, deal_id=str(deal_id))
         return current, None if snapshot is None else snapshot
@@ -448,6 +485,7 @@ def bootstrap_prompt_lab(
     deal_id: str,
     module_key: str = "quick_help.push",
     selected_strategy: str | None = None,
+    quick_help_mode: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     lab_db_path: Path = DEFAULT_PROMPT_LAB_DB_PATH,
 ) -> dict[str, Any]:
@@ -462,6 +500,7 @@ def bootstrap_prompt_lab(
             module_key=module_key,
             context=context,
             selected_strategy=selected_strategy,
+            quick_help_mode=spec.get("mode") if spec["family"] == "quick_help" else quick_help_mode,
             db_path=db_path,
             lab_db_path=lab_db_path,
         )

@@ -2528,9 +2528,15 @@ export type PromptLabBootstrap = {
   versions: PromptLabVersion[]
 }
 
-export function fetchPromptLabBootstrap(dealId: string, moduleKey: string, selectedStrategy?: string | null) {
+export function fetchPromptLabBootstrap(
+  dealId: string,
+  moduleKey: string,
+  selectedStrategy?: string | null,
+  quickHelpMode?: string | null,
+) {
   const query = new URLSearchParams({ deal_id: dealId, module_key: moduleKey })
   if (selectedStrategy) query.set('selected_strategy', selectedStrategy)
+  if (quickHelpMode) query.set('quick_help_mode', quickHelpMode)
   return api<PromptLabBootstrap>(`/api/prompt-lab/bootstrap?${query.toString()}`)
 }
 

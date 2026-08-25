@@ -93,6 +93,7 @@ export function PromptLabWorkspace({
   const [managerNote, setManagerNote] = useState('')
   const [previousMessage, setPreviousMessage] = useState('')
   const [qhUpstream, setQhUpstream] = useState<{ current: number | null; experiment: number | null }>({ current: null, experiment: null })
+  const [qhMode, setQhMode] = useState<ManagerAssistantMode>(productionMode === 'reanimator' ? 'reanimator' : 'push')
   const unsaved = experimentPrompt !== savedExperiment
   const strategyRef = useRef(strategy)
   strategyRef.current = strategy
@@ -105,20 +106,25 @@ export function PromptLabWorkspace({
     else onConfirmLeave?.()
   }, [leaveRequest, onConfirmLeave, unsaved])
 
-  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey, selectedStrategy?: ManagerQuickHelpStrategy) => {
+  const loadBootstrap = useCallback(async (nextModule: PromptLabModuleKey, selectedStrategy?: ManagerQuickHelpStrategy, activeQhMode?: ManagerAssistantMode) => {
+    const mode = activeQhMode || qhMode
     const payload = await fetchPromptLabBootstrap(
       dealId,
       nextModule,
       nextModule.startsWith('full_script.') ? (selectedStrategy || 'primary') : null,
+      nextModule.startsWith('full_script.') ? mode : null,
     )
     setBootstrap(payload)
     setCurrentPrompt(payload.production_current.prompt_template)
     setExperimentPrompt(payload.production_current.prompt_template)
     setSavedExperiment(payload.production_current.prompt_template)
-    setCurrentModel(payload.runtime.model)
-    setExperimentModel(payload.runtime.model)
-    setCurrentReasoning(payload.runtime.reasoning)
-    setExperimentReasoning(payload.runtime.reasoning)
+    const useProduction = payload.production_current.exists || Boolean(payload.production_current.lab_run)
+    const model = useProduction ? payload.production_current.model : payload.runtime.model
+    const reasoning = useProduction ? payload.production_current.reasoning : payload.runtime.reasoning
+    setCurrentModel(model)
+    setExperimentModel(model)
+    setCurrentReasoning(reasoning)
+    setExperimentReasoning(reasoning)
     setVersions(payload.versions)
     setSelectedVersionId(null)
     const imported = payload.production_current.lab_run || null
@@ -134,17 +140,22 @@ export function PromptLabWorkspace({
     const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: nextModule })
     setHistory(runs.runs)
     if (nextModule.startsWith('full_script.') || nextModule.startsWith('quick_help.')) {
-      const [pushRuns, reanimatorRuns] = await Promise.all([
-        fetchPromptLabRuns({ deal_id: dealId, module_key: 'quick_help.push' }),
-        fetchPromptLabRuns({ deal_id: dealId, module_key: 'quick_help.reanimator' }),
-      ])
-      const successful = [...pushRuns.runs, ...reanimatorRuns.runs].filter((item) => item.status === 'success' && item.id > 0)
+      const qhKey = nextModule.startsWith('quick_help.') ? nextModule : (`quick_help.${mode}` as PromptLabModuleKey)
+      const qhRuns = nextModule.startsWith('quick_help.') ? runs : await fetchPromptLabRuns({ deal_id: dealId, module_key: qhKey })
+      const successful = qhRuns.runs.filter((item) => item.status === 'success' && item.id > 0 && item.module_key === qhKey)
       setQhUpstream((value) => ({
         current: value.current || successful.find((item) => item.branch === 'current')?.id || null,
         experiment: successful.find((item) => item.branch === 'experiment')?.id || null,
       }))
     }
-  }, [dealId])
+  }, [dealId, qhMode])
+
+  function applyModule(next: PromptLabModuleKey) {
+    if (next.startsWith('quick_help.')) {
+      setQhMode(next === 'quick_help.reanimator' ? 'reanimator' : 'push')
+    }
+    setModuleKey(next)
+  }
 
   useEffect(() => {
     void loadBootstrap(moduleKey, strategyRef.current).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
@@ -153,9 +164,12 @@ export function PromptLabWorkspace({
   async function changeStrategy(next: ManagerQuickHelpStrategy) {
     setStrategy(next)
     if (!moduleKey.startsWith('full_script.')) return
-    const payload = await fetchPromptLabBootstrap(dealId, moduleKey, next)
+    const payload = await fetchPromptLabBootstrap(dealId, moduleKey, next, qhMode)
     setBootstrap(payload)
     setCurrentRun(payload.production_current.lab_run || null)
+    const useProduction = payload.production_current.exists || Boolean(payload.production_current.lab_run)
+    setCurrentModel(useProduction ? payload.production_current.model : payload.runtime.model)
+    setCurrentReasoning(useProduction ? payload.production_current.reasoning : payload.runtime.reasoning)
     if (payload.production_current.lab_run?.upstream_run_id) {
       setQhUpstream((value) => ({
         ...value,
@@ -210,7 +224,7 @@ export function PromptLabWorkspace({
       setPending({ kind: 'module', next })
       return
     }
-    setModuleKey(next)
+    applyModule(next)
   }
 
   async function refreshSnapshot() {
@@ -313,7 +327,7 @@ export function PromptLabWorkspace({
     const next = pending
     if (action === 'save') await saveVersion()
     if (next.kind === 'leave') onConfirmLeave?.()
-    else if (next.kind === 'module') setModuleKey(next.next)
+    else if (next.kind === 'module') applyModule(next.next)
     else applyVersion(next.nextVersionId)
     setPending(null)
   }

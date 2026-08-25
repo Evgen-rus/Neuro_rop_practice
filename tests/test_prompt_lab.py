@@ -51,6 +51,63 @@ CONTEXT = {
 }
 
 
+def _email_content(subject: str) -> dict:
+    return {
+        "email_contract": "v1",
+        "subject": subject,
+        "greeting": "Здравствуйте",
+        "context": "КП отправлено",
+        "questions": [],
+        "value_point": "польза",
+        "call_to_action": "ответьте",
+        "closing": "спасибо",
+    }
+
+
+def _qh_entry(mode: str, entry_id: int) -> dict:
+    return {
+        "id": entry_id,
+        "mode": mode,
+        "content": {"mode": mode, "client_messages": {"primary": mode.upper()}},
+        "model_meta": {"model": MANAGER_MODEL, "reasoning_effort": MANAGER_REASONING_EFFORT},
+    }
+
+
+def _save_lab_run(db: Path, snapshot_id: int, *, module_key: str, branch: str, result: dict, fingerprint: str, upstream_run_id: int | None = None) -> dict:
+    return lab_db.save_run(
+        db,
+        session_id=None,
+        turn_id=None,
+        snapshot_id=int(snapshot_id),
+        deal_id="101",
+        module_key=module_key,
+        branch=branch,
+        prompt_version_id=None,
+        prompt_hash="h",
+        prompt_text="t",
+        effective_prompt="t",
+        dependency_fingerprints={},
+        schema_version="strategy_v3",
+        material_revision=None,
+        model=MANAGER_MODEL,
+        reasoning=MANAGER_REASONING_EFFORT,
+        max_output_tokens=1,
+        question="",
+        selected_strategy=None,
+        upstream_run_id=upstream_run_id,
+        fingerprint=fingerprint,
+        status="success",
+        error=None,
+        result=result,
+        usage=None,
+        cost=None,
+        latency_seconds=0.1,
+        response_status="completed",
+        semantic_attempt_count=1,
+        call_type="prompt_lab_quick_help" if module_key.startswith("quick_help.") else "prompt_lab_full_script",
+    )
+
+
 def _admin():
     return {"id": 1, "role": "admin", "manager_id": None, "login": "admin"}
 
@@ -514,6 +571,7 @@ class PromptLabStorageTests(unittest.TestCase):
                     module_key="full_script.email",
                     context=CONTEXT,
                     selected_strategy="primary",
+                    quick_help_mode="push",
                     db_path=Path(directory) / "unused.sqlite",
                     lab_db_path=lab_path,
                 )
@@ -628,6 +686,174 @@ class PromptLabStorageTests(unittest.TestCase):
             runs = lab_db.list_runs(lab_path, deal_id="101")
             self.assertEqual(len(saved_ids), 1)
             self.assertEqual(len({int(item["snapshot_id"]) for item in runs}), 1)
+
+    def test_import_full_script_uses_requested_quick_help_mode(self) -> None:
+        called_modes: list[str | None] = []
+
+        def storage(name, *_args, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                called_modes.append(kwargs.get("mode"))
+                mode = str(kwargs.get("mode") or "")
+                return _qh_entry(mode, 1 if mode == "push" else 2)
+            if name == "get_deal_manager_email_script":
+                subject = "PUSH MAIL" if kwargs.get("quick_help_id") == 1 else "REANIMATOR MAIL"
+                return {"id": 10 if kwargs.get("quick_help_id") == 1 else 20, "content": _email_content(subject)}
+            return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", side_effect=storage
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"):
+                current, _snapshot = lab.import_production_current(
+                    deal_id="101",
+                    module_key="full_script.email",
+                    context=CONTEXT,
+                    selected_strategy="primary",
+                    quick_help_mode="reanimator",
+                    db_path=Path(directory) / "unused.sqlite",
+                    lab_db_path=lab_path,
+                )
+            self.assertTrue(called_modes)
+            self.assertTrue(all(item == "reanimator" for item in called_modes))
+            self.assertNotIn("push", called_modes)
+            self.assertEqual(current["production_quick_help"]["mode"], "reanimator")
+            self.assertEqual(current["lab_run"]["result"]["subject"], "REANIMATOR MAIL")
+            upstream = lab_db.get_run(lab_path, int(current["lab_run"]["upstream_run_id"]))
+            self.assertEqual(upstream["module_key"], "quick_help.reanimator")
+
+    def test_experiment_downstream_selects_same_quick_help_mode(self) -> None:
+        mixed = [
+            {"id": 11, "module_key": "quick_help.push", "branch": "experiment", "status": "success"},
+            {"id": 22, "module_key": "quick_help.reanimator", "branch": "experiment", "status": "success"},
+            {"id": 33, "module_key": "quick_help.reanimator", "branch": "current", "status": "success"},
+        ]
+        chosen = lab.select_qh_upstream_run(mixed, branch="experiment", mode="reanimator")
+        self.assertEqual(chosen["id"], 22)
+        self.assertEqual(lab.select_qh_upstream_run(mixed, branch="experiment", mode="push")["id"], 11)
+
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            snapshot = lab_db.save_snapshot(
+                lab_path,
+                deal_id="101",
+                source_report_id=17,
+                analysis_run_id=44,
+                situation_id=9,
+                situation_status="confirmed",
+                snapshot_hash="snap",
+                provenance={"deal_id": "101"},
+                context={
+                    "deal": CONTEXT["deal"],
+                    "deal_projection": CONTEXT["deal_projection"],
+                    "analysis_projection": CONTEXT["analysis_projection"],
+                    "situation_projection": CONTEXT["situation_projection"],
+                    "current_bitrix_task": None,
+                    "communication_pattern_context": {},
+                    "checklist": {},
+                    "last_contact": {},
+                    "objection_handling": {"items": []},
+                    "manager_tactics_hash": "t",
+                },
+            )
+            _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.push",
+                branch="experiment",
+                result={"mode": "push", "client_messages": {"primary": "PUSH"}},
+                fingerprint="fp-push",
+            )
+            reanimator = _save_lab_run(
+                lab_path,
+                int(snapshot["id"]),
+                module_key="quick_help.reanimator",
+                branch="experiment",
+                result={"mode": "reanimator", "client_messages": {"primary": "REANIMATOR"}},
+                fingerprint="fp-reanimator",
+            )
+            selected = lab.select_qh_upstream_run(
+                lab_db.list_runs(lab_path, deal_id="101"),
+                branch="experiment",
+                mode="reanimator",
+            )
+            self.assertEqual(int(selected["id"]), int(reanimator["id"]))
+            captured: dict = {}
+
+            def fake_email(**kwargs):
+                captured["quick_help"] = kwargs.get("quick_help")
+                return (
+                    _email_content("ok"),
+                    {"call_type": "prompt_lab_full_script", "usage": {}, "latency_seconds": 0.01, "response_status": "completed"},
+                )
+
+            with patch.object(lab, "_effective_prompt", return_value="SYSTEM_RULES:\ntest"), patch.object(
+                lab, "generate_deal_manager_email", side_effect=fake_email
+            ):
+                job = lab.start_lab_run(
+                    deal_id="101",
+                    module_key="full_script.email",
+                    branch="experiment",
+                    snapshot_id=int(snapshot["id"]),
+                    upstream_run_id=int(selected["id"]),
+                    reuse_existing=False,
+                    prompt_template="SYSTEM_RULES:\ntest",
+                    model=MANAGER_MODEL,
+                    reasoning=MANAGER_REASONING_EFFORT,
+                    selected_strategy="primary",
+                    lab_db_path=lab_path,
+                    db_path=Path(directory) / "unused.sqlite",
+                )
+                for _ in range(80):
+                    current = lab.get_lab_job(job["job_id"])
+                    if current and current["status"] in {"done", "error"}:
+                        break
+                    time.sleep(0.02)
+            self.assertEqual(captured["quick_help"]["mode"], "reanimator")
+            self.assertEqual(captured["quick_help"]["client_messages"]["primary"], "REANIMATOR")
+
+    def test_imported_current_downstream_keeps_same_quick_help_mode(self) -> None:
+        def storage(name, *_args, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return _qh_entry(str(kwargs.get("mode") or ""), 7 if kwargs.get("mode") == "reanimator" else 3)
+            if name == "get_deal_manager_call_script":
+                if kwargs.get("quick_help_id") != 7:
+                    return {"id": 99, "content": {"script_contract": "call", "conversation_goal": "push call"}}
+                return {
+                    "id": 8,
+                    "content": {
+                        "script_contract": "call_v1",
+                        "conversation_goal": "reanimator call",
+                        "blocks": [],
+                        "closing_agreement": "договорённость",
+                    },
+                }
+            if name == "get_deal_manager_full_script":
+                return {"id": 5, "content": {"conversation_goal": "push message"}}
+            return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            lab_path = Path(directory) / "lab.sqlite"
+            with patch.object(lab, "load_manager_screen_context", return_value=CONTEXT), patch.object(
+                lab, "_storage_call", side_effect=storage
+            ), patch.object(lab, "_load_local_communications", return_value=[]), patch.object(
+                lab, "find_last_contact", return_value=None
+            ), patch.object(lab, "load_manager_tactics", return_value="## T1 — test\n"):
+                current, _snapshot = lab.import_production_current(
+                    deal_id="101",
+                    module_key="full_script.call",
+                    context=CONTEXT,
+                    selected_strategy="primary",
+                    quick_help_mode="reanimator",
+                    db_path=Path(directory) / "unused.sqlite",
+                    lab_db_path=lab_path,
+                )
+            self.assertEqual(current["lab_run"]["result"]["conversation_goal"], "reanimator call")
+            upstream = lab_db.get_run(lab_path, int(current["lab_run"]["upstream_run_id"]))
+            self.assertEqual(upstream["module_key"], "quick_help.reanimator")
+            self.assertEqual(upstream["result"]["mode"], "reanimator")
 
 
 if __name__ == "__main__":

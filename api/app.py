@@ -1387,11 +1387,17 @@ def prompt_lab_bootstrap_get(
     deal_id: str = Query(min_length=1),
     module_key: str = Query(default="quick_help.push"),
     selected_strategy: str | None = Query(default=None),
+    quick_help_mode: str | None = Query(default=None),
 ) -> dict[str, Any]:
     _require_prompt_lab_deal(deal_id)
     try:
         get_module(module_key)
-        return bootstrap_prompt_lab(deal_id=deal_id, module_key=module_key, selected_strategy=selected_strategy)
+        return bootstrap_prompt_lab(
+            deal_id=deal_id,
+            module_key=module_key,
+            selected_strategy=selected_strategy,
+            quick_help_mode=quick_help_mode,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
