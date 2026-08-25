@@ -64,7 +64,7 @@ import {
   isCallScriptContent,
   isNeuroRopTask,
 } from './api'
-import { laterCheckCopy, reviewFromLabel } from './analysisReviewBanner'
+import { laterCheckCopy, reviewFromLabel, reviewHeadlineAt } from './analysisReviewBanner'
 import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
@@ -1595,17 +1595,18 @@ function DealDetail(props: {
         : <>{hasAnalysis ? 'Обновить анализ' : 'Провести анализ'}</>}
     </button>
   )
-  const laterCheck = laterCheckCopy({
+  const reviewInput = {
     createdAt: coaching.analysis_created_at,
     checkedAt: coaching.analysis_checked_at,
     checkStatus: coaching.analysis_check_status,
-  })
+  }
+  const laterCheck = laterCheckCopy(reviewInput)
   const analysisReady = (
     <div className="dc-analysis-ready">
       <div>
         <span>✓</span>
         <div>
-          <strong>{reviewFromLabel(coaching.analysis_created_at)}</strong>
+          <strong>{reviewFromLabel(reviewHeadlineAt(reviewInput))}</strong>
           {laterCheck ? <small className="dc-analysis-check">{laterCheck}</small> : null}
         </div>
       </div>
