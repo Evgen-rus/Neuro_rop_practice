@@ -171,7 +171,8 @@ textarea {
 .dc-call-script-header .dc-manager-full-script-header-actions { margin-left: 0; flex: none; }
 .dc-call-script-layout { display: grid; min-width: 0; min-height: 0; width: 100%; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); background: #fff; }
 .dc-call-script-pane { position: relative; min-width: 0; border-right: 1px solid #e7edf4; overflow: hidden; }
-.dc-call-script-scroll { position: absolute; inset: 0 0 56px; overflow: auto; }
+.dc-call-script-scroll { overflow: auto; }
+.dc-call-script-pane > .dc-call-script-scroll { position: absolute; inset: 0 0 56px; }
 .dc-call-script-stage { position: relative; padding: 22px 32px 24px 72px; border-bottom: 1px solid #e7edf4; }
 .dc-call-script-stage-number { position: absolute; left: 22px; top: 20px; width: 36px; height: 36px; display: grid; place-items: center; border: 1.5px solid #9ec1ff; border-radius: 50%; color: #176bf2; background: #fff; font-size: 16px; font-weight: 700; }
 .dc-call-script-stage.active .dc-call-script-stage-number { border-color: #2f7cf6; color: #fff; background: #2f7cf6; box-shadow: 0 0 0 4px #eaf2ff; }
@@ -9074,6 +9075,7 @@ ul.facts.bad li:before {
 .dc-prompt-lab-source .dc-manager-tone-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .dc-prompt-lab-source .dc-manager-tone-tabs button { border: 1px solid #d9e4ef; border-radius: 8px; }
 .dc-prompt-lab-source pre { margin: 0; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #2f4764; font: inherit; font-size: 12.5px; line-height: 1.45; }
+.dc-prompt-lab .dc-call-script-scroll { max-height: min(640px, 70vh); border: 1px solid #e7edf4; border-radius: 12px; background: #fff; }
 .dc-prompt-lab-branch > label { display: grid; gap: 4px; color: #4c6079; font-size: 11px; font-weight: 750; }
 .dc-prompt-lab-branch textarea { min-height: 140px; resize: vertical; padding: 8px 10px; border: 1px solid #d2dfec; border-radius: 9px; font: inherit; font-size: 12px; line-height: 1.4; }
 .dc-prompt-lab-config { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
