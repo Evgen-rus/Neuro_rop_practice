@@ -29,8 +29,12 @@ import { CompanionResultView, FollowupsResultView, FullScriptResultView, QuickHe
 import {
   PROMPT_LAB_LOADING_TEXT,
   jobMatchesModule,
+  keepQuickHelpSource,
   labResultKind,
+  materialSourceCaption,
   runMatchesModule,
+  selectedClientMessage,
+  strategyLabelFromResult,
   visibleLabRun,
 } from './promptLabWorkspace'
 
@@ -49,6 +53,9 @@ const MODULES: Array<{ key: PromptLabModuleKey; label: string }> = [
   { key: 'followups', label: 'Followups' },
   { key: 'companion', label: 'Companion' },
 ]
+
+const SOURCE_STRATEGIES: ManagerQuickHelpStrategy[] = ['primary', 'alternative', 'pattern_break']
+const QH_UPSTREAM_REQUIRED = 'Сначала получите Quick Help этой ветки на текущем контексте'
 
 function moscowStamp(value?: string | null) {
   if (!value) return '—'
@@ -100,6 +107,7 @@ export function PromptLabWorkspace({
   const [managerNote, setManagerNote] = useState('')
   const [previousMessage, setPreviousMessage] = useState('')
   const [qhUpstream, setQhUpstream] = useState<{ current: number | null; experiment: number | null }>({ current: null, experiment: null })
+  const [qhSource, setQhSource] = useState<{ current: PromptLabRun | null; experiment: PromptLabRun | null }>({ current: null, experiment: null })
   const [qhMode, setQhMode] = useState<ManagerAssistantMode>(productionMode === 'reanimator' ? 'reanimator' : 'push')
   const [workspaceLoading, setWorkspaceLoading] = useState(true)
   const unsaved = experimentPrompt !== savedExperiment
@@ -143,14 +151,19 @@ export function PromptLabWorkspace({
     const imported = visibleLabRun(payload.production_current.lab_run || null, nextModule)
     setCurrentRun(imported)
     setExperimentRun(null)
-    setQhUpstream({ current: null, experiment: null })
+    const keepSource = nextModule.startsWith('full_script.')
+    if (!keepSource) {
+      setQhUpstream({ current: null, experiment: null })
+    }
     const snapshotId = payload.snapshot.id || null
     const importedMatchesSnapshot = Boolean(imported && imported.id > 0 && (snapshotId == null || imported.snapshot_id === snapshotId))
     if (importedMatchesSnapshot && imported) {
-      setQhUpstream({
-        current: nextModule.startsWith('quick_help.') ? imported.id : (imported.upstream_run_id || null),
-        experiment: null,
-      })
+      setQhUpstream((value) => ({
+        current: nextModule.startsWith('quick_help.')
+          ? imported.id
+          : (value.current || imported.upstream_run_id || null),
+        experiment: keepSource ? value.experiment : null,
+      }))
     }
     setWorkspaceLoading(false)
     const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: nextModule })
@@ -173,19 +186,42 @@ export function PromptLabWorkspace({
         && (snapshotId == null || item.snapshot_id === snapshotId)
       ))
       const currentIds = new Set(successful.filter((item) => item.branch === 'current').map((item) => item.id))
-      setQhUpstream((value) => ({
-        current: (value.current && currentIds.has(value.current))
+      const experimentIds = new Set(successful.filter((item) => item.branch === 'experiment').map((item) => item.id))
+      const currentQh = successful.find((item) => item.branch === 'current') || null
+      const experimentQh = successful.find((item) => item.branch === 'experiment') || null
+      setQhUpstream((value) => {
+        const currentId = (value.current && currentIds.has(value.current))
           ? value.current
-          : (successful.find((item) => item.branch === 'current')?.id || null),
-        experiment: successful.find((item) => item.branch === 'experiment')?.id || null,
-      }))
+          : (currentQh?.id || null)
+        const experimentId = (value.experiment && experimentIds.has(value.experiment))
+          ? value.experiment
+          : (experimentQh?.id || null)
+        setQhSource((prev) => ({
+          current: successful.find((item) => item.id === currentId) || (keepSource ? prev.current : null),
+          experiment: successful.find((item) => item.id === experimentId) || (keepSource ? prev.experiment : null),
+        }))
+        return { current: currentId, experiment: experimentId }
+      })
     }
   }, [dealId, qhMode])
 
   function applyModule(next: PromptLabModuleKey) {
+    const previous = moduleKeyRef.current
     bootstrapSeqRef.current += 1
     if (next.startsWith('quick_help.')) {
       setQhMode(next === 'quick_help.reanimator' ? 'reanimator' : 'push')
+    }
+    if (previous.startsWith('quick_help.') && next.startsWith('full_script.')) {
+      const currentQh = visibleLabRun(currentRun, previous)
+      const experimentQh = visibleLabRun(experimentRun, previous)
+      setQhSource({ current: currentQh, experiment: experimentQh })
+      setQhUpstream({
+        current: currentQh && currentQh.id > 0 ? currentQh.id : null,
+        experiment: experimentQh && experimentQh.id > 0 ? experimentQh.id : null,
+      })
+    } else if (!keepQuickHelpSource(previous, next)) {
+      setQhSource({ current: null, experiment: null })
+      setQhUpstream({ current: null, experiment: null })
     }
     setModuleKey(next)
     setWorkspaceLoading(true)
@@ -197,7 +233,6 @@ export function PromptLabWorkspace({
     setExperimentRun(null)
     setCurrentJob(null)
     setExperimentJob(null)
-    setQhUpstream({ current: null, experiment: null })
     setExistingJob(null)
     setError('')
     setHistory([])
@@ -260,6 +295,7 @@ export function PromptLabWorkspace({
           else setExperimentRun(nextRun)
           if (moduleKeyRef.current.startsWith('quick_help.') && nextRun.id > 0) {
             setQhUpstream((value) => ({ ...value, [branch]: nextRun.id }))
+            setQhSource((value) => ({ ...value, [branch]: nextRun }))
           }
         } else if (next.run_id) {
           const run = await fetchPromptLabRun(next.run_id)
@@ -268,6 +304,7 @@ export function PromptLabWorkspace({
           else setExperimentRun(run)
           if (moduleKeyRef.current.startsWith('quick_help.') && run.id > 0) {
             setQhUpstream((value) => ({ ...value, [branch]: run.id }))
+            setQhSource((value) => ({ ...value, [branch]: run }))
           }
         }
         if (next.status === 'done' || next.status === 'error' || next.status === 'exists') {
@@ -344,7 +381,7 @@ export function PromptLabWorkspace({
       reuse_existing: options.force ? false : options.silentReuse ? true : null,
     }
     if (family === 'full_script' && (!body.upstream_run_id || body.upstream_run_id <= 0)) {
-      setError('Сначала получите Quick Help этой ветки на текущем контексте')
+      setError(QH_UPSTREAM_REQUIRED)
       return
     }
     const activeModule = moduleKey
@@ -361,6 +398,7 @@ export function PromptLabWorkspace({
       else setExperimentRun(job.run)
       if (moduleKeyRef.current.startsWith('quick_help.') && job.run.id > 0) {
         setQhUpstream((value) => ({ ...value, [branch]: job.run?.id || null }))
+        setQhSource((value) => ({ ...value, [branch]: job.run || null }))
       }
     }
   }
@@ -513,6 +551,8 @@ export function PromptLabWorkspace({
         onStrategy={changeStrategy}
         onGenerate={() => void generate('current')}
         onCopy={onCopy}
+        qhMode={qhMode}
+        sourceRun={qhSource.current}
         advanced={advanced === 'current'}
         onToggleAdvanced={() => setAdvanced((value) => value === 'current' ? null : 'current')}
       /> : null}
@@ -535,6 +575,8 @@ export function PromptLabWorkspace({
         onStrategy={changeStrategy}
         onGenerate={() => void generate('experiment')}
         onCopy={onCopy}
+        qhMode={qhMode}
+        sourceRun={qhSource.experiment}
         advanced={advanced === 'experiment'}
         onToggleAdvanced={() => setAdvanced((value) => value === 'experiment' ? null : 'experiment')}
         extraActions={<>
@@ -596,6 +638,43 @@ export function PromptLabWorkspace({
   </div>
 }
 
+function MaterialSourceBar({
+  mode,
+  sourceRun,
+  strategy,
+  onStrategy,
+  loading,
+}: {
+  mode: ManagerAssistantMode
+  sourceRun: PromptLabRun | null
+  strategy: ManagerQuickHelpStrategy
+  onStrategy: (value: ManagerQuickHelpStrategy) => void
+  loading?: boolean
+}) {
+  const result = sourceRun?.result
+  const caption = materialSourceCaption(mode, strategyLabelFromResult(result, strategy))
+  const preview = selectedClientMessage(result, strategy)
+  return <section className="dc-prompt-lab-source" aria-label="Исход Quick Help">
+    <strong>{caption}</strong>
+    <div className="dc-manager-tone-tabs labeled" role="tablist" aria-label="Вариант Quick Help">
+      {SOURCE_STRATEGIES.map((item) => (
+        <button
+          key={item}
+          type="button"
+          role="tab"
+          aria-selected={strategy === item}
+          className={strategy === item ? 'active' : ''}
+          disabled={loading}
+          onClick={() => onStrategy(item)}
+        >
+          <span>{strategyLabelFromResult(result, item)}</span>
+        </button>
+      ))}
+    </div>
+    <pre>{preview || (loading ? PROMPT_LAB_LOADING_TEXT : QH_UPSTREAM_REQUIRED)}</pre>
+  </section>
+}
+
 function BranchPanel(props: {
   title: string
   readOnlyPrompt?: boolean
@@ -616,17 +695,28 @@ function BranchPanel(props: {
   onStrategy: (value: ManagerQuickHelpStrategy) => void
   onGenerate: () => void
   onCopy: (text: string, label: string) => Promise<void>
+  qhMode: ManagerAssistantMode
+  sourceRun: PromptLabRun | null
   advanced: boolean
   onToggleAdvanced: () => void
   extraActions?: React.ReactNode
 }) {
-  const mode: ManagerAssistantMode = props.moduleKey === 'quick_help.push' ? 'push' : 'reanimator'
+  const mode = props.moduleKey.startsWith('quick_help.')
+    ? (props.moduleKey === 'quick_help.push' ? 'push' : 'reanimator')
+    : props.qhMode
   const visibleRun = visibleLabRun(props.run, props.moduleKey)
   return <section className="dc-prompt-lab-branch">
     <header>
       <strong>{props.title}</strong>
       <span>{props.loading ? PROMPT_LAB_LOADING_TEXT : props.job?.status === 'error' ? `✕ ${props.job.error || props.job.detail}` : props.busy ? props.job?.detail || 'Генерация…' : visibleRun?.status === 'success' ? '✓ Готово' : visibleRun?.status === 'error' ? `✕ ${visibleRun.error}` : 'Нет результата'}</span>
     </header>
+    {props.moduleKey.startsWith('full_script.') ? <MaterialSourceBar
+      mode={mode}
+      sourceRun={props.sourceRun}
+      strategy={props.strategy}
+      onStrategy={props.onStrategy}
+      loading={props.loading}
+    /> : null}
     <label>Prompt
       <textarea readOnly={props.readOnlyPrompt || props.loading} value={props.loading ? PROMPT_LAB_LOADING_TEXT : props.prompt} onChange={(event) => props.onPrompt(event.target.value)} />
     </label>

@@ -9069,6 +9069,11 @@ ul.facts.bad li:before {
 .dc-prompt-lab-branch > header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .dc-prompt-lab-branch > header strong { font-size: 13px; }
 .dc-prompt-lab-branch > header span { color: #5a6e84; font-size: 11px; font-weight: 700; }
+.dc-prompt-lab-source { display: grid; gap: 8px; min-width: 0; padding: 10px 11px; border: 1px solid #b9dec8; border-radius: 10px; background: #f5fcf8; }
+.dc-prompt-lab-source > strong { font-size: 12.5px; color: #08713f; }
+.dc-prompt-lab-source .dc-manager-tone-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dc-prompt-lab-source .dc-manager-tone-tabs button { border: 1px solid #d9e4ef; border-radius: 8px; }
+.dc-prompt-lab-source pre { margin: 0; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #2f4764; font: inherit; font-size: 12.5px; line-height: 1.45; }
 .dc-prompt-lab-branch > label { display: grid; gap: 4px; color: #4c6079; font-size: 11px; font-weight: 750; }
 .dc-prompt-lab-branch textarea { min-height: 140px; resize: vertical; padding: 8px 10px; border: 1px solid #d2dfec; border-radius: 9px; font: inherit; font-size: 12px; line-height: 1.4; }
 .dc-prompt-lab-config { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }

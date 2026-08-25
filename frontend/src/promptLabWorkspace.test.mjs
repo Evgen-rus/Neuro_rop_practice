@@ -5,7 +5,11 @@ import {
   applyBootstrapIfCurrent,
   applyJobIfCurrent,
   beginModuleLoad,
+  keepQuickHelpSource,
   labResultKind,
+  materialSourceCaption,
+  selectedClientMessage,
+  strategyLabelFromResult,
   visibleLabRun,
 } from './promptLabWorkspace.ts'
 
@@ -146,4 +150,29 @@ test('after new module bootstrap, prompt and matching imported CURRENT are shown
   assert.equal(state.currentRun?.module_key, 'full_script.message')
   assert.equal(labResultKind(state.currentRun, 'full_script.message'), 'full_script')
   assert.equal(labResultKind(qhRun(), 'full_script.message'), 'empty')
+})
+
+test('material source caption uses Дожим/Реаниматор and strategy label', () => {
+  assert.equal(materialSourceCaption('push', 'Основной ход'), 'Дожим · Основной ход')
+  assert.equal(materialSourceCaption('reanimator', 'Через сроки'), 'Реаниматор · Через сроки')
+})
+
+test('selectedClientMessage and strategy labels follow the locked Quick Help variant', () => {
+  const result = {
+    strategy_labels: { primary: 'Через надёжность', alternative: 'Через сроки', pattern_break: 'Через согласование' },
+    client_messages: { primary: 'А', alternative: 'Б', pattern_break: 'В' },
+  }
+  assert.equal(selectedClientMessage(result, 'alternative'), 'Б')
+  assert.equal(selectedClientMessage(result, 'missing'), '')
+  assert.equal(selectedClientMessage(null, 'primary'), '')
+  assert.equal(strategyLabelFromResult(result, 'primary'), 'Через надёжность')
+  assert.equal(strategyLabelFromResult({}, 'pattern_break'), 'Смена механики')
+})
+
+test('keep Quick Help source when leaving Дожим for Message/Call/Email', () => {
+  assert.equal(keepQuickHelpSource('quick_help.push', 'full_script.message'), true)
+  assert.equal(keepQuickHelpSource('full_script.message', 'full_script.call'), true)
+  assert.equal(keepQuickHelpSource('quick_help.push', 'quick_help.reanimator'), false)
+  assert.equal(keepQuickHelpSource('full_script.message', 'followups'), false)
+  assert.equal(keepQuickHelpSource('quick_help.push', 'followups'), false)
 })

@@ -44,6 +44,43 @@ export function isCurrentRequest(requestId: number, latestId: number): boolean {
   return requestId === latestId
 }
 
+export function assistantModeLabel(mode: 'push' | 'reanimator'): string {
+  return mode === 'push' ? 'Дожим' : 'Реаниматор'
+}
+
+export function materialSourceCaption(mode: 'push' | 'reanimator', strategyLabelText: string): string {
+  return `${assistantModeLabel(mode)} · ${strategyLabelText}`
+}
+
+export function selectedClientMessage(result: unknown, strategy: string): string {
+  if (!result || typeof result !== 'object') return ''
+  const messages = (result as { client_messages?: Record<string, unknown> }).client_messages
+  if (!messages || typeof messages !== 'object') return ''
+  return String(messages[strategy] || '').trim()
+}
+
+export function strategyLabelFromResult(result: unknown, strategy: string): string {
+  const fallbacks: Record<string, string> = {
+    primary: 'Основной ход',
+    alternative: 'Другой заход',
+    pattern_break: 'Смена механики',
+  }
+  const fallback = fallbacks[strategy] || strategy
+  if (!result || typeof result !== 'object') return fallback
+  const labels = (result as { strategy_labels?: Record<string, unknown> }).strategy_labels
+  if (!labels || typeof labels !== 'object') return fallback
+  const label = String(labels[strategy] ?? '').trim()
+  return label || fallback
+}
+
+export function keepQuickHelpSource(previousModule: PromptLabModuleRef, nextModule: PromptLabModuleRef): boolean {
+  const fromQuickHelp = previousModule.startsWith('quick_help.')
+  const fromMaterials = previousModule.startsWith('full_script.')
+  const toMaterials = nextModule.startsWith('full_script.')
+  const sameQuickHelp = fromQuickHelp && nextModule === previousModule
+  return Boolean((fromQuickHelp && toMaterials) || (fromMaterials && toMaterials) || sameQuickHelp)
+}
+
 export function labResultKind(run: PromptLabRunRef | null | undefined, moduleKey: PromptLabModuleRef): LabResultKind {
   const visible = visibleLabRun(run, moduleKey)
   if (!visible) return 'empty'
