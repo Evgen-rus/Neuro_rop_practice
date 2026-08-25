@@ -8,6 +8,7 @@ from typing import Any
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.deal_manager_quick_help import project_locked_move, project_quick_help_for_material
+from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 
 EMAIL_CONTRACT = "manager_email_v1"
@@ -56,9 +57,39 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
-def build_email_prompt(**kwargs: Any) -> str:
+def email_context_sections(**kwargs: Any) -> list[str]:
     selected_strategy = str(kwargs["selected_strategy"])
     locked_move = project_locked_move(kwargs.get("quick_help"), selected_strategy)
+    return [
+        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
+        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
+        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
+        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
+        _section("COMMUNICATION_PATTERN_CONTEXT", kwargs["communication_pattern_context"]),
+        _section("LOCKED_MOVE", locked_move),
+        _section("SELECTED_STRATEGY", selected_strategy),
+        _section("ASSISTANT_MODE", locked_move["mode"]),
+        _section("PRESSURE_LEVER", locked_move["pressure_lever"]),
+        _section("QUICK_HELP", project_quick_help_for_material(kwargs.get("quick_help"), selected_strategy)),
+    ]
+
+
+def email_static_prompt() -> str:
+    return static_prompt_from_full(
+        build_email_prompt(
+            selected_strategy="primary",
+            analysis_projection={},
+            situation_projection={},
+            deal={},
+            current_bitrix_task=None,
+            communication_pattern_context={},
+            quick_help={"mode": "push", "situation_summary": "x", "next_action": "x", "expected_result": "x", "pressure_lever": {"title": "x", "rationale": "x"}, "strategy_labels": {"primary": "a", "alternative": "b", "pattern_break": "c"}, "client_messages": {"primary": "m", "alternative": "m2", "pattern_break": "m3"}, "lifehacks": [], "fallback_action": "f"},
+        ),
+        "ANALYSIS_CONTEXT:",
+    )
+
+
+def build_email_prompt(**kwargs: Any) -> str:
     return "\n\n".join([
         "SYSTEM_RULES:\nТы — прикладной помощник менеджера. Подготовь одно деловое email-письмо по текущей сделке; полный анализ уже выполнен.",
         "RULES:\n"
@@ -70,26 +101,21 @@ def build_email_prompt(**kwargs: Any) -> str:
         "- Используй ANALYSIS_CONTEXT.client_communication_profile для формы подачи: D — прямота и результат, I — живой интерес и образ результата, S — спокойствие и снижение риска, C — структура и точность. Не называй DISC клиенту и не выводи из профиля факты или страхи. При недостаточных данных пиши нейтрально.\n"
         "- Не создавай КП и не обещай вложения или материалы, которых нет в контексте. Не придумывай факты, даты, суммы, имена и договорённости.\n"
         "- Верни только JSON по схеме на русском языке.",
-        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
-        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
-        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
-        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
-        _section("COMMUNICATION_PATTERN_CONTEXT", kwargs["communication_pattern_context"]),
-        _section("LOCKED_MOVE", locked_move),
-        _section("SELECTED_STRATEGY", selected_strategy),
-        _section("ASSISTANT_MODE", locked_move["mode"]),
-        _section("PRESSURE_LEVER", locked_move["pressure_lever"]),
-        _section("QUICK_HELP", project_quick_help_for_material(kwargs.get("quick_help"), selected_strategy)),
+        *email_context_sections(**kwargs),
     ])
 
 
 def generate_deal_manager_email(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     selected_strategy = str(kwargs["selected_strategy"])
-    prompt = build_email_prompt(**kwargs)
+    prompt_template = kwargs.pop("prompt_template", None)
+    model = kwargs.pop("model", None) or MANAGER_MODEL
+    reasoning_effort = kwargs.pop("reasoning_effort", None) or MANAGER_REASONING_EFFORT
+    call_type = kwargs.pop("call_type", None) or "deal_manager_email"
+    prompt = assemble_prompt(prompt_template, email_context_sections(**kwargs)) if prompt_template else build_email_prompt(**kwargs)
     result, metadata = call_structured_output_json(
-        prompt, schema=email_schema(), schema_name="deal_manager_email", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_EMAIL_OUTPUT_TOKENS,
-        log_title="deal manager email prompt", call_type="deal_manager_email",
+        prompt, schema=email_schema(), schema_name="deal_manager_email", model=model,
+        reasoning_effort=reasoning_effort, max_output_tokens=MAX_EMAIL_OUTPUT_TOKENS,
+        log_title="deal manager email prompt", call_type=call_type,
         prompt_cache_key="neuro-rop:deal-manager-email:v3",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
         trace_entity_type="deal",

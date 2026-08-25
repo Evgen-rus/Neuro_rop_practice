@@ -8,6 +8,7 @@ from typing import Any
 from openai_api.config import COMPANION_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
+from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 
 COMPANION_CONTRACT = "companion_message_v1"
@@ -75,9 +76,40 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
-def build_companion_prompt(**kwargs: Any) -> str:
+def companion_context_sections(**kwargs: Any) -> list[str]:
     manager_note = str(kwargs.get("manager_note") or "").strip()[:4000]
     previous_message = str(kwargs.get("previous_message") or "").strip()[:1200]
+    parts = [
+        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
+        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
+        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
+        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
+        _section("LAST_CONTACT", kwargs["last_contact"]),
+    ]
+    if previous_message:
+        parts.append(_section("PREVIOUS_MESSAGE", previous_message))
+    if manager_note:
+        parts.append(_section("MANAGER_NOTE", manager_note))
+    return parts
+
+
+def companion_static_prompt(*, manager_note: str | None = None) -> str:
+    return static_prompt_from_full(
+        build_companion_prompt(
+            analysis_projection={},
+            situation_projection={},
+            deal={},
+            current_bitrix_task=None,
+            last_contact={},
+            previous_message="",
+            manager_note=manager_note or "",
+        ),
+        "ANALYSIS_CONTEXT:",
+    )
+
+
+def build_companion_prompt(**kwargs: Any) -> str:
+    manager_note = str(kwargs.get("manager_note") or "").strip()[:4000]
     rules = (
         "RULES:\n"
         "- Сначала по старому снимку сделки и последней коммуникации пойми, что изменилось, подтвердилось, отменилось и кто владеет следующим шагом.\n"
@@ -97,28 +129,23 @@ def build_companion_prompt(**kwargs: Any) -> str:
             "Не добавляй факты, даты и обещания, которых нет в контексте. "
             "Если менеджер просит убрать дату, обещание или следующий шаг — убери."
         )
-    parts = [
+    return "\n\n".join([
         "SYSTEM_RULES:\nТы пишешь короткое сопроводительное сообщение клиенту после уже состоявшегося разговора или переписки. Это не Дожим и не идеи фоллоуапов.",
         rules,
-        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
-        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
-        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
-        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
-        _section("LAST_CONTACT", kwargs["last_contact"]),
-    ]
-    if previous_message:
-        parts.append(_section("PREVIOUS_MESSAGE", previous_message))
-    if manager_note:
-        parts.append(_section("MANAGER_NOTE", manager_note))
-    return "\n\n".join(parts)
+        *companion_context_sections(**kwargs),
+    ])
 
 
 def generate_deal_manager_companion(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    prompt = build_companion_prompt(**kwargs)
+    prompt_template = kwargs.pop("prompt_template", None)
+    model = kwargs.pop("model", None) or MANAGER_MODEL
+    reasoning_effort = kwargs.pop("reasoning_effort", None) or MANAGER_REASONING_EFFORT
+    call_type = kwargs.pop("call_type", None) or "deal_manager_companion"
+    prompt = assemble_prompt(prompt_template, companion_context_sections(**kwargs)) if prompt_template else build_companion_prompt(**kwargs)
     result, metadata = call_structured_output_json(
-        prompt, schema=companion_schema(), schema_name="deal_manager_companion", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=COMPANION_MAX_OUTPUT_TOKENS,
-        log_title="deal manager companion prompt", call_type="deal_manager_companion",
+        prompt, schema=companion_schema(), schema_name="deal_manager_companion", model=model,
+        reasoning_effort=reasoning_effort, max_output_tokens=COMPANION_MAX_OUTPUT_TOKENS,
+        log_title="deal manager companion prompt", call_type=call_type,
         prompt_cache_key="neuro-rop:deal-manager-companion:v1",
         stable_prefix=prompt_prefix_before(prompt, "LAST_CONTACT:"),
         trace_entity_type="deal",

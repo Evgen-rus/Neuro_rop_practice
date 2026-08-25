@@ -2431,6 +2431,201 @@ export function asStringList(value: unknown): string[] {
   return value.map((item) => String(item)).filter(Boolean)
 }
 
+export type PromptLabModuleKey =
+  | 'quick_help.push'
+  | 'quick_help.reanimator'
+  | 'full_script.message'
+  | 'full_script.call'
+  | 'full_script.email'
+  | 'followups'
+  | 'companion'
+
+export type PromptLabBranch = 'current' | 'experiment'
+
+export type PromptLabModel = {
+  id: string
+  label: string
+  reasoning: string[]
+}
+
+export type PromptLabVersion = {
+  id: number
+  prompt_key: string
+  version_number: number
+  prompt_text: string
+  prompt_hash: string
+  base_production_hash?: string | null
+  based_on_id?: number | null
+  candidate: boolean
+  verified: boolean
+  archived: boolean
+  note?: string | null
+  created_at: string
+}
+
+export type PromptLabRun = {
+  id: number
+  deal_id: string
+  module_key: PromptLabModuleKey | string
+  branch: PromptLabBranch
+  snapshot_id: number
+  turn_id?: number | null
+  prompt_version_id?: number | null
+  prompt_hash: string
+  prompt_text?: string
+  effective_prompt?: string | null
+  model: string
+  reasoning: string
+  question: string
+  selected_strategy?: string | null
+  upstream_run_id?: number | null
+  status: 'success' | 'error' | string
+  error?: string | null
+  result?: Record<string, unknown> | null
+  usage?: Record<string, unknown> | null
+  cost?: Record<string, unknown> | null
+  latency_seconds?: number | null
+  response_status?: string | null
+  schema_version?: string | null
+  call_type?: string | null
+  created_at: string
+  dependency_fingerprints?: Record<string, unknown> | null
+}
+
+export type PromptLabJob = {
+  job_id: string
+  deal_id: string
+  module_key: string
+  branch: PromptLabBranch
+  status: 'queued' | 'running' | 'done' | 'error' | 'exists'
+  stage: string
+  detail: string
+  percent: number
+  run_id?: number | null
+  reused?: boolean
+  existing?: boolean
+  error?: string | null
+  run?: PromptLabRun | null
+}
+
+export type PromptLabBootstrap = {
+  module: string
+  modules: Array<{ key: PromptLabModuleKey | string; label: string; family: string; requires_confirmed_situation: boolean; requires_upstream_quick_help: boolean; schema_version: string }>
+  models: PromptLabModel[]
+  runtime: { model: string; reasoning: string }
+  gate: { ok: boolean; reason: string | null; situation_status: string | null; source_report_id: number | null; situation_id: number | null }
+  production_current: {
+    exists: boolean
+    stale: boolean
+    entry: ManagerQuickHelpEntry | ManagerFollowupsRecord | ManagerCompanionRecord | Record<string, unknown> | null
+    model: string
+    reasoning: string
+    prompt_template: string
+    prompt_hash: string
+  }
+  snapshot: { id: number | null; created_at: string | null; snapshot_hash: string | null; provenance: Record<string, unknown> | null }
+  versions: PromptLabVersion[]
+}
+
+export function fetchPromptLabBootstrap(dealId: string, moduleKey: string) {
+  const query = new URLSearchParams({ deal_id: dealId, module_key: moduleKey })
+  return api<PromptLabBootstrap>(`/api/prompt-lab/bootstrap?${query.toString()}`)
+}
+
+export function createPromptLabSnapshot(dealId: string) {
+  return api<{ id: number; created_at: string; snapshot_hash: string; provenance: Record<string, unknown> }>('/api/prompt-lab/snapshots', {
+    method: 'POST',
+    body: JSON.stringify({ deal_id: dealId }),
+  })
+}
+
+export function startPromptLabRun(body: {
+  deal_id: string
+  module_key: string
+  branch: PromptLabBranch
+  snapshot_id?: number | null
+  session_id?: number | null
+  turn_id?: number | null
+  prompt_template?: string | null
+  prompt_version_id?: number | null
+  model?: string | null
+  reasoning?: string | null
+  question?: string
+  selected_strategy?: ManagerQuickHelpStrategy | null
+  upstream_run_id?: number | null
+  manager_note?: string
+  previous_message?: string
+  reuse_existing?: boolean | null
+}) {
+  return api<PromptLabJob>('/api/prompt-lab/runs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function fetchPromptLabJob(jobId: string) {
+  return api<PromptLabJob>(`/api/prompt-lab/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchPromptLabRuns(params: { deal_id?: string; module_key?: string; snapshot_id?: number; prompt_version_id?: number }) {
+  const query = new URLSearchParams()
+  if (params.deal_id) query.set('deal_id', params.deal_id)
+  if (params.module_key) query.set('module_key', params.module_key)
+  if (params.snapshot_id) query.set('snapshot_id', String(params.snapshot_id))
+  if (params.prompt_version_id) query.set('prompt_version_id', String(params.prompt_version_id))
+  return api<{ runs: PromptLabRun[] }>(`/api/prompt-lab/runs?${query.toString()}`)
+}
+
+export function fetchPromptLabRun(runId: number) {
+  return api<PromptLabRun>(`/api/prompt-lab/runs/${runId}`)
+}
+
+export function fetchPromptLabVersions(promptKey: string, includeArchived = false) {
+  const query = new URLSearchParams({ prompt_key: promptKey })
+  if (includeArchived) query.set('include_archived', 'true')
+  return api<{ versions: PromptLabVersion[] }>(`/api/prompt-lab/versions?${query.toString()}`)
+}
+
+export function savePromptLabVersion(body: { prompt_key: string; prompt_text: string; based_on_id?: number | null; note?: string | null }) {
+  return api<PromptLabVersion>('/api/prompt-lab/versions', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function patchPromptLabVersion(versionId: number, body: { candidate?: boolean; verified?: boolean; note?: string | null; archived?: boolean }) {
+  return api<PromptLabVersion>(`/api/prompt-lab/versions/${versionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export function deletePromptLabVersion(versionId: number, hard = false) {
+  const query = hard ? '?hard=true' : ''
+  return api<{ ok: boolean; deleted?: boolean; version?: PromptLabVersion }>(`/api/prompt-lab/versions/${versionId}${query}`, {
+    method: 'DELETE',
+  })
+}
+
+export function savePromptLabReview(body: {
+  current_run_id: number
+  experiment_run_id: number
+  prompt_version_id?: number | null
+  verdict: 'current_better' | 'same' | 'experiment_better' | 'both_bad'
+  comment?: string | null
+}) {
+  return api<Record<string, unknown>>('/api/prompt-lab/reviews', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function fetchPromptLabExport(mode: 'current' | 'candidates_module' | 'candidates_all', promptKey?: string) {
+  const query = new URLSearchParams({ mode })
+  if (promptKey) query.set('prompt_key', promptKey)
+  return api<{ mode: string; items: Array<Record<string, unknown>> }>(`/api/prompt-lab/export?${query.toString()}`)
+}
+
 /** LLM files may be saved as { analysis: {...} }; UI needs the inner object. */
 export function unwrapAnalysis(value: unknown): Record<string, unknown> | null {
   const payload = asRecord(value)

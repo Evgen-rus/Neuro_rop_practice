@@ -8,6 +8,7 @@ from typing import Any
 from openai_api.config import FOLLOWUPS_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
+from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 
 FOLLOWUPS_CONTRACT = "followup_plan_v1"
@@ -74,6 +75,26 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
+def followups_context_sections(**kwargs: Any) -> list[str]:
+    return [
+        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
+        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
+        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
+        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
+        _section("COMMUNICATION_PATTERN_CONTEXT", kwargs["communication_pattern_context"]),
+    ]
+
+
+def followups_static_prompt() -> str:
+    return static_prompt_from_full(build_followups_prompt(
+        analysis_projection={},
+        situation_projection={},
+        deal={},
+        current_bitrix_task=None,
+        communication_pattern_context={},
+    ), "ANALYSIS_CONTEXT:")
+
+
 def build_followups_prompt(**kwargs: Any) -> str:
     return "\n\n".join([
         "SYSTEM_RULES:\nТы — помощник менеджера по дожиму текущей сделки. Предложи идеи полезных follow-up касаний, но не создавай сами материалы.",
@@ -85,20 +106,20 @@ def build_followups_prompt(**kwargs: Any) -> str:
         "- Для каждой идеи задай один проверяемый клиентский результат. Не придумывай сроки; timing описывай относительно известной договорённости или состояния сделки.\n"
         "- Используй client_communication_profile только для рекомендуемой формы и канала: DISC не доказывает страх или факт клиента. При недостаточных данных используй нейтральный стиль.\n"
         "- Не создавай КП, скидки, искусственный дефицит или неподтверждённые обещания. Верни только JSON по схеме на русском языке.",
-        _section("ANALYSIS_CONTEXT", kwargs["analysis_projection"]),
-        _section("SITUATION_CONTEXT", kwargs["situation_projection"]),
-        _section("DEAL_CONTEXT", project_deal(kwargs["deal"])),
-        _section("CURRENT_BITRIX_TASK", project_bitrix_task(kwargs.get("current_bitrix_task"))),
-        _section("COMMUNICATION_PATTERN_CONTEXT", kwargs["communication_pattern_context"]),
+        *followups_context_sections(**kwargs),
     ])
 
 
 def generate_deal_manager_followups(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    prompt = build_followups_prompt(**kwargs)
+    prompt_template = kwargs.pop("prompt_template", None)
+    model = kwargs.pop("model", None) or MANAGER_MODEL
+    reasoning_effort = kwargs.pop("reasoning_effort", None) or MANAGER_REASONING_EFFORT
+    call_type = kwargs.pop("call_type", None) or "deal_manager_followups"
+    prompt = assemble_prompt(prompt_template, followups_context_sections(**kwargs)) if prompt_template else build_followups_prompt(**kwargs)
     result, metadata = call_structured_output_json(
-        prompt, schema=followups_schema(), schema_name="deal_manager_followups", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=FOLLOWUPS_MAX_OUTPUT_TOKENS,
-        log_title="deal manager followups prompt", call_type="deal_manager_followups",
+        prompt, schema=followups_schema(), schema_name="deal_manager_followups", model=model,
+        reasoning_effort=reasoning_effort, max_output_tokens=FOLLOWUPS_MAX_OUTPUT_TOKENS,
+        log_title="deal manager followups prompt", call_type=call_type,
         prompt_cache_key="neuro-rop:deal-manager-followups:v1",
         stable_prefix=prompt_prefix_before(prompt, "COMMUNICATION_PATTERN_CONTEXT:"),
         trace_entity_type="deal",

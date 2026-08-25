@@ -106,6 +106,7 @@ import { ManagerTrajectory } from './ManagerTrajectory'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
+import { PromptLabWorkspace } from './PromptLab'
 
 type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -1685,6 +1686,7 @@ function DealDetail(props: {
       assistantWorkspace={assistantWorkspace}
       assistantLoading={assistantLoading}
       assistantOpen={assistantOpen}
+      userRole={props.userRole}
       onOpenSituation={() => { setSituationError(''); setSituationModalOpen(true) }}
       onCloseSituation={() => setSituationModalOpen(false)}
       onSituationContext={setSituationContext}
@@ -1736,6 +1738,7 @@ type ManagerDealScreenProps = {
   assistantWorkspace: ManagerAssistantWorkspace | null
   assistantLoading: boolean
   assistantOpen: boolean
+  userRole: AuthUser['role']
   onOpenSituation: () => void
   onCloseSituation: () => void
   onSituationContext: (value: string) => void
@@ -1802,6 +1805,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       ) : null}
       {props.assistantOpen && props.assistantWorkspace ? <ManagerAssistantModal
         deal={props.deal}
+        userRole={props.userRole}
         workspace={props.assistantWorkspace}
         draft={props.quickHelpDraft}
         error={props.quickHelpError}
@@ -2592,6 +2596,7 @@ function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false, varian
 
 function ManagerAssistantModal(props: {
   deal: DealControlDeal
+  userRole: AuthUser['role']
   workspace: ManagerAssistantWorkspace
   draft: string
   error: string
@@ -2609,6 +2614,9 @@ function ManagerAssistantModal(props: {
   onRecommendationEvent: (eventType: 'shown' | 'viewed', recommendationId: number) => void
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups' | 'companion'>('answer')
+  const [workspaceMode, setWorkspaceMode] = useState<'work' | 'lab'>('work')
+  const [labUnsaved, setLabUnsaved] = useState(false)
+  const [labLeaveTick, setLabLeaveTick] = useState(0)
   const [assistantMode, setAssistantMode] = useState<ManagerAssistantMode>('push')
   const [followups, setFollowups] = useState<ManagerFollowupsRecord | null>(null)
   const [followupsJob, setFollowupsJob] = useState<ManagerFollowupsJob | null>(null)
@@ -2677,10 +2685,10 @@ function ManagerAssistantModal(props: {
   }, [busy, onFreshAnswerConsumed, props.freshEntryId, view, viewingLatest])
 
   useEffect(() => {
-    if (view !== 'answer' || visibleEntryId == null) return
+    if (workspaceMode === 'lab' || view !== 'answer' || visibleEntryId == null) return
     onRecommendationEvent('shown', visibleEntryId)
     onRecommendationEvent('viewed', visibleEntryId)
-  }, [onRecommendationEvent, view, visibleEntryId])
+  }, [onRecommendationEvent, view, visibleEntryId, workspaceMode])
 
   async function send() {
     if (view === 'companion') {
@@ -2702,6 +2710,15 @@ function ManagerAssistantModal(props: {
   function switchMode(next: ManagerAssistantMode) {
     if (next === assistantMode) return
     setAssistantMode(next)
+  }
+
+  function requestWorkspaceMode(next: 'work' | 'lab') {
+    if (next === workspaceMode) return
+    if (workspaceMode === 'lab' && next === 'work' && labUnsaved) {
+      setLabLeaveTick((value) => value + 1)
+      return
+    }
+    setWorkspaceMode(next)
   }
 
   function navigateHistory(nextOffset: number) {
@@ -2819,10 +2836,11 @@ function ManagerAssistantModal(props: {
   }
 
   return createPortal(<div className="dc-manager-assistant-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
-    <section className={workspaceModeClassName(assistantMode)} role="dialog" aria-modal="true" aria-label="Дожим сделки">
+    <section className={`${workspaceModeClassName(assistantMode)}${workspaceMode === 'lab' ? ' is-prompt-lab' : ''}`} role="dialog" aria-modal="true" aria-label={workspaceMode === 'lab' ? 'Prompt Lab' : 'Дожим сделки'}>
       <aside className="dc-manager-assistant-sidebar">
-        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>Дожим</strong></div></div>
+        <div className="dc-manager-assistant-brand"><span>AI</span><div><strong>{workspaceMode === 'lab' ? 'Prompt Lab' : 'Дожим'}</strong></div></div>
         <div className="dc-manager-assistant-deal"><small>Сделка</small><strong>{props.deal.title || `Сделка #${props.deal.deal_id}`}</strong><span>#{props.deal.deal_id} · {formatDealPipelineStage(props.deal)}<br />{task ? compactTaskText(task.subject) : 'Нет открытой задачи'}</span><em className="dc-manager-disc">{discProfileLabel(props.workspace.disc_profile)}</em></div>
+        {workspaceMode === 'lab' ? <p className="dc-manager-assistant-context-status">Режим лаборатории: сравнение CURRENT и EXPERIMENT без записи в рабочий контур.</p> : <>
         <nav>
           <button className={view === 'answer' ? 'active' : ''} onClick={showAnswer}><span>✦</span>Дожим</button>
           <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}><span>↻</span>История</button>
@@ -2832,19 +2850,34 @@ function ManagerAssistantModal(props: {
         </nav>
         <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
+        </>}
       </aside>
       <main className="dc-manager-assistant-main">
         <header>
-          <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
+          {props.userRole === 'admin' ? <div className="dc-manager-mode-switch dc-prompt-lab-mode" role="tablist" aria-label="Режим workspace">
+            <button type="button" role="tab" aria-selected={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'active' : ''} onClick={() => requestWorkspaceMode('work')}>Рабочий</button>
+            <button type="button" role="tab" aria-selected={workspaceMode === 'lab'} className={workspaceMode === 'lab' ? 'active' : ''} onClick={() => requestWorkspaceMode('lab')}>Prompt Lab</button>
+          </div> : null}
+          {workspaceMode === 'work' ? <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
             <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
             <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
-          </div>
-          {view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => navigateHistory(safeHistoryOffset + 1)}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => navigateHistory(safeHistoryOffset - 1)}>Следующий →</button></nav> : null}
+          </div> : null}
+          {workspaceMode === 'work' && view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => navigateHistory(safeHistoryOffset + 1)}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => navigateHistory(safeHistoryOffset - 1)}>Следующий →</button></nav> : null}
           <span className="dc-manager-disc-badge">{discProfileLabel(props.workspace.disc_profile)}</span>
           <span className="dc-manager-context-chip">Контекст учтён</span>
           <button onClick={props.onClose} aria-label="Закрыть">×</button>
         </header>
         <div className="dc-manager-assistant-content">
+          {workspaceMode === 'lab' ? <PromptLabWorkspace
+            dealId={props.deal.deal_id}
+            productionMode={assistantMode}
+            question={props.draft}
+            onQuestion={props.onDraft}
+            onCopy={props.onCopy}
+            leaveRequest={labLeaveTick}
+            onLeaveAttempt={setLabUnsaved}
+            onConfirmLeave={() => setWorkspaceMode('work')}
+          /> : <>
           <div className="dc-manager-assistant-checklist-mobile">
             <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
           </div>
@@ -2906,14 +2939,15 @@ function ManagerAssistantModal(props: {
             onGenerate={(regenerate) => void generateCompanion(regenerate)}
             onCopy={(text) => void props.onCopy(text, 'Сопроводительный текст')}
           /> : null}
+          </>}
         </div>
-        <footer>
+        {workspaceMode === 'lab' ? null : <footer>
           <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
           <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={view === 'companion' ? 'Как переписать: короче, без даты, клиент сам наберёт…' : 'Уточните рычаг, тон или что уже пробовали...'} aria-label={view === 'companion' ? 'Уточнение сопроводительного текста' : 'Уточнение рекомендации'} />
           <button className="dc-button primary" disabled={footerBusy || !props.draft.trim() || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
           {view === 'companion' && props.draft.trim() && !companionMessage ? <small className="dc-manager-error">Сначала сформируйте сопроводительный текст</small> : null}
           {props.error && visibleTurn && view !== 'companion' ? <small className="dc-manager-error">{props.error}</small> : null}
-        </footer>
+        </footer>}
       </main>
     </section>
   </div>, document.body)

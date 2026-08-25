@@ -21,6 +21,7 @@ from openai_api.llm.deal_manager_situation import (
 )
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.manager_tactics import load_manager_tactics, manager_tactic_ids
+from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 ASSISTANT_MODES = ("push", "reanimator")
 _STRATEGIES = ("primary", "alternative", "pattern_break")
@@ -399,6 +400,50 @@ def build_push_prompt(
     )
 
 
+def quick_help_static_prompt(mode: str = "reanimator") -> str:
+    """Production instruction prefix without CRM/context sections."""
+    if mode not in ASSISTANT_MODES:
+        raise ValueError("mode должен быть push или reanimator")
+    builder = build_push_prompt if mode == "push" else build_reanimator_prompt
+    full = builder(
+        question="",
+        analysis_projection={},
+        deal={},
+        current_bitrix_task=None,
+        situation_projection={},
+        communication_pattern_context={},
+        manager_tactics="",
+    )
+    return static_prompt_from_full(full, "MANAGER_TACTICS:")
+
+
+def assemble_quick_help_prompt(
+    *,
+    prompt_template: str,
+    question: str,
+    analysis_projection: dict[str, Any],
+    deal: dict[str, Any],
+    current_bitrix_task: dict[str, Any] | None,
+    situation_projection: dict[str, Any],
+    communication_pattern_context: dict[str, Any],
+    manager_tactics: str | None = None,
+) -> str:
+    tactics = manager_tactics if manager_tactics is not None else load_manager_tactics()
+    question = str(question or "").strip()[:MAX_MANAGER_CONTEXT_CHARS]
+    return assemble_prompt(
+        prompt_template,
+        _shared_context_sections(
+            analysis_projection=analysis_projection,
+            deal=deal,
+            current_bitrix_task=current_bitrix_task,
+            situation_projection=situation_projection,
+            communication_pattern_context=communication_pattern_context,
+            manager_tactics=tactics,
+            question=question,
+        ),
+    )
+
+
 def build_quick_help_prompt(
     *,
     question: str,
@@ -436,6 +481,8 @@ def generate_deal_manager_quick_help(
     mode: str = "reanimator",
     model: str = MANAGER_MODEL,
     reasoning_effort: str = MANAGER_REASONING_EFFORT,
+    prompt_template: str | None = None,
+    call_type: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if mode not in ASSISTANT_MODES:
         raise ValueError("mode должен быть push или reanimator")
@@ -443,16 +490,28 @@ def generate_deal_manager_quick_help(
     tactic_ids = manager_tactic_ids(tactics)
     if not tactic_ids:
         raise ValueError("В базе практических тактик не найдены стабильные ID")
-    prompt = build_quick_help_prompt(
-        question=question,
-        analysis_projection=analysis_projection,
-        deal=deal,
-        current_bitrix_task=current_bitrix_task,
-        situation_projection=situation_projection,
-        communication_pattern_context=communication_pattern_context,
-        manager_tactics=tactics,
-        mode=mode,
-    )
+    if prompt_template:
+        prompt = assemble_quick_help_prompt(
+            prompt_template=prompt_template,
+            question=question,
+            analysis_projection=analysis_projection,
+            deal=deal,
+            current_bitrix_task=current_bitrix_task,
+            situation_projection=situation_projection,
+            communication_pattern_context=communication_pattern_context,
+            manager_tactics=tactics,
+        )
+    else:
+        prompt = build_quick_help_prompt(
+            question=question,
+            analysis_projection=analysis_projection,
+            deal=deal,
+            current_bitrix_task=current_bitrix_task,
+            situation_projection=situation_projection,
+            communication_pattern_context=communication_pattern_context,
+            manager_tactics=tactics,
+            mode=mode,
+        )
     cache_key = (
         "neuro-rop:deal-manager-push:v4"
         if mode == "push"
@@ -468,7 +527,7 @@ def generate_deal_manager_quick_help(
         reasoning_effort=reasoning_effort,
         max_output_tokens=QUICK_HELP_MAX_OUTPUT_TOKENS,
         log_title=f"deal manager {mode} prompt",
-        call_type=f"deal_manager_quick_help_{mode}",
+        call_type=call_type or f"deal_manager_quick_help_{mode}",
         prompt_cache_key=cache_key,
         cache_prefixes=[knowledge_prefix, deal_prefix],
         trace_entity_type="deal",

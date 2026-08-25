@@ -11,6 +11,7 @@ from openai_api.llm.deal_manager_quick_help import (
     project_locked_move,
     project_quick_help_for_material,
 )
+from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 
 MAX_FULL_SCRIPT_OUTPUT_TOKENS = 6000
@@ -227,11 +228,48 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
     ])
 
 
+def full_script_static_prompt(script_mode: str = "message") -> str:
+    dummy_help = {
+        "mode": "push",
+        "situation_summary": "x",
+        "next_action": "x",
+        "expected_result": "x",
+        "pressure_lever": {"title": "x", "rationale": "x"},
+        "strategy_labels": {"primary": "a", "alternative": "b", "pattern_break": "c"},
+        "client_messages": {"primary": "m", "alternative": "m2", "pattern_break": "m3"},
+        "lifehacks": [],
+        "fallback_action": "f",
+    }
+    full = build_full_script_prompt(
+        analysis_projection={},
+        situation_projection={},
+        deal={},
+        current_bitrix_task=None,
+        checklist={},
+        communication_pattern_context={},
+        quick_help=dummy_help,
+        selected_strategy="primary",
+        relevant_tactics=[],
+        script_mode=script_mode,
+        objection_handling={"items": []},
+    )
+    return static_prompt_from_full(full, "ANALYSIS_CONTEXT:")
+
+
+def assemble_full_script_prompt(*, prompt_template: str, **kwargs: Any) -> str:
+    full = build_full_script_prompt(**kwargs)
+    return assemble_prompt(prompt_template, [full[len(static_prompt_from_full(full, "ANALYSIS_CONTEXT:")):].lstrip()])
+
+
 def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     selected_strategy = str(kwargs["selected_strategy"])
     script_mode = str(kwargs.get("script_mode") or "message")
     if script_mode not in SCRIPT_MODES:
         raise ValueError("Неизвестный режим сценария")
+    prompt_template = kwargs.pop("prompt_template", None)
+    model = kwargs.pop("model", None) or MANAGER_MODEL
+    reasoning_effort = kwargs.pop("reasoning_effort", None) or MANAGER_REASONING_EFFORT
+    call_type = kwargs.pop("call_type", None) or f"deal_manager_full_script_{script_mode}"
     relevant_tactics = kwargs.get("relevant_tactics")
     objection_handling = kwargs.get("objection_handling")
     allowed_tactic_ids = {
@@ -242,12 +280,12 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         str(item.get("objection_id") or "").strip()
         for item in objection_handling.get("items", []) if isinstance(item, dict)
     } if isinstance(objection_handling, dict) else set()
-    prompt = build_full_script_prompt(**kwargs)
+    prompt = assemble_full_script_prompt(prompt_template=prompt_template, **kwargs) if prompt_template else build_full_script_prompt(**kwargs)
     cache_version = "v5" if script_mode == "call" else "v4"
     result, metadata = call_structured_output_json(
-        prompt, schema=full_script_schema(script_mode), schema_name="deal_manager_full_script", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
-        log_title="deal manager full script prompt", call_type=f"deal_manager_full_script_{script_mode}",
+        prompt, schema=full_script_schema(script_mode), schema_name="deal_manager_full_script", model=model,
+        reasoning_effort=reasoning_effort, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
+        log_title="deal manager full script prompt", call_type=call_type,
         prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:{cache_version}",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
         trace_entity_type="deal",

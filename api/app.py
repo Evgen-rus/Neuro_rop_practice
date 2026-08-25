@@ -100,6 +100,17 @@ from api.deal_manager_full_script import (
 )
 from api.deal_manager_followups import get_followups_job, get_followups_workspace, start_followups_job
 from api.deal_manager_companion import get_companion_job, get_companion_workspace, start_companion_job
+from api.prompt_lab import (
+    bootstrap_prompt_lab,
+    create_snapshot,
+    export_payload,
+    get_lab_job,
+    save_version,
+    start_lab_run,
+)
+from api.prompt_lab_modules import get_module
+from storage import prompt_lab_db as prompt_lab_storage
+from storage.prompt_lab_db import DEFAULT_PROMPT_LAB_DB_PATH
 from api.deal_manager_situation import (
     StorageContractUnavailable,
     confirm_deal_manager_situation,
@@ -322,6 +333,51 @@ class DealManagerCompanionRequest(BaseModel):
     confirm_paid: bool = False
     regenerate: bool = False
     manager_note: str = Field(default="", max_length=4000)
+
+
+class PromptLabSnapshotRequest(BaseModel):
+    deal_id: str = Field(min_length=1, max_length=32)
+
+
+class PromptLabRunRequest(BaseModel):
+    deal_id: str = Field(min_length=1, max_length=32)
+    module_key: str = Field(min_length=1, max_length=80)
+    branch: Literal["current", "experiment"]
+    snapshot_id: int | None = Field(default=None, ge=1)
+    session_id: int | None = Field(default=None, ge=1)
+    turn_id: int | None = Field(default=None, ge=1)
+    prompt_template: str | None = Field(default=None, max_length=120000)
+    prompt_version_id: int | None = Field(default=None, ge=1)
+    model: str | None = Field(default=None, max_length=80)
+    reasoning: str | None = Field(default=None, max_length=32)
+    question: str = Field(default="", max_length=4000)
+    selected_strategy: Literal["primary", "alternative", "pattern_break"] | None = None
+    upstream_run_id: int | None = Field(default=None, ge=1)
+    manager_note: str = Field(default="", max_length=4000)
+    previous_message: str = Field(default="", max_length=1200)
+    reuse_existing: bool | None = None
+
+
+class PromptLabVersionRequest(BaseModel):
+    prompt_key: str = Field(min_length=1, max_length=80)
+    prompt_text: str = Field(min_length=1, max_length=120000)
+    based_on_id: int | None = Field(default=None, ge=1)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class PromptLabVersionPatchRequest(BaseModel):
+    candidate: bool | None = None
+    verified: bool | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    archived: bool | None = None
+
+
+class PromptLabReviewRequest(BaseModel):
+    current_run_id: int = Field(ge=1)
+    experiment_run_id: int = Field(ge=1)
+    prompt_version_id: int | None = Field(default=None, ge=1)
+    verdict: Literal["current_better", "same", "experiment_better", "both_bad"]
+    comment: str | None = Field(default=None, max_length=4000)
 
 
 class DealManagerCommunicationCompletedRequest(BaseModel):
@@ -1316,6 +1372,200 @@ def deal_manager_assistant_workspace_get(deal_id: str) -> dict[str, Any]:
         return get_manager_assistant_workspace(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур помощника ещё не подключён") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _require_prompt_lab_deal(deal_id: str) -> dict[str, Any]:
+    user = _require_admin()
+    require_deal(deal_id, user=user, action="open")
+    return user
+
+
+@app.get("/api/prompt-lab/bootstrap")
+def prompt_lab_bootstrap_get(
+    deal_id: str = Query(min_length=1),
+    module_key: str = Query(default="quick_help.push"),
+) -> dict[str, Any]:
+    _require_prompt_lab_deal(deal_id)
+    try:
+        get_module(module_key)
+        return bootstrap_prompt_lab(deal_id=deal_id, module_key=module_key)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/prompt-lab/snapshots")
+def prompt_lab_snapshot_create(body: PromptLabSnapshotRequest) -> dict[str, Any]:
+    _require_prompt_lab_deal(body.deal_id)
+    try:
+        return create_snapshot(deal_id=body.deal_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/prompt-lab/runs")
+def prompt_lab_run_start(body: PromptLabRunRequest) -> dict[str, Any]:
+    _require_prompt_lab_deal(body.deal_id)
+    try:
+        return start_lab_run(
+            deal_id=body.deal_id,
+            module_key=body.module_key,
+            branch=body.branch,
+            snapshot_id=body.snapshot_id,
+            session_id=body.session_id,
+            turn_id=body.turn_id,
+            prompt_template=body.prompt_template,
+            prompt_version_id=body.prompt_version_id,
+            model=body.model,
+            reasoning=body.reasoning,
+            question=body.question,
+            selected_strategy=body.selected_strategy,
+            upstream_run_id=body.upstream_run_id,
+            manager_note=body.manager_note,
+            previous_message=body.previous_message,
+            reuse_existing=body.reuse_existing,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/prompt-lab/jobs/{job_id}")
+def prompt_lab_job_get(job_id: str) -> dict[str, Any]:
+    _require_admin()
+    job = get_lab_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание Prompt Lab не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    if job.get("run_id"):
+        job["run"] = prompt_lab_storage.get_run(DEFAULT_PROMPT_LAB_DB_PATH, int(job["run_id"]))
+    return job
+
+
+@app.get("/api/prompt-lab/runs")
+def prompt_lab_runs_list(
+    deal_id: str | None = Query(default=None),
+    module_key: str | None = Query(default=None),
+    snapshot_id: int | None = Query(default=None, ge=1),
+    prompt_version_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    _require_admin()
+    if deal_id:
+        require_deal(deal_id, action="open")
+    runs = prompt_lab_storage.list_runs(
+        DEFAULT_PROMPT_LAB_DB_PATH,
+        deal_id=deal_id,
+        module_key=module_key,
+        snapshot_id=snapshot_id,
+        prompt_version_id=prompt_version_id,
+        limit=limit,
+    )
+    for run in runs:
+        run.pop("effective_prompt", None)
+        run.pop("prompt_text", None)
+    return {"runs": runs}
+
+
+@app.get("/api/prompt-lab/runs/{run_id}")
+def prompt_lab_run_get(run_id: int) -> dict[str, Any]:
+    _require_admin()
+    run = prompt_lab_storage.get_run(DEFAULT_PROMPT_LAB_DB_PATH, int(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Lab run не найден")
+    require_deal(str(run["deal_id"]), action="open")
+    return run
+
+
+@app.get("/api/prompt-lab/versions")
+def prompt_lab_versions_list(
+    prompt_key: str | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+    candidates_only: bool = Query(default=False),
+) -> dict[str, Any]:
+    _require_admin()
+    return {
+        "versions": prompt_lab_storage.list_prompt_versions(
+            DEFAULT_PROMPT_LAB_DB_PATH,
+            prompt_key=prompt_key,
+            include_archived=include_archived,
+            candidates_only=candidates_only,
+        )
+    }
+
+
+@app.post("/api/prompt-lab/versions")
+def prompt_lab_version_create(body: PromptLabVersionRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return save_version(
+            prompt_key=body.prompt_key,
+            prompt_text=body.prompt_text,
+            based_on_id=body.based_on_id,
+            note=body.note,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.patch("/api/prompt-lab/versions/{version_id}")
+def prompt_lab_version_patch(version_id: int, body: PromptLabVersionPatchRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return prompt_lab_storage.update_prompt_version_labels(
+            DEFAULT_PROMPT_LAB_DB_PATH,
+            int(version_id),
+            candidate=body.candidate,
+            verified=body.verified,
+            note=body.note,
+            archived=body.archived,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.delete("/api/prompt-lab/versions/{version_id}")
+def prompt_lab_version_delete(version_id: int, hard: bool = Query(default=False)) -> dict[str, Any]:
+    _require_admin()
+    try:
+        if hard:
+            prompt_lab_storage.delete_prompt_version(DEFAULT_PROMPT_LAB_DB_PATH, int(version_id))
+            return {"ok": True, "deleted": True}
+        version = prompt_lab_storage.archive_prompt_version(DEFAULT_PROMPT_LAB_DB_PATH, int(version_id))
+        return {"ok": True, "version": version}
+    except ValueError as error:
+        raise HTTPException(status_code=409 if "участвовала" in str(error) else 400, detail=str(error)) from error
+
+
+@app.post("/api/prompt-lab/reviews")
+def prompt_lab_review_create(body: PromptLabReviewRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        current = prompt_lab_storage.get_run(DEFAULT_PROMPT_LAB_DB_PATH, body.current_run_id)
+        experiment = prompt_lab_storage.get_run(DEFAULT_PROMPT_LAB_DB_PATH, body.experiment_run_id)
+        if current is None or experiment is None:
+            raise ValueError("Не найдены Lab runs для сравнения")
+        require_deal(str(current["deal_id"]), action="open")
+        return prompt_lab_storage.save_review(
+            DEFAULT_PROMPT_LAB_DB_PATH,
+            current_run_id=body.current_run_id,
+            experiment_run_id=body.experiment_run_id,
+            prompt_version_id=body.prompt_version_id,
+            verdict=body.verdict,
+            comment=body.comment,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/prompt-lab/export")
+def prompt_lab_export_get(
+    mode: str = Query(default="current"),
+    prompt_key: str | None = Query(default=None),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return export_payload(mode=mode, prompt_key=prompt_key)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
