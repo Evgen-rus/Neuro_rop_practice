@@ -410,18 +410,36 @@ class PurgeV2TablesTests(unittest.TestCase):
 class CompactPolicyTests(unittest.TestCase):
     """P3: both V2 prompts receive the compact policy subset with budget blocks."""
 
-    def test_policy_builder_uses_existing_knowledge_files(self) -> None:
-        project_root = Path(__file__).resolve().parents[1]
-        policy = build_v2_compact_policy(deal_dir=project_root / "reports" / "any", deal_id="7")
-        expected = {
-            "technical_data.md", "risk_signals.md", "call_attempt_rules.md",
-            "commercial_offer_followup.md", "objections.md", "funnel.md",
+    @staticmethod
+    def _write_knowledge_files(knowledge_dir: Path) -> None:
+        knowledge_dir.mkdir(parents=True)
+        contents = {
+            "technical_data.md": "## Общий принцип\nЕсли для подбора оборудования не хватает технических данных, запросить их.\n",
+            "risk_signals.md": "## Главный принцип\nКаждый контакт должен либо продвинуть клиента, либо уточнить риск.\n",
+            "call_attempt_rules.md": "## Первые 3 дня\nСогласовать следующую попытку связи.\n",
+            "commercial_offer_followup.md": "## Хороший результат после КП\nЗафиксировать следующий шаг.\n",
+            "objections.md": "## Возражения\nПроверить причину сомнений клиента.\n",
+            "funnel.md": "## Общая логика\nСледующий шаг должен быть конкретным.\n",
         }
-        self.assertTrue(expected.issubset(set(policy["knowledge_files"])))
-        rendered = render_v2_compact_policy(policy)
-        self.assertIn("Если для подбора оборудования не хватает технических данных", rendered)
-        self.assertIn("Каждый контакт должен либо продвинуть клиента", rendered)
-        self.assertNotIn("CRM_STAGE_POLICY", rendered)
+        for filename, content in contents.items():
+            (knowledge_dir / filename).write_text(content, encoding="utf-8")
+
+    def test_policy_builder_uses_existing_knowledge_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            knowledge_dir = Path(temp_dir) / "knowledge"
+            self._write_knowledge_files(knowledge_dir)
+            with patch("openai_api.llm.analyze_deal.DEFAULT_KNOWLEDGE_DIR", knowledge_dir):
+                policy = build_v2_compact_policy(deal_dir=Path(temp_dir) / "reports" / "any", deal_id="7")
+
+            expected = {
+                "technical_data.md", "risk_signals.md", "call_attempt_rules.md",
+                "commercial_offer_followup.md", "objections.md", "funnel.md",
+            }
+            self.assertEqual(set(policy["knowledge_files"]), expected)
+            rendered = render_v2_compact_policy(policy)
+            self.assertIn("Если для подбора оборудования не хватает технических данных", rendered)
+            self.assertIn("Каждый контакт должен либо продвинуть клиента", rendered)
+            self.assertNotIn("CRM_STAGE_POLICY", rendered)
 
     def test_both_prompts_include_compact_policy_text(self) -> None:
         state = _bootstrap_state()
@@ -445,12 +463,20 @@ class CompactPolicyTests(unittest.TestCase):
         self.assertIn("## V2_COMPACT_POLICY\nPOLICY_MARKER", materialization_prompt)
 
     def test_policy_projection_tracks_source_content(self) -> None:
-        project_root = Path(__file__).resolve().parents[1]
-        policy = build_v2_compact_policy(deal_dir=project_root / "reports" / "any", deal_id="7")
-        source = (project_root / "knowledge" / "clients" / "praktikm" / "risk_signals.md").read_text(encoding="utf-8")
-        marker = "Оценивать нужно не только качество звонка"
-        self.assertIn(marker, source)
-        self.assertIn(marker, policy["sources"]["risk_signals.md"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            knowledge_dir = Path(temp_dir) / "knowledge"
+            self._write_knowledge_files(knowledge_dir)
+            marker = "Тестовый маркер риска для автономной фикстуры"
+            risk_signals = knowledge_dir / "risk_signals.md"
+            risk_signals.write_text(
+                f"## Главный принцип\n{marker}\n",
+                encoding="utf-8",
+            )
+            with patch("openai_api.llm.analyze_deal.DEFAULT_KNOWLEDGE_DIR", knowledge_dir):
+                policy = build_v2_compact_policy(deal_dir=Path(temp_dir) / "reports" / "any", deal_id="7")
+
+            self.assertIn(marker, risk_signals.read_text(encoding="utf-8"))
+            self.assertIn(marker, policy["sources"]["risk_signals.md"])
 
     def test_diagnostics_and_stage_policy_have_separate_prompt_blocks(self) -> None:
         diagnostics = render_v2_compact_diagnostics(build_v2_compact_diagnostics({
