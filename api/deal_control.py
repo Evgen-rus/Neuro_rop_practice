@@ -75,12 +75,14 @@ DAILY_COMMUNICATION_TARGET = 3
 CHECKLIST_LIMIT = 5
 
 # Рабочий срез контроля сделок. Воронка 15 без отсечки по этапам — как сейчас.
-# 17: с «Потребность выявлена», без закрытых. 47: с «Вышли на ЛПР», без закрытых.
+# 17 и 47: все открытые этапы, без закрытых успешных и неуспешных.
 # None = все открытые этапы этой воронки.
 DEAL_CONTROL_PIPELINE_STAGE_IDS: dict[str, frozenset[str] | None] = {
     "15": None,
     "17": frozenset(
         {
+            "C17:NEW",
+            "C17:PREPARATION",
             "C17:UC_3KRF2B",
             "C17:UC_QXDZOT",
             "C17:UC_U9TY5N",
@@ -98,6 +100,9 @@ DEAL_CONTROL_PIPELINE_STAGE_IDS: dict[str, frozenset[str] | None] = {
     ),
     "47": frozenset(
         {
+            "C47:NEW",
+            "C47:PREPARATION",
+            "C47:PREPAYMENT_INVOIC",
             "C47:EXECUTING",
             "C47:UC_W9WXD3",
             "C47:FINAL_INVOICE",
@@ -386,7 +391,7 @@ def _deal_row(deal: dict[str, Any], *, source: str, stage_names: dict[str, str],
 
 
 def _stage_allowed(pipeline_id: str, stage_id: str) -> bool:
-    """Воронка 15 и неизвестные воронки — все открытые этапы. 17/47 — только рабочий срез."""
+    """Воронка 15 и неизвестные воронки — все открытые этапы. 17/47 — открытые, без закрытых."""
     allowed = DEAL_CONTROL_PIPELINE_STAGE_IDS.get(str(pipeline_id))
     if allowed is None:
         return True

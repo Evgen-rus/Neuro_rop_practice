@@ -634,6 +634,8 @@ class DealControlTests(unittest.TestCase):
                     deal("402", manager_id="10", category_id="47", stage_id="C47:PREPAYMENT_INVOIC"),
                     deal("403", manager_id="10", category_id="47", stage_id="C47:EXECUTING"),
                     deal("404", manager_id="20", category_id="47", stage_id="C47:EXECUTING"),
+                    deal("305", manager_id="10", category_id="17", stage_id="C17:WON"),
+                    deal("405", manager_id="10", category_id="47", stage_id="C47:LOSE"),
                 ],
             )
             with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
@@ -641,7 +643,7 @@ class DealControlTests(unittest.TestCase):
                     db_path=db_path, client=client, now=datetime(2026, 7, 20, 10, tzinfo=MSK)
                 )
             active_ids = {item["deal_id"] for item in result["deals"]}
-            self.assertEqual(active_ids, {"101", "201", "302", "303", "403"})
+            self.assertEqual(active_ids, {"101", "201", "301", "302", "303", "401", "402", "403"})
             self.assertTrue(all(item["is_active"] for item in result["deals"]))
 
     def test_sync_fetches_activities_only_for_active_deals_and_includes_reactivated_deals(self):

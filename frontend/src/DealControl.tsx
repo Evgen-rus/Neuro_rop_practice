@@ -932,7 +932,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <p>Сохраняем локальную выборку. Bitrix используется только для чтения.</p>
         <label>Стартовые ID сделок<textarea value={initialIds} onChange={(event) => setInitialIds(event.target.value)} /></label>
         <label>ID ответственных для новых сделок<textarea value={managerIds} onChange={(event) => setManagerIds(event.target.value)} /></label>
-        <p>Рабочие воронки уже заданы: 15 «Новые клиенты - Оборудование» (все открытые этапы), 17 «Повторные клиенты - Оборудование» с этапа «Потребность выявлена», 47 «Отдел продаж 2» с этапа «Вышли на ЛПР».</p>
+        <p>Рабочие воронки уже заданы: 15 «Новые клиенты - Оборудование», 17 «Повторные клиенты - Оборудование» и 47 «Отдел продаж 2» — все открытые этапы, без закрытых успешных и неуспешных.</p>
         <div><button className="dc-button primary" onClick={() => void saveScope()}>Сохранить выборку</button>{onExit ? <button className="dc-button" onClick={onExit}>Назад</button> : null}</div>
         {error ? <p className="dc-alert error">{error}</p> : null}
       </section>
