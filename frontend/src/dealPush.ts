@@ -65,6 +65,18 @@ export function currentEntryForMode(
   }) || null
 }
 
+export function entriesForCurrentContext(
+  entries: ManagerQuickHelpEntry[],
+  sourceReportId?: number | null,
+  situationReviewId?: number | null,
+): ManagerQuickHelpEntry[] {
+  if (sourceReportId == null || situationReviewId == null) return []
+  return entries.filter((entry) => (
+    Number(entry.source_report_id) === Number(sourceReportId)
+    && Number(entry.situation_review_id) === Number(situationReviewId)
+  ))
+}
+
 export function entriesForMode(entries: ManagerQuickHelpEntry[], mode: AssistantMode): ManagerQuickHelpEntry[] {
   return [...entries].filter((entry) => entryMode(entry) === mode).sort((first, second) => first.id - second.id)
 }

@@ -85,8 +85,8 @@ import { useQuickHelpReveal } from './useQuickHelpReveal'
 import {
   assistantAnswerPane,
   currentEntryForMode,
+  entriesForCurrentContext,
   entryForTurn,
-  missingCurrentModes,
   quickHelpAnswerReady,
   sharedTurns,
   workspaceModeClassName,
@@ -1497,20 +1497,23 @@ function DealDetail(props: {
     if (copied) props.onNotice('Контекст скопирован. Вставьте его в комментарий Bitrix.')
   }
 
-  async function requestQuickHelp(question: string, mode?: ManagerAssistantMode) {
-    if (!props.deal) return
+  async function requestQuickHelp(question: string, mode?: ManagerAssistantMode): Promise<boolean> {
+    if (!props.deal) return false
     const normalized = question.trim()
     if (normalized.length > 4000) {
       setQuickHelpError('Опиши вопрос от 1 до 4000 символов.')
-      return
+      return false
     }
-    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
+    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return false
     setQuickHelpError('')
     setFreshQuickHelpId(null)
     try {
       const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true, mode)
-      setQuickHelpDraft('')
       setQuickHelpJob(started)
+      const requestedMode = mode || 'push'
+      const accepted = !started.mode || started.mode === requestedMode
+      if (!accepted) return false
+      setQuickHelpDraft('')
       if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
       if (started.status === 'done') {
         const knownId = freshQuickHelpIdFromJob(started)
@@ -1521,21 +1524,19 @@ function DealDetail(props: {
           if (fallback) setFreshQuickHelpId(fallback)
         }
       }
+      return true
     } catch (reason) {
       setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
+      return true
     }
   }
 
   async function openAssistant() {
+    setQuickHelpError('')
     const workspace = await loadAssistantWorkspace(true)
     if (!workspace) return
     if (managerTelemetryEnabled && activeDealId) {
       void recordQuickHelpOpened(activeDealId).catch(() => undefined)
-    }
-    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status) && quickHelpAnswerReady(quickHelpJob)) return
-    if (quickHelpJob && ['queued', 'running'].includes(quickHelpJob.status)) return
-    if (missingCurrentModes(workspace.current_by_mode).length) {
-      await requestQuickHelp('')
     }
   }
 
@@ -1746,7 +1747,7 @@ type ManagerDealScreenProps = {
   onPersistContextToBitrix: () => void
   onCopySavedContext: () => void
   onQuickHelpDraft: (value: string) => void
-  onQuickHelp: (question: string, mode?: ManagerAssistantMode) => Promise<void>
+  onQuickHelp: (question: string, mode?: ManagerAssistantMode) => Promise<boolean>
   onOpenAssistant: () => void
   onCloseAssistant: () => void
   freshQuickHelpId: number | null
@@ -2391,7 +2392,7 @@ function ManagerAssistantModal(props: {
   error: string
   job: ManagerQuickHelpJob | null
   onDraft: (value: string) => void
-  onRequest: (question: string, mode?: ManagerAssistantMode) => Promise<void>
+  onRequest: (question: string, mode?: ManagerAssistantMode) => Promise<boolean>
   onClose: () => void
   onEditSituation: () => void
   onCopy: (text: string, label: string) => Promise<void>
@@ -2415,26 +2416,35 @@ function ManagerAssistantModal(props: {
   const [companionJob, setCompanionJob] = useState<ManagerCompanionJob | null>(null)
   const [companionError, setCompanionError] = useState('')
   const [historyOffset, setHistoryOffset] = useState(0)
+  const [lazyMode, setLazyMode] = useState<ManagerAssistantMode | null>(null)
+  const lazyRequestKeyRef = useRef('')
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
-  const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const jobBusy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
   const companionBusy = Boolean(companionJob && ['queued', 'running'].includes(companionJob.status))
-  const footerBusy = view === 'companion' ? companionBusy : busy
   const companionMessage = String(companion?.content.message_text || '').trim()
-  const turns = sharedTurns(props.workspace.entries)
+  const currentEntries = entriesForCurrentContext(
+    props.workspace.entries,
+    props.workspace.source_report_id,
+    props.workspace.situation_review_id,
+  )
+  const turns = sharedTurns(currentEntries)
   const latestTurn = turns.length ? turns[turns.length - 1] : null
   const safeHistoryOffset = Math.min(historyOffset, Math.max(0, turns.length - 1))
   const visibleTurnIndex = turns.length - 1 - safeHistoryOffset
   const visibleTurn = safeHistoryOffset === 0 ? latestTurn : (turns[visibleTurnIndex] || null)
   const visibleEntry = entryForTurn(visibleTurn, assistantMode)
     || (safeHistoryOffset === 0
-      ? currentEntryForMode(
-          props.workspace.entries,
+          ? currentEntryForMode(
+          currentEntries,
           assistantMode,
           props.workspace.source_report_id,
           props.workspace.situation_review_id,
         )
       : null)
   const viewingLatest = safeHistoryOffset === 0
+  const autoModePending = workspaceMode === 'work' && view === 'answer' && viewingLatest && !visibleEntry && !props.error
+  const busy = jobBusy || lazyMode === assistantMode || autoModePending
+  const footerBusy = view === 'companion' ? companionBusy : busy
   const answerPane = assistantAnswerPane({
     hasTurn: Boolean(visibleTurn),
     busy,
@@ -2474,6 +2484,20 @@ function ManagerAssistantModal(props: {
   }, [busy, onFreshAnswerConsumed, props.freshEntryId, view, viewingLatest])
 
   useEffect(() => {
+    if (workspaceMode === 'lab' || view !== 'answer' || !viewingLatest || jobBusy || lazyMode === assistantMode || visibleEntry) return
+    const question = latestTurn?.origin === 'manager' ? latestTurn.question : ''
+    const requestKey = `${props.workspace.source_report_id || 0}:${props.workspace.situation_review_id || 0}:${latestTurn?.key || 'auto'}:${assistantMode}`
+    if (lazyRequestKeyRef.current === requestKey) return
+    lazyRequestKeyRef.current = requestKey
+    setLazyMode(assistantMode)
+    void props.onRequest(question, assistantMode).then((started) => {
+      if (!started && lazyRequestKeyRef.current === requestKey) lazyRequestKeyRef.current = ''
+    }).finally(() => {
+      setLazyMode((current) => current === assistantMode ? null : current)
+    })
+  }, [assistantMode, jobBusy, latestTurn, lazyMode, props, view, viewingLatest, visibleEntry, workspaceMode])
+
+  useEffect(() => {
     if (workspaceMode === 'lab' || view !== 'answer' || visibleEntryId == null) return
     onRecommendationEvent('shown', visibleEntryId)
     onRecommendationEvent('viewed', visibleEntryId)
@@ -2499,6 +2523,8 @@ function ManagerAssistantModal(props: {
   function switchMode(next: ManagerAssistantMode) {
     if (next === assistantMode) return
     setAssistantMode(next)
+    setHistoryOffset(0)
+    setView('answer')
   }
 
   function requestWorkspaceMode(next: 'work' | 'lab') {
@@ -2673,11 +2699,11 @@ function ManagerAssistantModal(props: {
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
             {answerPane === 'empty' ? <div className="dc-manager-assistant-empty">
               <p>Рекомендация по этой сделке ещё не сформирована.</p>
-              <button type="button" className="dc-button primary" onClick={() => void props.onRequest('')}>Сформировать</button>
+              <button type="button" className="dc-button primary" onClick={() => void props.onRequest('', assistantMode)}>Сформировать</button>
             </div> : null}
             {answerPane === 'error' ? <div className="dc-manager-assistant-empty is-error">
               <p>{props.error}</p>
-              <button type="button" className="dc-button primary" onClick={() => void props.onRequest('')}>Повторить</button>
+              <button type="button" className="dc-button primary" onClick={() => void props.onRequest(latestTurn?.origin === 'manager' ? latestTurn.question : '', assistantMode)}>Повторить</button>
             </div> : null}
             {visibleTurn ? <div className="dc-manager-assistant-turn" key={`${assistantMode}:${visibleTurn.key}`}>
               {visibleTurn.origin === 'auto' ? null : (
@@ -2700,7 +2726,7 @@ function ManagerAssistantModal(props: {
                 onBitrix={() => void prepareBitrixComment(visibleEntry)}
                 onToggleChecklistItem={props.onToggleChecklistItem}
                 onRevealFinished={onFreshAnswerConsumed}
-              /> : <p className="dc-manager-assistant-missing-mode">В этом режиме ответа на этот запрос ещё нет.</p>}
+              /> : busy ? null : <p className="dc-manager-assistant-missing-mode">В этом режиме ответа на этот запрос ещё нет.</p>}
             </div> : null}
             {busy ? <div className="dc-manager-assistant-typing" role="status"><span /><span /><span /><small>{props.job?.detail || 'Готовим рекомендацию'}</small></div> : null}
           </section> : null}

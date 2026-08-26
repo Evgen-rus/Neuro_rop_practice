@@ -4,6 +4,7 @@ import {
   STRATEGY_FALLBACK_LABELS,
   answerModeClassName,
   currentEntryForMode,
+  entriesForCurrentContext,
   entriesForMode,
   entryForTurn,
   entryMode,
@@ -116,6 +117,16 @@ test('current recommendation is per mode and does not mix voices', () => {
   assert.deepEqual(entriesForMode(entries, 'push').map((item) => item.id), [3, 4])
   assert.deepEqual(missingCurrentModes({ push, reanimator: null }), ['reanimator'])
   assert.deepEqual(missingCurrentModes({ push, reanimator }), [])
+})
+
+test('working thread excludes recommendations from an old report or situation', () => {
+  const oldReport = { ...push, id: 7, source_report_id: 16 }
+  const oldSituation = { ...push, id: 8, situation_review_id: 20 }
+  const current = { ...push, id: 9 }
+  const entries = entriesForCurrentContext([oldReport, oldSituation, current], 17, 21)
+  assert.deepEqual(entries.map((entry) => entry.id), [9])
+  assert.deepEqual(entriesForCurrentContext([oldReport], null, 21), [])
+  assert.equal(assistantAnswerPane({ hasTurn: entriesForCurrentContext([oldReport], 17, 21).length > 0, busy: true }), 'loading')
 })
 
 test('lifehacks are shown one at a time with position', () => {

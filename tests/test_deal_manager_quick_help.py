@@ -288,8 +288,10 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         calls = []
 
         def save_call(name, db_path, **kwargs):
-            calls.append((name, kwargs))
+            if name == "get_current_deal_manager_quick_help":
+                return None
             if name == "save_deal_manager_quick_help":
+                calls.append((name, kwargs))
                 return {"id": 31, "deal_id": "101"}
             raise AssertionError(name)
 
@@ -311,8 +313,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["quick_help_id"], 31)
         expand.assert_not_called()
-        self.assertEqual(len(calls), 2)
-        self.assertEqual([item[1]["mode"] for item in calls], ["push", "reanimator"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([item[1]["mode"] for item in calls], ["push"])
         self.assertEqual({item[1]["turn_id"] for item in calls}, {job["turn_id"]})
         name, kwargs = calls[0]
         self.assertEqual(name, "save_deal_manager_quick_help")
@@ -324,7 +326,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertEqual(communication_context["window_days"], 30)
         self.assertEqual(communication_context["recent_events"], [])
 
-    def test_first_mode_is_saved_before_second_mode_runs(self) -> None:
+    def test_only_requested_mode_is_generated(self) -> None:
         seen = []
 
         def generate(**kwargs):
@@ -333,6 +335,8 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             return (ANSWER, {})
 
         def save_call(name, db_path, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return None
             if name == "save_deal_manager_quick_help":
                 return {"id": 40 + len(seen) - 1, "deal_id": "101"}
             raise AssertionError(name)
@@ -346,14 +350,15 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 db_path=Path("state.sqlite"),
                 deal_id="101",
                 question="Что сказать клиенту после паузы?",
+                mode="reanimator",
                 confirm_paid=True,
             )
-        self.assertEqual(seen[0], ("push", {}))
-        self.assertEqual(seen[1][0], "reanimator")
-        self.assertEqual(seen[1][1].get("push"), 40)
+        self.assertEqual(seen, [("reanimator", {})])
 
     def test_quick_help_does_not_auto_expand_channel_cards(self) -> None:
         def save_call(name, db_path, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return None
             if name == "save_deal_manager_quick_help":
                 return {"id": 31, "deal_id": "101"}
             raise AssertionError(name)
@@ -513,7 +518,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("MANAGER_TACTICS", prefixes[0])
         self.assertNotIn("MANAGER_QUESTION", prefixes[1])
 
-    def test_ensure_reuses_current_modes_and_does_not_call_llm(self) -> None:
+    def test_ensure_reuses_only_requested_mode_and_does_not_call_llm(self) -> None:
         calls: list[str] = []
 
         def storage_call(name, db_path, **kwargs):
@@ -530,19 +535,22 @@ class DealManagerQuickHelpTests(unittest.TestCase):
                 db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=True,
             )
             second = quick_help.start_quick_help_job(
-                db_path=Path("state.sqlite"), deal_id="101", question="", confirm_paid=False,
+                db_path=Path("state.sqlite"), deal_id="101", question="", mode="reanimator", confirm_paid=False,
             )
 
         self.assertTrue(first["reused"])
         self.assertTrue(second["reused"])
-        self.assertEqual(first["saved_by_mode"], {"push": 40, "reanimator": 41})
+        self.assertEqual(first["saved_by_mode"], {"push": 40})
+        self.assertEqual(second["saved_by_mode"], {"reanimator": 41})
         generate.assert_not_called()
-        self.assertEqual(calls.count("get_current_deal_manager_quick_help"), 4)
+        self.assertEqual(calls.count("get_current_deal_manager_quick_help"), 2)
 
-    def test_chat_refinement_updates_both_modes_with_shared_turn(self) -> None:
+    def test_chat_refinement_updates_only_selected_mode(self) -> None:
         saved = []
 
         def storage_call(name, db_path, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return None
             if name == "save_deal_manager_quick_help":
                 saved.append(kwargs)
                 return {"id": 50 + len(saved), "deal_id": "101"}
@@ -565,13 +573,51 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             )
 
         self.assertEqual(started["status"], "done")
-        self.assertEqual([call.kwargs["mode"] for call in generate_mock.call_args_list], ["push", "reanimator"])
-        self.assertEqual([item["mode"] for item in saved], ["push", "reanimator"])
+        self.assertEqual([call.kwargs["mode"] for call in generate_mock.call_args_list], ["push"])
+        self.assertEqual([item["mode"] for item in saved], ["push"])
         self.assertEqual({item["turn_id"] for item in saved}, {started["turn_id"]})
         self.assertTrue(started["turn_id"])
         self.assertEqual(saved[0]["origin"], "manager")
         self.assertEqual(saved[0]["question"], "Этот рычаг не подходит, давай через сроки")
-        self.assertEqual(saved[1]["question"], "Этот рычаг не подходит, давай через сроки")
+
+    def test_lazy_counterpart_reuses_turn_for_same_manager_question(self) -> None:
+        question = "Этот рычаг не подходит, давай через сроки"
+        saved = []
+        current_push = None
+
+        def current_for_mode(db_path, context, mode):
+            if mode == "push":
+                return current_push
+            return None
+
+        def storage_call(name, db_path, **kwargs):
+            nonlocal current_push
+            if name != "save_deal_manager_quick_help":
+                raise AssertionError(name)
+            saved.append(kwargs)
+            row = {"id": 60 + len(saved), "deal_id": "101", **kwargs}
+            if kwargs["mode"] == "push":
+                current_push = row
+            return row
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_current_for_mode", side_effect=current_for_mode), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {})), \
+             patch.object(quick_help, "_storage_call", side_effect=storage_call), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            push = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"), deal_id="101", question=question,
+                mode="push", confirm_paid=True,
+            )
+            reanimator = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"), deal_id="101", question=question,
+                mode="reanimator", confirm_paid=True,
+            )
+
+        self.assertEqual([item["mode"] for item in saved], ["push", "reanimator"])
+        self.assertEqual(push["turn_id"], reanimator["turn_id"])
+        self.assertEqual({item["turn_id"] for item in saved}, {push["turn_id"]})
 
     def test_new_situation_context_allows_fresh_ensure(self) -> None:
         generated_modes: list[str] = []
@@ -601,7 +647,7 @@ class DealManagerQuickHelpTests(unittest.TestCase):
             )
 
         self.assertFalse(started["reused"])
-        self.assertEqual(generated_modes, ["push", "reanimator"])
+        self.assertEqual(generated_modes, ["push"])
 
     def test_communication_completed_uses_confirmed_deal_context(self) -> None:
         calls = []

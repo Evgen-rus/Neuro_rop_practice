@@ -206,16 +206,20 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
         communication_pattern_context = build_communication_pattern_context(
             _load_local_communications(job.deal_id)
         )
-        if job.origin == "auto" and not job.question.strip():
+        if not job.turn_id:
             for item_mode in ASSISTANT_MODES:
+                if item_mode == job.mode:
+                    continue
                 current = _current_for_mode(db_path, context, item_mode)
+                if job.question.strip() and str((current or {}).get("question") or "").strip() != job.question.strip():
+                    continue
                 sibling_turn = str((current or {}).get("turn_id") or "").strip()
                 if sibling_turn:
                     job.turn_id = sibling_turn
                     break
         if not job.turn_id:
             job.turn_id = uuid.uuid4().hex
-        modes = list(ASSISTANT_MODES)
+        modes = [job.mode or "push"]
         generated = 0
         for index, mode in enumerate(modes):
             existing = _current_for_mode(db_path, context, mode) if job.origin == "auto" and not job.question.strip() else None
@@ -268,8 +272,8 @@ def start_quick_help_job(
     if mode is not None and mode not in ASSISTANT_MODES:
         raise ValueError("mode должен быть push или reanimator")
     origin = "manager" if normalized_question else "auto"
-    if origin == "manager" and mode is None:
-        mode = "reanimator"
+    if mode is None:
+        mode = "push"
     # Уточнение в чате всегда платное. Автогенерация может переиспользовать
     # уже сохранённые режимы без LLM, поэтому confirm_paid проверяем после контекста.
     if origin == "manager" and not confirm_paid:
@@ -281,14 +285,9 @@ def start_quick_help_job(
     )
     if origin == "auto":
         saved_by_mode: dict[str, int] = {}
-        missing: list[str] = []
-        for item_mode in ASSISTANT_MODES:
-            current = _current_for_mode(db_path, context, item_mode)
-            if isinstance(current, dict) and current.get("id") is not None:
-                saved_by_mode[item_mode] = int(current["id"])
-            else:
-                missing.append(item_mode)
-        if not missing:
+        current = _current_for_mode(db_path, context, mode)
+        if isinstance(current, dict) and current.get("id") is not None:
+            saved_by_mode[mode] = int(current["id"])
             job = DealManagerQuickHelpJob(
                 job_id=uuid.uuid4().hex,
                 deal_id=str(deal_id),
@@ -300,7 +299,7 @@ def start_quick_help_job(
                 stage="done",
                 detail="Открываем сохранённую актуальную рекомендацию",
                 percent=100,
-                quick_help_id=saved_by_mode.get("push") or next(iter(saved_by_mode.values()), None),
+                quick_help_id=int(current["id"]),
                 saved_by_mode=saved_by_mode,
                 reused=True,
             )
@@ -328,7 +327,7 @@ def start_quick_help_job(
             situation_id=context["situation_id"],
             mode=mode,
             origin=origin,
-            turn_id=uuid.uuid4().hex,
+            turn_id=None,
         )
         _QUICK_HELP_JOBS[job_id] = job
     thread = threading.Thread(target=_run_quick_help_job, args=(job_id, db_path), daemon=True)
