@@ -1716,7 +1716,7 @@ function DealDetail(props: {
       openEventId={openReviewEventId}
       onToggleEvent={(eventId) => setOpenReviewEventId((current) => current === eventId ? '' : eventId)}
     />}
-    <DealMarkdownReport reportId={coaching.report_id} onCopy={props.onCopy} />
+    <DealMarkdownReport reportId={coaching.report_id} userRole={props.userRole} onCopy={props.onCopy} />
   </aside>
 }
 
@@ -2716,6 +2716,7 @@ function ManagerAssistantModal(props: {
             mainRisk={props.workspace.context.main_risk}
             discProfile={props.workspace.disc_profile}
             report={props.workspace.context.report || null}
+            userRole={props.userRole}
             onCopy={props.onCopy}
           /> : null}
           {view === 'followups' ? <section className="dc-manager-followups"><header><div><h3>Фоллоуапы / дожим</h3><p>Идеи полезных касаний по текущей ситуации и DISC-профилю клиента.</p></div><button className="dc-button primary" disabled={Boolean(followupsJob && ['queued', 'running'].includes(followupsJob.status))} onClick={() => void generateFollowups()}>{followups ? 'Открыть актуальные' : 'Сформировать'}</button></header>{followupsJob && ['queued', 'running'].includes(followupsJob.status) ? <ManagerJobProgress job={followupsJob} label="Подготовка фоллоуапов" /> : null}{followupsError ? <p className="dc-manager-error">{followupsError}</p> : null}{followups ? <FollowupsResultView record={followups} /> : <p className="empty">Фоллоуапы ещё не сформированы. Запуск создаст 3–5 идей без генерации самих материалов.</p>}</section> : null}
@@ -2777,6 +2778,7 @@ function ContextEvidence({ values }: { values: string[] }) {
 function DealMarkdownReport(props: {
   reportId?: number | null
   markdownAvailable?: boolean
+  userRole: AuthUser['role']
   onCopy: (text: string, label: string) => Promise<void>
 }) {
   const [markdown, setMarkdown] = useState<string | null>(null)
@@ -2829,6 +2831,8 @@ function DealMarkdownReport(props: {
     }
   }
 
+  if (props.userRole !== 'admin') return null
+
   return (
     <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown">
       <div className="dc-markdown-report-actions">
@@ -2868,6 +2872,7 @@ function ManagerDealContextView(props: {
   mainRisk: string
   discProfile?: ManagerDiscProfile | null
   report: { report_id?: number | null; markdown_available: boolean } | null
+  userRole: AuthUser['role']
   onCopy: (text: string, label: string) => Promise<void>
 }) {
   const [priorities, setPriorities] = useState<Record<string, 1 | 2 | 3 | null>>({})
@@ -2902,6 +2907,7 @@ function ManagerDealContextView(props: {
     <DealMarkdownReport
       reportId={props.report?.report_id}
       markdownAvailable={props.report?.markdown_available}
+      userRole={props.userRole}
       onCopy={props.onCopy}
     />
   )

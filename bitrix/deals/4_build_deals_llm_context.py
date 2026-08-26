@@ -25,6 +25,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import load_json
+from bitrix.deals.email_text import strip_quoted_history
+from bitrix.deals.history_compaction import (
+    COMPACT_HISTORY_POLICIES,
+    compact_history_coverage,
+)
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -81,19 +86,6 @@ RISK_KEYWORDS = (
     "КП",
     "КОНКУР",
     "ИНОКС",
-)
-
-QUOTE_MARKERS = (
-    "От кого:",
-    "Кому:",
-    "Дата:",
-    "Тема:",
-    "-----Original Message-----",
-    "---------- Forwarded message",
-    "From:",
-    "Sent:",
-    "To:",
-    "Subject:",
 )
 
 SIGNATURE_MARKERS = (
@@ -463,23 +455,6 @@ def timeline_comments(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 row["_source"] = source
                 rows.append(row)
     return sorted(rows, key=lambda item: (item.get("CREATED") or "", int(item.get("ID") or 0)))
-
-
-def strip_quoted_history(text: str) -> str:
-    text = text.replace("\u202f", " ").replace("\xa0", " ")
-    positions = [text.find(marker) for marker in QUOTE_MARKERS if text.find(marker) > 0]
-    lines = text.splitlines()
-    offset = 0
-    for index, line in enumerate(lines):
-        cleaned = line.strip()
-        if re.match(r"^(пн|вт|ср|чт|пт|сб|вс),?\s+\d{1,2}\s+.+?\s+\d{4}.*(<[^>]+>|@).*>?:?\s*$", cleaned, flags=re.I):
-            positions.append(offset)
-        if re.match(r"^.+?\d{4}.*(<[^>]+>|@).*>?:?\s*$", cleaned):
-            positions.append(offset)
-        offset += len(line) + 1
-    if positions:
-        return text[: min(positions)].rstrip()
-    return text
 
 
 def strip_email_signature(text: str) -> str:
@@ -891,13 +866,15 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
 
 def compact_history_rows(items: list[dict[str, Any]], limit: int = 20, text_limit: int = 500) -> list[str]:
     rows: list[str] = []
-    for item in items[-limit:]:
+    coverage = compact_history_coverage(items, limit=limit, text_limit=text_limit, cleaner=clean_text)
+    for entry in coverage:
+        if not entry["included"]:
+            continue
+        item = entry["item"]
         entity = f"{item.get('entity_type')}:{item.get('entity_id')}"
-        value = item.get("text") if item.get("category") == "internal_im_chat" else item.get("subject") or item.get("text")
-        text = clean_text(value, text_limit)
         rows.append(
             f"- {item.get('when') or '-'} source={entity} type={item.get('event_type') or '-'} "
-            f"id={item.get('id') or '-'}: {text or '-'}"
+            f"id={item.get('id') or '-'}: {entry['prompt_text'] or '-'}"
         )
     return rows or ["- Не найдено."]
 
@@ -983,21 +960,21 @@ def build_customer_history_llm_context(bundle: dict[str, Any]) -> str:
         "",
         "## 5. Клиентские касания",
         "",
-        *compact_history_rows(bundle.get("client_touchpoints") or [], limit=30),
+        *compact_history_rows(bundle.get("client_touchpoints") or [], **COMPACT_HISTORY_POLICIES["client_touchpoints"]),
         "",
         "## 6. Задачи и контроль",
         "",
-        *compact_history_rows(bundle.get("tasks_and_control") or [], limit=20),
+        *compact_history_rows(bundle.get("tasks_and_control") or [], **COMPACT_HISTORY_POLICIES["tasks_and_control"]),
         "",
         "## 7. Внутренний контекст",
         "",
         "Не считать этот блок словами клиента.",
         "",
-        *compact_history_rows(bundle.get("internal_context") or [], limit=20, text_limit=1200),
+        *compact_history_rows(bundle.get("internal_context") or [], **COMPACT_HISTORY_POLICIES["internal_context"]),
         "",
         "## 8. Системные события и состояния",
         "",
-        *compact_history_rows(bundle.get("system_events") or [], limit=20),
+        *compact_history_rows(bundle.get("system_events") or [], **COMPACT_HISTORY_POLICIES["system_events"]),
         "",
         "## 9. Диагностика выгрузки",
         "",
