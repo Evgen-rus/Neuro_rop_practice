@@ -37,6 +37,9 @@ from storage.rop_db import (
 
 COLLECTION_KEY = "bitrix_manager_wide"
 COLLECTION_OVERLAP = timedelta(minutes=15)
+HIDDEN_RECOMMENDATION_USAGE_FIELDS = (
+    "generated_at", "shown_at", "generated_count", "shown_count",
+)
 
 
 def _aware(value: datetime) -> datetime:
@@ -946,6 +949,78 @@ def build_manager_trajectory_report(
         "managers": grouped,
         "warnings": warnings,
     }
+
+
+def neurorop_display_label(event_kind: str, recommendation_kind: str | None = None) -> str:
+    kind = str(event_kind or "").removeprefix("recommendation_")
+    if kind == "viewed":
+        if str(recommendation_kind or "") == "quick_help":
+            return "Открыл ответ Quick Help"
+        return "Кликнул сделку в НейроРОПе"
+    if kind == "quick_help_opened":
+        return "Зашёл в дожим сделки"
+    return kind.replace("_", " ")
+
+
+def _visible_recommendation_usage(item: dict[str, Any]) -> dict[str, Any] | None:
+    views = item.get("view_occurrences") or item.get("viewed_at") or []
+    if not views:
+        return None
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in HIDDEN_RECOMMENDATION_USAGE_FIELDS
+    }
+
+
+def _project_manager_for_display(manager: dict[str, Any]) -> dict[str, Any]:
+    usage = dict(manager.get("product_usage") or {})
+    recommendations: list[dict[str, Any]] = []
+    for item in usage.get("recommendations") or []:
+        visible = _visible_recommendation_usage(item)
+        if visible is not None:
+            recommendations.append(visible)
+    viewed = sum(
+        len(item.get("view_occurrences") or item.get("viewed_at") or [])
+        for item in recommendations
+    )
+    openings = list(usage.get("quick_help_openings") or [])
+    usage["recommendations"] = recommendations
+    usage["viewed"] = viewed
+    usage["quick_help_opened"] = len(openings)
+    usage.pop("generated", None)
+    usage.pop("shown", None)
+    counts = dict(manager.get("counts") or {})
+    counts.pop("recommendation_generated", None)
+    counts.pop("recommendation_shown", None)
+    projected = {
+        **manager,
+        "counts": counts,
+        "product_usage": usage,
+    }
+    projected.pop("quick_help_generated", None)
+    return projected
+
+
+def project_manager_trajectory_for_display(report: dict[str, Any]) -> dict[str, Any]:
+    """Copy of the local report without generated/shown recommendation facts.
+
+    SQLite still stores those events. UI, JSON download and CLI hide them.
+    """
+    managers = [
+        _project_manager_for_display(item)
+        for item in report.get("managers") or []
+    ]
+    summary = dict(report.get("summary") or {})
+    summary.pop("recommendations_generated", None)
+    summary.pop("recommendations_shown", None)
+    summary["recommendations_viewed"] = sum(
+        item.get("product_usage", {}).get("viewed", 0) for item in managers
+    )
+    summary["quick_help_opened"] = sum(
+        item.get("product_usage", {}).get("quick_help_opened", 0) for item in managers
+    )
+    return {**report, "managers": managers, "summary": summary}
 
 
 def _verified_manager_actor(event: dict[str, Any], manager_id: str) -> bool:

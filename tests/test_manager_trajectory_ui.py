@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from api.manager_trajectory import build_manager_trajectory_report
+from api.manager_trajectory import build_manager_trajectory_report, project_manager_trajectory_for_display
 from api.manager_trajectory_ui import (
     build_day_export,
     build_day_projection,
@@ -215,6 +215,70 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
         self.assertEqual(call["temporal_relation"]["kind"], "after_recommendation_view")
         self.assertIn("после просмотра", call["temporal_relation"]["text"])
         self.assertNotIn("вызвал", call["temporal_relation"]["text"])
+
+    def test_ui_hides_generated_shown_and_renames_visible_neurorop_events(self) -> None:
+        actor = {
+            "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+        }
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="recommendation_generated", recommendation_kind="deal_task",
+            recommendation_id="77", source="fixture", source_event_key="gen:77",
+            occurred_at=(START + timedelta(minutes=1)).isoformat(),
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="recommendation_shown", recommendation_kind="deal_task",
+            recommendation_id="77", source="fixture", source_event_key="shown:77",
+            occurred_at=(START + timedelta(minutes=1, seconds=30)).isoformat(),
+            payload=actor,
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="recommendation_viewed", recommendation_kind="quick_help",
+            recommendation_id="88", source="fixture", source_event_key="view:88",
+            occurred_at=(START + timedelta(minutes=3)).isoformat(),
+            payload={**actor, "occurrence_id": "view-88"},
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="quick_help_opened", recommendation_kind="quick_help",
+            recommendation_id="88", source="fixture", source_event_key="open:88",
+            occurred_at=(START + timedelta(minutes=4)).isoformat(),
+            payload={**actor, "occurrence_id": "open-88", "entrypoint": "workspace"},
+        )
+
+        window = build_window_projection(
+            manager_id="10", from_at=START, to_at=START + timedelta(minutes=30),
+            db_path=self.db_path,
+        )
+        neurorop = [item for item in window["events"] if item["category"] == "neurorop"]
+        labels = [item["label"] for item in neurorop]
+        event_types = {item["event_type"] for item in neurorop}
+
+        self.assertEqual(
+            labels,
+            ["Кликнул сделку в НейроРОПе", "Открыл ответ Quick Help", "Зашёл в дожим сделки"],
+        )
+        self.assertEqual(event_types, {"recommendation_viewed", "quick_help_opened"})
+        self.assertNotIn("recommendation_generated", event_types)
+        self.assertNotIn("recommendation_shown", event_types)
+
+        day = build_day_projection(value=DAY, bucket_minutes=30, db_path=self.db_path)
+        self.assertEqual(day["managers"][0]["totals"]["neurorop"], 3)
+        self.assertEqual(day["totals"]["neurorop"], 3)
+
+        payload = build_day_export(value=DAY, db_path=self.db_path)
+        usage = payload["managers"][0]["product_usage"]
+        self.assertNotIn("generated", usage)
+        self.assertNotIn("shown", usage)
+        dumped = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("Рекомендация сформирована", dumped)
+        self.assertNotIn("Рекомендация показана", dumped)
+        self.assertNotIn("recommendation_generated", dumped)
+        for recommendation in usage.get("recommendations") or []:
+            self.assertNotIn("generated_at", recommendation)
+            self.assertNotIn("shown_at", recommendation)
 
     def test_entity_communications_can_load_saved_content_lazily(self) -> None:
         self._event(
@@ -571,6 +635,8 @@ class ManagerTrajectoryDayExportTests(_ManagerTrajectoryUiFixture):
         self.assertNotIn("a3", task_ids)
         self.assertEqual(payload["managers"][0]["workday"]["task_history_events"], 0)
         self.assertEqual(payload["managers"][0]["product_usage"]["viewed"], 0)
+        self.assertNotIn("generated", payload["managers"][0]["product_usage"])
+        self.assertNotIn("shown", payload["managers"][0]["product_usage"])
 
     def test_query_filters_by_entity_id_and_title(self) -> None:
         by_title = self._export(query="Бета")
@@ -601,7 +667,15 @@ class ManagerTrajectoryDayExportTests(_ManagerTrajectoryUiFixture):
                 db_path=self.db_path, from_at=start, to_at=end,
             )
         content = {key: value for key, value in payload.items() if key != "export"}
-        self.assertEqual(content, report)
+        self.assertEqual(content, project_manager_trajectory_for_display(report))
+        usage = payload["managers"][0]["product_usage"]
+        self.assertNotIn("generated", usage)
+        self.assertNotIn("shown", usage)
+        self.assertNotIn("recommendations_generated", payload["summary"])
+        self.assertNotIn("recommendations_shown", payload["summary"])
+        for recommendation in usage.get("recommendations") or []:
+            self.assertNotIn("generated_at", recommendation)
+            self.assertNotIn("shown_at", recommendation)
         call = next(item for item in self._crm_actions(payload) if item.get("activity_id") == "a1")
         self.assertEqual(call["call"]["duration_seconds"], 65)
         self.assertIn("payload", call)

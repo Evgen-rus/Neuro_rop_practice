@@ -17,7 +17,7 @@ const events = [
   { event_id: 'd-call', entity_type: 'deal', entity_id: '101', category: 'communications', label: 'Звонок' },
   { event_id: 'd-task', entity_type: 'deal', entity_id: '101', category: 'tasks', label: 'Задача' },
   { event_id: 'l-mail', entity_type: 'lead', entity_id: '202', category: 'communications', label: 'Письмо' },
-  { event_id: 'neuro', entity_type: 'deal', entity_id: '101', category: 'neurorop', label: 'Рекомендация просмотрена' },
+  { event_id: 'neuro', entity_type: 'deal', entity_id: '101', category: 'neurorop', label: 'Кликнул сделку в НейроРОПе' },
 ]
 
 test('page category=all opens the drawer with every category selected', () => {

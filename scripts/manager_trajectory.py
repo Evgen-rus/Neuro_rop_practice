@@ -20,7 +20,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.candidates import custom_period_bounds, make_client, profile_candidates_preview
-from api.manager_trajectory import build_manager_trajectory_report, collect_manager_trajectory
+from api.manager_trajectory import (
+    build_manager_trajectory_report,
+    collect_manager_trajectory,
+    neurorop_display_label,
+    project_manager_trajectory_for_display,
+)
 from setup import BASE_DIR, MSK_TZ, configure_console
 from storage.rop_db import DEFAULT_DB_PATH, get_analysis_profile, get_last_analysis_profile
 
@@ -120,6 +125,10 @@ def _recommendation_label(kind: Any) -> str:
     return "Quick Help" if str(kind or "") == "quick_help" else "задача НейроРОПа"
 
 
+def _viewed_line_label(kind: Any) -> str:
+    return "открыл ответ Quick Help" if str(kind or "") == "quick_help" else "кликнул сделку в НейроРОПе"
+
+
 def _print_text(payload: dict[str, Any], command: str) -> None:
     if command == "collect":
         print(f"Статус: {payload['status']}")
@@ -155,11 +164,8 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
         "Итого: "
         f"менеджеров {summary.get('managers', 0)}, "
         f"уникальных CRM-действий {summary.get('unique_crm_actions', 0)}, "
-        f"рекомендаций создано/показано/просмотрено "
-        f"{summary.get('recommendations_generated', 0)}/"
-        f"{summary.get('recommendations_shown', 0)}/"
-        f"{summary.get('recommendations_viewed', 0)}; "
-        f"входов в Quick Help {summary.get('quick_help_opened', 0)}"
+        f"просмотров НейроРОПа {summary.get('recommendations_viewed', 0)}; "
+        f"входов в дожим {summary.get('quick_help_opened', 0)}"
     )
     for manager in payload["managers"]:
         manager_label = manager.get("manager_name") or "Имя не найдено"
@@ -194,33 +200,28 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
             _print_actions(timeline, indent="      ")
 
         print("  2. Как использовал НейроРОП")
-        print(
-            "    Создано/показано/просмотрено: "
-            f"{counts.get('recommendation_generated', 0)}/"
-            f"{counts.get('recommendation_shown', 0)}/"
-            f"{counts.get('recommendation_viewed', 0)}"
-        )
         recommendations = (manager.get("product_usage") or {}).get("recommendations") or []
-        if not recommendations:
+        openings = (manager.get("product_usage") or {}).get("quick_help_openings") or []
+        print(
+            "    Просмотров: "
+            f"{counts.get('recommendation_viewed', 0)}; "
+            f"входов в дожим: {len(openings)}"
+        )
+        if not recommendations and not openings:
             print("    Событий использования рекомендаций не обнаружено")
         for recommendation in recommendations:
+            kind = recommendation.get("recommendation_kind")
             print(
                 f"    Сделка #{recommendation.get('deal_id')} · "
-                f"{_recommendation_label(recommendation.get('recommendation_kind'))} "
+                f"{_recommendation_label(kind)} "
                 f"#{recommendation.get('recommendation_id')}"
             )
             print(
-                f"      создана: {', '.join(_clock(item) for item in recommendation.get('generated_at') or []) or 'вне периода или нет данных'}"
-            )
-            print(
-                f"      показана: {', '.join(_clock(item) for item in recommendation.get('shown_at') or []) or 'нет данных'}"
-            )
-            print(
-                f"      просмотры: {', '.join(_clock(item) for item in recommendation.get('viewed_at') or []) or 'нет'}; "
+                f"      {_viewed_line_label(kind)}: "
+                f"{', '.join(_clock(item) for item in recommendation.get('viewed_at') or []) or 'нет'}; "
                 f"точность: {recommendation.get('view_tracking_precision')}"
             )
-        openings = (manager.get("product_usage") or {}).get("quick_help_openings") or []
-        print(f"    Входов в раздел Quick Help: {len(openings)}")
+        print(f"    Входов в дожим сделки: {len(openings)}")
         for opening in openings:
             mode = opening.get("assistant_mode") or "режим не указан"
             print(
@@ -236,7 +237,8 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
             print(f"    Сделка #{deal.get('deal_id')}")
             for view in deal.get("views") or []:
                 print(
-                    f"      Просмотр {view.get('view_index_for_deal')} · {_clock(view.get('occurred_at'))} · "
+                    f"      {neurorop_display_label('viewed', view.get('recommendation_kind'))} "
+                    f"{view.get('view_index_for_deal')} · {_clock(view.get('occurred_at'))} · "
                     f"{_recommendation_label(view.get('recommendation_kind'))} #{view.get('recommendation_id')}"
                 )
                 print("        До просмотра (после предыдущего просмотра этой сделки):")
@@ -252,7 +254,8 @@ def _print_text(payload: dict[str, Any], command: str) -> None:
                 )
             for opening in deal.get("quick_help_openings") or []:
                 print(
-                    f"      Вход в Quick Help {opening.get('opening_index_for_deal')} · "
+                    f"      {neurorop_display_label('quick_help_opened')} "
+                    f"{opening.get('opening_index_for_deal')} · "
                     f"{_clock(opening.get('opened_at'))} · {opening.get('assistant_mode') or 'режим не указан'}"
                 )
                 print("        До входа (после предыдущего входа в Quick Help по этой сделке):")
@@ -368,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                 to_at=end,
                 manager_ids=_manager_ids(args),
             )
+            payload = project_manager_trajectory_for_display(payload)
             if collection is not None:
                 payload["collection_run"] = collection
             exit_code = 0 if collection is None or collection["status"] == "success" else 2

@@ -10,7 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from api.manager_trajectory import build_manager_trajectory_report, collect_manager_trajectory
+from api.manager_trajectory import (
+    build_manager_trajectory_report,
+    collect_manager_trajectory,
+    neurorop_display_label,
+    project_manager_trajectory_for_display,
+)
 from openai_api.change_detection.provenance import analysis_run_provenance
 from setup import MSK_TZ
 from storage.rop_db import (
@@ -473,6 +478,17 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         self.assertEqual([item["activity_id"] for item in views[0]["actions_before_since_previous_view"]], ["a1"])
         self.assertEqual([item["activity_id"] for item in views[0]["actions_after_until_next_view"]], ["a2"])
         self.assertEqual(views[1]["actions_after_until_next_view"][0]["action_type"], "stage_change")
+        self.assertTrue(recommendation["generated_at"])
+        self.assertTrue(recommendation["shown_at"])
+        display = project_manager_trajectory_for_display(report)
+        visible = display["managers"][0]["product_usage"]
+        self.assertNotIn("generated", visible)
+        self.assertNotIn("shown", visible)
+        self.assertNotIn("generated_at", visible["recommendations"][0])
+        self.assertNotIn("shown_at", visible["recommendations"][0])
+        self.assertEqual(visible["recommendations"][0]["view_count"], 2)
+        self.assertNotIn("recommendations_generated", display["summary"])
+        self.assertNotIn("recommendations_shown", display["summary"])
 
     def test_stage_change_is_append_only_and_partial_does_not_advance_watermark(self) -> None:
         collect_manager_trajectory(
@@ -657,6 +673,77 @@ class ManagerTrajectoryCliTests(unittest.TestCase):
         self.assertIn("1. Чем занимался в течение дня", rendered)
         self.assertIn("2. Как использовал НейроРОП", rendered)
         self.assertIn("3. Что происходило до и после просмотров", rendered)
+
+    def test_report_hides_generated_and_shown_in_text_and_json(self) -> None:
+        from scripts import manager_trajectory as cli
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "cli.sqlite"
+            init_db(db_path)
+            save_deal_control_scope(
+                db_path, initial_deal_ids=["900"], manager_ids=["10"], pipeline_id="15",
+            )
+            upsert_deal_control_deal(
+                db_path, deal_id="900", source="manager", title="Сделка", manager_id="10",
+                manager_name="Иван Петров", stage_id="NEW", stage_name="Новая", pipeline_id="15",
+                amount="100", currency_id="RUB", created_at_crm=NOW.isoformat(),
+                modified_at_crm=NOW.isoformat(), is_active=True,
+            )
+            actor = {
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+            }
+            record_manager_trajectory_event(
+                db_path, entity_type="deal", entity_id="900", manager_id="10",
+                event_type="recommendation_generated", recommendation_kind="deal_task",
+                recommendation_id="77", source="fixture", source_event_key="gen:77",
+                occurred_at=(NOW - timedelta(hours=3)).isoformat(),
+            )
+            record_manager_trajectory_event(
+                db_path, entity_type="deal", entity_id="900", manager_id="10",
+                event_type="recommendation_shown", recommendation_kind="deal_task",
+                recommendation_id="77", source="fixture", source_event_key="shown:77",
+                occurred_at=(NOW - timedelta(hours=2, minutes=55)).isoformat(),
+                payload=actor,
+            )
+            record_manager_trajectory_event(
+                db_path, entity_type="deal", entity_id="900", manager_id="10",
+                event_type="recommendation_viewed", recommendation_kind="deal_task",
+                recommendation_id="77", source="fixture", source_event_key="view:77",
+                occurred_at=(NOW - timedelta(hours=2, minutes=50)).isoformat(),
+                payload={**actor, "occurrence_id": "view-77"},
+            )
+            text_out = io.StringIO()
+            with redirect_stdout(text_out):
+                text_code = cli.main([
+                    "--db-path", str(db_path), "report",
+                    "--from", "2026-08-16", "--to", "2026-08-16",
+                ])
+            json_out = io.StringIO()
+            with redirect_stdout(json_out):
+                json_code = cli.main([
+                    "--db-path", str(db_path), "report",
+                    "--from", "2026-08-16", "--to", "2026-08-16", "--format", "json",
+                ])
+            rendered = text_out.getvalue()
+            payload = json.loads(json_out.getvalue())
+        self.assertEqual(text_code, 0)
+        self.assertEqual(json_code, 0)
+        self.assertIn("кликнул сделку в НейроРОПе", rendered)
+        self.assertNotIn("создана:", rendered)
+        self.assertNotIn("показана:", rendered)
+        self.assertNotIn("создано/показано", rendered)
+        usage = payload["managers"][0]["product_usage"]
+        self.assertNotIn("generated", usage)
+        self.assertNotIn("shown", usage)
+        self.assertNotIn("generated_at", usage["recommendations"][0])
+        self.assertNotIn("shown_at", usage["recommendations"][0])
+
+
+class NeuroRopDisplayLabelTests(unittest.TestCase):
+    def test_visible_event_labels(self) -> None:
+        self.assertEqual(neurorop_display_label("viewed", "deal_task"), "Кликнул сделку в НейроРОПе")
+        self.assertEqual(neurorop_display_label("recommendation_viewed", "quick_help"), "Открыл ответ Quick Help")
+        self.assertEqual(neurorop_display_label("quick_help_opened"), "Зашёл в дожим сделки")
 
 
 if __name__ == "__main__":

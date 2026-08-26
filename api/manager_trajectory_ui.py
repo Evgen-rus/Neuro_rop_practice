@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from api.deal_call_transcript import find_call_transcript
-from api.manager_trajectory import build_manager_trajectory_report
+from api.manager_trajectory import (
+    build_manager_trajectory_report,
+    neurorop_display_label,
+    project_manager_trajectory_for_display,
+)
 from setup import MSK_TZ
 from storage.rop_db import DEFAULT_DB_PATH
 
@@ -19,12 +23,6 @@ ENTITY_EVENT_KEYS = (
     "crm_actions", "stage_changes", "task_history", "timeline_comments",
     "business_field_changes", "stage_history",
 )
-NEUROROP_EVENT_LABELS = {
-    "generated": "Рекомендация сформирована",
-    "shown": "Рекомендация показана",
-    "viewed": "Рекомендация просмотрена",
-    "quick_help_opened": "Открыт Quick Help",
-}
 
 
 def day_bounds(value: date) -> tuple[datetime, datetime]:
@@ -218,28 +216,13 @@ def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
             "recommendation_id": recommendation.get("recommendation_id"),
         }
         entity = metadata.get(("deal", common["entity_id"])) or {}
-        for field, kind in (("generated_at", "generated"), ("shown_at", "shown")):
-            for index, occurred_at in enumerate(recommendation.get(field) or []):
-                events.append({
-                    **common,
-                    "event_id": f"neurorop:{kind}:{common['recommendation_id']}:{index}",
-                    "occurred_at": occurred_at,
-                    "event_type": f"recommendation_{kind}",
-                    "label": NEUROROP_EVENT_LABELS[kind],
-                    "entity_title": entity.get("title"),
-                    "pipeline_name": entity.get("pipeline_name"),
-                    "stage_name": entity.get("stage_name"),
-                    "subject": None,
-                    "description": None,
-                    "temporal_relation": None,
-                })
         for occurrence in recommendation.get("view_occurrences") or []:
             events.append({
                 **common,
                 "event_id": occurrence.get("event_id"),
                 "occurred_at": occurrence.get("occurred_at"),
                 "event_type": "recommendation_viewed",
-                "label": NEUROROP_EVENT_LABELS["viewed"],
+                "label": neurorop_display_label("viewed", common.get("recommendation_kind")),
                 "entity_title": entity.get("title"),
                 "pipeline_name": entity.get("pipeline_name"),
                 "stage_name": entity.get("stage_name"),
@@ -255,7 +238,7 @@ def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
             "occurred_at": opening.get("opened_at"),
             "category": "neurorop",
             "event_type": "quick_help_opened",
-            "label": NEUROROP_EVENT_LABELS["quick_help_opened"],
+            "label": neurorop_display_label("quick_help_opened"),
             "entity_type": "deal",
             "entity_id": entity_id,
             "entity_title": entity.get("title"),
@@ -633,8 +616,6 @@ def _export_summary(managers: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "managers": len(managers),
         "unique_crm_actions": sum(item.get("workday", {}).get("unique_crm_actions", 0) for item in managers),
-        "recommendations_generated": sum(item.get("product_usage", {}).get("generated", 0) for item in managers),
-        "recommendations_shown": sum(item.get("product_usage", {}).get("shown", 0) for item in managers),
         "recommendations_viewed": sum(item.get("product_usage", {}).get("viewed", 0) for item in managers),
         "quick_help_opened": sum(item.get("product_usage", {}).get("quick_help_opened", 0) for item in managers),
     }
@@ -672,19 +653,17 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
         counts["crm_business_field_changed"] = len(business_field_changes)
     if stage_history:
         counts["crm_stage_history_observed"] = len(stage_history)
-    generated = sum(len(item.get("generated_at") or []) for item in recommendations)
-    shown = sum(len(item.get("shown_at") or []) for item in recommendations)
     viewed = sum(len(item.get("view_occurrences") or item.get("viewed_at") or []) for item in recommendations)
-    if generated:
-        counts["recommendation_generated"] = generated
-    if shown:
-        counts["recommendation_shown"] = shown
     if viewed:
         counts["recommendation_viewed"] = viewed
     if openings:
         counts["quick_help_opened"] = len(openings)
     entity_keys = {(item.get("entity_type"), str(item.get("entity_id") or "")) for item in entities}
-    entity_keys.update(("deal", str(item.get("deal_id") or "")) for item in recommendations if item.get("deal_id"))
+    entity_keys.update(
+        ("deal", str(item.get("deal_id") or ""))
+        for item in recommendations
+        if item.get("deal_id") and (item.get("view_occurrences") or item.get("viewed_at"))
+    )
     entity_keys.update(("deal", str(item.get("deal_id") or "")) for item in openings if item.get("deal_id"))
     workday.update({
         "unique_crm_actions": len(crm_actions),
@@ -703,8 +682,6 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
     product_usage.update({
         "recommendations": recommendations,
         "quick_help_openings": openings,
-        "generated": generated,
-        "shown": shown,
         "viewed": viewed,
         "quick_help_opened": len(openings),
     })
@@ -712,11 +689,6 @@ def _recompute_manager_export_aggregates(manager: dict[str, Any]) -> dict[str, A
         **manager,
         "counts": counts,
         "entities": len(entity_keys),
-        "quick_help_generated": sum(
-            len(item.get("generated_at") or [])
-            for item in recommendations
-            if item.get("recommendation_kind") == "quick_help"
-        ),
         "viewed_windows_60m": [],
         "workday": workday,
         "product_usage": product_usage,
@@ -811,6 +783,7 @@ def build_day_export(
     report, _start, _end = _report(db_path, value, manager_ids)
     if category != "all" or query.strip():
         report = _filter_full_report(report, category=category, query=query)
+    report = project_manager_trajectory_for_display(report)
     manager_id = manager_ids[0] if manager_ids and len(manager_ids) == 1 else None
     return {
         "export": {
