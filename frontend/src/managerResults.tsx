@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   isCallScriptContent,
-  type ManagerCallScriptContent,
   type ManagerCompanionRecord,
+  type ManagerConversationScriptContent,
   type ManagerEmailContent,
   type ManagerFollowupsRecord,
   type ManagerFullScriptBlock,
@@ -279,7 +279,7 @@ function CallSpeechIcon() {
   </span>
 }
 
-export function CallScriptResultView({ script }: { script: ManagerCallScriptContent }) {
+export function CallScriptResultView({ script }: { script: ManagerConversationScriptContent }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [activeStep, setActiveStep] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -334,7 +334,7 @@ export function CallScriptResultView({ script }: { script: ManagerCallScriptCont
     {script.closing_agreement?.trim() ? <article className={`dc-call-script-stage ${activeStep === script.blocks.length ? 'active' : ''} ${collapsed.__close ? 'collapsed' : ''}`} data-call-step={script.blocks.length}>
       <div className="dc-call-script-stage-number">{script.blocks.length + 1}</div>
       <div className="dc-call-script-stage-head">
-        <h3>Резюме и следующий шаг</h3>
+        <h3>{isCallScriptContent(script) ? 'Резюме и следующий шаг' : 'Завершить договорённостью'}</h3>
         <button type="button" aria-label={collapsed.__close ? 'Развернуть шаг' : 'Свернуть шаг'} onClick={() => toggleStage('__close')}>{collapsed.__close ? '⌄' : '⌃'}</button>
       </div>
       {collapsed.__close ? null : <div className="dc-call-script-stage-body">

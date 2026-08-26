@@ -47,7 +47,7 @@ import {
   type ManagerQuickHelpJob,
   type ManagerQuickHelpStrategy,
   type ManagerAssistantMode,
-  type ManagerCallScriptContent,
+  type ManagerConversationScriptContent,
   type ManagerFullScriptJob,
   type ManagerFullScriptMode,
   type ManagerFullScriptWorkspace,
@@ -99,7 +99,7 @@ import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
-import { CallScriptResultView, CompanionResultView, ConversationScriptResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
+import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
 
 type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
@@ -2126,11 +2126,12 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, on
   </>
 }
 
-function CallScriptModal(props: {
+function ConversationScriptModal(props: {
   deal: DealControlDeal
   variantNumber: string
   discLabel: string
-  script: ManagerCallScriptContent | null
+  title: string
+  script: ManagerConversationScriptContent | null
   objections: ManagerObjectionHandling['items']
   copyText: string
   job: ManagerFullScriptJob | null
@@ -2154,7 +2155,7 @@ function CallScriptModal(props: {
   return <section className="dc-manager-full-script-modal dc-call-script" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
     <header className="dc-call-script-header">
       <div className="dc-call-script-heading">
-        <h2 id="manager-full-script-title">Сценарий звонка</h2>
+        <h2 id="manager-full-script-title">{props.title}</h2>
         <p className="dc-call-script-deal">Сделка #{props.deal.deal_id} · вариант {props.variantNumber}{props.discLabel ? <> · {props.discLabel}</> : null}</p>
       </div>
       {script?.conversation_goal ? <div className="dc-call-script-goal" title={script.conversation_goal}>
@@ -2162,7 +2163,7 @@ function CallScriptModal(props: {
         <b>Цель:</b><span>{script.conversation_goal}</span>
       </div> : null}
       <div className="dc-manager-full-script-header-actions">
-        <button className="dc-button dc-manager-full-script-copy" disabled={!props.copyText} onClick={() => void props.onCopy(props.copyText, 'Сценарий звонка')}>Скопировать</button>
+        <button className="dc-button dc-manager-full-script-copy" disabled={!props.copyText} onClick={() => void props.onCopy(props.copyText, props.title)}>Скопировать</button>
         <button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button>
       </div>
     </header>
@@ -2276,13 +2277,18 @@ function ManagerFullScriptModal(props: {
         script.closing,
       ].join('\n\n')
     : ''
-  if (props.scriptMode === 'call') {
+  if (props.scriptMode !== 'email') {
+    const conversationScript = script && 'script_contract' in script
+      && (props.scriptMode === 'call' ? isCallScriptContent(script) : !isCallScriptContent(script))
+      ? script
+      : null
     return createPortal(<div className="dc-manager-full-script-layer">
-      <CallScriptModal
+      <ConversationScriptModal
         deal={props.deal}
         variantNumber={variantNumber}
         discLabel={discLabel}
-        script={script && 'script_contract' in script && isCallScriptContent(script) ? script : null}
+        title={title}
+        script={conversationScript}
         objections={objections}
         copyText={copyText}
         job={props.job}
@@ -2294,20 +2300,13 @@ function ManagerFullScriptModal(props: {
       />
     </div>, document.body)
   }
+  const emailScript = script && 'email_contract' in script ? script : null
   return createPortal(<div className="dc-manager-full-script-layer">
     <section className="dc-manager-full-script-modal" role="dialog" aria-modal="true" aria-labelledby="manager-full-script-title">
       <header><div><small>Сделка #{props.deal.deal_id} · вариант {variantNumber}{props.workspace?.disc_profile ? <> · <span className="dc-manager-disc">{discLabel}</span></> : null}</small><h2 id="manager-full-script-title">{title}</h2></div><div className="dc-manager-full-script-header-actions"><button className="dc-button dc-manager-full-script-copy" disabled={!copyText} onClick={() => void props.onCopy(copyText, title)}>Скопировать</button><button className="dc-manager-full-script-close-button" onClick={props.onClose} aria-label="Закрыть">×</button></div></header>
       {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
-      {!script && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !script ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : 'script_contract' in script ? <>
-        <div className="dc-manager-full-script-grid">
-          <main>
-            <ConversationScriptResultView script={script} objections={objections} />
-          </main>
-          <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
-        </div>
-        {objections.length ? <details className="dc-manager-full-script-objections"><summary>Возражения и отработка <span>⌄</span></summary><div>{objections.map((item, index) => <article key={`${item.objection}-${index}`}><h3>{item.objection}</h3><p><strong>Как ответить:</strong> {item.manager_reply}</p><p><strong>Follow-up:</strong> {item.follow_up_question}</p><p><strong>Следующий шаг:</strong> {item.next_step_goal}</p>{item.what_not_to_do ? <p className="avoid"><strong>Чего не делать:</strong> {item.what_not_to_do}</p> : null}</article>)}</div></details> : null}
-      </> : <div className="dc-manager-full-script-grid">
-        <EmailScriptResultView script={script} />
+      {!emailScript && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !emailScript ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : <div className="dc-manager-full-script-grid">
+        <EmailScriptResultView script={emailScript} />
         <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
       </div>}
     </section>
