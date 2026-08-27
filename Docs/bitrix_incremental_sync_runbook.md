@@ -20,7 +20,7 @@ Automatic daytime cycle ставил analysis job на каждую свобод
 | `local` | Новый локальный transcript или пересечение временного порога | Существующий анализ по локальному context без CRM fetch |
 | `skip` | Нет сигналов и обязательных проверок | Job не создаётся; automatic item завершается с `publication_status=reused` |
 
-Признаки сделки берутся из уже обновлённого portfolio: `DATE_MODIFY`, stage, manager, amount. Trajectory watermark — локальный ingestion ID, а не время самого события. Поздно загруженное старое событие поэтому не теряется. Дополнительные probes группируются: activity versions/FILES, версии связанных сущностей, первая страница timeline, последние сообщения известных чатов, выбранные открытые задачи. Shared entity сравнивается с snapshot каждой сделки отдельно.
+Признаки сделки берутся из уже обновлённого portfolio: `DATE_MODIFY`, stage, manager, amount. Trajectory watermark — локальный ingestion ID, а не время самого события. Поздно загруженное старое событие поэтому не теряется. Activity-probe использует на сделку `max(activity_probe_at, activity_cursor) - 15 минут`; успешный skip двигает только `activity_probe_at`. Сделки с разным окном не делят один `min()`-фильтр. Прочие probes: версии связанных сущностей, первая страница timeline, последние сообщения известных чатов, выбранные открытые задачи. Shared entity сравнивается с snapshot каждой сделки отдельно. Отсутствие строки в `crm.*.list` само по себе не считается изменением.
 
 После delta остаются существующие FULL / MINI / skip правила. Добавлен один технический soft signal `operational_context_changed`, чтобы изменение task/internal context дошло до MINI. Он не превращает внутреннюю запись в клиентский контакт и сам по себе не запускает платный FULL. Prompts, lead/deal JSON-контракты и UI не менялись.
 
@@ -84,7 +84,7 @@ Manual API/CLI по умолчанию получает `context_refresh_mode=fu
 
 OS locks защищают scheduler sync/collect/enqueue между локальными процессами и deal workspace на время pipeline/publication/acknowledgement. Lock освобождается ОС при аварии, без опасного перехвата по TTL. Прямой низкоуровневый fetch дополнительно защищён CAS; штатный entrypoint — API job или `run_rop_assistant.py`.
 
-Ack записывается после успешного job, с event watermark, зафиксированным при enqueue. Событие, появившееся во время job, остаётся сигналом следующего цикла. Неуспешный анализ не подтверждает новый context. Ошибка источника сохраняет старую информацию и cursor; списки чатов восстанавливаются по ID, а не по позиции.
+Ack записывается после `audio_idle` или terminal `publish_ready` со статусом skip/mini/full, с event watermark, зафиксированным при enqueue. Событие, появившееся во время job, остаётся сигналом следующего цикла. Неуспешный анализ (`error`, нет publish_ready) не подтверждает новый context. Ошибка источника сохраняет старую информацию и cursor; списки чатов восстанавливаются по ID, а не по позиции.
 
 Эти механизмы защищают от локальной потери данных при сбоях и гонках, но не дают абсолютной гарантии восстановления удалённого до чтения события или данных, недоступных webhook. Ограничения перечислены в M.
 
@@ -121,7 +121,7 @@ Benchmark не включает стоимость существующих deal
 
 ## I. Что осталось на idle
 
-В данном fixture: два activity list, один contact versions list и один batch с 20 timeline head commands — 4 моделируемых физических вызова. Discovery/invoices/products/heavy jobs отсутствуют. В живом цикле добавятся неизменённые collectors, связанные сущности, известные чаты/open tasks, пагинация, retries и независимые audio checks. **Точное число live Bitrix HTTP после изменения пока не измерено.**
+В данном fixture immediate idle: два activity list, один contact versions list и один batch с 20 timeline head commands — 4 моделируемых физических вызова. Это окно сразу после full, не live-цикл через несколько часов. Повторные skip двигают `activity_probe_at`, поэтому окно не растёт до полной history. Discovery/invoices/products/heavy jobs отсутствуют. В живом цикле добавятся неизменённые collectors, связанные сущности, известные чаты/open tasks, пагинация, retries и независимые audio checks. **Точное число live Bitrix HTTP после изменения пока не измерено.**
 
 ## J. Оставшиеся дорогие операции и tracing
 

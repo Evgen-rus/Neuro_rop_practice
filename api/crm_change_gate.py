@@ -84,6 +84,48 @@ def _result(response: dict) -> Any:
     return (response.get("response") or {}).get("result")
 
 
+def activity_probe_since(payload: dict, probe: dict | None) -> str | None:
+    """Lower bound for cheap activity list: last successful probe or fetch, not the oldest deal in the pool."""
+    stamps = []
+    for value in (
+        (probe or {}).get("activity_probe_at"),
+        ((payload.get("context") or {}).get("sync") or {}).get("activity_cursor"),
+        ((payload.get("customer_history") or {}).get("sync") or {}).get("activity_cursor"),
+    ):
+        parsed = parsed_at(value)
+        if parsed:
+            stamps.append(parsed)
+    if not stamps:
+        return None
+    latest = max(stamps).astimezone(MSK_TZ).replace(second=0, microsecond=0)
+    return (latest - OVERLAP).isoformat(timespec="seconds")
+
+
+def record_activity_probe(db_path: str | Path, deal_id: str, now: datetime) -> None:
+    key = f"deal_probe:{deal_id}"
+    stored = get_crm_sync_state(db_path, key)
+    try:
+        put_crm_sync_state(
+            db_path,
+            key,
+            {"activity_probe_at": now.isoformat(timespec="seconds")},
+            expected_revision=(stored or {}).get("revision", 0),
+        )
+    except RuntimeError:
+        pass
+
+
+def deal_job_can_acknowledge(progress: dict | None) -> bool:
+    """Ack only after a terminal deal decision or audio idle, never after a failed analysis."""
+    row = progress or {}
+    if row.get("stage") == "audio_idle" and row.get("status") == "done":
+        return True
+    if row.get("publish_ready") is True and row.get("status") != "error":
+        from progress_events import compact_decision_status
+        return compact_decision_status(row.get("decision_status")) in {"full", "mini", "skip"}
+    return False
+
+
 def _different(rows: list[dict], known: list[dict], keys: tuple[str, ...] | None = None) -> bool:
     old = {str(row.get("ID") or row.get("id")): row for row in known}
     for row in rows:
@@ -98,8 +140,10 @@ def _different(rows: list[dict], known: list[dict], keys: tuple[str, ...] | None
     return False
 
 
-def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | None = None) -> dict[str, set[str]]:
+def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | None = None,
+                  probe_states: dict[str, dict] | None = None) -> dict[str, set[str]]:
     current = now or datetime.now(MSK_TZ)
+    probe_states = probe_states or {}
     def failed_before(response):
         return response.get("ok") is False or response.get("refresh_ok") is False
 
@@ -162,27 +206,28 @@ def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | Non
             keys = [key for key in histories if key.startswith(kind + ":")]
             if not keys:
                 continue
-            cursors = [parsed_at((history.get("sync") or {}).get("activity_cursor"))
-                       or parsed_at(history.get("generated_at")) for key in keys for history in histories[key].values()]
-            # Related histories use the parent success cursor, not generated file time.
-            fallback = [parsed_at((p.get("customer_history", {}).get("sync") or {}).get("activity_cursor")) for p in payloads.values() if p.get("customer_history")]
-            dates = [value for value in [*cursors, *fallback] if value]
-            filters = {"OWNER_TYPE_ID": owner_type, "OWNER_ID": [key.split(":", 1)[1] for key in keys]}
-            if dates:
-                filters[">=LAST_UPDATED"] = (min(dates) - OVERLAP).isoformat()
-            response = client.safe_list_all("crm.activity.list", {"filter": filters,
-                "order": {"LAST_UPDATED": "ASC", "ID": "ASC"},
-                "select": ["ID", "OWNER_ID", "OWNER_TYPE_ID", "LAST_UPDATED", "FILES"]})
+            buckets: dict[str | None, list[str]] = {}
             for key in keys:
-                if not response.get("ok"):
+                owner_since = [activity_probe_since(payloads[deal_id], probe_states.get(deal_id))
+                               for deal_id in owners.get(key, ()) if deal_id in payloads]
+                buckets.setdefault(min((value for value in owner_since if value), default=None), []).append(key)
+            for since, group_keys in buckets.items():
+                filters = {"OWNER_TYPE_ID": owner_type, "OWNER_ID": [key.split(":", 1)[1] for key in group_keys]}
+                if since:
+                    filters[">=LAST_UPDATED"] = since
+                response = client.safe_list_all("crm.activity.list", {"filter": filters,
+                    "order": {"LAST_UPDATED": "ASC", "ID": "ASC"},
+                    "select": ["ID", "OWNER_ID", "OWNER_TYPE_ID", "LAST_UPDATED", "FILES"]})
+                for key in group_keys:
+                    if not response.get("ok"):
+                        for deal_id, history in histories[key].items():
+                            if failure_due(deal_id, failed_before(history.get("activities") or {})):
+                                changes[deal_id].add("probe_error")
+                        continue
+                    rows = [row for row in response.get("items", []) if str(row.get("OWNER_ID")) == key.split(":", 1)[1]]
                     for deal_id, history in histories[key].items():
-                        if failure_due(deal_id, failed_before(history.get("activities") or {})):
-                            changes[deal_id].add("probe_error")
-                    continue
-                rows = [row for row in response.get("items", []) if str(row.get("OWNER_ID")) == key.split(":", 1)[1]]
-                for deal_id, history in histories[key].items():
-                    if _different(rows, history.get("activities", {}).get("items", []), ("LAST_UPDATED", "FILES")):
-                        changes[deal_id].add("activity")
+                        if _different(rows, history.get("activities", {}).get("items", []), ("LAST_UPDATED", "FILES")):
+                            changes[deal_id].add("activity")
         for kind in ("contact", "company", "deal"):
             keys = [key for key in linked_records if key.startswith(kind + ":")]
             if not keys:
@@ -192,7 +237,11 @@ def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | Non
             for key in keys:
                 item = records.get(key.split(":", 1)[1])
                 for deal_id, previous in linked_records[key].items():
-                    if not response.get("ok") or not item or str(item.get("DATE_MODIFY") or "") != str(previous.get("DATE_MODIFY") or ""):
+                    if not response.get("ok"):
+                        if failure_due(deal_id, True):
+                            changes[deal_id].add("probe_error")
+                        continue
+                    if item and str(item.get("DATE_MODIFY") or "") != str(previous.get("DATE_MODIFY") or ""):
                         changes[deal_id].add("linked_entity")
         batch_requests = [(key, method, params) for key, (method, params) in requests.items()]
         batch = getattr(client, "safe_batch_call", None)
@@ -268,10 +317,16 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
         if client is None:
             from api.candidates import make_client
             client = make_client()
-        for deal_id, reasons in probe_changes(client, probe_payloads, now=current).items():
+        probe_states = {
+            deal_id: ((get_crm_sync_state(db_path, f"deal_probe:{deal_id}") or {}).get("payload") or {})
+            for deal_id in probe_payloads
+        }
+        for deal_id, reasons in probe_changes(client, probe_payloads, now=current, probe_states=probe_states).items():
             if reasons:
                 plans[deal_id]["mode"] = "incremental"
                 plans[deal_id]["reasons"].extend(sorted(reasons))
+            if "probe_error" not in reasons:
+                record_activity_probe(db_path, deal_id, current)
     return plans
 
 

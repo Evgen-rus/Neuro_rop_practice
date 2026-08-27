@@ -437,7 +437,7 @@ def fetch_activities_for_owner(
 ) -> dict[str, Any]:
     activity_filter: dict[str, Any] = {"OWNER_TYPE_ID": owner_type_id, "OWNER_ID": owner_id}
     if updated_after:
-        activity_filter[">LAST_UPDATED"] = updated_after
+        activity_filter[">=LAST_UPDATED"] = updated_after
     payload = {
         "order": {"START_TIME": "ASC", "DEADLINE": "ASC", "ID": "ASC"},
         "filter": activity_filter,

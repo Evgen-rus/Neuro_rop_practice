@@ -99,7 +99,7 @@ class CrmIncrementalSyncTests(unittest.TestCase):
         self.assertEqual(set(activities), {"1", "2"})
         self.assertEqual(activities["1"]["SUBJECT"], "updated value")
         activity_payload = next(payload for method, payload in client.list_calls if method == "crm.activity.list")
-        self.assertEqual(activity_payload["filter"][">LAST_UPDATED"], "2026-08-08T09:55:00+03:00")
+        self.assertEqual(activity_payload["filter"][">=LAST_UPDATED"], "2026-08-08T09:55:00+03:00")
         self.assertEqual(activity_payload["select"], ["*", "FILES", "COMMUNICATIONS"])
         self.assertEqual(client.call_calls, [])
         self.assertEqual(history["sync_mode"], "incremental")
@@ -110,6 +110,7 @@ class CrmIncrementalSyncTests(unittest.TestCase):
         history = fetch_entity_history(client, "deal", "7", history_period(365))
 
         activity_payload = next(payload for method, payload in client.list_calls if method == "crm.activity.list")
+        self.assertNotIn(">=LAST_UPDATED", activity_payload["filter"])
         self.assertNotIn(">LAST_UPDATED", activity_payload["filter"])
         self.assertEqual(history["sync_mode"], "full")
 

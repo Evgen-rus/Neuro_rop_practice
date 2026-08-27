@@ -1267,9 +1267,15 @@ def _run_job(job_id: str) -> None:
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
         if options.sync_plan:
-            from api.crm_change_gate import acknowledge_refresh
-            for entity_id in groups["deal"]:
-                acknowledge_refresh(Path(str(options.storage_db_path or DEFAULT_DB_PATH)), entity_id, options.sync_plan)
+            from api.crm_change_gate import acknowledge_refresh, deal_job_can_acknowledge
+            with _LOCK:
+                progresses = {
+                    entity_id: dict(_JOBS[job_id].entity_progress.get(progress_key("deal", entity_id)) or {})
+                    for entity_id in groups["deal"]
+                }
+            for entity_id, progress in progresses.items():
+                if deal_job_can_acknowledge(progress):
+                    acknowledge_refresh(Path(str(options.storage_db_path or DEFAULT_DB_PATH)), entity_id, options.sync_plan)
         if automatic_run_id is not None:
             update_automatic_analysis_item(
                 Path(str(options.storage_db_path or DEFAULT_DB_PATH)),

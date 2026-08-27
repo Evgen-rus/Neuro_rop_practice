@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from crm_sync_fixture import SnapshotHarness
-from api.crm_change_gate import acknowledge_refresh, audio_due, probe_changes, transcript_signature
+from api.crm_change_gate import acknowledge_refresh, audio_due, deal_job_can_acknowledge, probe_changes, transcript_signature
 from bitrix.context_sync import ContextReadClient, atomic_json, dialog_delta, local_sync_lock, retained_response, retain_failed_sources, timeline_delta
 from bitrix.deals.download_deals_call_audio import refresh_missing_call_files
 from bitrix.internal_im_chat import fetch_internal_im_chats
@@ -289,6 +289,65 @@ class CrmChangeGateTests(unittest.TestCase):
         changes = probe_changes(self.h.client, {"first": payload_a, "second": payload_b})
         self.assertIn("linked_entity", changes["first"])
         self.assertNotIn("linked_entity", changes["second"])
+
+    def test_idle_probe_window_follows_last_skip_probe(self):
+        from bitrix.context_sync import parsed_at
+        t0 = self.h.remote.now
+        self.h.plans(now=t0)
+        self.h.plans(now=t0 + timedelta(minutes=30))
+        self.h.remote.reset_counts()
+        later = t0 + timedelta(minutes=60)
+        self.assertEqual(self.h.plans(now=later)[self.deal_id]["mode"], "skip")
+        deal_filters = [row for row in self.h.remote.activity_filters if str(row.get("OWNER_TYPE_ID")) == "2"]
+        self.assertTrue(deal_filters)
+        since = parsed_at(deal_filters[0][">=LAST_UPDATED"])
+        self.assertGreaterEqual(since, t0 + timedelta(minutes=10))
+        self.assertLess(since, later)
+
+    def test_stale_deal_probe_does_not_widen_fresh_deal_window(self):
+        from bitrix.context_sync import parsed_at
+        other = SnapshotHarness(2)
+        self.addCleanup(other.close)
+        other.initial()
+        other.plans()
+        stale_id, fresh_id = other.ids
+        stale_at = (other.remote.now - timedelta(hours=3)).isoformat()
+        probe = get_crm_sync_state(other.db, f"deal_probe:{stale_id}")
+        put_crm_sync_state(other.db, f"deal_probe:{stale_id}", {"activity_probe_at": stale_at},
+                           expected_revision=probe["revision"])
+        state = other.state(stale_id)
+        payload = copy.deepcopy(state["payload"])
+        payload["context"]["sync"]["activity_cursor"] = stale_at
+        payload["customer_history"]["sync"]["activity_cursor"] = stale_at
+        put_crm_sync_state(other.db, f"deal_context:{stale_id}", payload, expected_revision=state["revision"])
+        updated = get_crm_sync_state(other.db, f"deal_context:{stale_id}")
+        ack = get_crm_sync_state(other.db, f"deal_ack:{stale_id}")
+        ack_payload = copy.deepcopy(ack["payload"])
+        ack_payload["context_revision"] = updated["revision"]
+        put_crm_sync_state(other.db, f"deal_ack:{stale_id}", ack_payload, expected_revision=ack["revision"])
+        other.remote.reset_counts()
+        other.plans()
+        deal_filters = [row for row in other.remote.activity_filters if str(row.get("OWNER_TYPE_ID")) == "2"]
+        by_owner = {}
+        for row in deal_filters:
+            ids = row.get("OWNER_ID")
+            ids = [ids] if not isinstance(ids, list) else ids
+            for entity_id in ids:
+                by_owner[str(entity_id)] = parsed_at(row[">=LAST_UPDATED"])
+        self.assertLess(by_owner[stale_id], by_owner[fresh_id] - timedelta(hours=2))
+
+    def test_missing_linked_contact_list_row_does_not_refresh(self):
+        contact_id = next(iter(self.h.remote.contacts))
+        del self.h.remote.contacts[contact_id]
+        self.assertEqual(self.h.plans()[self.deal_id]["mode"], "skip")
+
+    def test_deal_job_ack_requires_terminal_success_not_error(self):
+        self.assertFalse(deal_job_can_acknowledge({}))
+        self.assertFalse(deal_job_can_acknowledge(
+            {"publish_ready": True, "status": "error", "decision_status": "error"}))
+        self.assertTrue(deal_job_can_acknowledge(
+            {"publish_ready": True, "status": "done", "decision_status": "skip"}))
+        self.assertTrue(deal_job_can_acknowledge({"stage": "audio_idle", "status": "done"}))
 
 
 if __name__ == "__main__":

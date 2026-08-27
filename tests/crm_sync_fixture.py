@@ -52,6 +52,7 @@ class SyntheticBitrix:
         self.physical = 0
         self.commands = Counter()
         self.fail = set()
+        self.activity_filters = []
         self.deals, self.contacts, self.activities, self.comments, self.stages, self.chats, self.tasks = {}, {}, {}, {}, {}, {}, {}
         stamp = (self.now - timedelta(hours=2)).isoformat()
         for offset in range(count):
@@ -70,6 +71,7 @@ class SyntheticBitrix:
     def reset_counts(self):
         self.physical = 0
         self.commands.clear()
+        self.activity_filters.clear()
 
     def post(self, url, *, json, **kwargs):
         self.physical += 1
@@ -119,6 +121,7 @@ class SyntheticBitrix:
             since = filters.get(">LAST_UPDATED") or filters.get(">=LAST_UPDATED")
             if since:
                 rows = [row for row in rows if row.get("LAST_UPDATED", "") >= since]
+            self.activity_filters.append(dict(filters))
             return self.page(rows, params)
         if method == "crm.timeline.comment.list":
             assert set(filters) == {"ENTITY_TYPE", "ENTITY_ID"}, "No invented timeline filters"
