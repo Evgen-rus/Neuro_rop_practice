@@ -51,7 +51,9 @@ Deal/contact/company/user/task entity get и одинаковые list requests 
 
 Chat discovery отделён от чтения известных dialog IDs. Успешный discovery, включая пустой, имеет суточный срок; новый discovery вызывается также по activity/timeline/chat/trajectory/deal-field сигналам и при full refresh. Ошибка не продвигает discovery timestamp. Уже известные чаты не удаляются из-за пустого поиска. Новый чат без иных сигналов будет найден при следующей суточной сверке, если он доступен используемому API поиска.
 
-Invoices, smart invoices и product rows остаются в context. На idle они не читаются. При любом CRM refresh читаются снова, включая ранее пустые: это консервативная negative-cache policy. Ошибка перечитывания сохраняет прежние данные со stale/refresh error, а не превращает их в валидную пустоту.
+По решению пользователя от 2026-08-27 сбор структурированных invoices, smart invoices и product rows отключён для текущего портала: `crm.invoice.list`, `crm.item.list` (entityTypeId=31) и `crm.deal.productrows.get` не вызываются ни при incremental, ни при initial/full/manual/force/reconciliation. Ранее использовавшаяся negative-cache policy заменена этим отключением.
+
+Raw сохраняет `product_rows=None`, `invoice_attempts=[]` и `structured_commercial_sources_enabled=False`. Это признак отключения сбора, а не утверждение, что счетов в CRM нет. Старые snapshot продолжают читаться; переход на отключённые источники не создаёт `commercial_refs_changed` по счетам/товарам. Сумма сделки, коммерческие вложения и упоминания счетов/оплат в activities, письмах, комментариях и transcripts не отключаются. LLM context явно сообщает об отключённых структурированных источниках. API/lead-контракт и аудио не меняются.
 
 ## E. Независимый audio-путь
 
@@ -92,7 +94,7 @@ Ack записывается после `audio_idle` или terminal `publish_re
 
 OLD — предоставленный пользователем live RUN 2: 10 сделок, 396 physical Bitrix HTTP, FULL 0, MINI 9, SKIP 1, OpenAI 0. Указанное в исходной диагностике среднее ~36,2 не совпадает с 396/10; без исходного scope его не используем для расчёта экономии.
 
-NEW — **локальный synthetic transport benchmark, не live Bitrix**. Выполняет production gate/context fetch через реальный read-only client, batch и pagination с подменой HTTP transport синтетическим сервером. В fixture по 120 timeline comments на сделку, связанные контакты, пустые commercial sources; нет pending audio. Context-only ack не имитирует успешный реальный LLM-анализ.
+NEW — **локальный synthetic transport benchmark, не live Bitrix**. Выполняет production gate/context fetch через реальный read-only client, batch и pagination с подменой HTTP transport синтетическим сервером. В fixture по 120 timeline comments на сделку, связанные контакты, пустые commercial sources; нет pending audio. Context-only ack не имитирует успешный реальный LLM-анализ. Таблица ниже сохраняет исторический замер до отключения счетов/товаров.
 
 | Метрика | A initial/full | B immediate idle | C одна новая activity |
 | --- | ---: | ---: | ---: |
@@ -119,13 +121,17 @@ Benchmark не включает стоимость существующих deal
 
 Артефакт — `logs/phase2_context_sync/fixture_benchmark.json`, без CRM payload. Wall time меняется между запусками.
 
+После отключения счетов/товаров повторён тот же локальный fixture: initial **154 HTTP** вместо 184, idle **4** без изменений, одна изменённая сделка **17** вместо 20. Во всех трёх сценариях `invoice_product_requests=0`; остальные счётчики методов сохранены. Это моделируемые транспортные вызовы, реальные Bitrix/OpenAI запросы не запускались. Артефакт — `logs/phase2_context_sync/no_commercial_benchmark.json`. Отдельные regression tests проверяют full/incremental без этих запросов, безопасный переход с непустых legacy данных и сохранение коммерческих фактов из activities/вложений.
+
+Проверка этого изменения: полный `python -m unittest discover -s tests` — **740 tests, OK, 153,710 s**; `git diff --check` и UTF-8 проверены. Frontend не изменён, lint/build не запускались. Изменение локальное, без deploy и без запуска внешних API. Разбор причин долгого итогового SKIP остаётся отдельной задачей.
+
 ## I. Что осталось на idle
 
 В данном fixture immediate idle: два activity list, один contact versions list и один batch с 20 timeline head commands — 4 моделируемых физических вызова. Это окно сразу после full, не live-цикл через несколько часов. Повторные skip двигают `activity_probe_at`, поэтому окно не растёт до полной history. Discovery/invoices/products/heavy jobs отсутствуют. В живом цикле добавятся неизменённые collectors, связанные сущности, известные чаты/open tasks, пагинация, retries и независимые audio checks. **Точное число live Bitrix HTTP после изменения пока не измерено.**
 
 ## J. Оставшиеся дорогие операции и tracing
 
-Полная сверка длинных timeline/chat histories, повторный commercial fetch при изменении, discovery по сигналам, коллекция trajectory и audio size/download checks остаются основными кандидатами на следующий замер. Gate ограничивает head probes одной страницей на источник, но число logical commands растёт с числом связанных сущностей/чатов/задач. Activity version list может иметь несколько страниц.
+Полная сверка длинных timeline/chat histories, discovery по сигналам, коллекция trajectory и audio size/download checks остаются основными кандидатами на следующий замер. Structured commercial fetch отключён. Gate ограничивает head probes одной страницей на источник, но число logical commands растёт с числом связанных сущностей/чатов/задач. Activity version list может иметь несколько страниц.
 
 Privacy-safe physical usage trace сохранён: в него не добавляются CRM payload, IDs или содержимое сообщений. Добавлены допустимые component labels для gate/delta/cache/discovery/reconciliation; активные source scopes позволяют отделять cheap detection, timeline/stage, chat updates/discovery и entity cache. Старые invoice/product/audio/trajectory labels сохранены. Один физический batch может содержать много logical commands. Наличие label в allowlist само по себе не означает отдельный запрос или cache hit; причины full reconciliation хранятся в sync plan.
 

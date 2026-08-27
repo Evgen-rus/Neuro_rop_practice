@@ -136,6 +136,13 @@ class DealOperationalFetchTests(unittest.TestCase):
 
 
 class DealOperationalContextTests(unittest.TestCase):
+    def test_disabled_commercial_sources_keep_invoice_mentions_in_activities(self):
+        rows = context.commercial_section({"structured_commercial_sources_enabled": False,
+                                           "product_rows": None, "invoice_attempts": []},
+            [{"ID": "8", "TYPE_ID": "4", "SUBJECT": "Клиент согласовал счёт", "DESCRIPTION": "Оплата после согласования"}])
+        self.assertIn("не запрашиваются", rows[0])
+        self.assertTrue(any("Клиент согласовал счёт" in row for row in rows))
+
     def fixture(self) -> dict[str, Any]:
         return {
             "deal": {

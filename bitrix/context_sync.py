@@ -249,7 +249,7 @@ class ContextReadClient:
     """Per-job entity memo + daily persisted schema cache, scoped to credentials.
 
     Entity records are NOT reused across jobs without a reliable version signal.
-    A changed deal always refreshes products/invoices, even previously empty ones.
+    Structured invoices/products are disabled by the deal context builder.
     """
     def __init__(self, client: Any, *, db_path: str | Path = DEFAULT_DB_PATH, full: bool = False):
         self.client, self.db_path, self.full = client, db_path, full

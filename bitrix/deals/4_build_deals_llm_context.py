@@ -591,6 +591,8 @@ def need_summary(comments: list[dict[str, Any]], emails: list[dict[str, Any]]) -
 
 def commercial_section(bundle: dict[str, Any], activities: list[dict[str, Any]]) -> list[str]:
     rows = []
+    if bundle.get("structured_commercial_sources_enabled") is False:
+        rows.append("- Структурированные счета, смарт-счета и товарные строки не запрашиваются; это не подтверждает их отсутствие в CRM.")
     product_rows = result_items(bundle.get("product_rows"))
     if product_rows:
         rows.append(f"- Товарные строки: {len(product_rows)}")

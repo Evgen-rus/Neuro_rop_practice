@@ -30,6 +30,29 @@ def decision(diff: dict, current: dict):
 
 
 class DealChangeDecisionTests(unittest.TestCase):
+    def test_disabling_structured_commercial_sources_does_not_signal_a_deal_change(self):
+        from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
+        legacy = {"deal": {"item": {"ID": "7", "CLOSED": "N"}},
+                  "product_rows": {"ok": True, "response": {"result": [{"ID": "1", "PRICE": "500"}]}},
+                  "invoice_attempts": [{"ok": True, "items": [{"ID": "2", "PRICE": "500"}]}]}
+        previous = build_deal_snapshot(legacy)
+        self.assertEqual(previous["commercial"]["product_rows_count"], 1)
+        self.assertEqual(previous["commercial"]["invoice_refs_count"], 1)
+        # Actual legacy stored snapshots predate the new metadata field.
+        previous["commercial"].pop("structured_sources_enabled")
+        current = build_deal_snapshot({**legacy, "structured_commercial_sources_enabled": False,
+                                       "product_rows": None, "invoice_attempts": []})
+        diff = compare_snapshots(previous, current)
+        self.assertFalse(diff["has_semantic_changes"], diff)
+        baseline = decision(compare_snapshots(previous, previous), previous)
+        result = decision(diff, current)
+        self.assertEqual(result.status, baseline.status)
+        self.assertNotIn(result.status, (FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS))
+        # Disabling structured sources must not hide changes in commercial files.
+        current["commercial"]["commercial_file_refs_hash"] = "new-commercial-file"
+        diff = compare_snapshots(previous, current)
+        self.assertEqual(diff["details"]["commercial_refs_changed"], ["commercial_file_refs_hash"])
+
     def test_internal_context_change_is_mini_not_client_evidence(self):
         from openai_api.change_detection.snapshot import compare_snapshots
         previous = {**snapshot(), "operational_context_fingerprint": "old"}

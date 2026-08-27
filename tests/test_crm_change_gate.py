@@ -61,7 +61,7 @@ class CrmChangeGateTests(unittest.TestCase):
         self.assertEqual(result["counts"]["heavy_context_fetch_count"], 0)
         self.assertEqual(result["counts"]["skipped_before_fetch"], 1)
 
-    def test_new_activity_refreshes_delta_and_rechecks_empty_invoices_and_products(self):
+    def test_new_activity_refreshes_delta_without_invoices_and_products(self):
         row = copy.deepcopy(self.h.remote.activities[self.deal_id][0])
         row.update(ID="99901", LAST_UPDATED=self.h.remote.now.isoformat(), SUBJECT="Новое письмо")
         self.h.remote.activities[self.deal_id].append(row)
@@ -70,8 +70,20 @@ class CrmChangeGateTests(unittest.TestCase):
         self.assertIn("activity", plan["reasons"])
         self.h.refresh(self.deal_id, plan)
         self.assertEqual(len(self.h.state()["payload"]["context"]["activities"]["items"]), 2)
-        self.assertEqual(self.h.remote.commands["crm.invoice.list"], 1)
-        self.assertEqual(self.h.remote.commands["crm.deal.productrows.get"], 1)
+        for method in ("crm.invoice.list", "crm.item.list", "crm.deal.productrows.get"):
+            self.assertEqual(self.h.remote.commands[method], 0)
+
+    def test_full_refresh_does_not_query_disabled_commercial_sources(self):
+        for method in ("crm.invoice.list", "crm.item.list", "crm.deal.productrows.get"):
+            self.h.remote.fail.add(method)
+        self.h.refresh(self.deal_id, {**self.h.plans()[self.deal_id], "mode": "full"})
+        raw = self.h.state()["payload"]["context"]
+        self.assertFalse(raw["structured_commercial_sources_enabled"])
+        self.assertIsNone(raw["product_rows"])
+        self.assertEqual(raw["invoice_attempts"], [])
+        self.assertFalse(raw["sync"]["retry_required"])
+        for method in ("crm.invoice.list", "crm.item.list", "crm.deal.productrows.get"):
+            self.assertEqual(self.h.remote.commands[method], 0)
 
     def test_stage_change_and_linked_contact_change_are_detected(self):
         self.h.remote.deals[self.deal_id]["STAGE_ID"] = "NEXT"

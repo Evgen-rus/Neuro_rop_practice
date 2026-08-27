@@ -414,6 +414,7 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
         "activities": activities,
         "timeline_comments": comments,
         "commercial": {
+            "structured_sources_enabled": raw_bundle.get("structured_commercial_sources_enabled", True),
             "product_rows_hash": stable_hash(product_rows),
             "invoice_refs_hash": stable_hash(invoices),
             "commercial_file_refs_hash": stable_hash(commercial_file_refs),
@@ -598,6 +599,10 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
     hard_commercial_fields = ("product_rows_hash", "invoice_refs_hash", "commercial_file_refs_hash")
     changed_hard_commercial = []
     for field in hard_commercial_fields:
+        if current_commercial.get("structured_sources_enabled") is False and field in {"product_rows_hash", "invoice_refs_hash"}:
+            # Disabling a source is not evidence that a product/invoice changed.
+            # Commercial attachments remain independent, meaningful evidence.
+            continue
         if field not in previous_commercial and field in current_commercial:
             continue
         if previous_commercial.get(field, EMPTY_LIST_HASH) != current_commercial.get(field, EMPTY_LIST_HASH):

@@ -588,6 +588,9 @@ def fetch_deal_bundle(
         "deal_contacts": contact_items_response,
         "users": fetch_users(client, user_ids),
         "fields": fetch_field_schemas(client),
+        # This portal does not use structured invoices/products. Keep the legacy
+        # keys readable, but distinguish disabled collection from an empty read.
+        "structured_commercial_sources_enabled": False,
         "product_rows": None,
         "source_lead": source_lead,
         "activities": activities_response,
@@ -606,13 +609,6 @@ def fetch_deal_bundle(
             "automatic_full_reconciliation": bool(force_full and previous_bundle),
         },
     }
-    with bitrix_trace_context(component="product_rows"):
-        bundle["product_rows"] = client.safe_call("crm.deal.productrows.get", {"id": deal_id})
-    with bitrix_trace_context(component="invoice"):
-        bundle["invoice_attempts"] = [
-            client.safe_list_all("crm.invoice.list", {"filter": {"UF_DEAL_ID": deal_id}, "select": ["*"]}),
-            client.safe_list_all("crm.item.list", {"entityTypeId": 31, "filter": {"parentId2": deal_id}}),
-        ]
     return bundle
 
 
