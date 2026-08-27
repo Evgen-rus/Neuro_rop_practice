@@ -37,7 +37,13 @@ SAFE_CHUNK_SECONDS = 420
 CHUNK_OVERLAP_SECONDS = 5
 
 
-def _record_transcription_spend(*, duration_seconds: float | None, entity_type: str | None, entity_id: str | None) -> None:
+def _record_transcription_spend(
+    *,
+    duration_seconds: float | None,
+    entity_type: str | None,
+    entity_id: str | None,
+    attempt: int | None = None,
+) -> None:
     try:
         from openai_api.spend_diary import record_transcription_spend
 
@@ -47,6 +53,7 @@ def _record_transcription_spend(*, duration_seconds: float | None, entity_type: 
             entity_id=entity_id,
             kind="transcription",
             model=TRANSCRIPTION_MODEL,
+            attempt=attempt,
         )
     except Exception:  # noqa: BLE001 - diary must not fail transcription
         logger.warning("Не удалось записать трату транскрибации сегмента")
@@ -190,7 +197,12 @@ async def transcribe_file_async(
 
         try:
             async with semaphore:
+                segment_attempt = 1
+
                 def segment_retry_callback(event: dict[str, Any]) -> None:
+                    nonlocal segment_attempt
+                    if isinstance(event.get("attempt"), int):
+                        segment_attempt = max(segment_attempt, int(event["attempt"]))
                     if progress_callback is not None:
                         progress_callback({**event, "current": idx + 1, "total": total_chunks})
 
@@ -204,6 +216,7 @@ async def transcribe_file_async(
                 duration_seconds=chunk_duration_sec,
                 entity_type=entity_type,
                 entity_id=entity_id,
+                attempt=segment_attempt,
             )
         except Exception as e:  # noqa: BLE001 — хотим залогировать и продолжить другие сегменты
             logger.error(f"Ошибка при транскрибации сегмента {idx + 1}: {e}")

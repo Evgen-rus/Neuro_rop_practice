@@ -70,6 +70,7 @@ class AnalyzeOptions:
     transcript_mode: str = "all"
     daily_summary_run_id: int | None = None
     automatic_analysis_run_id: int | None = None
+    storage_db_path: str | None = None
     extra_env: dict[str, str] | None = None
 
 
@@ -91,6 +92,32 @@ class JobState:
 
 _JOBS: dict[str, JobState] = {}
 _LOCK = threading.Lock()
+_AUTOMATIC_WORKER_CONDITION = threading.Condition()
+_AUTOMATIC_WORKERS_ACTIVE = 0
+
+
+def analysis_worker_concurrency() -> int:
+    """Automatic deal pipelines in parallel; deliberately capped for CRM/OpenAI safety."""
+    try:
+        configured = int(os.getenv("ANALYSIS_WORKER_CONCURRENCY", "2") or "2")
+    except ValueError:
+        configured = 2
+    return max(1, min(configured, 4))
+
+
+def _acquire_automatic_worker_slot() -> None:
+    global _AUTOMATIC_WORKERS_ACTIVE
+    with _AUTOMATIC_WORKER_CONDITION:
+        while _AUTOMATIC_WORKERS_ACTIVE >= analysis_worker_concurrency():
+            _AUTOMATIC_WORKER_CONDITION.wait()
+        _AUTOMATIC_WORKERS_ACTIVE += 1
+
+
+def _release_automatic_worker_slot() -> None:
+    global _AUTOMATIC_WORKERS_ACTIVE
+    with _AUTOMATIC_WORKER_CONDITION:
+        _AUTOMATIC_WORKERS_ACTIVE = max(0, _AUTOMATIC_WORKERS_ACTIVE - 1)
+        _AUTOMATIC_WORKER_CONDITION.notify_all()
 
 
 def _touch(job: JobState) -> None:
@@ -158,9 +185,14 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         return asdict(job) if job else None
 
 
-def wait_for_job(job_id: str, *, timeout_seconds: float = 3000, poll_seconds: float = 1.0) -> dict[str, Any]:
+def wait_for_job(
+    job_id: str,
+    *,
+    timeout_seconds: float | None = 3000,
+    poll_seconds: float = 1.0,
+) -> dict[str, Any]:
     """Block until an in-memory analyze job finishes. Used by the daytime scheduler."""
-    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    deadline = None if timeout_seconds is None else time.monotonic() + max(1.0, float(timeout_seconds))
     pause = max(0.05, float(poll_seconds))
     while True:
         job = get_job(job_id)
@@ -168,7 +200,7 @@ def wait_for_job(job_id: str, *, timeout_seconds: float = 3000, poll_seconds: fl
             raise RuntimeError(f"Задание {job_id} не найдено")
         if job.get("status") in {"done", "error"}:
             return job
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError(f"Задание {job_id} не завершилось за {timeout_seconds:.0f} с")
         time.sleep(pause)
 
@@ -799,11 +831,12 @@ def _sync_automatic_analysis_item(
     report_id: int | None = None,
     error: str | None = None,
     publication_status: str | None = None,
+    db_path: str | Path = DEFAULT_DB_PATH,
 ) -> None:
     if run_id is None:
         return
     update_automatic_analysis_item(
-        DEFAULT_DB_PATH,
+        db_path,
         int(run_id),
         entity_type="deal",
         entity_id=str(entity_id),
@@ -863,6 +896,7 @@ def _publish_deal_result(job: JobState, entity_id: str, *, allow_raise: bool = T
     key = progress_key("deal", entity_id)
     progress = dict(job.entity_progress.get(key) or {})
     automatic_run_id = _int_or_none(job.options.get("automatic_analysis_run_id"))
+    automatic_db_path = Path(str(job.options.get("storage_db_path") or DEFAULT_DB_PATH))
     publish_ready = progress.get("publish_ready") is True
     decision = compact_decision_status(str(progress.get("decision_status") or ""))
     if not decision and str(progress.get("status") or "") == "error":
@@ -982,6 +1016,7 @@ def _publish_deal_result(job: JobState, entity_id: str, *, allow_raise: bool = T
         report_id=report_id,
         error=stored_error or "",
         publication_status=publication_status,
+        db_path=automatic_db_path,
     )
 
 
@@ -1088,9 +1123,28 @@ def _collect_group_results(job: JobState, entity_type: str, ids: list[str]) -> N
 def _run_job(job_id: str) -> None:
     with _LOCK:
         job = _JOBS[job_id]
+        options = AnalyzeOptions(**job.options)
+
+    automatic_run_id = _int_or_none(options.automatic_analysis_run_id)
+    automatic_slot_acquired = False
+    if automatic_run_id is not None:
+        _acquire_automatic_worker_slot()
+        automatic_slot_acquired = True
+        update_automatic_analysis_item(
+            Path(str(options.storage_db_path or DEFAULT_DB_PATH)),
+            automatic_run_id,
+            entity_type="deal",
+            entity_id=str(options.ids[0]),
+            stage="processing",
+            processing_status="processing",
+            job_id=job_id,
+            increment_attempt=True,
+            current_stage="processing",
+        )
+    with _LOCK:
+        job = _JOBS[job_id]
         job.status = "running"
         _touch(job)
-        options = AnalyzeOptions(**job.options)
 
     def log_line(text: str) -> None:
         publish_entity_id: str | None = None
@@ -1136,6 +1190,7 @@ def _run_job(job_id: str) -> None:
                     stage="error",
                     error=_safe_publish_error(publish_error),
                     publication_status="pending",
+                    db_path=Path(str(current.options.get("storage_db_path") or DEFAULT_DB_PATH)),
                 )
             return
         if automatic_run_id is not None and stage_event is not None:
@@ -1143,6 +1198,7 @@ def _run_job(job_id: str) -> None:
                 automatic_run_id,
                 entity_id=stage_event["entity_id"],
                 stage=stage_event["stage"] or None,
+                db_path=Path(str(current.options.get("storage_db_path") or DEFAULT_DB_PATH)),
             )
 
     groups: dict[str, list[str]] = {"lead": [], "deal": []}
@@ -1185,6 +1241,15 @@ def _run_job(job_id: str) -> None:
                 collected_groups.add(entity_type)
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
+        if automatic_run_id is not None:
+            update_automatic_analysis_item(
+                Path(str(options.storage_db_path or DEFAULT_DB_PATH)),
+                automatic_run_id,
+                entity_type="deal",
+                entity_id=str(options.ids[0]),
+                processing_status="done",
+                current_stage="done",
+            )
         with _LOCK:
             job = _JOBS[job_id]
             job.status = "done"
@@ -1217,7 +1282,6 @@ def _run_job(job_id: str) -> None:
                     )
         with _LOCK:
             job = _JOBS[job_id]
-            job.status = "error"
             job.error = str(error)
             run_id = job.options.get("daily_summary_run_id")
             if run_id:
@@ -1256,6 +1320,26 @@ def _run_job(job_id: str) -> None:
                 }
             )
             _touch(job)
+        if automatic_run_id is not None:
+            update_automatic_analysis_item(
+                Path(str(options.storage_db_path or DEFAULT_DB_PATH)),
+                automatic_run_id,
+                entity_type="deal",
+                entity_id=str(options.ids[0]),
+                stage="error",
+                decision_status="error",
+                error=str(error),
+                publication_status="error",
+                processing_status="error",
+                current_stage="error",
+            )
+        with _LOCK:
+            job = _JOBS[job_id]
+            job.status = "error"
+            _touch(job)
+    finally:
+        if automatic_slot_acquired:
+            _release_automatic_worker_slot()
 
 
 def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
@@ -1267,6 +1351,10 @@ def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
         raise ValueError("transcript_mode должен быть all|latest|none")
 
     job_id = uuid.uuid4().hex[:12]
+    requested_ids = {str(item) for item in options.ids if str(item).strip()}
+    extra_env = dict(options.extra_env or {})
+    extra_env["SPEND_DIARY_JOB_ID"] = job_id
+    options.extra_env = extra_env
     job = JobState(job_id=job_id, options=asdict(options))
     for entity_id in options.ids:
         key = progress_key(options.entity_type, entity_id)
@@ -1286,6 +1374,17 @@ def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
             "updated_at": job.created_at,
         }
     with _LOCK:
+        overlapping: set[str] = set()
+        for existing in _JOBS.values():
+            if existing.status not in {"queued", "running"}:
+                continue
+            existing_options = existing.options or {}
+            existing_type = str(existing_options.get("entity_type") or "")
+            if existing_type not in {options.entity_type, "auto"} and options.entity_type != "auto":
+                continue
+            overlapping.update(requested_ids.intersection(str(item) for item in existing_options.get("ids") or []))
+        if overlapping:
+            raise ValueError(f"Анализ уже выполняется для: {', '.join(sorted(overlapping))}")
         _JOBS[job_id] = job
         _set_stage(job, "queued", "В очереди", "queued")
     if options.daily_summary_run_id:

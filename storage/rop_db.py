@@ -176,8 +176,10 @@ def _manager_script_should_replace(stored: Any, incoming: dict[str, Any]) -> boo
 def connect(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, factory=RopConnection)
+    conn = sqlite3.connect(path, timeout=30.0, factory=RopConnection)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -1002,7 +1004,9 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 current_stage TEXT,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                finished_at TEXT
+                finished_at TEXT,
+                spend_batch_path TEXT,
+                diary_written_at TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_automatic_analysis_runs_started
@@ -1019,6 +1023,11 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 report_id INTEGER,
                 error TEXT,
                 publication_status TEXT NOT NULL DEFAULT 'pending',
+                processing_status TEXT NOT NULL DEFAULT 'queued',
+                job_id TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                finished_at TEXT,
                 updated_at TEXT NOT NULL,
                 UNIQUE(run_id, entity_type, entity_id),
                 FOREIGN KEY(run_id) REFERENCES automatic_analysis_runs(id),
@@ -1059,6 +1068,21 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "analysis_runs", "provenance_json", "TEXT")
         _ensure_column(conn, "analysis_runs", "evidence_ids_included_json", "TEXT")
         _ensure_column(conn, "deal_semantic_checkpoints", "baseline_snapshot_json", "TEXT")
+        _ensure_column(conn, "automatic_analysis_runs", "spend_batch_path", "TEXT")
+        _ensure_column(conn, "automatic_analysis_runs", "diary_written_at", "TEXT")
+        _ensure_column(conn, "automatic_analysis_items", "processing_status", "TEXT NOT NULL DEFAULT 'queued'")
+        _ensure_column(conn, "automatic_analysis_items", "job_id", "TEXT")
+        _ensure_column(conn, "automatic_analysis_items", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "automatic_analysis_items", "started_at", "TEXT")
+        _ensure_column(conn, "automatic_analysis_items", "finished_at", "TEXT")
+        conn.execute(
+            "UPDATE automatic_analysis_items SET processing_status = 'done' "
+            "WHERE processing_status = 'queued' AND decision_status IN ('full', 'mini', 'skip')"
+        )
+        conn.execute(
+            "UPDATE automatic_analysis_items SET processing_status = 'error' "
+            "WHERE processing_status = 'queued' AND decision_status = 'error'"
+        )
         _ensure_column(conn, "ui_reports", "analysis_run_id", "INTEGER")
         _ensure_column(conn, "ui_reports", "report_meta_json", "TEXT")
         _ensure_column(conn, "ui_reports", "technical_log_json", "TEXT")
@@ -2565,6 +2589,7 @@ def create_automatic_analysis_run(
     status: str = "running",
     current_stage: str | None = "queued",
     business_date: str | None = None,
+    spend_batch_path: str | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
     now = utcish_now()
@@ -2576,11 +2601,14 @@ def create_automatic_analysis_run(
             """
             INSERT INTO automatic_analysis_runs (
                 business_date, trigger, job_id, status, current_stage,
-                started_at, updated_at, finished_at
+                started_at, updated_at, finished_at, spend_batch_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (date_value, str(trigger), job_id, str(status), current_stage, now, now, finished_at),
+            (
+                date_value, str(trigger), job_id, str(status), current_stage,
+                now, now, finished_at, str(spend_batch_path) if spend_batch_path else None,
+            ),
         )
         run_id = int(cursor.lastrowid)
         for entity_id in ids:
@@ -2679,6 +2707,84 @@ def interrupt_running_automatic_analysis_runs(db_path: str | Path = DEFAULT_DB_P
         return int(cursor.rowcount or 0)
 
 
+def list_recoverable_automatic_analysis_runs(
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Return interrupted/running batches for resume or terminal finalization."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT runs.*
+            FROM automatic_analysis_runs AS runs
+            WHERE runs.status IN ('running', 'interrupted')
+            ORDER BY runs.id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def requeue_unfinished_automatic_analysis_items(
+    db_path: str | Path,
+    run_id: int,
+) -> list[str]:
+    """Make unfinished items runnable again after the API process restarted."""
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT entity_id
+            FROM automatic_analysis_items
+            WHERE run_id = ?
+              AND COALESCE(processing_status, 'queued') NOT IN ('done', 'error')
+            ORDER BY id ASC
+            """,
+            (int(run_id),),
+        ).fetchall()
+        ids = [str(row["entity_id"]) for row in rows]
+        if ids:
+            conn.execute(
+                """
+                UPDATE automatic_analysis_items
+                SET processing_status = 'retry', stage = 'queued', job_id = NULL,
+                    error = NULL, started_at = NULL, finished_at = NULL, updated_at = ?
+                WHERE run_id = ?
+                  AND COALESCE(processing_status, 'queued') NOT IN ('done', 'error')
+                """,
+                (now, int(run_id)),
+            )
+            conn.execute(
+                """
+                UPDATE automatic_analysis_runs
+                SET status = 'running', current_stage = 'queued', finished_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, int(run_id)),
+            )
+    return ids
+
+
+def active_automatic_analysis_entity_ids(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    entity_type: str = "deal",
+) -> set[str]:
+    """Reserve every deal owned by an unfinished automatic batch across scheduler ticks."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT items.entity_id
+            FROM automatic_analysis_items AS items
+            JOIN automatic_analysis_runs AS runs ON runs.id = items.run_id
+            WHERE runs.status IN ('running', 'interrupted') AND items.entity_type = ?
+            """,
+            (str(entity_type),),
+        ).fetchall()
+    return {str(row["entity_id"]) for row in rows}
+
+
 def get_latest_automatic_analysis_run(db_path: str | Path) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:
@@ -2741,6 +2847,9 @@ def update_automatic_analysis_item(
     error: str | None = None,
     publication_status: str | None = None,
     current_stage: str | None = None,
+    processing_status: str | None = None,
+    job_id: str | None = None,
+    increment_attempt: bool = False,
 ) -> None:
     init_db(db_path)
     now = utcish_now()
@@ -2764,6 +2873,22 @@ def update_automatic_analysis_item(
     if publication_status is not None:
         assignments.append("publication_status = ?")
         values.append(str(publication_status))
+    if processing_status is not None:
+        normalized_processing = str(processing_status)
+        assignments.append("processing_status = ?")
+        values.append(normalized_processing)
+        if normalized_processing == "processing":
+            assignments.append("started_at = COALESCE(started_at, ?)")
+            values.append(now)
+            assignments.append("finished_at = NULL")
+        elif normalized_processing in {"done", "error"}:
+            assignments.append("finished_at = ?")
+            values.append(now)
+    if job_id is not None:
+        assignments.append("job_id = ?")
+        values.append(str(job_id).strip() or None)
+    if increment_attempt:
+        assignments.append("attempt_count = COALESCE(attempt_count, 0) + 1")
     values.extend([int(run_id), str(entity_type), str(entity_id)])
     with connect(db_path) as conn:
         conn.execute(
@@ -2792,6 +2917,25 @@ def update_automatic_analysis_item(
                 """,
                 (now, int(run_id)),
             )
+
+
+def mark_automatic_analysis_diary_written(
+    db_path: str | Path,
+    run_id: int,
+) -> bool:
+    """Claim the one human-readable batch block for a completed run."""
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE automatic_analysis_runs
+            SET diary_written_at = ?, updated_at = ?
+            WHERE id = ? AND diary_written_at IS NULL
+            """,
+            (now, now, int(run_id)),
+        )
+    return int(cursor.rowcount or 0) == 1
 
 
 DAILY_CONTROL_METADATA_COLUMNS = (

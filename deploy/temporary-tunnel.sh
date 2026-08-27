@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/opt/Neuro_rop_practice}"
 RUNTIME_DIR="${PROJECT_ROOT}/runtime"
 REPORTS_DIR="${RUNTIME_DIR}/reports"
+LOGS_DIR="${RUNTIME_DIR}/logs"
 KNOWLEDGE_DIR="${RUNTIME_DIR}/knowledge"
 PIPELINE_MAP_FILE="${RUNTIME_DIR}/crm_pipeline_map.json"
 AUTH_DIR="${RUNTIME_DIR}/nginx"
@@ -89,6 +90,7 @@ require_file "${RUNTIME_DIR}/.env"
 require_directory "${REPORTS_DIR}"
 require_directory "${KNOWLEDGE_DIR}"
 require_file "${PIPELINE_MAP_FILE}"
+mkdir -p "${LOGS_DIR}"
 
 mkdir -p "${AUTH_DIR}"
 chmod 700 "${RUNTIME_DIR}" "${AUTH_DIR}"
@@ -129,7 +131,7 @@ fi
 # Не включать сюда ${TUNNEL_CONTAINER}: force-remove сбрасывает Quick Tunnel URL.
 docker rm --force "${WEB_CONTAINER}" "${API_CONTAINER}" >/dev/null 2>&1 || true
 
-chown -R 10001:10001 "${REPORTS_DIR}"
+chown -R 10001:10001 "${REPORTS_DIR}" "${LOGS_DIR}"
 
 docker run --detach \
     --name "${API_CONTAINER}" \
@@ -137,6 +139,7 @@ docker run --detach \
     --restart unless-stopped \
     --env-file "${RUNTIME_DIR}/.env" \
     --volume "${REPORTS_DIR}:/app/reports" \
+    --volume "${LOGS_DIR}:/app/logs" \
     --volume "${KNOWLEDGE_DIR}:/app/knowledge:ro" \
     --volume "${PIPELINE_MAP_FILE}:/app/crm_pipeline_map.json:ro" \
     --security-opt no-new-privileges \

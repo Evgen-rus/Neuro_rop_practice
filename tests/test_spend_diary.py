@@ -12,6 +12,8 @@ from openai_api.llm.usage_trace import append_usage_trace
 from openai_api.spend_diary import (
     BATCH_ENV,
     DIR_ENV,
+    JOB_ENV,
+    RUN_ENV,
     day_total_rub,
     format_rub,
     human_diary_path,
@@ -67,18 +69,24 @@ class SpendDiaryTests(unittest.TestCase):
 
     def test_batch_env_does_not_write_adhoc_line(self) -> None:
         batch = self.dir / "batch.jsonl"
-        with patch.dict(os.environ, {BATCH_ENV: str(batch)}):
+        with patch.dict(os.environ, {BATCH_ENV: str(batch), RUN_ENV: "17", JOB_ENV: "job-42"}):
             record_paid_call(
                 kind="full_deal_analysis",
                 estimated_cost_rub=12,
                 entity_type="deal",
                 entity_id="18507",
+                status="error",
+                attempt=2,
                 now=NOW,
             )
         self.assertFalse(human_diary_path(NOW).exists())
         payload = json.loads(batch.read_text(encoding="utf-8").splitlines()[0])
         self.assertEqual(payload["entity_id"], "18507")
         self.assertEqual(payload["estimated_cost_rub"], 12.0)
+        self.assertEqual(payload["run_id"], "17")
+        self.assertEqual(payload["job_id"], "job-42")
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["attempt"], 2)
 
     def test_cycle_block_matches_brief_format_and_skip_is_one_line(self) -> None:
         events = [

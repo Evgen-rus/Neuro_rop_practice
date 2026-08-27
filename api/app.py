@@ -118,7 +118,12 @@ from api.deal_manager_situation import (
     start_situation_refine_job,
 )
 from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
-from api.daytime_cycle import daytime_cycle_status, start_daytime_cycle, stop_daytime_cycle
+from api.daytime_cycle import (
+    daytime_cycle_status,
+    resume_automatic_analysis_runs,
+    start_daytime_cycle,
+    stop_daytime_cycle,
+)
 from api.daily_control import (
     history_payload as daily_control_history_payload,
     report_payload as daily_control_report_payload,
@@ -157,7 +162,6 @@ from storage.rop_db import (
     get_ui_report,
     get_ui_report_by_share_token,
     init_db,
-    interrupt_running_automatic_analysis_runs,
     list_analysis_profiles,
     list_daily_summary_runs,
     list_automatic_analysis_items,
@@ -185,7 +189,7 @@ init_db(DEFAULT_DB_PATH)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    interrupt_running_automatic_analysis_runs(DEFAULT_DB_PATH)
+    resume_automatic_analysis_runs(DEFAULT_DB_PATH)
     start_daytime_cycle()
     yield
     stop_daytime_cycle()

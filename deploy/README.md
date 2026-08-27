@@ -11,6 +11,7 @@
 ```text
 /opt/Neuro_rop_practice/runtime/.env
 /opt/Neuro_rop_practice/runtime/reports/
+/opt/Neuro_rop_practice/runtime/logs/
 /opt/Neuro_rop_practice/runtime/knowledge/
 /opt/Neuro_rop_practice/runtime/crm_pipeline_map.json
 ```
@@ -42,7 +43,7 @@ commit и запускает этот же `temporary-tunnel.sh`. Workflow не 
 `docker compose down` и не перезапускает `neuro-rop-tunnel`.
 
 Workflow не передаёт на GitHub application-секреты. `.env`, отчёты, SQLite,
-knowledge, карта воронок и пароль Basic Auth остаются только в `runtime/` на VPS.
+knowledge, карта воронок, финансовая телеметрия `logs/` и пароль Basic Auth остаются только в `runtime/` на VPS.
 Для SSH используются GitHub Secrets; их настройка описана в runbook.
 
 Остановка временного стенда:

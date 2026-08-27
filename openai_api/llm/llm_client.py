@@ -19,6 +19,7 @@ from openai_api.config import (
     ANALYSIS_MODEL,
     ANALYSIS_REASONING_EFFORT,
     OPENAI_API_KEY,
+    OPENAI_REQUEST_TIMEOUT_SECONDS,
     USD_RUB_RATE,
     logger,
 )
@@ -28,7 +29,7 @@ from openai_api.pricing import estimate_analysis_cost
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry
 
 
-client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0)
+client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS)
 PROMPT_CACHE_TTL = "30m"
 
 

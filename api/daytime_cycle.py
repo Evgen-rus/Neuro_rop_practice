@@ -20,12 +20,19 @@ from openai_api.config import read_bool_env
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
+    active_automatic_analysis_entity_ids,
     attach_automatic_analysis_job_id,
     create_automatic_analysis_run,
     finish_automatic_analysis_run,
     get_deal_control_scope,
+    interrupt_running_automatic_analysis_runs,
     list_analysis_runs,
+    list_automatic_analysis_items,
+    list_recoverable_automatic_analysis_runs,
     list_deal_control_deals,
+    mark_automatic_analysis_diary_written,
+    requeue_unfinished_automatic_analysis_items,
+    update_automatic_analysis_item,
     utcish_now,
 )
 
@@ -36,7 +43,6 @@ WORKDAY_END = time(18, 0)
 PLANNING_REPORT_TIME = time(15, 45)
 WEEKDAY_MONDAY = 0
 WEEKDAY_FRIDAY = 4
-ANALYZE_JOB_TIMEOUT_SECONDS = 50 * 60
 FULL_STATUSES = {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}
 MINI_STATUSES = {MINI_RECOMMENDATION_NO_LLM}
 SKIP_STATUSES = {SKIPPED_NO_CHANGES}
@@ -139,6 +145,8 @@ def _write_spend_diary(
     started: datetime,
     analysis_payload: dict[str, Any] | None,
 ) -> None:
+    if str((analysis_payload or {}).get("status") or "") == "running":
+        return
     try:
         from openai_api.spend_diary import load_batch_events, write_cycle_block
 
@@ -236,7 +244,7 @@ def _analyze_work_pool(
     started_at: str,
     trigger: str = "scheduled",
 ) -> dict[str, Any]:
-    from api.jobs import AnalyzeOptions, busy_analyze_entity_ids, start_analyze_job, wait_for_job
+    from api.jobs import AnalyzeOptions, busy_analyze_entity_ids
 
     if not deal_ids:
         _persist_skipped_automatic_run(
@@ -253,7 +261,7 @@ def _analyze_work_pool(
             "spend_batch_path": None,
         }
 
-    busy = busy_analyze_entity_ids("deal")
+    busy = busy_analyze_entity_ids("deal") | active_automatic_analysis_entity_ids(db_path)
     ready_ids = [entity_id for entity_id in deal_ids if entity_id not in busy]
     skipped_busy = [entity_id for entity_id in deal_ids if entity_id in busy]
     if skipped_busy:
@@ -266,13 +274,6 @@ def _analyze_work_pool(
         counts["checked"] = len(deal_ids)
         counts["full_ids"] = []
         counts["mini_ids"] = []
-        _persist_skipped_automatic_run(
-            db_path,
-            trigger=trigger,
-            status="skipped_busy",
-            started_at=started_at,
-            entity_ids=deal_ids,
-        )
         return {
             "status": "skipped_busy",
             "job_id": None,
@@ -281,7 +282,7 @@ def _analyze_work_pool(
             "spend_batch_path": None,
         }
 
-    from openai_api.spend_diary import BATCH_ENV, new_cycle_batch_path
+    from openai_api.spend_diary import new_cycle_batch_path
 
     started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
     batch_path = new_cycle_batch_path(started)
@@ -293,47 +294,208 @@ def _analyze_work_pool(
         status="running",
         current_stage="queued",
         business_date=business_date,
+        spend_batch_path=str(batch_path),
     )
     automatic_run_id = int(automatic_run["id"])
-    job = start_analyze_job(
-        AnalyzeOptions(
-            entity_type="deal",
-            ids=ready_ids,
-            force_llm=False,
-            analyze=True,
-            download_audio=True,
-            transcribe_audio=True,
-            transcript_mode="all",
-            automatic_analysis_run_id=automatic_run_id,
-            extra_env={BATCH_ENV: str(batch_path)},
-        )
+    job_ids = _launch_automatic_run_jobs(
+        db_path=db_path,
+        automatic_run_id=automatic_run_id,
+        deal_ids=ready_ids,
+        batch_path=str(batch_path),
+        started_at=str(automatic_run.get("started_at") or started_at),
     )
-    job_id = str(job.get("job_id") or "")
-    attach_automatic_analysis_job_id(db_path, automatic_run_id, job_id)
-    try:
-        finished = wait_for_job(job_id, timeout_seconds=ANALYZE_JOB_TIMEOUT_SECONDS)
-    except Exception:
-        finish_automatic_analysis_run(db_path, automatic_run_id, status="error", current_stage="error")
-        raise
-    job_status = str(finished.get("status") or "error")
-    finish_automatic_analysis_run(
-        db_path,
-        automatic_run_id,
-        status="done" if job_status == "done" else "error",
-        current_stage="done" if job_status == "done" else "error",
-    )
-    counts = _summarize_decisions(db_path=db_path, deal_ids=ready_ids, created_at_from=started_at)
-    if skipped_busy:
-        counts["checked"] = len(deal_ids)
+    counts = _empty_decision_counts() | {"checked": len(deal_ids), "full_ids": [], "mini_ids": []}
     return {
-        "status": job_status,
-        "job_id": job_id,
+        "status": "running",
+        "job_id": job_ids[0] if job_ids else None,
+        "job_ids": job_ids,
         "busy_ids": skipped_busy,
-        "error": finished.get("error"),
         "counts": counts,
         "spend_batch_path": str(batch_path),
         "automatic_analysis_run_id": automatic_run_id,
     }
+
+
+def _automatic_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, Any] = _empty_decision_counts()
+    counts["checked"] = len(items)
+    counts["full_ids"] = []
+    counts["mini_ids"] = []
+    for item in items:
+        entity_id = str(item.get("entity_id") or "")
+        decision = str(item.get("decision_status") or "")
+        if decision == "full":
+            counts["full"] += 1
+            counts["full_ids"].append(entity_id)
+        elif decision == "mini":
+            counts["mini"] += 1
+            counts["mini_ids"].append(entity_id)
+        elif decision == "skip":
+            counts["skip"] += 1
+        elif decision == "error" or str(item.get("processing_status") or "") == "error":
+            counts["error"] += 1
+    counts["changed"] = counts["full"] + counts["mini"]
+    return counts
+
+
+def _finish_automatic_run(
+    db_path: str | Path,
+    run_id: int,
+    *,
+    batch_path: str | None,
+    started_at: str,
+) -> None:
+    items = list_automatic_analysis_items(db_path, run_id)
+    counts = _automatic_counts(items)
+    errors = int(counts.get("error") or 0)
+    completed = sum(
+        str(item.get("processing_status") or "") in {"done", "error"}
+        for item in items
+    )
+    if completed < len(items):
+        return
+    status = "done" if errors == 0 else "partial" if errors < len(items) else "error"
+    run_started = datetime.fromisoformat(str(started_at or utcish_now()).replace("Z", "+00:00"))
+    try:
+        from openai_api.spend_diary import load_batch_events, write_cycle_block
+
+        write_cycle_block(
+            started=run_started,
+            counts=counts,
+            events=load_batch_events(batch_path),
+            status=status,
+            now=run_started,
+        )
+        mark_automatic_analysis_diary_written(db_path, run_id)
+    except Exception as error:  # noqa: BLE001 - events remain recoverable
+        logger.warning("Итоговый блок дневника run=%s не записан: %s", run_id, type(error).__name__)
+    finish_automatic_analysis_run(db_path, run_id, status=status, current_stage=status)
+
+
+def _monitor_automatic_run(
+    *,
+    db_path: str | Path,
+    run_id: int,
+    job_ids: list[str],
+    batch_path: str | None,
+    started_at: str,
+) -> None:
+    from api.jobs import wait_for_job
+
+    for job_id in job_ids:
+        try:
+            wait_for_job(job_id, timeout_seconds=None)
+        except Exception as error:  # noqa: BLE001 - item is made retryable by the next API start/tick
+            logger.warning("Не удалось дождаться automatic job %s: %s", job_id, type(error).__name__)
+    try:
+        _finish_automatic_run(db_path, run_id, batch_path=batch_path, started_at=started_at)
+    except Exception as error:  # noqa: BLE001 - recovery is persisted for the next API start
+        # The API may be shutting down while a daemon monitor is unwinding.
+        logger.info(
+            "Automatic run %s завершится при следующем старте API: %s",
+            run_id,
+            type(error).__name__,
+        )
+
+
+def _launch_automatic_run_jobs(
+    *,
+    db_path: str | Path,
+    automatic_run_id: int,
+    deal_ids: list[str],
+    batch_path: str | None,
+    started_at: str,
+) -> list[str]:
+    from api.jobs import AnalyzeOptions, start_analyze_job
+    from openai_api.spend_diary import BATCH_ENV, RUN_ENV
+
+    job_ids: list[str] = []
+    for entity_id in deal_ids:
+        try:
+            job = start_analyze_job(
+                AnalyzeOptions(
+                    entity_type="deal",
+                    ids=[entity_id],
+                    force_llm=False,
+                    analyze=True,
+                    download_audio=True,
+                    transcribe_audio=True,
+                    transcript_mode="all",
+                    automatic_analysis_run_id=automatic_run_id,
+                    storage_db_path=str(db_path),
+                    extra_env={
+                        BATCH_ENV: str(batch_path or ""),
+                        RUN_ENV: str(automatic_run_id),
+                    },
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - do not duplicate a manual job that won the race
+            update_automatic_analysis_item(
+                db_path,
+                automatic_run_id,
+                entity_type="deal",
+                entity_id=entity_id,
+                stage="error",
+                decision_status="error",
+                error=f"Не удалось поставить в очередь: {type(error).__name__}",
+                publication_status="error",
+                processing_status="error",
+                current_stage="error",
+            )
+            continue
+        job_id = str(job.get("job_id") or "")
+        if job_id:
+            job_ids.append(job_id)
+            update_automatic_analysis_item(
+                db_path,
+                automatic_run_id,
+                entity_type="deal",
+                entity_id=entity_id,
+                job_id=job_id,
+                processing_status="queued",
+            )
+    if job_ids:
+        attach_automatic_analysis_job_id(db_path, automatic_run_id, job_ids[0])
+    monitor = threading.Thread(
+        target=_monitor_automatic_run,
+        kwargs={
+            "db_path": db_path,
+            "run_id": automatic_run_id,
+            "job_ids": job_ids,
+            "batch_path": batch_path,
+            "started_at": started_at,
+        },
+        name=f"automatic-analysis-run-{automatic_run_id}",
+        daemon=True,
+    )
+    monitor.start()
+    return job_ids
+
+
+def resume_automatic_analysis_runs(db_path: str | Path = DEFAULT_DB_PATH) -> int:
+    """Recover unfinished per-deal work after an API/container restart."""
+    interrupt_running_automatic_analysis_runs(db_path)
+    resumed = 0
+    for run in list_recoverable_automatic_analysis_runs(db_path):
+        run_id = int(run["id"])
+        deal_ids = requeue_unfinished_automatic_analysis_items(db_path, run_id)
+        if not deal_ids:
+            _finish_automatic_run(
+                db_path,
+                run_id,
+                batch_path=str(run.get("spend_batch_path") or "") or None,
+                started_at=str(run.get("started_at") or utcish_now()),
+            )
+            continue
+        _launch_automatic_run_jobs(
+            db_path=db_path,
+            automatic_run_id=run_id,
+            deal_ids=deal_ids,
+            batch_path=str(run.get("spend_batch_path") or "") or None,
+            started_at=str(run.get("started_at") or utcish_now()),
+        )
+        resumed += len(deal_ids)
+    return resumed
 
 
 def run_daytime_cycle(

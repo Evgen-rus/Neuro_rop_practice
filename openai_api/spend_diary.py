@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 DIR_ENV = "SPEND_DIARY_DIR"
 BATCH_ENV = "SPEND_DIARY_BATCH_PATH"
+RUN_ENV = "SPEND_DIARY_RUN_ID"
+JOB_ENV = "SPEND_DIARY_JOB_ID"
 DEFAULT_DIR = LOGS_DIR / "daily_spend"
 HEADER = "Дневник трат OpenAI. Оценка по тарифу проекта, это не счёт OpenAI.\n"
 MAX_ENTITY_ID_CHARS = 40
@@ -194,6 +196,7 @@ def record_transcription_spend(
     entity_id: str | None = None,
     kind: str = "transcription",
     model: str | None = None,
+    attempt: int | None = None,
 ) -> dict[str, Any] | None:
     """Record one successful transcription HTTP call using the project estimate."""
     try:
@@ -209,6 +212,8 @@ def record_transcription_spend(
             entity_type=entity_type,
             entity_id=entity_id,
             model=used_model,
+            status="success",
+            attempt=attempt,
         )
     except Exception as error:  # noqa: BLE001 - diary is best-effort
         logger.warning("Не удалось записать трату транскрибации: %s", type(error).__name__)
@@ -223,6 +228,8 @@ def record_paid_call(
     entity_type: str | None = None,
     entity_id: str | None = None,
     model: str | None = None,
+    status: str = "success",
+    attempt: int | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Append one paid OpenAI call. Never raises into the caller."""
@@ -237,6 +244,10 @@ def record_paid_call(
         "estimated_cost_rub": _as_float(estimated_cost_rub),
         "estimated_cost_usd": _as_float(estimated_cost_usd),
         "model": _clean_text(model)[:80] or None,
+        "status": _clean_text(status)[:40] or "success",
+        "attempt": int(attempt) if isinstance(attempt, int) and attempt > 0 else None,
+        "run_id": _clean_text(os.getenv(RUN_ENV))[:80] or None,
+        "job_id": _clean_text(os.getenv(JOB_ENV))[:80] or None,
     }
     try:
         with _WRITE_LOCK:

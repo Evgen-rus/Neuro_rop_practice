@@ -24,6 +24,10 @@ def read_bool_env(name: str, default: bool) -> bool:
 
 BITRIX_PORTAL_URL = os.getenv("BITRIX_PORTAL_URL", "").strip().rstrip("/")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_REQUEST_TIMEOUT_SECONDS = max(
+    30.0,
+    float(os.getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "600") or "600"),
+)
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
 ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
 ANALYSIS_REASONING_EFFORT = os.getenv("ANALYSIS_REASONING_EFFORT", "low").strip() or "low"

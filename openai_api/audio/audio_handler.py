@@ -10,11 +10,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from openai_api.config import OPENAI_API_KEY, TRANSCRIPTION_MODEL, logger
+from openai_api.config import OPENAI_API_KEY, OPENAI_REQUEST_TIMEOUT_SECONDS, TRANSCRIPTION_MODEL, logger
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry_async
 
 # Инициализация клиента OpenAI
-client = AsyncOpenAI(api_key=OPENAI_API_KEY, max_retries=0)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY, max_retries=0, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS)
 
 async def transcribe_voice(
     voice_data: bytes,

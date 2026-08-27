@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,6 +182,87 @@ class IncrementalJobPublishTests(unittest.TestCase):
             latest = get_latest_automatic_analysis_run(db_path)
             self.assertEqual(latest["status"], "interrupted")
             self.assertIsNotNone(latest["finished_at"])
+
+    def test_restart_requeues_only_unfinished_automatic_items(self) -> None:
+        from api.daytime_cycle import resume_automatic_analysis_runs
+        from storage.rop_db import update_automatic_analysis_item
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            init_db(db_path)
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger="interval_30m",
+                entity_ids=["101", "102"],
+                status="running",
+                spend_batch_path=str(Path(directory) / "batch.jsonl"),
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="101",
+                decision_status="skip",
+                processing_status="done",
+            )
+            with patch("api.daytime_cycle._launch_automatic_run_jobs", return_value=["job-102"]) as launch:
+                resumed = resume_automatic_analysis_runs(db_path)
+            self.assertEqual(resumed, 1)
+            self.assertEqual(launch.call_args.kwargs["deal_ids"], ["102"])
+            latest = get_latest_automatic_analysis_run(db_path)
+            self.assertEqual(latest["status"], "running")
+            items = list_automatic_analysis_items(db_path, int(run["id"]))
+            self.assertEqual(items[0]["processing_status"], "done")
+            self.assertEqual(items[1]["processing_status"], "retry")
+
+    def test_restart_rebuilds_missing_human_spend_block_from_batch_events(self) -> None:
+        from api.daytime_cycle import resume_automatic_analysis_runs
+        from storage.rop_db import update_automatic_analysis_item
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "rop.sqlite"
+            spend_dir = root / "spend"
+            batch_path = spend_dir / "batches" / "run.jsonl"
+            batch_path.parent.mkdir(parents=True)
+            batch_path.write_text(
+                json.dumps(
+                    {
+                        "kind": "full_deal_analysis",
+                        "entity_type": "deal",
+                        "entity_id": "101",
+                        "estimated_cost_rub": 12,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            init_db(db_path)
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger="interval_30m",
+                entity_ids=["101"],
+                status="running",
+                business_date="2026-08-18",
+                spend_batch_path=str(batch_path),
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="101",
+                decision_status="full",
+                processing_status="done",
+            )
+            with patch.dict(os.environ, {"SPEND_DIARY_DIR": str(spend_dir)}):
+                self.assertEqual(resume_automatic_analysis_runs(db_path), 0)
+            diary = spend_dir / "daily_spend-placeholder"
+            human_files = list(spend_dir.glob("*.txt"))
+            self.assertEqual(len(human_files), 1, diary)
+            text = human_files[0].read_text(encoding="utf-8")
+            self.assertIn("Сделка 101 — полный анализ, ~12 ₽", text)
+            self.assertIn("За этот запуск: ~12 ₽", text)
 
 
 if __name__ == "__main__":

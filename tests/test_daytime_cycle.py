@@ -237,6 +237,43 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(first_result.get("status"), "success")
 
+    def test_running_analysis_does_not_block_the_next_bitrix_tick(self) -> None:
+        calls: list[str] = []
+
+        def refresh(**_kwargs):
+            calls.append("sync")
+            return {"sync_message": "CRM обновлена", "sync_errors": []}
+
+        def collect(*_args, **_kwargs):
+            return {"status": "success", "counts": {}, "errors": {}}
+
+        def analyze(**_kwargs):
+            return {
+                "status": "running",
+                "job_id": "long-job",
+                "counts": {"checked": 1, "changed": 0, "full": 0, "mini": 0, "skip": 0, "error": 0},
+            }
+
+        first = run_daytime_cycle(
+            db_path=self.db_path,
+            now=NOW,
+            refresh_fn=refresh,
+            collect_fn=collect,
+            analyze_fn=analyze,
+            make_client_fn=lambda: object(),
+        )
+        second = run_daytime_cycle(
+            db_path=self.db_path,
+            now=NOW + timedelta(minutes=30),
+            refresh_fn=refresh,
+            collect_fn=collect,
+            analyze_fn=analyze,
+            make_client_fn=lambda: object(),
+        )
+        self.assertEqual(first["status"], "success")
+        self.assertEqual(second["status"], "success")
+        self.assertEqual(calls, ["sync", "sync"])
+
     def test_unconfigured_scope_does_not_call_bitrix(self) -> None:
         empty = Path(self.temp.name) / "empty.sqlite"
         init_db(empty)
@@ -277,7 +314,7 @@ class DaytimeCycleRunTests(unittest.TestCase):
 
         with patch("api.jobs.busy_analyze_entity_ids", return_value=set()), \
              patch("api.jobs.start_analyze_job") as start, \
-             patch("api.jobs.wait_for_job", return_value={"status": "done"}), \
+             patch("api.daytime_cycle.threading.Thread.start"), \
              patch("api.daytime_cycle._summarize_decisions", return_value={
                  "checked": 1, "changed": 0, "full": 0, "mini": 0, "skip": 1, "error": 0,
              }):
@@ -292,6 +329,7 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertFalse(options.force_llm)
         self.assertTrue(options.analyze)
         self.assertIsNotNone(options.automatic_analysis_run_id)
+        self.assertEqual(options.storage_db_path, str(self.db_path))
         self.assertTrue(options.extra_env and "SPEND_DIARY_BATCH_PATH" in options.extra_env)
         self.assertEqual(payload["job_id"], "abc")
 
@@ -441,6 +479,72 @@ class JobWaitTests(unittest.TestCase):
         threading.Thread(target=finish).start()
         result = wait_for_job("wait-1", timeout_seconds=1, poll_seconds=0.02)
         self.assertEqual(result["status"], "done")
+
+    def test_manual_and_scheduled_start_cannot_claim_the_same_deal(self) -> None:
+        from api.jobs import AnalyzeOptions, start_analyze_job
+
+        with patch("api.jobs.threading.Thread.start"):
+            start_analyze_job(AnalyzeOptions(entity_type="deal", ids=["101"]))
+            with self.assertRaisesRegex(ValueError, "101"):
+                start_analyze_job(
+                    AnalyzeOptions(
+                        entity_type="deal",
+                        ids=["101"],
+                        automatic_analysis_run_id=7,
+                    )
+                )
+
+    def test_automatic_jobs_are_limited_to_two_workers_by_default(self) -> None:
+        from api.jobs import AnalyzeOptions, get_job, start_analyze_job, wait_for_job
+        from storage.rop_db import create_automatic_analysis_run
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "workers.sqlite"
+            init_db(db_path)
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger="test",
+                entity_ids=["101", "102", "103"],
+            )
+            entered = threading.Event()
+            release = threading.Event()
+            state_lock = threading.Lock()
+            active = 0
+            maximum = 0
+
+            def fake_run_command(*_args, **_kwargs):
+                nonlocal active, maximum
+                with state_lock:
+                    active += 1
+                    maximum = max(maximum, active)
+                    if active == 2:
+                        entered.set()
+                self.assertTrue(release.wait(timeout=3))
+                with state_lock:
+                    active -= 1
+
+            with patch.dict(os.environ, {"ANALYSIS_WORKER_CONCURRENCY": "2"}), \
+                 patch("api.jobs.run_command", side_effect=fake_run_command), \
+                 patch("api.jobs._collect_group_results"):
+                jobs = [
+                    start_analyze_job(
+                        AnalyzeOptions(
+                            entity_type="deal",
+                            ids=[entity_id],
+                            automatic_analysis_run_id=int(run["id"]),
+                            storage_db_path=str(db_path),
+                        )
+                    )
+                    for entity_id in ("101", "102", "103")
+                ]
+                self.assertTrue(entered.wait(timeout=3))
+                threading.Event().wait(0.1)
+                self.assertEqual(maximum, 2)
+                self.assertEqual(sum(get_job(str(job["job_id"]))["status"] == "running" for job in jobs), 2)
+                release.set()
+                for job in jobs:
+                    result = wait_for_job(str(job["job_id"]), timeout_seconds=3, poll_seconds=0.02)
+                    self.assertEqual(result["status"], "done")
 
 
 if __name__ == "__main__":
