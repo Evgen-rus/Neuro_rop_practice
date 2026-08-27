@@ -131,7 +131,9 @@ class BitrixCrmCycleDiagTests(unittest.TestCase):
         self.assertIn("crm.deal.list", methods)
         self.assertIn("crm.activity.list", methods)
         serialized = json.dumps(summary, ensure_ascii=False)
-        self.assertNotIn("101", serialized)
+        # CRM ID as a JSON string, not a substring of elapsed_ms like 101.0
+        self.assertNotIn('"101"', serialized)
+        self.assertNotIn("deal_id", serialized)
         self.assertIn("summary.json", summary["summary_path"])
 
     def test_audio_metadata_uses_disk_file_get_without_downloading_bytes(self) -> None:
