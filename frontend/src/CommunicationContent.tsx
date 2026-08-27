@@ -1,6 +1,7 @@
 import { useState, type SyntheticEvent } from 'react'
 
 import {
+  ApiError,
   fetchDealCallTranscript,
   fetchDealCommunicationContent,
   type DealCallTranscript,
@@ -28,13 +29,15 @@ export function CommunicationContent({
   dealId,
   eventId,
   channel,
+  allowLoad = true,
 }: {
   dealId: string
   eventId: string
   channel: string
+  allowLoad?: boolean
 }) {
   const normalizedChannel = channel.toLowerCase()
-  const canLoad = normalizedChannel === 'call' || TEXT_CHANNELS.has(normalizedChannel)
+  const canLoad = allowLoad && (normalizedChannel === 'call' || TEXT_CHANNELS.has(normalizedChannel))
   const cacheKey = `${dealId}:${eventId}:${normalizedChannel}`
   const cached = contentCache.get(cacheKey) || null
   const [content, setContent] = useState<LoadedContent | null>(cached)
@@ -52,7 +55,10 @@ export function CommunicationContent({
       contentCache.set(cacheKey, result)
       setContent(result)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Не удалось загрузить текст коммуникации')
+      const message = reason instanceof ApiError && reason.status === 404
+        ? 'Текст или расшифровка недоступны'
+        : reason instanceof Error ? reason.message : 'Текст или расшифровка недоступны'
+      setError(message)
     } finally {
       setLoading(false)
     }

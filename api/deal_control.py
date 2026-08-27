@@ -16,7 +16,14 @@ from api.candidates import (
     parse_bitrix_dt,
 )
 from api.jobs import unwrap_analysis_payload
-from bitrix.customer_history import activity_type, build_normalized_communications
+from api.deal_call_transcript import find_call_transcript
+from api.deal_manager_quick_help import load_local_communication_bundle
+from bitrix.customer_history import (
+    _bundle_client_names,
+    activity_type,
+    build_normalized_communications,
+    classify_call_outcome,
+)
 from bitrix.usage_trace import bitrix_trace_context
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from progress_events import compact_decision_status
@@ -74,6 +81,15 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
 })
 DAILY_COMMUNICATION_TARGET = 3
 CHECKLIST_LIMIT = 5
+MESSENGER_CHANNELS = frozenset({"message", "whatsapp", "telegram", "max"})
+INTERNAL_CHANNELS = frozenset({"internal_chat", "internal_comment"})
+LAST_ACTIVITY_LABELS = {
+    "dial_attempt": "попытка дозвона",
+    "conversation": "разговор",
+    "email": "письмо",
+    "message": "сообщение",
+    "client_reply": "ответ клиента",
+}
 
 # Рабочий срез контроля сделок. Воронка 15 без отсечки по этапам — как сейчас.
 # 17 и 47: все открытые этапы, без закрытых успешных и неуспешных.
@@ -207,42 +223,240 @@ def _empty_daily_communications(now: datetime, *, available: bool) -> dict[str, 
         "calls": 0,
         "messages": 0,
         "duration_seconds": 0,
+        "calls_total": 0,
+        "calls_connected": 0,
+        "calls_no_answer": 0,
+        "calls_unknown": 0,
+        "emails": 0,
+        "messenger_messages": 0,
+        "conversation_duration_seconds": None,
+        "last_activity": None,
+        "last_confirmed_contact": None,
         "items": [],
     }
 
 
-def _today_communications(activities: list[dict[str, Any]], now: datetime) -> dict[str, Any]:
+def _contacts_bundle_from_names(names: set[str]) -> dict[str, Any]:
+    contacts: dict[str, Any] = {}
+    for index, name in enumerate(sorted(names)):
+        contacts[str(index)] = {"ok": True, "response": {"result": {"NAME": name}}}
+    return contacts
+
+
+def _source_activity_id(event: dict[str, Any]) -> str:
+    values = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
+    if values:
+        return str(values[0] or "").strip()
+    event_id = str(event.get("event_id") or "")
+    return event_id.split(":", 1)[1].strip() if event_id.startswith("crm_activity:") else ""
+
+
+def _communication_contact_label(event: dict[str, Any], raw: dict[str, Any]) -> str:
+    name = str(event.get("participant_name") or "").strip()
+    if name:
+        return name
+    communications = raw.get("COMMUNICATIONS") if isinstance(raw.get("COMMUNICATIONS"), list) else []
+    for item in communications:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("VALUE") or item.get("TITLE") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _last_activity_kind(event: dict[str, Any]) -> str | None:
+    channel = str(event.get("channel") or "")
+    direction = str(event.get("direction") or "")
+    content = str(event.get("content") or "").strip()
+    contact_class = str(event.get("contact_class") or "")
+    if channel == "call":
+        outcome = str(event.get("call_outcome") or "")
+        if direction == "outgoing":
+            return "conversation" if outcome == "connected" else "dial_attempt"
+        if direction == "incoming" and outcome == "connected":
+            return "conversation"
+        return None
+    if channel == "email":
+        if direction == "outgoing":
+            return "email"
+        if direction == "incoming" and content:
+            return "client_reply"
+        return None
+    if channel not in MESSENGER_CHANNELS:
+        return None
+    if contact_class == "internal_information":
+        return None
+    if contact_class == "confirmed_contact" and content:
+        return "client_reply"
+    if direction == "outgoing" or (contact_class == "attempt" and content):
+        return "message"
+    if direction == "incoming" and content:
+        return "client_reply"
+    return None
+
+
+def _communication_ref(event: dict[str, Any], kind: str) -> dict[str, Any]:
+    return {
+        "event_id": str(event.get("event_id") or ""),
+        "occurred_at": event.get("occurred_at"),
+        "channel": event.get("channel"),
+        "direction": event.get("direction"),
+        "kind": kind,
+        "label": LAST_ACTIVITY_LABELS.get(kind, kind),
+    }
+
+
+def _pick_latest_ref(events: list[dict[str, Any]], kinds: set[str]) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    latest_key = ("", "")
+    for event in events:
+        kind = _last_activity_kind(event)
+        if kind not in kinds:
+            continue
+        key = (str(event.get("occurred_at") or ""), str(event.get("event_id") or ""))
+        if latest is None or key > latest_key:
+            latest = _communication_ref(event, kind)
+            latest_key = key
+    return latest
+
+
+def _count_direction_suffix(events: list[dict[str, Any]], channel: str | frozenset[str] | set[str]) -> str:
+    channels = {channel} if isinstance(channel, str) else set(channel)
+    matched = [item for item in events if item.get("channel") in channels]
+    if not matched:
+        return "всего"
+    incoming = all(item.get("direction") == "incoming" for item in matched)
+    outgoing = all(item.get("direction") == "outgoing" for item in matched)
+    if channels == {"email"}:
+        if outgoing:
+            return "отправлено"
+        if incoming:
+            return "получено"
+        return "всего"
+    if outgoing:
+        return "исходящее"
+    if incoming:
+        return "входящее"
+    return "всего"
+
+
+def _list_many(client: Any, requests_to_run: list[tuple[str, str, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    batch = getattr(client, "safe_batch_list", None)
+    if callable(batch):
+        return batch(requests_to_run)
+    return {
+        key: client.safe_list_all(method, payload)
+        for key, method, payload in requests_to_run
+    }
+
+
+def _fetch_deal_timeline_comments(
+    client: Any,
+    deal_ids: list[str],
+    day_start: datetime,
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {deal_id: [] for deal_id in deal_ids}
+    if not deal_ids:
+        return result
+    requests = [
+        (
+            deal_id,
+            "crm.timeline.comment.list",
+            {
+                "order": {"CREATED": "ASC", "ID": "ASC"},
+                "filter": {
+                    "ENTITY_TYPE": "deal",
+                    "ENTITY_ID": deal_id,
+                    ">=CREATED": day_start.isoformat(timespec="seconds"),
+                },
+            },
+        )
+        for deal_id in deal_ids
+    ]
+    try:
+        responses = _list_many(client, requests)
+    except Exception:  # noqa: BLE001 - comments are additive; activity query remains the availability gate
+        return result
+    for deal_id in deal_ids:
+        response = responses.get(deal_id) if isinstance(responses, dict) else None
+        if not isinstance(response, dict) or not response.get("ok"):
+            continue
+        items = response.get("items") or []
+        result[deal_id] = [item for item in items if isinstance(item, dict)]
+    return result
+
+
+def _today_communications(
+    activities: list[dict[str, Any]],
+    now: datetime,
+    *,
+    comments: list[dict[str, Any]] | None = None,
+    client_names: set[str] | None = None,
+    deal_id: str = "",
+) -> dict[str, Any]:
     current = now if now.tzinfo else now.replace(tzinfo=MSK_TZ)
     current_date = current.astimezone(MSK_TZ).date()
+    entity_id = str(deal_id or "")
     touchpoints: list[dict[str, Any]] = []
+    activities_by_id: dict[str, dict[str, Any]] = {}
     for activity in activities:
         kind = activity_type(activity)
+        activity_id = str(activity.get("ID") or "")
+        if activity_id:
+            activities_by_id[activity_id] = activity
         if kind not in {"call", "email", "message"} or not _is_completed(activity):
             continue
+        owner_id = str(activity.get("OWNER_ID") or entity_id)
         touchpoints.append({
             "when": activity.get("START_TIME") or activity.get("CREATED") or activity.get("END_TIME"),
             "event_type": kind,
             "entity_type": "deal",
-            "entity_id": str(activity.get("OWNER_ID") or ""),
-            "entity_key": f"deal:{activity.get('OWNER_ID') or ''}",
-            "id": str(activity.get("ID") or ""),
+            "entity_id": owner_id,
+            "entity_key": f"deal:{owner_id}",
+            "id": activity_id,
             "subject": str(activity.get("SUBJECT") or ""),
             "text": str(activity.get("DESCRIPTION") or ""),
             "direction": activity.get("DIRECTION"),
             "raw": activity,
         })
-    events = build_normalized_communications({"client_touchpoints": touchpoints, "internal_context": []})
+    internal_context: list[dict[str, Any]] = []
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        text = str(comment.get("COMMENT") or comment.get("TEXT") or comment.get("DESCRIPTION") or "")
+        owner_id = str(comment.get("ENTITY_ID") or entity_id)
+        internal_context.append({
+            "when": comment.get("CREATED") or comment.get("DATE_CREATE"),
+            "category": "timeline_comment",
+            "event_type": "internal_comment",
+            "entity_type": "deal",
+            "entity_id": owner_id,
+            "entity_key": f"deal:{owner_id}",
+            "id": str(comment.get("ID") or ""),
+            "text": text,
+        })
+    events = build_normalized_communications({
+        "client_touchpoints": touchpoints,
+        "internal_context": internal_context,
+        "contacts": _contacts_bundle_from_names(client_names or set()),
+    })
     today_events: list[dict[str, Any]] = []
     for event in events:
+        channel = str(event.get("channel") or "unknown")
+        if channel in INTERNAL_CHANNELS:
+            continue
         occurred = parse_bitrix_dt(event.get("occurred_at"))
         if occurred is None:
             continue
         localized = (occurred if occurred.tzinfo else occurred.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
         if localized.date() != current_date:
             continue
-        today_events.append({
+        source_id = _source_activity_id(event)
+        raw = activities_by_id.get(source_id, {})
+        item = {
             "event_id": str(event.get("event_id") or ""),
-            "channel": str(event.get("channel") or "unknown"),
+            "channel": channel,
             "direction": str(event.get("direction") or "unknown"),
             "occurred_at": localized.isoformat(timespec="seconds"),
             "subject": str(event.get("subject") or ""),
@@ -250,11 +464,41 @@ def _today_communications(activities: list[dict[str, Any]], now: datetime) -> di
             "content": str(event.get("content") or ""),
             "duration_seconds": event.get("duration_seconds"),
             "contact_class": str(event.get("contact_class") or "attempt"),
-        })
+            "participant_name": _communication_contact_label(event, raw),
+            "source_type": str(event.get("source_type") or ""),
+        }
+        if channel == "call":
+            has_transcript = bool(
+                entity_id and source_id and find_call_transcript("deal", entity_id, source_id)
+            )
+            classified = classify_call_outcome(raw, has_transcript=has_transcript)
+            item["call_outcome"] = classified["call_outcome"]
+            item["talk_duration_seconds"] = classified["talk_duration_seconds"]
+            item["status_label"] = classified["status_label"]
+            item["content_available"] = bool(has_transcript and classified["call_outcome"] == "connected")
+        else:
+            item["talk_duration_seconds"] = None
+            item["status_label"] = None
+            item["content_available"] = bool(str(item.get("content") or "").strip())
+        today_events.append(item)
     today_events.sort(key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")))
-    calls = sum(1 for event in today_events if event["channel"] == "call")
+    call_events = [item for item in today_events if item["channel"] == "call"]
+    calls = len(call_events)
     messages = len(today_events) - calls
     duration = round(sum(float(event.get("duration_seconds") or 0) for event in today_events))
+    connected = [item for item in call_events if item.get("call_outcome") == "connected"]
+    outgoing_no_answer = [
+        item for item in call_events
+        if item.get("call_outcome") == "no_answer" and item.get("direction") == "outgoing"
+    ]
+    unknown_calls = [item for item in call_events if item.get("call_outcome") == "unknown"]
+    proven_talk = [
+        float(item["talk_duration_seconds"])
+        for item in connected
+        if isinstance(item.get("talk_duration_seconds"), (int, float))
+    ]
+    emails = [item for item in today_events if item["channel"] == "email"]
+    messenger = [item for item in today_events if item["channel"] in MESSENGER_CHANNELS]
     completed = len(today_events)
     return {
         "date": current_date.isoformat(),
@@ -265,6 +509,20 @@ def _today_communications(activities: list[dict[str, Any]], now: datetime) -> di
         "calls": calls,
         "messages": messages,
         "duration_seconds": duration,
+        "calls_total": calls,
+        "calls_connected": len(connected),
+        "calls_no_answer": len(outgoing_no_answer),
+        "calls_unknown": len(unknown_calls),
+        "emails": len(emails),
+        "messenger_messages": len(messenger),
+        "email_suffix": _count_direction_suffix(today_events, "email"),
+        "message_suffix": _count_direction_suffix(today_events, MESSENGER_CHANNELS),
+        "conversation_duration_seconds": None if not proven_talk else round(sum(proven_talk)),
+        "last_activity": _pick_latest_ref(
+            today_events,
+            {"dial_attempt", "conversation", "email", "message", "client_reply"},
+        ),
+        "last_confirmed_contact": _pick_latest_ref(today_events, {"conversation", "client_reply"}),
         "items": today_events,
     }
 
@@ -518,6 +776,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
             sync_entities,
             additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
         )
+        today_comments = _fetch_deal_timeline_comments(crm, sync_deal_ids, day_start)
         deals_by_id = {str(item["deal_id"]): item for item in deals}
         sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
         task_deal_ids = list(dict.fromkeys(str(task["deal_id"]) for task in sync_tasks))
@@ -551,10 +810,20 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
             deal_id=deal_id,
             tasks=_open_bitrix_tasks(list(deal_activities.values()), current),
         )
+        comments = today_comments.get(deal_id, [])
+        client_names: set[str] = set()
+        if comments:
+            client_names = _bundle_client_names(load_local_communication_bundle(deal_id))
         save_deal_control_communications_today(
             db_path,
             deal_id=deal_id,
-            summary=_today_communications(completed_items, current),
+            summary=_today_communications(
+                completed_items,
+                current,
+                comments=comments,
+                client_names=client_names,
+                deal_id=deal_id,
+            ),
         )
     reported_task_activity_errors: set[str] = set()
     for task in sync_tasks:

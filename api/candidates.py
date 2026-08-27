@@ -898,6 +898,8 @@ def fetch_candidate_activities(
                 "ID", "OWNER_ID", "TYPE_ID", "PROVIDER_ID", "PROVIDER_TYPE_ID", "SUBJECT", "DESCRIPTION",
                 "ASSOCIATED_ENTITY_ID", "RESPONSIBLE_ID",
                 "DIRECTION", "COMPLETED", "START_TIME", "END_TIME", "DEADLINE", "CREATED", "LAST_UPDATED",
+                "FILES", "RESULT_STATUS", "RESULT_MARK", "SETTINGS", "PROVIDER_PARAMS", "PROVIDER_DATA",
+                "COMMUNICATIONS",
             ],
         },
     )
@@ -916,6 +918,8 @@ def fetch_candidate_activities_bulk(
         "ID", "OWNER_ID", "TYPE_ID", "PROVIDER_ID", "PROVIDER_TYPE_ID", "SUBJECT", "DESCRIPTION",
         "ASSOCIATED_ENTITY_ID", "RESPONSIBLE_ID",
         "DIRECTION", "COMPLETED", "START_TIME", "END_TIME", "DEADLINE", "CREATED", "LAST_UPDATED",
+        "FILES", "RESULT_STATUS", "RESULT_MARK", "SETTINGS", "PROVIDER_PARAMS", "PROVIDER_DATA",
+        "COMMUNICATIONS",
     ]
     for entity_type, owner_type_id in (("lead", LEAD_OWNER_TYPE_ID), ("deal", DEAL_OWNER_TYPE_ID)):
         ids = [str(row.get("ID") or "") for kind, row in entities if kind == entity_type and str(row.get("ID") or "")]

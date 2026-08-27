@@ -1261,6 +1261,7 @@ function DealDetail(props: {
   const [situationContext, setSituationContext] = useState('')
   const [situationError, setSituationError] = useState('')
   const [situationJob, setSituationJob] = useState<ManagerSituationJob | null>(null)
+  const [situationConfirming, setSituationConfirming] = useState(false)
   const pendingSituationContextRef = useRef('')
   const [savedContextForBitrix, setSavedContextForBitrix] = useState('')
   const [contextCopyFailed, setContextCopyFailed] = useState(false)
@@ -1306,6 +1307,7 @@ function DealDetail(props: {
     setSituationContext(readDealDraft(MANAGER_SITUATION_DRAFT_PREFIX, activeDealId))
     setSituationError('')
     setSituationJob(null)
+    setSituationConfirming(false)
     setQuickHelpDraft(readDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId))
     setQuickHelpError('')
     setQuickHelpJob(null)
@@ -1445,14 +1447,17 @@ function DealDetail(props: {
   }, [activeDealId, loadAssistantWorkspace, managerScreen, quickHelpJobId, quickHelpJobStatus])
 
   async function confirmSituation() {
-    if (!props.deal) return
+    if (!props.deal || situationConfirming) return
     setSituationError('')
+    setSituationConfirming(true)
     try {
       await confirmManagerSituation(props.deal.deal_id)
       setSituationContext('')
       await props.onReload()
     } catch (reason) {
       setSituationError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSituationConfirming(false)
     }
   }
 
@@ -1677,6 +1682,7 @@ function DealDetail(props: {
       situationContext={situationContext}
       situationError={situationError}
       situationJob={situationJob}
+      situationConfirming={situationConfirming}
       savedContextForBitrix={savedContextForBitrix}
       contextCopyFailed={contextCopyFailed}
       contextPersistUsed={contextPersistUsed}
@@ -1729,6 +1735,7 @@ type ManagerDealScreenProps = {
   situationContext: string
   situationError: string
   situationJob: ManagerSituationJob | null
+  situationConfirming: boolean
   savedContextForBitrix: string
   contextCopyFailed: boolean
   contextPersistUsed: boolean
@@ -1772,6 +1779,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       context={props.situationContext}
       error={props.situationError}
       job={props.situationJob}
+      confirming={props.situationConfirming}
       savedContext={props.savedContextForBitrix}
       copyFailed={props.contextCopyFailed}
       persistUsed={props.contextPersistUsed}
@@ -1900,6 +1908,7 @@ function ManagerSituationActions(props: {
   context: string
   error: string
   job: ManagerSituationJob | null
+  confirming: boolean
   savedContext: string
   copyFailed: boolean
   persistUsed: boolean
@@ -1914,6 +1923,7 @@ function ManagerSituationActions(props: {
 }) {
   const confirmed = managerSituationIsConfirmed(props.situation)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const confirming = props.confirming
   const needsReview = props.situation.is_current && props.situation.state === 'refined'
   const stateLabel = confirmed
     ? 'Подтверждена'
@@ -1944,10 +1954,14 @@ function ManagerSituationActions(props: {
       </div>
 
       <footer className="dc-manager-situation-actions">
-        <button className="dc-button primary" disabled={busy || confirmed} onClick={props.onConfirm}>
-          {confirmed ? '✓ Ситуация подтверждена' : needsReview ? 'Подтвердить ситуацию' : 'Подтвердить на сегодня'}
+        <button className="dc-button primary" disabled={busy || confirmed || confirming} onClick={props.onConfirm}>
+          {confirmed
+            ? '✓ Ситуация подтверждена'
+            : confirming
+              ? <><span className="dc-spinner" />{needsReview ? 'Подтверждаем ситуацию…' : 'Подтверждаем…'}</>
+              : needsReview ? 'Подтвердить ситуацию' : 'Подтвердить на сегодня'}
         </button>
-        <button className="dc-button" disabled={busy} onClick={props.onOpenModal}>
+        <button className="dc-button" disabled={busy || confirming} onClick={props.onOpenModal}>
           {props.situation.state === 'refined' ? 'Изменить контекст' : 'Добавить контекст'}
         </button>
       </footer>

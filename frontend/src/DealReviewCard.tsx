@@ -1,4 +1,6 @@
-import type { DailyControlDeal } from './api'
+import { useState } from 'react'
+
+import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommunicationsToday } from './api'
 import { CommunicationContent } from './CommunicationContent'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
@@ -49,18 +51,22 @@ function formatClock(value?: string | null) {
   return formatMoscowDateTime(value, { hour: '2-digit', minute: '2-digit' }) || value
 }
 
-function talkTime(seconds?: number | null) {
-  const total = Math.max(0, Math.round(Number(seconds || 0)))
+function talkTime(seconds?: number | null, empty = '0:00') {
+  if (seconds == null || Number.isNaN(Number(seconds))) return empty
+  const total = Math.max(0, Math.round(Number(seconds)))
   const hours = Math.floor(total / 3600)
   const minutes = Math.floor((total % 3600) / 60)
   const rest = total % 60
-  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}`
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
   return `${minutes}:${String(rest).padStart(2, '0')}`
 }
 
 function channelLabel(channel: string) {
   if (channel === 'call') return 'Звонок'
   if (channel === 'email') return 'Письмо'
+  if (channel === 'whatsapp') return 'WhatsApp'
+  if (channel === 'telegram') return 'Telegram'
+  if (channel === 'max') return 'Max'
   if (channel === 'message') return 'Сообщение'
   return channel || NO_DATA
 }
@@ -96,6 +102,66 @@ function channelIcon(channel: string) {
   if (channel === 'call') return 'phone'
   if (channel === 'email') return 'mail'
   return 'message'
+}
+
+const TEXT_CHANNELS = new Set(['email', 'message', 'whatsapp', 'telegram', 'max'])
+
+function eventStatus(item: DealControlCommunicationItem) {
+  if (item.status_label) return item.status_label
+  if (item.channel === 'call') {
+    if (item.call_outcome === 'connected') return 'Разговор'
+    if (item.call_outcome === 'no_answer') return item.direction === 'incoming' ? 'Пропущенный' : 'Не дозвонились'
+    if (item.call_outcome === 'unknown') return 'Исход не определён'
+  }
+  if (item.channel === 'email') return item.direction === 'incoming' ? 'Получено' : 'Отправлено'
+  if (item.direction === 'incoming') return 'Входящее'
+  if (item.direction === 'outgoing') return 'Исходящее'
+  return 'Доставлено'
+}
+
+function statusIsAttempt(item: DealControlCommunicationItem) {
+  return item.channel === 'call' && item.call_outcome !== 'connected'
+}
+
+function eventDurationLabel(item: DealControlCommunicationItem) {
+  if (item.channel !== 'call') return ''
+  if (item.call_outcome === 'connected') {
+    return item.talk_duration_seconds == null ? '—' : talkTime(item.talk_duration_seconds)
+  }
+  if (item.call_outcome === 'no_answer') return '0:00'
+  return '—'
+}
+
+function canOpenContent(item: DealControlCommunicationItem) {
+  if (TEXT_CHANNELS.has(item.channel)) return true
+  return item.channel === 'call' && item.call_outcome === 'connected'
+}
+
+function displayEvents(items: DealControlCommunicationItem[]) {
+  return [...items].sort((left, right) => {
+    const byTime = String(right.occurred_at || '').localeCompare(String(left.occurred_at || ''))
+    if (byTime) return byTime
+    return String(right.event_id || '').localeCompare(String(left.event_id || ''))
+  })
+}
+
+function summaryView(communications: DealControlCommunicationsToday) {
+  const items = communications.items || []
+  const callsTotal = communications.calls_total ?? communications.calls ?? 0
+  const emails = communications.emails ?? items.filter((item) => item.channel === 'email').length
+  const messenger = communications.messenger_messages
+    ?? items.filter((item) => ['message', 'whatsapp', 'telegram', 'max'].includes(item.channel)).length
+  return {
+    callsTotal,
+    attempts: communications.calls_no_answer ?? 0,
+    unknown: communications.calls_unknown ?? 0,
+    emails,
+    messenger,
+    emailSuffix: communications.email_suffix || (emails ? 'всего' : 'всего'),
+    messageSuffix: communications.message_suffix || (messenger ? 'всего' : 'всего'),
+    talkSeconds: communications.conversation_duration_seconds,
+    lastActivity: communications.last_activity || null,
+  }
 }
 
 export function DealQualityAndFocus(props: {
@@ -218,12 +284,14 @@ export function DealReviewCard(props: {
   contentNote?: string
   scriptHint?: string
 }) {
+  const [eventsOpen, setEventsOpen] = useState(false)
   const deal = props.deal
   if (!deal) {
     return <section className="dc-daily-card"><p className="dc-daily-empty-list">{props.emptyText || 'Выберите другую категорию, чтобы открыть сделку.'}</p></section>
   }
   const communications = deal.communications_today
-  const lastTouch = communications.items[communications.items.length - 1]
+  const summary = summaryView(communications)
+  const events = displayEvents(communications.items || [])
   const checklist = deal.checklist
   const contentNote = props.contentNote || DEFAULT_CONTENT_NOTE
   const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
@@ -282,45 +350,108 @@ export function DealReviewCard(props: {
             <span className="dc-daily-ico"><DailyIcon name="phone" /></span>
             <h3>Коммуникации за сегодня</h3>
           </span>
+          <small>Сделка #{deal.deal_id} · {deal.title || NO_DATA}</small>
         </header>
         {communications.unavailable ? (
           <p className="dc-daily-block-note">Данные коммуникаций недоступны. Это не нулевая активность.</p>
         ) : (
           <>
-            <div className="dc-daily-comm-summary">
-              <span><strong>{communications.calls}</strong> зв.</span>
-              <span className="dc-daily-comm-sep" aria-hidden="true">·</span>
-              <span><strong>{communications.messages}</strong> сообщ.</span>
-              <span className="dc-daily-comm-sep" aria-hidden="true">·</span>
-              <span><strong>{talkTime(communications.duration_seconds)}</strong></span>
-              <span className="dc-daily-comm-sep" aria-hidden="true">·</span>
-              <span>последнее касание {lastTouch ? formatClock(lastTouch.occurred_at) : NO_DATA}</span>
+            <div className="dc-daily-comm-summary" aria-label="Сводка коммуникаций">
+              <div className="dc-daily-stat">
+                <span className="dc-daily-stat-label">Звонки</span>
+                <span className="dc-daily-stat-value">
+                  <strong>{summary.callsTotal}</strong>
+                  <span>всего{summary.unknown > 0 ? ` · ${summary.unknown} исход не ясен` : ''}</span>
+                </span>
+              </div>
+              <div className="dc-daily-stat">
+                <span className="dc-daily-stat-label">Попытки дозвона</span>
+                <span className="dc-daily-stat-value"><strong>{summary.attempts}</strong><span>без ответа</span></span>
+              </div>
+              <div className="dc-daily-stat">
+                <span className="dc-daily-stat-label">Письма</span>
+                <span className="dc-daily-stat-value"><strong>{summary.emails}</strong><span>{summary.emailSuffix}</span></span>
+              </div>
+              <div className="dc-daily-stat">
+                <span className="dc-daily-stat-label">Сообщения</span>
+                <span className="dc-daily-stat-value"><strong>{summary.messenger}</strong><span>{summary.messageSuffix}</span></span>
+              </div>
+              <div className="dc-daily-stat">
+                <span className="dc-daily-stat-label">Длительность</span>
+                <span className="dc-daily-stat-value">
+                  {summary.talkSeconds == null ? (
+                    <span className="dc-daily-stat-empty">нет данных</span>
+                  ) : (
+                    <>
+                      <strong>{talkTime(summary.talkSeconds)}</strong>
+                      <span>разговоров</span>
+                    </>
+                  )}
+                </span>
+              </div>
+              <div className="dc-daily-stat last">
+                <span className="dc-daily-stat-label">Последняя активность</span>
+                <span className="dc-daily-stat-value">
+                  {summary.lastActivity?.occurred_at ? (
+                    <>
+                      <strong>{formatClock(summary.lastActivity.occurred_at)}</strong>
+                      <span>{summary.lastActivity.label || ''}</span>
+                    </>
+                  ) : (
+                    <span className="dc-daily-stat-empty">нет данных</span>
+                  )}
+                </span>
+              </div>
             </div>
-            <details className="dc-daily-comm-events">
-              <summary>Показать события · {communications.items.length}</summary>
-              {communications.items.length ? communications.items.map((item) => {
-                const open = props.openEventId === item.event_id
-                return (
-                  <div className={`dc-daily-comm-event ${open ? 'open' : ''}`} key={item.event_id}>
-                    <button type="button" onClick={() => props.onToggleEvent(item.event_id)}>
-                      <time>{formatClock(item.occurred_at)}</time>
-                      <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
-                      <span>
-                        {channelLabel(item.channel)} · {directionLabel(item.direction)}
-                      </span>
-                      <em>{item.duration_seconds ? talkTime(item.duration_seconds) : ''}</em>
-                      <i aria-hidden="true">{open ? '▴' : '▾'}</i>
-                    </button>
-                    {open ? (
-                      <div className="dc-daily-comm-event-detail">
-                        <p>{item.subject || NO_DATA}</p>
-                        <small>ID события: {item.event_id}. {contentNote}</small>
-                        <CommunicationContent dealId={deal.deal_id} eventId={item.event_id} channel={item.channel} />
+            <details className="dc-daily-comm-events" onToggle={(event) => setEventsOpen(event.currentTarget.open)}>
+              <summary>{eventsOpen ? 'Скрыть' : 'Показать'} события · {events.length}</summary>
+              {events.length ? (
+                <div className="dc-daily-event-list">
+                  {events.map((item) => {
+                    const open = props.openEventId === item.event_id
+                    const attempt = statusIsAttempt(item)
+                    return (
+                      <div className={`dc-daily-comm-event ${open ? 'open' : ''}`} key={item.event_id}>
+                        <button type="button" aria-expanded={open} onClick={() => props.onToggleEvent(item.event_id)}>
+                          <time>{formatClock(item.occurred_at)}</time>
+                          <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
+                          <span className="dc-daily-event-main">
+                            <span>{channelLabel(item.channel)} · {directionLabel(item.direction)}</span>
+                            <span className={`dc-daily-event-status${attempt ? ' attempt' : ''}`}>{eventStatus(item)}</span>
+                          </span>
+                          <span className="dc-daily-event-contact">{item.participant_name || item.subject || ''}</span>
+                          <em className="dc-daily-event-duration">{eventDurationLabel(item)}</em>
+                          <i className="dc-daily-event-chevron" aria-hidden="true">{open ? '▴' : '▾'}</i>
+                        </button>
+                        {open ? (
+                          <div className="dc-daily-comm-event-detail">
+                            <p className="dc-daily-event-meta">
+                              {item.subject ? <span>Тема: <b>{item.subject}</b></span> : null}
+                              <span>ID события: {item.event_id}</span>
+                            </p>
+                            {attempt ? (
+                              <div className="dc-daily-attempt-note">
+                                {item.call_outcome === 'unknown'
+                                  ? 'Исход звонка не доказан — событие не считается разговором.'
+                                  : 'Соединение не установлено — расшифровки разговора нет.'}
+                              </div>
+                            ) : null}
+                            {canOpenContent(item) ? (
+                              <CommunicationContent
+                                dealId={deal.deal_id}
+                                eventId={item.event_id}
+                                channel={item.channel}
+                                allowLoad={item.channel !== 'call' || item.call_outcome === 'connected'}
+                              />
+                            ) : null}
+                            <small>{contentNote}</small>
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
-                )
-              }) : <p className="dc-daily-block-note">Событий за день не зафиксировано.</p>}
+                    )
+                  })}
+                </div>
+              ) : <p className="dc-daily-block-note">Событий за день не зафиксировано.</p>}
             </details>
           </>
         )}

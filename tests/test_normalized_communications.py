@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from bitrix.customer_history import build_normalized_communications, messenger_mirror_from_comment
+from bitrix.customer_history import build_normalized_communications, classify_call_outcome, messenger_mirror_from_comment
 
 
 def response(item: dict) -> dict:
@@ -135,6 +135,28 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         self.assertEqual(mirrored["content"], "Направляем предварительное КП.")
         self.assertIsNone(messenger_mirror_from_comment("Контроль завтра"))
         self.assertIsNone(messenger_mirror_from_comment(""))
+
+    def test_classify_call_outcome_needs_recording_or_transcript(self) -> None:
+        connected = classify_call_outcome(
+            {"DIRECTION": "2", "COMPLETED": "Y", "FILES": [{"ID": "8"}], "SUBJECT": "Звонок"},
+        )
+        self.assertEqual(connected["call_outcome"], "connected")
+        self.assertIsNone(connected["talk_duration_seconds"])
+        no_answer = classify_call_outcome(
+            {"DIRECTION": "2", "COMPLETED": "Y", "SUBJECT": "Исходящий звонок"},
+        )
+        self.assertEqual(no_answer["call_outcome"], "no_answer")
+        missed = classify_call_outcome({"DIRECTION": "1", "COMPLETED": "Y", "SUBJECT": "Входящий"})
+        self.assertEqual(missed["status_label"], "Пропущенный")
+        unknown = classify_call_outcome({"COMPLETED": "Y", "SUBJECT": "Звонок"})
+        self.assertEqual(unknown["call_outcome"], "unknown")
+        short = classify_call_outcome(
+            {"DIRECTION": "2", "FILES": [{"ID": "1"}]},
+            recording_duration_seconds=8,
+        )
+        self.assertEqual(short["call_outcome"], "no_answer")
+        transcript = classify_call_outcome({"DIRECTION": "2"}, has_transcript=True)
+        self.assertEqual(transcript["call_outcome"], "connected")
 
 
 if __name__ == "__main__":

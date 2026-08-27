@@ -43,10 +43,11 @@ MSK = ZoneInfo("Europe/Moscow")
 
 
 class FakeBitrixClient:
-    def __init__(self, *, initial=None, pipeline=None, activities=None):
+    def __init__(self, *, initial=None, pipeline=None, activities=None, comments=None):
         self.initial = initial or {}
         self.pipeline = pipeline or []
         self.activities = activities or {}
+        self.comments = comments or {}
         self.calls: list[tuple[str, dict]] = []
 
     def list_all(self, method, payload=None):
@@ -70,9 +71,12 @@ class FakeBitrixClient:
         raise AssertionError(method)
 
     def safe_list_all(self, method, payload=None):
+        self.calls.append((method, payload or {}))
+        if method == "crm.timeline.comment.list":
+            entity_id = str(((payload or {}).get("filter") or {}).get("ENTITY_ID") or "")
+            return {"ok": True, "items": list(self.comments.get(entity_id, []))}
         if method != "crm.activity.list":
             raise AssertionError(method)
-        self.calls.append((method, payload or {}))
         owner_ids = ((payload or {}).get("filter") or {}).get("OWNER_ID") or []
         owner_ids = owner_ids if isinstance(owner_ids, list) else [owner_ids]
         result = []
@@ -371,6 +375,143 @@ class DealControlTests(unittest.TestCase):
             result["items"][0]["content"],
             "Полный текст письма для ленивой загрузки",
         )
+        self.assertEqual(result["calls_total"], 2)
+        self.assertEqual(result["calls_connected"], 0)
+        self.assertEqual(result["calls_no_answer"], 2)
+        self.assertEqual(result["emails"], 1)
+        self.assertEqual(result["messenger_messages"], 0)
+        self.assertIsNone(result["conversation_duration_seconds"])
+        self.assertEqual(result["last_activity"]["kind"], "dial_attempt")
+
+    def test_today_communications_splits_call_outcomes_and_ignores_internal_comments(self):
+        activities = [
+            {
+                "ID": "801", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "VOXIMPLANT_CALL",
+                "SUBJECT": "Разговор", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T09:00:00+03:00", "END_TIME": "2026-07-20T09:07:14+03:00",
+                "FILES": [{"ID": "11"}],
+            },
+            {
+                "ID": "802", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "VOXIMPLANT_CALL",
+                "SUBJECT": "Входящий разговор", "DIRECTION": "1", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T09:31:00+03:00", "END_TIME": "2026-07-20T09:35:26+03:00",
+                "FILES": [{"ID": "12"}],
+            },
+            {
+                "ID": "803", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Исходящий недозвон", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T10:00:00+03:00", "END_TIME": "2026-07-20T10:00:08+03:00",
+            },
+            {
+                "ID": "804", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Занято", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T10:05:00+03:00", "END_TIME": "2026-07-20T10:05:02+03:00",
+            },
+            {
+                "ID": "805", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Пропущенный", "DIRECTION": "1", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T10:10:00+03:00",
+            },
+            {
+                "ID": "806", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Звонок", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T10:20:00+03:00",
+            },
+            {
+                "ID": "807", "OWNER_ID": "101", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+                "SUBJECT": "Письмо", "DIRECTION": "2", "COMPLETED": "Y",
+                "DESCRIPTION": "Текст письма",
+                "START_TIME": "2026-07-20T11:00:00+03:00",
+            },
+            {
+                "ID": "808", "OWNER_ID": "101", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK",
+                "SUBJECT": "Задача", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T11:30:00+03:00",
+            },
+        ]
+        comments = [
+            {
+                "ID": "900",
+                "CREATED": "2026-07-20T12:00:00+03:00",
+                "COMMENT": "[img]https://static.wazzup24.com/images/bitrix/whatsapp.png[/img] Олег Клиент:\nСогласовано.",
+            },
+            {
+                "ID": "901",
+                "CREATED": "2026-07-20T12:05:00+03:00",
+                "COMMENT": "Внутренняя заметка без зеркала",
+            },
+            {
+                "ID": "902",
+                "CREATED": "2026-07-20T12:10:00+03:00",
+                "COMMENT": "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Менеджер Иван:\nНаправил договор.",
+            },
+        ]
+        result = _today_communications(
+            activities,
+            datetime(2026, 7, 20, 16, tzinfo=MSK),
+            comments=comments,
+            client_names={"олег клиент"},
+            deal_id="101",
+        )
+        self.assertEqual(result["calls_total"], 6)
+        self.assertEqual(result["calls_connected"], 2)
+        self.assertEqual(result["calls_no_answer"], 2)
+        self.assertEqual(result["calls_unknown"], 1)
+        self.assertEqual(result["emails"], 1)
+        self.assertEqual(result["messenger_messages"], 2)
+        self.assertIsNone(result["conversation_duration_seconds"])
+        self.assertEqual(result["last_activity"]["kind"], "message")
+        self.assertEqual(result["last_confirmed_contact"]["kind"], "client_reply")
+        self.assertEqual(result["items"][-1]["channel"], "max")
+        missed = next(item for item in result["items"] if item["event_id"] == "crm_activity:805")
+        self.assertEqual(missed["call_outcome"], "no_answer")
+        self.assertEqual(missed["status_label"], "Пропущенный")
+        unknown = next(item for item in result["items"] if item["event_id"] == "crm_activity:806")
+        self.assertEqual(unknown["call_outcome"], "unknown")
+        self.assertTrue(all("Внутренняя заметка" not in str(item.get("content") or "") for item in result["items"]))
+
+    def test_completed_call_without_recording_is_not_a_conversation(self):
+        result = _today_communications(
+            [{
+                "ID": "1", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                "SUBJECT": "Исходящий звонок", "DIRECTION": "2", "COMPLETED": "Y",
+                "START_TIME": "2026-07-20T12:00:00+03:00", "END_TIME": "2026-07-20T12:05:00+03:00",
+            }],
+            datetime(2026, 7, 20, 16, tzinfo=MSK),
+        )
+        self.assertEqual(result["calls_connected"], 0)
+        self.assertEqual(result["calls_no_answer"], 1)
+        self.assertEqual(result["items"][0]["call_outcome"], "no_answer")
+        self.assertIsNone(result["conversation_duration_seconds"])
+        self.assertEqual(result["last_activity"]["kind"], "dial_attempt")
+        self.assertIsNone(result["last_confirmed_contact"])
+
+    def test_last_activity_skips_missed_incoming_and_keeps_moscow_day(self):
+        result = _today_communications(
+            [
+                {
+                    "ID": "1", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                    "SUBJECT": "Пропущенный", "DIRECTION": "1", "COMPLETED": "Y",
+                    "START_TIME": "2026-07-20T18:00:00+03:00",
+                },
+                {
+                    "ID": "2", "OWNER_ID": "101", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+                    "SUBJECT": "Письмо", "DIRECTION": "2", "COMPLETED": "Y",
+                    "DESCRIPTION": "Текст",
+                    "START_TIME": "2026-07-20T11:00:00+03:00",
+                },
+                {
+                    "ID": "3", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+                    "SUBJECT": "Вчера", "DIRECTION": "2", "COMPLETED": "Y",
+                    "START_TIME": "2026-07-19T23:50:00+03:00", "FILES": [{"ID": "9"}],
+                },
+            ],
+            datetime(2026, 7, 20, 19, tzinfo=MSK),
+        )
+        self.assertEqual(result["calls_total"], 1)
+        self.assertEqual(result["last_activity"]["kind"], "email")
+        self.assertEqual(result["last_activity"]["event_id"], "crm_activity:2")
+        self.assertIsNone(result["last_confirmed_contact"])
 
     def test_analysis_coaching_projects_manager_message_call_variants_and_crm_checklist(self):
         with tempfile.TemporaryDirectory() as directory:

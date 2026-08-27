@@ -253,6 +253,76 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertFalse(item["content_available"])
         self.assertEqual(snapshot["deals"][0]["generic_question"], GENERIC_STATUS_QUESTION)
 
+    def test_old_snapshot_without_new_communication_fields_stays_readable(self) -> None:
+        snapshot = build_daily_control_snapshot({
+            "deals": [_deal_row(communications_today={
+                "date": "2026-08-18",
+                "available": True,
+                "completed": 1,
+                "calls": 1,
+                "messages": 0,
+                "duration_seconds": 90,
+                "items": [{
+                    "event_id": "crm_activity:1",
+                    "channel": "call",
+                    "direction": "outgoing",
+                    "occurred_at": "2026-08-18T10:15:00+03:00",
+                    "subject": "Звонок",
+                    "duration_seconds": 90,
+                }],
+            })],
+        })
+        communications = snapshot["deals"][0]["communications_today"]
+        self.assertEqual(communications["calls_total"], 1)
+        self.assertEqual(communications["calls_connected"], 0)
+        self.assertIsNone(communications["conversation_duration_seconds"])
+        self.assertIsNone(communications["last_activity"])
+        self.assertNotIn("content", communications["items"][0])
+
+    def test_sanitize_keeps_new_summary_fields_without_bodies(self) -> None:
+        snapshot = build_daily_control_snapshot({
+            "deals": [_deal_row(communications_today={
+                "date": "2026-08-18",
+                "available": True,
+                "completed": 2,
+                "calls": 1,
+                "messages": 1,
+                "duration_seconds": 90,
+                "calls_total": 1,
+                "calls_connected": 1,
+                "calls_no_answer": 0,
+                "calls_unknown": 0,
+                "emails": 0,
+                "messenger_messages": 1,
+                "conversation_duration_seconds": 70,
+                "last_activity": {
+                    "event_id": "crm_mirror:1",
+                    "kind": "client_reply",
+                    "label": "ответ клиента",
+                    "occurred_at": "2026-08-18T12:00:00+03:00",
+                    "content": "не должен попасть",
+                },
+                "items": [{
+                    "event_id": "crm_mirror:1",
+                    "channel": "whatsapp",
+                    "direction": "incoming",
+                    "occurred_at": "2026-08-18T12:00:00+03:00",
+                    "content": "секрет",
+                    "html": "<p>секрет</p>",
+                    "call_outcome": None,
+                    "content_available": True,
+                }],
+            })],
+        })
+        communications = snapshot["deals"][0]["communications_today"]
+        self.assertEqual(communications["messenger_messages"], 1)
+        self.assertEqual(communications["conversation_duration_seconds"], 70)
+        self.assertEqual(communications["last_activity"]["kind"], "client_reply")
+        self.assertNotIn("content", communications["last_activity"])
+        self.assertNotIn("content", communications["items"][0])
+        self.assertNotIn("html", communications["items"][0])
+        self.assertTrue(communications["items"][0]["content_available"])
+
     def test_live_dashboard_review_matches_snapshot_card(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"

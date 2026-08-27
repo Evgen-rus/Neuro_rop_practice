@@ -671,12 +671,27 @@ export type DealControlBitrixTask = {
 
 export type DealControlCommunicationItem = {
   event_id: string
-  channel: 'call' | 'email' | 'message' | string
+  channel: 'call' | 'email' | 'message' | 'whatsapp' | 'telegram' | 'max' | string
   direction: 'incoming' | 'outgoing' | 'unknown' | string
   occurred_at: string
   subject?: string
   duration_seconds?: number | null
   contact_class?: string
+  call_outcome?: 'connected' | 'no_answer' | 'unknown' | null
+  talk_duration_seconds?: number | null
+  content_available?: boolean
+  participant_name?: string | null
+  status_label?: string | null
+  source_type?: string | null
+}
+
+export type DealControlCommunicationRef = {
+  event_id?: string | null
+  occurred_at?: string | null
+  channel?: string | null
+  direction?: string | null
+  kind?: string | null
+  label?: string | null
 }
 
 export type DealCallTranscript = {
@@ -704,6 +719,17 @@ export type DealControlCommunicationsToday = {
   calls: number
   messages: number
   duration_seconds: number
+  calls_total?: number
+  calls_connected?: number
+  calls_no_answer?: number
+  calls_unknown?: number
+  emails?: number
+  messenger_messages?: number
+  email_suffix?: string | null
+  message_suffix?: string | null
+  conversation_duration_seconds?: number | null
+  last_activity?: DealControlCommunicationRef | null
+  last_confirmed_contact?: DealControlCommunicationRef | null
   items: DealControlCommunicationItem[]
 }
 
@@ -1458,6 +1484,15 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
     calls: 0,
     messages: 0,
     duration_seconds: 0,
+    calls_total: 0,
+    calls_connected: 0,
+    calls_no_answer: 0,
+    calls_unknown: 0,
+    emails: 0,
+    messenger_messages: 0,
+    conversation_duration_seconds: null,
+    last_activity: null,
+    last_confirmed_contact: null,
     items: [],
   }
   const emptyChecklist: DealControlChecklist = {

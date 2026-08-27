@@ -105,12 +105,117 @@ def _bundle_client_names(bundle: dict[str, Any]) -> set[str]:
     return names
 
 
+# Совпадает с openai_api.audio.short_call: короче 20 сек записи — недозвон/автоответчик.
+CALL_RECORDING_MIN_TALK_SECONDS = 20.0
+CALL_NO_ANSWER_TOKENS = (
+    "НЕ ОТВЕТ",
+    "НЕДОЗВОН",
+    "НЕ ДОЗВОН",
+    "ЗАНЯТ",
+    "BUSY",
+    "NO ANSWER",
+    "INVALID",
+    "НЕВЕРН",
+    "ПРОПУЩ",
+    "MISSED",
+    "FAILED",
+)
+CALL_BUSY_TOKENS = ("ЗАНЯТ", "BUSY")
+
+
 def _call_duration_seconds(raw: dict[str, Any]) -> float | None:
     started = parse_bitrix_datetime(raw.get("START_TIME") or raw.get("CREATED"))
     ended = parse_bitrix_datetime(raw.get("END_TIME"))
     if started is None or ended is None:
         return None
     return round(max(0.0, (ended - started).total_seconds()), 1)
+
+
+def _has_call_recording(raw: dict[str, Any]) -> bool:
+    files = raw.get("FILES")
+    if isinstance(files, list):
+        return any(
+            (isinstance(item, dict) and str(item.get("ID") or item.get("id") or "").strip())
+            or (not isinstance(item, dict) and str(item or "").strip())
+            for item in files
+        )
+    return bool(files)
+
+
+def _call_direction(raw: dict[str, Any]) -> str:
+    value = str(raw.get("DIRECTION") or "").strip()
+    if value == "1":
+        return "incoming"
+    if value == "2":
+        return "outgoing"
+    lowered = value.lower()
+    if lowered in {"incoming", "in", "входящий"}:
+        return "incoming"
+    if lowered in {"outgoing", "out", "исходящий"}:
+        return "outgoing"
+    return "unknown"
+
+
+def _call_status_haystack(raw: dict[str, Any]) -> str:
+    return " ".join(
+        str(raw.get(key) or "")
+        for key in ("SUBJECT", "PROVIDER_TYPE_ID")
+    ).upper()
+
+
+def classify_call_outcome(
+    raw: dict[str, Any] | None,
+    *,
+    has_transcript: bool = False,
+    recording_duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Classify a CRM call without treating COMPLETED=Y or START-END as a conversation."""
+    activity = raw if isinstance(raw, dict) else {}
+    direction = _call_direction(activity)
+    haystack = _call_status_haystack(activity)
+    busy = any(token in haystack for token in CALL_BUSY_TOKENS)
+    explicit_no_answer = any(token in haystack for token in CALL_NO_ANSWER_TOKENS)
+    has_recording = _has_call_recording(activity)
+    short_recording = (
+        recording_duration_seconds is not None
+        and float(recording_duration_seconds) < CALL_RECORDING_MIN_TALK_SECONDS
+    )
+
+    if short_recording:
+        return {
+            "call_outcome": "no_answer",
+            "talk_duration_seconds": 0.0,
+            "status_label": "Занято" if busy else "Не дозвонились",
+            "has_recording": has_recording,
+        }
+    if has_transcript or has_recording:
+        duration = None if recording_duration_seconds is None else round(float(recording_duration_seconds), 1)
+        return {
+            "call_outcome": "connected",
+            "talk_duration_seconds": duration,
+            "status_label": "Разговор",
+            "has_recording": has_recording,
+        }
+    if direction == "incoming":
+        return {
+            "call_outcome": "no_answer",
+            "talk_duration_seconds": 0.0,
+            "status_label": "Пропущенный",
+            "has_recording": False,
+        }
+    if direction == "outgoing" or explicit_no_answer:
+        return {
+            "call_outcome": "no_answer",
+            "talk_duration_seconds": 0.0,
+            "status_label": "Занято" if busy else "Не дозвонились",
+            "has_recording": False,
+        }
+    return {
+        "call_outcome": "unknown",
+        "talk_duration_seconds": None,
+        "status_label": "Исход не определён",
+        "has_recording": False,
+    }
 
 
 def _communication_channel_from_comment(text: str) -> str | None:

@@ -47,6 +47,20 @@ COMMUNICATION_ITEM_KEYS = (
     "subject",
     "duration_seconds",
     "contact_class",
+    "call_outcome",
+    "talk_duration_seconds",
+    "content_available",
+    "participant_name",
+    "status_label",
+    "source_type",
+)
+COMMUNICATION_REF_KEYS = (
+    "event_id",
+    "occurred_at",
+    "channel",
+    "direction",
+    "kind",
+    "label",
 )
 INVENTED_CONTENT_KEYS = (
     "text",
@@ -126,6 +140,16 @@ def compute_source_watermark(
                         "messages": communications.get("messages"),
                         "duration_seconds": communications.get("duration_seconds"),
                         "completed": communications.get("completed"),
+                        "calls_total": communications.get("calls_total"),
+                        "calls_connected": communications.get("calls_connected"),
+                        "calls_no_answer": communications.get("calls_no_answer"),
+                        "calls_unknown": communications.get("calls_unknown"),
+                        "emails": communications.get("emails"),
+                        "messenger_messages": communications.get("messenger_messages"),
+                        "conversation_duration_seconds": communications.get("conversation_duration_seconds"),
+                        "last_activity": (communications.get("last_activity") or {}).get("event_id")
+                        if isinstance(communications.get("last_activity"), dict)
+                        else communications.get("last_activity"),
                     },
                     "report_id": report.get("id") if report else None,
                     "report_created_at": report.get("created_at") if report else None,
@@ -225,6 +249,21 @@ def _audit_scores(audit: dict[str, Any]) -> dict[str, int | None]:
     return scores
 
 
+def _sanitize_communication_ref(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {key: value.get(key) for key in COMMUNICATION_REF_KEYS}
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _sanitize_communications(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     items = []
@@ -232,12 +271,22 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             continue
         item = {key: raw.get(key) for key in COMMUNICATION_ITEM_KEYS}
-        item["content_available"] = False
         for forbidden in INVENTED_CONTENT_KEYS:
             item.pop(forbidden, None)
+        if "content_available" not in raw:
+            item["content_available"] = False
+        else:
+            item["content_available"] = bool(raw.get("content_available"))
         items.append(item)
     available = bool(source.get("available"))
-    return {
+    def _count(key: str, fallback: Any = 0) -> int:
+        if not available:
+            return 0
+        if source.get(key) is None:
+            return int(fallback or 0)
+        return int(source.get(key) or 0)
+
+    payload = {
         "date": source.get("date"),
         "available": available,
         "target": source.get("target"),
@@ -246,10 +295,22 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
         "calls": int(source.get("calls") or 0) if available else 0,
         "messages": int(source.get("messages") or 0) if available else 0,
         "duration_seconds": int(source.get("duration_seconds") or 0) if available else 0,
+        "conversation_duration_seconds": _optional_int(source.get("conversation_duration_seconds")) if available else None,
+        "last_activity": _sanitize_communication_ref(source.get("last_activity")) if available else None,
+        "last_confirmed_contact": _sanitize_communication_ref(source.get("last_confirmed_contact")) if available else None,
+        "calls_total": _count("calls_total", source.get("calls")),
+        "calls_connected": _count("calls_connected"),
+        "calls_no_answer": _count("calls_no_answer"),
+        "calls_unknown": _count("calls_unknown"),
+        "emails": _count("emails"),
+        "messenger_messages": _count("messenger_messages"),
+        "email_suffix": source.get("email_suffix") if available else None,
+        "message_suffix": source.get("message_suffix") if available else None,
         "unavailable": not available,
         "items": items if available else [],
         "content_available": False,
     }
+    return payload
 
 
 def _checklist_why(item: dict[str, Any]) -> str | None:
