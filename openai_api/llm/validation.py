@@ -5,8 +5,10 @@ Lightweight validation for model-generated ROP analysis JSON.
 from __future__ import annotations
 
 from datetime import date, datetime
+import re
 from typing import Any
 
+from business_time import recommendation_due_at
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 
 
@@ -266,6 +268,7 @@ def normalize_analysis_for_validation(
     )
     _normalize_deal_context_enum_aliases(analysis, changes)
     _normalize_communication_quality_audit(analysis, changes)
+    _normalize_deal_feedback_deadline(analysis, changes)
     if allow_legacy_qualification_assessment:
         if "deal_state" in analysis and "recommendation_feedback" not in analysis:
             analysis["recommendation_feedback"] = {
@@ -410,6 +413,29 @@ def _legacy_qualification_assessment() -> dict[str, Any]:
             "evidence": [],
         },
     }
+
+
+def _normalize_deal_feedback_deadline(analysis: dict[str, Any], changes: list[dict[str, Any]]) -> None:
+    # The lead contract has no recommendation_feedback; never repair mixed data.
+    if "deal_state" not in analysis or "lead_state" in analysis:
+        return
+    feedback = analysis.get("recommendation_feedback")
+    if not isinstance(feedback, dict) or feedback.get("applicable") is not True:
+        return
+    if feedback.get("next_action_required") is not True:
+        return
+    value = feedback.get("next_action_at")
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?)?", value
+    ):
+        return
+    normalized = recommendation_due_at(value)
+    if normalized is not None:
+        feedback["next_action_at"] = normalized
+        changes.append({
+            "path": "recommendation_feedback.next_action_at",
+            "action": "date_to_business_deadline" if len(value) == 10 else "assumed_moscow_timezone",
+        })
 
 
 def _normalize_deal_context_enum_aliases(

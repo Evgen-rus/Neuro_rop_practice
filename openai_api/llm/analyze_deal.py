@@ -585,6 +585,7 @@ competitor_defense_checklist внутри deal_context: они уже счита
 Если предыдущей рекомендации нет, верни ровно нейтральный блок: applicable=false, source_report_id=null, status=unconfirmed, false/empty/null во всех остальных полях.
 Для применимого блока source_report_id должен быть ID предыдущей рекомендации. status=attempted допускается только для попытки без подтверждённого контакта; activity/call/закрытая задача дают максимум attempted. status=contacted требует явного клиентского ответа в transcript/client evidence; переход стадии не является контактом или результатом. status=achieved требует явного соответствия expected_result предыдущей рекомендации и клиентского evidence. При недостатке или противоречии evidence используй status=unconfirmed и не ставь target_result_achieved=true.
 what_manager_did и evidence должны быть короткими фактами, evidence — не более 7 пунктов. Если next_action_required=true, заполни все три next_action-поля; иначе оставь их null. Не выдумывай следующий шаг, срок или результат.
+next_action_at — ISO datetime с часовым поясом, например 2026-08-27T16:00:00+03:00. Время без явно указанной зоны трактуется как МСК. Если известна только дата, системный срок контроля — 18:00 МСК этой даты; это не подтверждённое клиентом время. Не превращай «после обеда» или неизвестный срок в выдуманную точную дату.
 </recommendation_feedback_rules>
 
 <daily_checklist_rules>

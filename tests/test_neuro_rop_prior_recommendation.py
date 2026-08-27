@@ -10,8 +10,10 @@ from api.jobs import JobState
 from openai_api.llm.analyze_deal import build_prompt
 from openai_api.llm.validation import (
     _validate_recommendation_feedback,
+    normalize_analysis_for_validation,
     validate_deal_recommendation_materialization,
 )
+from business_time import recommendation_due_at
 from storage.rop_db import (
     apply_deal_recommendation_feedback,
     connect,
@@ -238,6 +240,45 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
         invalid.update({"applicable": True, "source_report_id": 1, "status": "contacted", "contact_confirmed": True, "target_result_achieved": True})
         _validate_recommendation_feedback(invalid, errors)
         self.assertTrue(errors)
+
+    def test_feedback_deadlines_normalize_before_strict_validation(self) -> None:
+        for value, expected in (
+            ("2026-08-27", "2026-08-27T18:00:00+03:00"),
+            ("2026-08-27T16:00:00", "2026-08-27T16:00:00+03:00"),
+            ("2026-08-27 16:00", "2026-08-27T16:00:00+03:00"),
+            ("2026-08-27T16:00:00+07:00", "2026-08-27T16:00:00+07:00"),
+            ("2026-08-27T16:00:00Z", "2026-08-27T16:00:00Z"),
+        ):
+            with self.subTest(value=value):
+                feedback = {
+                    "applicable": True, "source_report_id": 1, "status": "unconfirmed",
+                    "what_manager_did": None, "contact_confirmed": False, "target_result_achieved": False,
+                    "evidence": [], "next_action_required": True, "next_action_text": "Позвонить",
+                    "next_action_at": value, "next_action_reason": "Контроль",
+                }
+                analysis = {"deal_state": {}, "recommendation_feedback": feedback}
+                changes = normalize_analysis_for_validation(analysis)
+                self.assertEqual(feedback["next_action_at"], expected)
+                self.assertEqual(recommendation_due_at(value), recommendation_due_at(expected))
+                errors = []
+                _validate_recommendation_feedback(feedback, errors)
+                self.assertEqual(errors, [])
+                self.assertEqual(normalize_analysis_for_validation(analysis), [])
+                self.assertNotIn(value, json.dumps(changes, ensure_ascii=False))
+
+    def test_feedback_deadline_repair_does_not_guess_or_touch_leads(self) -> None:
+        for value in ("завтра", "после обеда", "2026-02-30", "2026-08-27T25:00:00", 123, None):
+            feedback = {"applicable": True, "next_action_required": True, "next_action_at": value}
+            self.assertEqual(normalize_analysis_for_validation({"deal_state": {}, "recommendation_feedback": feedback}), [])
+            self.assertEqual(feedback["next_action_at"], value)
+        for marker in ({"lead_state": {}}, {"lead_state": {}, "deal_state": {}}):
+            feedback = {"applicable": True, "next_action_required": True, "next_action_at": "2026-08-27"}
+            self.assertEqual(normalize_analysis_for_validation({**marker, "recommendation_feedback": feedback}), [])
+            self.assertEqual(feedback["next_action_at"], "2026-08-27")
+        for flags in ({"applicable": False, "next_action_required": True}, {"applicable": True, "next_action_required": False}):
+            feedback = {**flags, "next_action_at": "2026-08-27"}
+            self.assertEqual(normalize_analysis_for_validation({"deal_state": {}, "recommendation_feedback": feedback}), [])
+            self.assertEqual(feedback["next_action_at"], "2026-08-27")
 
     def test_prompt_has_structured_prior_section_without_private_fields(self) -> None:
         prior = {

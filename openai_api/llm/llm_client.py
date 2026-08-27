@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import hashlib
+from copy import deepcopy
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Callable
@@ -25,6 +26,7 @@ from openai_api.config import (
 )
 from openai_api.logging_utils import log_model_text_payload
 from openai_api.llm.usage_trace import append_usage_trace
+from openai_api.llm.validation_diagnostics import save_validation_diagnostic
 from openai_api.pricing import estimate_analysis_cost
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry
 
@@ -542,6 +544,7 @@ def call_validated_analysis_json(
             )
         deferred_trace = analysis_caller is call_analysis_json
         attempt_error: BaseException | None = None
+        original_analysis: dict[str, Any] | None = None
         try:
             if prompt_cache_marker is not None and prompt_cache_markers is not None:
                 raise ValueError("prompt_cache_marker and prompt_cache_markers are mutually exclusive")
@@ -564,8 +567,12 @@ def call_validated_analysis_json(
             if not preview_response_errors:
                 caller_options["preview_response_errors"] = False
             analysis, metadata = analysis_caller(current_prompt, **caller_options)
+            metadata = dict(metadata)
+            metadata.pop("validation_diagnostic_ref", None)
+            metadata.pop("validation_diagnostic_status", None)
             final_raw = str(metadata.get("raw_output_text") or "")
             final_analysis = analysis
+            original_analysis = deepcopy(analysis)
             normalization_changes = normalizer(analysis)
             if normalization_changes:
                 metadata["normalization_changes"] = normalization_changes
@@ -606,6 +613,12 @@ def call_validated_analysis_json(
             return analysis, _aggregate_attempt_metadata(attempts, metadata)
 
         safe_attempt_error = _safe_validation_error(attempt_error or ValueError(final_error))
+        diagnostic_ref = save_validation_diagnostic(
+            error=final_error, analysis=final_analysis, original_analysis=original_analysis,
+            raw_output_text=final_raw, metadata=metadata, attempt=semantic_attempt,
+        )
+        metadata["validation_diagnostic_ref"] = diagnostic_ref
+        metadata["validation_diagnostic_status"] = "saved" if diagnostic_ref else "unavailable"
         attempt_metadata = _semantic_attempt_metadata(
             metadata,
             attempt_number=semantic_attempt,

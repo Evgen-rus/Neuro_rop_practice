@@ -124,6 +124,8 @@ def build_usage_trace_event(
             else None
         ),
         "validation_error": metadata.get("validation_error"),
+        "validation_diagnostic_ref": metadata.get("validation_diagnostic_ref"),
+        "validation_diagnostic_status": metadata.get("validation_diagnostic_status"),
         "transport_retry": metadata.get("transport_retry"),
         "transport_attempt_count": metadata.get("transport_attempt_count"),
         "transport_retry_count": metadata.get("transport_retry_count"),

@@ -42,6 +42,7 @@ class UsageTraceTests(unittest.TestCase):
             "latency_seconds": 1.25,
             "response_id": "resp_test",
             "raw_output_text": "must not be traced",
+            "validation_diagnostic": {"value": "private diagnostic must not be traced"},
             "prompt": "must not be traced",
         }
 
@@ -110,6 +111,8 @@ class UsageTraceTests(unittest.TestCase):
             "semantic_correction_retry": True,
             "validation_passed": False,
             "validation_error": "AnalysisValidationError: field score is invalid",
+            "validation_diagnostic_ref": "2026-08-27/0123456789abcdef0123456789abcdef.json",
+            "validation_diagnostic_status": "saved",
             "transport_retry": True,
             "transport_attempt_count": 2,
             "transport_retry_count": 1,
@@ -120,6 +123,8 @@ class UsageTraceTests(unittest.TestCase):
 
         self.assertEqual(event["semantic_attempt_number"], 2)
         self.assertEqual(event["validation_status"], "failed")
+        self.assertEqual(event["validation_diagnostic_ref"], metadata["validation_diagnostic_ref"])
+        self.assertEqual(event["validation_diagnostic_status"], "saved")
         self.assertTrue(event["semantic_correction_retry"])
         self.assertTrue(event["transport_retry"])
         self.assertEqual(event["transport_retry_count"], 1)

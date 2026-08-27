@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from setup import BASE_DIR, MSK_TZ
+from business_time import recommendation_due_at as _recommendation_due_at
 
 
 DEFAULT_DB_PATH = BASE_DIR / "reports" / "rop_assistant" / "rop_assistant.sqlite"
@@ -6820,30 +6821,6 @@ def create_deal_control_task(db_path: str | Path, *, deal_id: str, task_text: st
     result = dict(row) if row is not None else None
     assert result is not None
     return result
-
-
-def _recommendation_due_at(deadline: Any) -> str | None:
-    value = str(deadline or "").strip()
-    if not value:
-        return None
-    if len(value) == 10:
-        try:
-            parsed_date = date.fromisoformat(value)
-        except ValueError:
-            return None
-        return datetime.combine(parsed_date, time(18, 0), tzinfo=MSK_TZ).isoformat(timespec="seconds")
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        try:
-            parsed_date = date.fromisoformat(value)
-        except ValueError:
-            return None
-        return datetime.combine(parsed_date, time(18, 0), tzinfo=MSK_TZ).isoformat(timespec="seconds")
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=MSK_TZ)
-    return parsed.astimezone(MSK_TZ).isoformat(timespec="seconds")
 
 
 def materialize_deal_recommendation_from_report(

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from crm_sync_fixture import SnapshotHarness
-from api.crm_change_gate import acknowledge_refresh, audio_due, deal_job_can_acknowledge, probe_changes, transcript_signature
+from api.crm_change_gate import _same_amount, acknowledge_refresh, audio_due, deal_job_can_acknowledge, probe_changes, transcript_signature
 from bitrix.context_sync import ContextReadClient, atomic_json, dialog_delta, local_sync_lock, retained_response, retain_failed_sources, timeline_delta
 from bitrix.deals.download_deals_call_audio import refresh_missing_call_files
 from bitrix.internal_im_chat import fetch_internal_im_chats
@@ -60,6 +60,73 @@ class CrmChangeGateTests(unittest.TestCase):
         start.assert_not_called()
         self.assertEqual(result["counts"]["heavy_context_fetch_count"], 0)
         self.assertEqual(result["counts"]["skipped_before_fetch"], 1)
+
+    def test_amount_comparison_preserves_precision_and_missing_values(self):
+        cases = [
+            ("100.00", "100.000000", True),
+            (100, "100.00", True),
+            (100.0, "100", True),
+            (" 100.00 ", "100", True),
+            (0, "0.000000", True),
+            ("-0.00", "0", True),
+            ("-100.00", "-100", True),
+            ("100.00", "100.01", False),
+            ("9007199254740992.00", "9007199254740993.00", False),
+            ("100.00000000000000000001", "100.00000000000000000002", False),
+            (None, "", True),
+            (None, "0", False),
+            ("", 0, False),
+            (None, "100", False),
+            ("", "100", False),
+            ("invalid", "0", False),
+            ("invalid", "other", False),
+            ("invalid", "invalid", True),
+            ("100,00", "100.00", False),
+            ("NaN", "100", False),
+            ("sNaN", "0", False),
+            ("Infinity", "100", False),
+            ("Infinity", "-Infinity", False),
+        ]
+        for left, right, expected in cases:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(_same_amount(left, right), expected)
+                self.assertEqual(_same_amount(right, left), expected)
+
+    def test_amount_format_only_skips_heavy_without_changing_context(self):
+        before = self.h.state()
+        for amount in ("100.00", "100.000000", 100, 100.0):
+            with self.subTest(amount=amount):
+                self.h.remote.deals[self.deal_id]["OPPORTUNITY"] = amount
+                self.h.sync_portfolio()
+                plan = self.h.plans()[self.deal_id]
+                self.assertEqual(plan["mode"], "skip", plan)
+                self.assertNotIn("deal_fields", plan["reasons"])
+        self.assertEqual(self.h.state(), before)
+        for method in ("crm.deal.get", "im.search.chat.list"):
+            self.assertEqual(self.h.remote.commands[method], 0)
+
+    def test_real_amount_change_refreshes_then_skips_after_acknowledgement(self):
+        self.h.remote.deals[self.deal_id]["OPPORTUNITY"] = "100.01"
+        self.h.sync_portfolio()
+        plan = self.h.plans()[self.deal_id]
+        self.assertEqual(plan["mode"], "incremental")
+        self.assertIn("deal_fields", plan["reasons"])
+        self.h.refresh(self.deal_id, plan)
+        self.assertEqual(self.h.plans()[self.deal_id]["mode"], "skip")
+
+    def test_equal_amount_format_does_not_mask_other_deal_fields(self):
+        original = copy.deepcopy(self.h.remote.deals[self.deal_id])
+        for field, value in (
+            ("STAGE_ID", "NEXT"),
+            ("ASSIGNED_BY_ID", "8"),
+            ("DATE_MODIFY", (self.h.remote.now + timedelta(seconds=1)).isoformat()),
+        ):
+            with self.subTest(field=field):
+                self.h.remote.deals[self.deal_id] = {**original, "OPPORTUNITY": "100.000000", field: value}
+                self.h.sync_portfolio()
+                plan = self.h.plans()[self.deal_id]
+                self.assertEqual(plan["mode"], "incremental")
+                self.assertIn("deal_fields", plan["reasons"])
 
     def test_new_activity_refreshes_delta_without_invoices_and_products(self):
         row = copy.deepcopy(self.h.remote.activities[self.deal_id][0])

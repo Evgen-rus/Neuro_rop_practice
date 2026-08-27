@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +139,21 @@ def _different(rows: list[dict], known: list[dict], keys: tuple[str, ...] | None
         elif digest(row) != digest(previous):
             return True
     return False
+
+
+def _same_amount(left: Any, right: Any) -> bool:
+    """Compare finite amounts exactly; missing/invalid values never become zero."""
+    left_text = "" if left is None else str(left).strip()
+    right_text = "" if right is None else str(right).strip()
+    if not left_text or not right_text:
+        return left_text == right_text
+    try:
+        left_number, right_number = Decimal(left_text), Decimal(right_text)
+    except InvalidOperation:
+        return left_text == right_text
+    if not left_number.is_finite() or not right_number.is_finite():
+        return left_text == right_text
+    return left_number == right_number
 
 
 def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | None = None,
@@ -290,8 +306,8 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
             deal = (raw.get("deal") or {}).get("item") or {}
             row = portfolio.get(deal_id) or {}
             if any(str(deal.get(field) or "") != str(row.get(local) or "") for field, local in (
-                ("DATE_MODIFY", "modified_at_crm"), ("STAGE_ID", "stage_id"), ("ASSIGNED_BY_ID", "manager_id"), ("OPPORTUNITY", "amount"),
-            )):
+                ("DATE_MODIFY", "modified_at_crm"), ("STAGE_ID", "stage_id"), ("ASSIGNED_BY_ID", "manager_id"),
+            )) or not _same_amount(deal.get("OPPORTUNITY"), row.get("amount")):
                 plan["reasons"].append("deal_fields")
             if events != acknowledged.get("events"):
                 plan["reasons"].append("trajectory")
