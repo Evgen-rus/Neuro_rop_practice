@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, replace
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +42,10 @@ class WorkflowOptions:
     analyze: bool
     force_llm: bool
     transcript_mode: str
+    context_refresh_mode: str = "full"
+    storage_db_path: str | None = None
+    rediscover_chats: bool = False
+    analysis_signal: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-transcribe", action="store_true", help="Не транскрибировать скачанные аудио")
     parser.add_argument("--no-analyze", action="store_true", help="Не запускать LLM-анализ")
     parser.add_argument("--no-force-llm", action="store_true", help="Не принуждать полный LLM-анализ")
+    parser.add_argument("--context-refresh-mode", choices=["full", "incremental", "audio", "local"], default="full")
+    parser.add_argument("--db-path")
+    parser.add_argument("--rediscover-chats", action="store_true")
+    parser.add_argument("--analysis-signal", action="store_true")
     parser.add_argument(
         "--transcript",
         choices=["all", "latest", "none"],
@@ -168,6 +178,10 @@ def options_from_args(args: argparse.Namespace) -> WorkflowOptions:
             analyze=not args.no_analyze,
             force_llm=not args.no_force_llm,
             transcript_mode=args.transcript,
+            context_refresh_mode="full" if not args.no_force_llm else getattr(args, "context_refresh_mode", "full"),
+            storage_db_path=getattr(args, "db_path", None),
+            rediscover_chats=getattr(args, "rediscover_chats", False),
+            analysis_signal=getattr(args, "analysis_signal", False),
         )
 
     print("=== РОП-помощник: сбор контекста -> звонки -> транскрибация -> анализ ===")
@@ -277,6 +291,12 @@ def pipeline_command(options: WorkflowOptions) -> list[str]:
         command.append("--skip-audio-download")
     if options.redownload_audio:
         command.append("--redownload-audio")
+    if options.entity_type == "deal":
+        command.extend(["--context-refresh-mode", "full" if options.force_llm else options.context_refresh_mode])
+        if options.storage_db_path:
+            command.extend(["--db-path", options.storage_db_path])
+        if options.rediscover_chats:
+            command.append("--rediscover-chats")
     return command
 
 
@@ -777,6 +797,8 @@ def analyze_command(options: WorkflowOptions, entity_id: str) -> list[str]:
     ]
     if options.force_llm:
         command.append("--force-llm")
+    if options.storage_db_path:
+        command.extend(["--db-path", options.storage_db_path])
     return command
 
 
@@ -864,9 +886,39 @@ def main() -> None:
     configure_console()
     args = parse_args()
     options = options_from_args(args)
+    from bitrix.context_sync import local_sync_lock
+    inherited_locks = set(os.getenv("ROP_DEAL_WORKSPACE_LOCKED_IDS", "").split(","))
+    with ExitStack() as locks:
+        if options.entity_type == "deal":
+            for entity_id in sorted(options.entity_ids):
+                if entity_id not in inherited_locks:
+                    locks.enter_context(local_sync_lock(workspace_dir("deal", entity_id) / ".context-sync.lock"))
+        run_workflow(options)
+
+
+def run_workflow(options: WorkflowOptions) -> None:
+    if options.entity_type == "deal" and options.context_refresh_mode == "local" and not options.force_llm:
+        raise_for_analysis_failures(run_analysis(options))
+        return
+    audio_only = options.entity_type == "deal" and options.context_refresh_mode == "audio" and not options.force_llm
+    if audio_only:
+        from api.crm_change_gate import transcript_signature
+        signatures = {entity_id: transcript_signature(entity_id) for entity_id in options.entity_ids}
     run_command(pipeline_command(options), "Сбор истории, аудио и диагностики")
     failures: list[AnalysisFailure] = []
     if options.entity_type != "lead":
+        if audio_only:
+            if options.transcribe_audio:
+                transcribe_missing_audio(options)
+            for entity_id in options.entity_ids:
+                if options.analysis_signal or signatures[entity_id] != transcript_signature(entity_id):
+                    if options.analyze:
+                        failures.extend(run_analysis(options_for_entity(options, "deal", [entity_id])))
+                else:
+                    emit_progress("deal", entity_id, "audio_idle", status="done", decision_status="skip",
+                                  detail="Аудио проверено, нового транскрипта нет; контекст и рекомендация сохранены")
+            raise_for_analysis_failures(failures)
+            return
         failures.extend(run_post_pipeline_steps(options))
         print_final_status(options)
         raise_for_analysis_failures(failures)
@@ -883,8 +935,14 @@ def main() -> None:
         print_converted_switch(converted)
         deal_ids = unique_ordered([str(deal.get("id")) for deal in converted.values() if deal.get("id")])
         deal_options = options_for_converted_deals(options, deal_ids)
-        run_command(pipeline_command(deal_options), "Сбор истории, аудио и диагностики по сделкам сконвертированных лидов")
-        failures.extend(run_post_pipeline_steps(deal_options))
+        from bitrix.context_sync import local_sync_lock
+        inherited_locks = set(os.getenv("ROP_DEAL_WORKSPACE_LOCKED_IDS", "").split(","))
+        with ExitStack() as locks:
+            for deal_id in sorted(deal_ids):
+                if deal_id not in inherited_locks:
+                    locks.enter_context(local_sync_lock(workspace_dir("deal", deal_id) / ".context-sync.lock"))
+            run_command(pipeline_command(deal_options), "Сбор истории, аудио и диагностики по сделкам сконвертированных лидов")
+            failures.extend(run_post_pipeline_steps(deal_options))
 
     print_final_status(options_for_entity(options, "lead", remaining_lead_ids), show_report=True) if remaining_lead_ids else None
     if converted:

@@ -9,6 +9,7 @@ timeline comments. It does not write anything to Bitrix.
 from __future__ import annotations
 
 import hashlib
+import copy
 import html
 import re
 from datetime import datetime, timedelta
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from bitrix.client import BitrixReadOnlyClient, as_list, load_json
+from bitrix.context_sync import OVERLAP, source_since, timeline_delta
 from bitrix.internal_im_chat import append_internal_chat_events, fetch_internal_im_chats, internal_chat_events
 from setup import BASE_DIR, MSK_TZ
 
@@ -25,7 +27,7 @@ DEAL_OWNER_TYPE_ID = 2
 CONTACT_OWNER_TYPE_ID = 3
 
 DEFAULT_HISTORY_DAYS = 365
-INCREMENTAL_OVERLAP = timedelta(minutes=5)
+INCREMENTAL_OVERLAP = OVERLAP
 
 WAZZUP_CHANNEL_MARKERS = {
     "whatsapp": ("/whatsapp.", "whatsapp"),
@@ -456,15 +458,10 @@ def fetch_timeline_comments(
     entity_type: str,
     owner_type_id: int,
     created_after: str | None = None,
+    known: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     del owner_type_id
-    timeline_filter: dict[str, Any] = {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id}
-    del created_after
-    payload = {
-        "order": {"CREATED": "ASC", "ID": "ASC"},
-        "filter": timeline_filter,
-    }
-    return [client.safe_list_all("crm.timeline.comment.list", payload)]
+    return [timeline_delta(client, entity_type, entity_id, since=created_after, known=known)]
 
 
 def contact_ids_from_deal(client: BitrixReadOnlyClient, deal_id: str, deal: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
@@ -845,6 +842,7 @@ def fetch_entity_history(
     previous_history: dict[str, Any] | None = None,
     updated_after: str | None = None,
 ) -> dict[str, Any]:
+    started_at = datetime.now(MSK_TZ).isoformat()
     owner_id = owner_type_id(entity_type)
     incremental = bool(previous_history and updated_after)
     activities_response = fetch_activities_for_owner(
@@ -853,25 +851,22 @@ def fetch_entity_history(
         entity_id,
         updated_after=updated_after if incremental else None,
     )
-    previous_activities = (
-        result_items((previous_history or {}).get("activities"))
-        if incremental
-        else []
-    )
+    previous_activities = result_items((previous_history or {}).get("activities"))
     current_activities = result_items(activities_response)
     merged_activities = merge_items_by_id(previous_activities, current_activities)
-    activities = [
+    activities = merge_items_by_id(previous_activities, [
         item
         for item in merged_activities
         if in_period_by_any_date(item, period, ("START_TIME", "DEADLINE", "CREATED", "LAST_UPDATED"))
-    ]
+    ])
     activity_details = fetch_activity_details(client, activities)
     timeline_response = fetch_timeline_comments(
         client,
         entity_id,
         entity_type=entity_type,
         owner_type_id=owner_id,
-        created_after=updated_after if incremental else None,
+        created_after=source_since(((previous_history or {}).get("timeline_comments") or [{}])[0]) if incremental else None,
+        known=[row for response in (previous_history or {}).get("timeline_comments", []) for row in response.get("items", [])],
     )
     current_timeline = [item for attempt in timeline_response for item in result_items(attempt)]
     previous_timeline = (
@@ -880,17 +875,17 @@ def fetch_entity_history(
             for attempt in (previous_history or {}).get("timeline_comments") or []
             for item in result_items(attempt)
         ]
-        if incremental
-        else []
     )
     merged_timeline = merge_items_by_id(previous_timeline, current_timeline)
-    timeline_items = [
+    timeline_items = merge_items_by_id(previous_timeline, [
         item
         for item in merged_timeline
         if in_period_by_any_date(item, period, ("CREATED", "DATE_CREATE"))
-    ]
+    ])
     base_timeline_response = dict(timeline_response[0]) if timeline_response else {"ok": False, "items": []}
     base_timeline_response["items"] = timeline_items
+    old_timeline = ((previous_history or {}).get("timeline_comments") or [{}])[0]
+    base_timeline_response["last_success_at"] = started_at if base_timeline_response.get("ok") else old_timeline.get("last_success_at")
     filtered_timeline = [base_timeline_response]
     activities_container = dict(activities_response)
     activities_container["items"] = activities
@@ -1176,6 +1171,8 @@ def build_customer_history_bundle(
     root_contact_items_override: dict[str, Any] | None = None,
     preloaded_contacts: dict[str, Any] | None = None,
     preloaded_companies: dict[str, Any] | None = None,
+    force_full: bool = False,
+    rediscover_chats: bool = False,
 ) -> dict[str, Any]:
     root_type = root_type.lower().strip()
     if root_type not in {"lead", "deal"}:
@@ -1353,7 +1350,7 @@ def build_customer_history_bundle(
 
     activities_by_entity: dict[str, Any] = {}
     previous_activities = (previous_bundle or {}).get("activities_by_entity") or {}
-    updated_after = incremental_since(previous_bundle)
+    updated_after = None if force_full else incremental_since(previous_bundle)
     if root_item:
         root_key = f"{root_type}:{root_id}"
         activities_by_entity[root_key] = root_history_override or fetch_entity_history(
@@ -1364,6 +1361,15 @@ def build_customer_history_bundle(
             previous_history=previous_activities.get(root_key),
             updated_after=updated_after,
         )
+        if root_history_override and previous_activities.get(root_key):
+            history = copy.deepcopy(root_history_override)
+            old = previous_activities[root_key]
+            history["activities"]["items"] = merge_items_by_id(old.get("activities", {}).get("items", []), history.get("activities", {}).get("items", []))
+            history["activity_details"] = activity_details_from_list(history["activities"]["items"])
+            old_comments = [row for response in old.get("timeline_comments", []) for row in response.get("items", [])]
+            if history.get("timeline_comments"):
+                history["timeline_comments"][0]["items"] = merge_items_by_id(old_comments, history["timeline_comments"][0].get("items", []))
+            activities_by_entity[root_key] = history
     for lead in related_leads:
         lead_id = str(lead.get("id") or "")
         entity_key = f"lead:{lead_id}"
@@ -1387,9 +1393,15 @@ def build_customer_history_bundle(
                 client, "deal", deal_id, period,
                 previous_history=previous_activities.get(entity_key), updated_after=updated_after,
             )
+    # A missing relationship or failed discovery is not evidence that previously
+    # collected history never existed. Keep it locally with an explicit marker.
+    for entity_key, history in previous_activities.items():
+        if entity_key not in activities_by_entity:
+            activities_by_entity[entity_key] = {**copy.deepcopy(history), "historical_link": True}
     activity_sync_ok = bool(activities_by_entity) and all(
         bool((history.get("activities") or {}).get("ok"))
         for history in activities_by_entity.values()
+        if not history.get("historical_link")
     )
     activity_cursor = sync_started_at if activity_sync_ok else activity_cursor_value(previous_bundle)
 
@@ -1408,7 +1420,7 @@ def build_customer_history_bundle(
             "updated_after": updated_after,
             "activity_cursor": activity_cursor,
             "activity_sync_ok": activity_sync_ok,
-            "automatic_full_reconciliation": False,
+            "automatic_full_reconciliation": bool(force_full and previous_bundle),
         },
         "include_internal_context": bool(include_internal_context),
         "lead": root_response if root_type == "lead" else None,
@@ -1468,6 +1480,9 @@ def build_customer_history_bundle(
                 entity_type=target["entity_type"],
                 entity_id=target["entity_id"],
                 title=target.get("title") or "",
+                previous_bundle=((previous_bundle or {}).get("internal_im_chats_by_entity") or {}).get(entity_key),
+                force_discovery=force_full or rediscover_chats,
+                force_full=force_full,
             )
             internal_chats_by_entity[entity_key] = chat_bundle
             internal_chat_rows.extend(
@@ -1478,6 +1493,14 @@ def build_customer_history_bundle(
                 )
             )
 
+    if include_internal_context:
+        for entity_key, previous_chats in ((previous_bundle or {}).get("internal_im_chats_by_entity") or {}).items():
+            if entity_key not in internal_chats_by_entity:
+                historical = {**copy.deepcopy(previous_chats), "historical_link": True}
+                internal_chats_by_entity[entity_key] = historical
+                entity_type, entity_id = entity_key.split(":", 1)
+                internal_chat_rows.extend(internal_chat_events(historical,
+                    source_entity_type=entity_type, source_entity_id=entity_id))
     bundle["internal_im_chats_by_entity"] = internal_chats_by_entity
     append_internal_chat_events(bundle, internal_chat_rows)
     bundle["normalized_communications"] = build_normalized_communications(bundle)

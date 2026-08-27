@@ -8,9 +8,13 @@ touchpoints. The resulting rows are meant for `internal_context`.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from bitrix.client import BitrixReadOnlyClient
+from bitrix.context_sync import dialog_delta, due, retain_failed_sources
+from bitrix.usage_trace import bitrix_trace_context
+from setup import MSK_TZ
 
 
 CRM_ENTITY_TYPE = "CRM"
@@ -183,17 +187,32 @@ def fetch_internal_im_chats(
     title: str,
     extra_search_terms: list[str] | None = None,
     message_limit: int = 100,
+    previous_bundle: dict[str, Any] | None = None,
+    force_discovery: bool = False,
+    force_full: bool = False,
 ) -> dict[str, Any]:
     entity_type = normalize_entity_type(entity_type)
     expected_entity_id = crm_entity_id(entity_type, entity_id)
     search_responses: list[dict[str, Any]] = []
 
-    for term in search_terms(entity_type, entity_id, title, extra_search_terms):
-        search_responses.append(client.safe_call("im.search.chat.list", {"FIND": term}))
+    now = datetime.now(MSK_TZ)
+    previous = previous_bundle or {}
+    discovery_at = previous.get("discovery_success_at")
+    rediscover = force_discovery or due(discovery_at, now)
+    if rediscover:
+        with bitrix_trace_context(component="chat_discovery"):
+            for term in search_terms(entity_type, entity_id, title, extra_search_terms):
+                search_responses.append(client.safe_call("im.search.chat.list", {"FIND": term}))
+        if search_responses and all(row.get("ok") for row in search_responses):
+            discovery_at = now.isoformat()
+    else:
+        search_responses = previous.get("search_responses") or []
 
     chats: list[dict[str, Any]] = []
     seen_chat_ids: set[str] = set()
-    for response in search_responses:
+    previous_chats = {str(chat.get("chat_id")): chat for chat in previous.get("chats", [])}
+    known_response = {"ok": True, "response": {"result": [chat["chat"] for chat in previous_chats.values() if chat.get("chat")]}}
+    for response in [*search_responses, known_response]:
         for chat in result_items(response, keys=("items", "chats")):
             chat_entity_id = str(chat.get("entity_id") or chat.get("ENTITY_ID") or "")
             chat_id = str(chat.get("id") or chat.get("ID") or "").strip()
@@ -201,12 +220,12 @@ def fetch_internal_im_chats(
                 continue
             seen_chat_ids.add(chat_id)
             dialog_id = f"chat{chat_id}"
-            messages_response = client.safe_call(
-                "im.dialog.messages.get",
-                {"DIALOG_ID": dialog_id, "LIMIT": message_limit},
-            )
+            messages_response = dialog_delta(client, dialog_id, (previous_chats.get(chat_id) or {}).get("messages_response"), full=force_full)
             users_response = client.safe_call("im.dialog.users.list", {"DIALOG_ID": dialog_id})
             chat_response = client.safe_call("im.chat.get", {"CHAT_ID": chat_id})
+            old_chat = previous_chats.get(chat_id) or {}
+            users_response = retain_failed_sources(users_response, old_chat.get("users_response"))
+            chat_response = retain_failed_sources(chat_response, old_chat.get("chat_response"))
             chats.append(
                 {
                     "chat_id": chat_id,
@@ -226,6 +245,7 @@ def fetch_internal_im_chats(
         "entity_id": str(entity_id),
         "crm_entity_id": expected_entity_id,
         "search_responses": search_responses,
+        "discovery_success_at": discovery_at,
         "chats": chats,
     }
 

@@ -194,6 +194,12 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     with connect(db_path) as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS crm_context_sync_state (
+                state_key TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS entity_state (
                 entity_type TEXT NOT NULL,
                 entity_id TEXT NOT NULL,
@@ -1943,6 +1949,50 @@ def _row_to_state(row: sqlite3.Row | None) -> dict[str, Any] | None:
     value["last_analysis"] = loads_json(value.pop("last_analysis_json"), None)
     value["last_recommendation"] = loads_json(value.pop("last_recommendation_json"), None)
     return value
+
+
+def get_crm_sync_state(db_path: str | Path, key: str) -> dict[str, Any] | None:
+    """Local CRM data, never telemetry. Revision is a compare-and-swap token."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM crm_context_sync_state WHERE state_key = ?", (key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"revision": row["revision"], "payload": loads_json(row["payload_json"], {}),
+            "updated_at": row["updated_at"]}
+
+
+def put_crm_sync_state(db_path: str | Path, key: str, payload: dict[str, Any], *, expected_revision: int) -> int:
+    """Commit data and its cursors together; stale writers must retry from disk."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if expected_revision == 0:
+            result = conn.execute(
+                "INSERT OR IGNORE INTO crm_context_sync_state VALUES (?, 1, ?, ?)",
+                (key, dumps_json(payload), utcish_now()),
+            )
+        else:
+            result = conn.execute(
+                "UPDATE crm_context_sync_state SET revision = revision + 1, payload_json = ?, updated_at = ? "
+                "WHERE state_key = ? AND revision = ?",
+                (dumps_json(payload), utcish_now(), key, expected_revision),
+            )
+        if result.rowcount != 1:
+            raise RuntimeError("CRM sync revision conflict; newer local state retained")
+    return expected_revision + 1
+
+
+def crm_trajectory_signal_versions(db_path: str | Path) -> dict[str, int]:
+    """Use ingestion IDs, not occurrence times: late historical evidence is new too."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, MAX(id) AS version FROM manager_trajectory_events "
+            "WHERE source LIKE 'bitrix%' GROUP BY entity_type, entity_id",
+        ).fetchall()
+    return {f"{row['entity_type']}:{row['entity_id']}": int(row["version"]) for row in rows}
 
 
 def get_entity_state(db_path: str | Path, entity_type: str, entity_id: str) -> dict[str, Any] | None:

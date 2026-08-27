@@ -113,9 +113,9 @@ class CrmIncrementalSyncTests(unittest.TestCase):
         self.assertNotIn(">LAST_UPDATED", activity_payload["filter"])
         self.assertEqual(history["sync_mode"], "full")
 
-    def test_snapshot_overlap_is_five_minutes(self) -> None:
+    def test_snapshot_overlap_is_fifteen_minutes(self) -> None:
         since = incremental_since({"generated_at": "2026-08-08T10:00:00+03:00"})
-        self.assertEqual(since, "2026-08-08T09:55:00+03:00")
+        self.assertEqual(since, "2026-08-08T09:45:00+03:00")
 
     def test_failed_snapshot_cursor_forces_full_retry_instead_of_advancing(self) -> None:
         since = incremental_since(

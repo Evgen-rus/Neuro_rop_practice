@@ -60,6 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deal-ids", nargs="+", default=DEFAULT_DEAL_IDS, help="Deal IDs to process")
     parser.add_argument("--raw-dir", default=str(DEFAULT_RAW_DIR), help="Raw JSON dir")
     parser.add_argument("--audio-dir", default=str(DEFAULT_AUDIO_DIR), help="Local audio output dir")
+    parser.add_argument("--recheck-only", action="store_true")
+    parser.add_argument("--db-path")
     parser.add_argument(
         "--redownload",
         action="store_true",
@@ -591,7 +593,7 @@ def _refresh_existing_downloads(
     activity: dict[str, Any],
     existing_downloads: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], bool]:
-    if not should_recheck_recording(activity):
+    if not should_recheck_recording(activity) and all(item.get("recording_ready_for_transcription", True) for item in existing_downloads):
         return mark_existing_downloads(existing_downloads), False
 
     with bitrix_trace_context(component="audio_readiness"):
@@ -655,6 +657,35 @@ def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | No
     if current.tzinfo is None:
         current = current.replace(tzinfo=MSK_TZ)
     return current.astimezone(MSK_TZ) - started_at.astimezone(MSK_TZ) > AUDIO_FILE_DISCOVERY_WINDOW
+
+
+def refresh_missing_call_files(client: BitrixReadOnlyClient, bundle: dict[str, Any]) -> dict[str, Any]:
+    """Independent FILES discovery; a provider can attach FILES without DATE_MODIFY.
+
+    No history cursor is advanced by these targeted activity.get reads.
+    """
+    import copy
+    result = copy.deepcopy(bundle)
+    refreshed: dict[str, dict] = {}
+    for activity in call_activities(bundle):
+        if activity.get("FILES") or audio_file_discovery_expired(activity):
+            continue
+        activity_id = str(activity.get("ID"))
+        with bitrix_trace_context(component="audio_discovery"):
+            response = client.safe_call("crm.activity.get", {"id": activity_id})
+        if response.get("ok") and isinstance(result_item(response), dict) and result_item(response).get("ID"):
+            refreshed[activity_id] = result_item(response)
+        else:
+            # The missing-file queue remains pending. Never replace with an empty activity.
+            result.setdefault("sync", {})["audio_discovery_retry_required"] = True
+    for container in [result, result.get("source_lead") or {}]:
+        for activity in (container.get("activities") or {}).get("items", []):
+            activity_id = str(activity.get("ID"))
+            if activity_id in refreshed:
+                activity.update(refreshed[activity_id])
+                container.setdefault("activity_details", {})[activity_id] = {
+                    "ok": True, "response": {"result": dict(activity)}, "method": "crm.activity.get"}
+    return result
 
 
 def process_call(
@@ -963,6 +994,41 @@ def main() -> None:
             logger.warning("Raw bundle not found: %s", raw_path)
             continue
 
+        from bitrix.context_sync import atomic_json
+        from storage.rop_db import DEFAULT_DB_PATH, get_crm_sync_state, put_crm_sync_state
+        db_path = args.db_path or DEFAULT_DB_PATH
+        state = get_crm_sync_state(db_path, f"deal_context:{deal_id}")
+        if args.recheck_only and not state:
+            raise RuntimeError("Audio recheck requires saved context")
+        before = load_json(raw_path)
+        refreshed = refresh_missing_call_files(client, before)
+        if refreshed != before:
+            if state and state["payload"]["context"] != before:
+                raise RuntimeError("Newer CRM snapshot exists; retry audio from current context")
+            if state:
+                from bitrix.customer_history import activity_details_from_list, build_history_sections, build_normalized_communications
+                from bitrix.internal_im_chat import append_internal_chat_events, internal_chat_events
+                payload = state["payload"]
+                payload["context"] = refreshed
+                customer = payload.get("customer_history")
+                if customer:
+                    fresh_calls = {str(row.get("ID")): row for row in call_activities(refreshed)}
+                    for history in customer.get("activities_by_entity", {}).values():
+                        for activity in history.get("activities", {}).get("items", []):
+                            update = fresh_calls.get(str(activity.get("ID")))
+                            if update:
+                                activity.update({key: value for key, value in update.items() if not key.startswith("_")})
+                        history["activity_details"] = activity_details_from_list(history.get("activities", {}).get("items", []))
+                    customer.update(build_history_sections(customer))
+                    for key, chats in customer.get("internal_im_chats_by_entity", {}).items():
+                        kind, entity_id = key.split(":", 1)
+                        append_internal_chat_events(customer, internal_chat_events(chats, source_entity_type=kind, source_entity_id=entity_id))
+                    customer["normalized_communications"] = build_normalized_communications(customer)
+                put_crm_sync_state(db_path, f"deal_context:{deal_id}", payload, expected_revision=state["revision"])
+                if customer:
+                    atomic_json(raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json"), customer)
+            atomic_json(raw_path, refreshed)
+
         manifest_path = audio_dir / f"deal_{deal_id}_call_audio_manifest.json"
         existing_manifest = load_existing_manifest(manifest_path)
         manifest = enrich_manifest_calls(
@@ -976,7 +1042,8 @@ def main() -> None:
                 max_voice_lookback_days=args.max_voice_lookback_days,
             )
         )
-        save_json(manifest_path, manifest)
+        from bitrix.context_sync import atomic_json
+        atomic_json(manifest_path, manifest)
         manifest["manifest_path"] = str(manifest_path)
         manifests.append(manifest)
         logger.info("Saved call audio manifest: %s", manifest_path)

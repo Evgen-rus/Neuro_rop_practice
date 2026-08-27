@@ -55,6 +55,7 @@ SOFT_CHANGE_TYPES = {
     "closed_flag_changed",
     "file_refs_changed",
     "transcript_changed_non_meaningful",
+    "operational_context_changed",
 }
 
 LEAD_SOFT_CHANGE_TYPES = SOFT_CHANGE_TYPES | {
@@ -282,6 +283,7 @@ def soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
         "assigned_manager_changed": "assigned_manager_changed_without_llm",
         "activity_updated": "activity_updated_without_llm",
         "comment_updated": "comment_updated_without_llm",
+        "operational_context_changed": "operational_context_changed_without_llm",
         "file_refs_changed": "non_commercial_file_refs_changed_without_llm",
         "transcript_changed_non_meaningful": "non_meaningful_transcript_without_llm",
     }
@@ -505,6 +507,7 @@ def trigger_label(trigger: dict[str, Any]) -> str:
         "assigned_manager_changed_without_llm": "Изменился ответственный",
         "activity_updated_without_llm": "Обновлена активность без hard-признаков",
         "comment_updated_without_llm": "Обновлен комментарий",
+        "operational_context_changed_without_llm": "Обновлён внутренний контекст, задачи или история CRM",
         "non_commercial_file_refs_changed_without_llm": "Изменились файлы/ссылки без признаков КП/счета/договора",
         "soft_change_without_llm": "Soft-изменение без запуска LLM",
         "non_meaningful_transcript_without_llm": "Новая расшифровка не содержит содержательного изменения",

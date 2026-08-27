@@ -30,6 +30,16 @@ def decision(diff: dict, current: dict):
 
 
 class DealChangeDecisionTests(unittest.TestCase):
+    def test_internal_context_change_is_mini_not_client_evidence(self):
+        from openai_api.change_detection.snapshot import compare_snapshots
+        previous = {**snapshot(), "operational_context_fingerprint": "old"}
+        current = {**snapshot(), "operational_context_fingerprint": "new"}
+        diff = compare_snapshots(previous, current)
+        self.assertIn("operational_context_changed", diff["changes"])
+        result = decision(diff, current)
+        self.assertEqual(result.status, MINI_RECOMMENDATION_NO_LLM)
+        self.assertIn("operational_context_changed_without_llm", [row["trigger_type"] for row in result.triggers])
+
     def test_task_and_stage_change_do_not_start_paid_deal_analysis(self):
         current = snapshot()
         task = decision({"changes": ["new_task"], "details": {"new_activity_ids": ["1"]}}, current)

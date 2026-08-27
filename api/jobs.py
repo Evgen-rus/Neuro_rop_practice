@@ -72,6 +72,8 @@ class AnalyzeOptions:
     automatic_analysis_run_id: int | None = None
     storage_db_path: str | None = None
     extra_env: dict[str, str] | None = None
+    context_refresh_mode: str = "full"  # internal automatic routing; manual stays full
+    sync_plan: dict[str, Any] | None = None
 
 
 @dataclass
@@ -735,6 +737,14 @@ def build_cli_command(options: AnalyzeOptions, entity_type: str, ids: list[str])
     if not options.force_llm:
         command.append("--no-force-llm")
     command.extend(["--transcript", options.transcript_mode])
+    if entity_type == "deal":
+        command.extend(["--context-refresh-mode", "full" if options.force_llm else options.context_refresh_mode])
+        if options.storage_db_path:
+            command.extend(["--db-path", options.storage_db_path])
+        if options.sync_plan and set(options.sync_plan.get("reasons") or []) & {"activity", "timeline", "chat", "trajectory", "deal_fields"}:
+            command.append("--rediscover-chats")
+        if options.sync_plan and set(options.sync_plan.get("reasons") or []) & {"new_transcript", "time_threshold"}:
+            command.append("--analysis-signal")
     return command
 
 
@@ -1203,6 +1213,9 @@ def _run_job(job_id: str) -> None:
 
     groups: dict[str, list[str]] = {"lead": [], "deal": []}
     collected_groups: set[str] = set()
+    from contextlib import ExitStack
+    from bitrix.context_sync import local_sync_lock
+    workspace_locks = ExitStack()
     try:
         # Group IDs by resolved type for auto mode.
         with _LOCK:
@@ -1210,6 +1223,11 @@ def _run_job(job_id: str) -> None:
         for entity_id in options.ids:
             resolved = resolve_entity_type(options.entity_type, entity_id)
             groups[resolved].append(entity_id)
+        for entity_id in sorted(groups["deal"]):
+            workspace_locks.enter_context(local_sync_lock(
+                PROJECT_ROOT / "reports" / "rop_assistant" / "deals" / f"deal_{entity_id}" / ".context-sync.lock"))
+        command_env = dict(options.extra_env or {})
+        command_env["ROP_DEAL_WORKSPACE_LOCKED_IDS"] = ",".join(groups["deal"])
         with _LOCK:
             _set_stage(
                 _JOBS[job_id],
@@ -1232,15 +1250,26 @@ def _run_job(job_id: str) -> None:
                     f"ids={', '.join(ids)}",
                 )
             command = build_cli_command(options, entity_type, ids)
-            run_command(command, on_line=log_line, extra_env=options.extra_env)
+            run_command(command, on_line=log_line, extra_env=command_env)
             with _LOCK:
                 _set_stage(_JOBS[job_id], stage_key, f"Pipeline {entity_type}", "done")
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "running")
-            _collect_group_results(_JOBS[job_id], entity_type, ids)
+            audio_unchanged = entity_type == "deal" and all(
+                (_JOBS[job_id].entity_progress.get(progress_key(entity_type, entity_id)) or {}).get("stage") == "audio_idle"
+                for entity_id in ids)
+            if not audio_unchanged:
+                _collect_group_results(_JOBS[job_id], entity_type, ids)
+            elif automatic_run_id is not None:
+                update_automatic_analysis_item(Path(str(options.storage_db_path or DEFAULT_DB_PATH)), automatic_run_id,
+                    entity_type="deal", entity_id=str(ids[0]), decision_status="skip", publication_status="reused")
             with _LOCK:
                 collected_groups.add(entity_type)
                 _set_stage(_JOBS[job_id], f"collect_{entity_type}", f"Сбор результатов ({entity_type})", "done")
 
+        if options.sync_plan:
+            from api.crm_change_gate import acknowledge_refresh
+            for entity_id in groups["deal"]:
+                acknowledge_refresh(Path(str(options.storage_db_path or DEFAULT_DB_PATH)), entity_id, options.sync_plan)
         if automatic_run_id is not None:
             update_automatic_analysis_item(
                 Path(str(options.storage_db_path or DEFAULT_DB_PATH)),
@@ -1338,6 +1367,7 @@ def _run_job(job_id: str) -> None:
             job.status = "error"
             _touch(job)
     finally:
+        workspace_locks.close()
         if automatic_slot_acquired:
             _release_automatic_worker_slot()
 
@@ -1349,6 +1379,8 @@ def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
         raise ValueError("entity_type должен быть lead|deal|auto")
     if options.transcript_mode not in {"all", "latest", "none"}:
         raise ValueError("transcript_mode должен быть all|latest|none")
+    if options.context_refresh_mode not in {"full", "incremental", "audio", "local"}:
+        raise ValueError("Invalid context refresh mode")
 
     job_id = uuid.uuid4().hex[:12]
     requested_ids = {str(item) for item in options.ids if str(item).strip()}

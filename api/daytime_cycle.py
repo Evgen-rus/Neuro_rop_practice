@@ -145,7 +145,7 @@ def _write_spend_diary(
     started: datetime,
     analysis_payload: dict[str, Any] | None,
 ) -> None:
-    if str((analysis_payload or {}).get("status") or "") == "running":
+    if str((analysis_payload or {}).get("status") or "") == "running" or (analysis_payload or {}).get("automatic_analysis_run_id"):
         return
     try:
         from openai_api.spend_diary import load_batch_events, write_cycle_block
@@ -243,6 +243,7 @@ def _analyze_work_pool(
     deal_ids: list[str],
     started_at: str,
     trigger: str = "scheduled",
+    sources_ok: bool = True,
 ) -> dict[str, Any]:
     from api.jobs import AnalyzeOptions, busy_analyze_entity_ids
 
@@ -282,6 +283,13 @@ def _analyze_work_pool(
             "spend_batch_path": None,
         }
 
+    from api.crm_change_gate import plan_automatic_refresh
+    plans = plan_automatic_refresh(db_path=db_path, deal_ids=ready_ids,
+        now=datetime.fromisoformat(started_at), sources_ok=sources_ok)
+    idle_ids = [entity_id for entity_id in ready_ids if plans[entity_id]["mode"] == "skip"]
+    heavy_ids = [entity_id for entity_id in ready_ids if plans[entity_id]["mode"] in {"full", "incremental"}]
+    active_ids = [entity_id for entity_id in ready_ids if entity_id not in idle_ids]
+
     from openai_api.spend_diary import new_cycle_batch_path
 
     started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
@@ -297,16 +305,23 @@ def _analyze_work_pool(
         spend_batch_path=str(batch_path),
     )
     automatic_run_id = int(automatic_run["id"])
+    for entity_id in idle_ids:
+        update_automatic_analysis_item(db_path, automatic_run_id, entity_type="deal", entity_id=entity_id,
+            stage="skipped_before_fetch", decision_status="skip", processing_status="done",
+            publication_status="reused", current_stage="skipped_before_fetch")
     job_ids = _launch_automatic_run_jobs(
         db_path=db_path,
         automatic_run_id=automatic_run_id,
-        deal_ids=ready_ids,
+        deal_ids=active_ids,
+        refresh_plans=plans,
         batch_path=str(batch_path),
         started_at=str(automatic_run.get("started_at") or started_at),
     )
-    counts = _empty_decision_counts() | {"checked": len(deal_ids), "full_ids": [], "mini_ids": []}
+    counts = _empty_decision_counts() | {"checked": len(deal_ids), "skip": len(idle_ids), "full_ids": [], "mini_ids": [],
+        "skipped_before_fetch": len(idle_ids), "heavy_context_fetch_count": len(heavy_ids),
+        "audio_only_jobs": sum(plans[entity_id]["mode"] == "audio" for entity_id in active_ids)}
     return {
-        "status": "running",
+        "status": "running" if active_ids else "done",
         "job_id": job_ids[0] if job_ids else None,
         "job_ids": job_ids,
         "busy_ids": skipped_busy,
@@ -437,11 +452,19 @@ def _launch_automatic_run_jobs(
     deal_ids: list[str],
     batch_path: str | None,
     started_at: str,
+    refresh_plans: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
     from api.jobs import AnalyzeOptions, start_analyze_job
 
     job_ids: list[str] = []
     for entity_id in deal_ids:
+        plan = (refresh_plans or {}).get(entity_id)
+        if plan is None:
+            from storage.rop_db import get_crm_sync_state, crm_trajectory_signal_versions
+            ack = get_crm_sync_state(db_path, f"deal_ack:{entity_id}")
+            plan = {"mode": "full", "reasons": ["recovery"],
+                    "ack_revision": (ack or {}).get("revision", 0),
+                    "events": {f"deal:{entity_id}": crm_trajectory_signal_versions(db_path).get(f"deal:{entity_id}", 0)}}
         try:
             job = start_analyze_job(
                 AnalyzeOptions(
@@ -454,6 +477,8 @@ def _launch_automatic_run_jobs(
                     transcript_mode="all",
                     automatic_analysis_run_id=automatic_run_id,
                     storage_db_path=str(db_path),
+                    context_refresh_mode=plan["mode"],
+                    sync_plan=plan,
                     extra_env=_job_extra_env(
                         entity_id,
                         batch_path=batch_path,
@@ -563,6 +588,7 @@ def run_daytime_cycle(
     trajectory_payload: dict[str, Any] | None = None
     analysis_payload: dict[str, Any] | None = None
     deal_ids: list[str] = []
+    cycle_file_lock = None
     logger.info("Начало дневного цикла (%s) в %s МСК.", trigger, started_at)
     try:
         scope = get_deal_control_scope(db_path)
@@ -587,6 +613,14 @@ def run_daytime_cycle(
         from api.candidates import make_client
         from api.deal_control import refresh_deal_control
         from api.manager_trajectory import collect_manager_trajectory
+        from bitrix.context_sync import local_sync_lock
+        candidate_lock = local_sync_lock(Path(db_path).with_suffix(".daytime-cycle.lock"))
+        try:
+            candidate_lock.__enter__()
+        except RuntimeError:
+            return _store_cycle_result({"status": "skipped_locked", "trigger": trigger,
+                "started_at": started_at, "finished_at": utcish_now()})
+        cycle_file_lock = candidate_lock
 
         client_factory = make_client_fn or make_client
         refresh = refresh_fn or refresh_deal_control
@@ -597,6 +631,7 @@ def run_daytime_cycle(
                 deal_ids=kwargs["deal_ids"],
                 started_at=kwargs["started_at"],
                 trigger=kwargs.get("trigger") or trigger,
+                sources_ok=not errors,
             )
         )
 
@@ -693,6 +728,8 @@ def run_daytime_cycle(
         _write_spend_diary(payload, started=started, analysis_payload=analysis_payload)
         return _store_cycle_result(payload)
     finally:
+        if cycle_file_lock is not None:
+            cycle_file_lock.__exit__(None, None, None)
         _run_lock.release()
 
 

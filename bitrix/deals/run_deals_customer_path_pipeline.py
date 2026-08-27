@@ -24,6 +24,7 @@ from setup import BASE_DIR, get_logger
 from bitrix.customer_history import DEFAULT_HISTORY_DAYS
 from bitrix.deals.download_deals_call_audio import MAX_VOICE_LOOKBACK_DAYS
 from progress_events import emit_progress
+from storage.rop_db import DEFAULT_DB_PATH
 
 
 DEFAULT_DEAL_IDS = ["18507", "18493"]
@@ -42,6 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--markdown-dir", default=str(DEFAULT_MD_DIR), help="Markdown output dir")
     parser.add_argument("--audio-dir", default=str(DEFAULT_AUDIO_DIR), help="Existing call audio manifest dir")
     parser.add_argument("--workspace-root", default=str(DEFAULT_WORKSPACE_ROOT), help="Deal workspace root")
+    parser.add_argument("--context-refresh-mode", choices=["full", "incremental", "audio"], default="full")
+    parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
+    parser.add_argument("--rediscover-chats", action="store_true")
     parser.add_argument(
         "--skip-audio-download",
         action="store_true",
@@ -91,8 +95,8 @@ def main() -> None:
 
     for deal_id in args.deal_ids:
         emit_progress("deal", deal_id, "crm_context", detail="Собирает историю CRM")
-    run_step(
-        [
+    if args.context_refresh_mode != "audio":
+        run_step([
             sys.executable,
             "bitrix/deals/1_fetch_deals_context.py",
             "--deal-ids",
@@ -103,8 +107,20 @@ def main() -> None:
             str(args.history_days),
             *(["--include-related-contact-deals"] if args.include_related_contact_deals else []),
             *(["--include-internal-context"] if args.include_internal_context else []),
-        ]
-    )
+            *(["--incremental-context"] if args.context_refresh_mode == "incremental" else []),
+            *(["--rediscover-chats"] if args.rediscover_chats else []),
+            "--db-path", str(args.db_path),
+        ])
+    else:
+        from bitrix.context_sync import atomic_json
+        from storage.rop_db import get_crm_sync_state
+        for deal_id in args.deal_ids:
+            saved = get_crm_sync_state(args.db_path, f"deal_context:{deal_id}")
+            if not saved or not saved["payload"].get("context"):
+                raise RuntimeError("Audio recheck requires a complete local CRM snapshot")
+            atomic_json(raw_dir / f"deal_{deal_id}_context.json", saved["payload"]["context"])
+            if saved["payload"].get("customer_history"):
+                atomic_json(raw_dir / f"deal_{deal_id}_customer_history_bundle.json", saved["payload"]["customer_history"])
     if args.include_related_contact_deals:
         run_step(
             [
@@ -153,6 +169,8 @@ def main() -> None:
                 "--max-voice-lookback-days",
                 str(args.max_voice_lookback_days),
                 *(["--redownload"] if args.redownload_audio else []),
+                "--db-path", str(args.db_path),
+                *(["--recheck-only"] if args.context_refresh_mode == "audio" else []),
             ]
         )
         for deal_id in args.deal_ids:

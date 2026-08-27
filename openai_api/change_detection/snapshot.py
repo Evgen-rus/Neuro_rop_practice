@@ -406,6 +406,7 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
             "date_create": source_lead_item.get("DATE_CREATE") or "",
             "date_closed": source_lead_item.get("DATE_CLOSED") or "",
         },
+        "operational_context_fingerprint": raw_bundle.get("operational_context_fingerprint"),
         "metadata": {
             "date_modify": deal.get("DATE_MODIFY") or "",
             "raw_generated_at": raw_bundle.get("generated_at") or "",
@@ -588,6 +589,9 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
     if updated_comment_ids:
         changes.append("comment_updated")
         details["updated_comment_ids"] = updated_comment_ids
+
+    if current.get("operational_context_fingerprint") and current.get("operational_context_fingerprint") != previous.get("operational_context_fingerprint"):
+        changes.append("operational_context_changed")
 
     previous_commercial = previous.get("commercial", {}) or {}
     current_commercial = current.get("commercial", {}) or {}
