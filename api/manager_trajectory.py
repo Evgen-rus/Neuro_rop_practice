@@ -18,6 +18,7 @@ from api.manager_trajectory_sources import (
     fetch_activity_facts,
 )
 from bitrix.client import BitrixReadOnlyClient
+from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -64,18 +65,19 @@ def _fetch_entities(
     custom_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     is_deal = entity_type == "deal"
-    response = client.safe_list_all(
-        "crm.deal.list" if is_deal else "crm.lead.list",
-        {
-            "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
-            "filter": {
-                "ASSIGNED_BY_ID": manager_ids,
-                ">=DATE_MODIFY": _bitrix_datetime(from_at),
-                "<DATE_MODIFY": _bitrix_datetime(to_at),
+    with bitrix_trace_context(component="manager_trajectory_core"):
+        response = client.safe_list_all(
+            "crm.deal.list" if is_deal else "crm.lead.list",
+            {
+                "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
+                "filter": {
+                    "ASSIGNED_BY_ID": manager_ids,
+                    ">=DATE_MODIFY": _bitrix_datetime(from_at),
+                    "<DATE_MODIFY": _bitrix_datetime(to_at),
+                },
+                "select": [*BUSINESS_FIELD_SELECT[entity_type], *(custom_fields or [])],
             },
-            "select": [*BUSINESS_FIELD_SELECT[entity_type], *(custom_fields or [])],
-        },
-    )
+        )
     return response
 
 

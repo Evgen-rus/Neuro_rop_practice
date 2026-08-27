@@ -10,7 +10,11 @@ from unittest.mock import patch
 import requests
 
 from bitrix.client import BitrixReadOnlyClient
-from bitrix.usage_trace import append_trace_event, build_trace_event
+from bitrix.usage_trace import (
+    append_trace_event,
+    bitrix_trace_context,
+    build_trace_event,
+)
 from reliability.retry import RetryPolicy
 
 
@@ -57,6 +61,8 @@ class BitrixUsageTraceTests(unittest.TestCase):
         self.assertEqual(event["request_shape"]["page_start"], 50)
         self.assertEqual(event["item_count"], 1)
         self.assertFalse(event["empty"])
+        self.assertEqual(event["component"], "other")
+        self.assertFalse(event["is_retry"])
         self.assertNotIn("secret-crm-id", serialized)
         self.assertNotIn("secret-webhook-token", serialized)
         self.assertNotIn("secret-result-id", serialized)
@@ -125,6 +131,51 @@ class BitrixUsageTraceTests(unittest.TestCase):
         self.assertEqual(events[0]["error_type"], "Timeout")
         self.assertIsNone(events[0]["http_status"])
         self.assertNotIn("secret.example", json.dumps(events, ensure_ascii=False))
+
+
+    def test_component_context_and_batch_metadata_omit_query_values(self) -> None:
+        event = build_trace_event(
+            run_id="from-client",
+            method="batch",
+            payload={
+                "halt": 0,
+                "cmd": {
+                    "r0": "crm.timeline.comment.list?filter[ENTITY_ID]=secret-id",
+                    "r1": "crm.stagehistory.list?filter[OWNER_ID]=42",
+                },
+            },
+            attempt=1,
+            duration_ms=10,
+            ok=True,
+            http_status=200,
+            data={"result": {"result": {"r0": []}}},
+            component="manager_trajectory_timeline",
+        )
+        serialized = json.dumps(event, ensure_ascii=False)
+        self.assertEqual(event["component"], "manager_trajectory_timeline")
+        self.assertEqual(event["batch_cmd_count"], 2)
+        self.assertEqual(
+            event["batch_cmd_methods"],
+            ["crm.stagehistory.list", "crm.timeline.comment.list"],
+        )
+        self.assertEqual(event["item_count"], 0)
+        self.assertNotIn("secret-id", serialized)
+        self.assertNotIn("OWNER_ID", serialized)
+
+        with bitrix_trace_context(run_id="override-run", component="deal_control"):
+            nested = build_trace_event(
+                run_id="from-client",
+                method="crm.deal.list",
+                payload={"filter": {"CLOSED": "N"}},
+                attempt=2,
+                duration_ms=1,
+                ok=True,
+                http_status=200,
+                data={"result": []},
+            )
+        self.assertEqual(nested["run_id"], "override-run")
+        self.assertEqual(nested["component"], "deal_control")
+        self.assertTrue(nested["is_retry"])
 
 
 if __name__ == "__main__":

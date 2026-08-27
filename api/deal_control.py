@@ -17,6 +17,7 @@ from api.candidates import (
 )
 from api.jobs import unwrap_analysis_payload
 from bitrix.customer_history import activity_type, build_normalized_communications
+from bitrix.usage_trace import bitrix_trace_context
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from progress_events import compact_decision_status
 from setup import MSK_TZ
@@ -357,7 +358,8 @@ def _manager_names(client: Any, manager_ids: set[str]) -> dict[str, str]:
     if not manager_ids:
         return {}
     try:
-        rows = client.list_all("user.get", {"filter": {"ID": sorted(manager_ids)}})
+        with bitrix_trace_context(component="deal_control"):
+            rows = client.list_all("user.get", {"filter": {"ID": sorted(manager_ids)}})
     except Exception:  # noqa: BLE001 - the dashboard still works if the CRM user list is unavailable
         return {}
     names: dict[str, str] = {}
@@ -402,14 +404,15 @@ def _fetch_pipeline_deals(client: Any, *, pipeline_ids: list[str], manager_ids: 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for pipeline_id in pipeline_ids:
-        batch = client.list_all(
-            "crm.deal.list",
-            {
-                "order": {"DATE_CREATE": "DESC", "ID": "DESC"},
-                "filter": {"CATEGORY_ID": pipeline_id, "CLOSED": "N"},
-                "select": DEAL_SELECT,
-            },
-        )
+        with bitrix_trace_context(component="deal_control"):
+            batch = client.list_all(
+                "crm.deal.list",
+                {
+                    "order": {"DATE_CREATE": "DESC", "ID": "DESC"},
+                    "filter": {"CATEGORY_ID": pipeline_id, "CLOSED": "N"},
+                    "select": DEAL_SELECT,
+                },
+            )
         for row in batch:
             deal_id = str(row.get("ID") or "")
             if not deal_id or deal_id in seen:
@@ -431,14 +434,15 @@ def _fetch_initial_deals(client: Any, deal_ids: list[str]) -> tuple[list[dict[st
     if not ids:
         return [], []
     try:
-        rows = client.list_all(
-            "crm.deal.list",
-            {
-                "order": {"ID": "ASC"},
-                "filter": {"ID": ids},
-                "select": DEAL_SELECT,
-            },
-        )
+        with bitrix_trace_context(component="deal_control"):
+            rows = client.list_all(
+                "crm.deal.list",
+                {
+                    "order": {"ID": "ASC"},
+                    "filter": {"ID": ids},
+                    "select": DEAL_SELECT,
+                },
+            )
     except Exception as error:  # noqa: BLE001 - one failure must not turn into 36 slow retries
         return [], [f"Стартовая выборка: {error}"]
     found_ids = {str(row.get("ID") or "") for row in rows}
@@ -503,23 +507,24 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     sync_deal_ids = [str(item["deal_id"]) for item in deals]
     sync_entities = [("deal", {"ID": deal_id}) for deal_id in sync_deal_ids]
     day_start = current.astimezone(MSK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    open_task_activities = fetch_candidate_activities_bulk(
-        crm,
-        sync_entities,
-        additional_filter={"PROVIDER_ID": "CRM_TASKS_TASK", "COMPLETED": "N"},
-    )
-    completed_today_activities = fetch_candidate_activities_bulk(
-        crm,
-        sync_entities,
-        additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
-    )
-    deals_by_id = {str(item["deal_id"]): item for item in deals}
-    sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
-    task_deal_ids = list(dict.fromkeys(str(task["deal_id"]) for task in sync_tasks))
-    task_activities = fetch_candidate_activities_bulk(
-        crm,
-        [("deal", {"ID": deal_id}) for deal_id in task_deal_ids],
-    )
+    with bitrix_trace_context(component="deal_control"):
+        open_task_activities = fetch_candidate_activities_bulk(
+            crm,
+            sync_entities,
+            additional_filter={"PROVIDER_ID": "CRM_TASKS_TASK", "COMPLETED": "N"},
+        )
+        completed_today_activities = fetch_candidate_activities_bulk(
+            crm,
+            sync_entities,
+            additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
+        )
+        deals_by_id = {str(item["deal_id"]): item for item in deals}
+        sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
+        task_deal_ids = list(dict.fromkeys(str(task["deal_id"]) for task in sync_tasks))
+        task_activities = fetch_candidate_activities_bulk(
+            crm,
+            [("deal", {"ID": deal_id}) for deal_id in task_deal_ids],
+        )
     for deal_item in deals:
         deal_id = str(deal_item["deal_id"])
         open_items, open_error = open_task_activities.get(("deal", deal_id), ([], "open tasks unavailable"))

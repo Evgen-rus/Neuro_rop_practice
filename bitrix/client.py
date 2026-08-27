@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 import requests
 
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, RetryPolicy, run_with_retry
-from bitrix.usage_trace import append_trace_event, build_trace_event
+from bitrix.usage_trace import append_trace_event, build_trace_event, resolve_run_id
 
 
 PAGE_SIZE = 50
@@ -34,12 +34,13 @@ class BitrixReadOnlyClient:
         timeout: int = 30,
         retry_callback: RetryCallback | None = None,
         retry_policy: RetryPolicy = DEFAULT_TRANSPORT_RETRY,
+        trace_run_id: str | None = None,
     ):
         self.webhook_url = webhook_url.rstrip("/")
         self.timeout = timeout
         self.retry_callback = retry_callback
         self.retry_policy = retry_policy
-        self.trace_run_id = uuid.uuid4().hex
+        self.trace_run_id = trace_run_id or uuid.uuid4().hex
 
     def method_url(self, method: str) -> str:
         return f"{self.webhook_url}/{method}"
@@ -80,7 +81,7 @@ class BitrixReadOnlyClient:
                 api_error = bool(data.get("error"))
                 append_trace_event(
                     build_trace_event(
-                        run_id=self.trace_run_id,
+                        run_id=resolve_run_id(self.trace_run_id),
                         method=method,
                         payload=payload,
                         attempt=attempt,

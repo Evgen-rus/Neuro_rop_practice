@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from api.candidates import DEAL_OWNER_TYPE_ID, LEAD_OWNER_TYPE_ID, parse_bitrix_dt
 from bitrix.customer_history import activity_type
+from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
 
 
@@ -316,18 +317,19 @@ def _safe_list_many(
 
 
 def fetch_activity_facts(client: Any, manager_ids: list[str], start: datetime, end: datetime) -> dict[str, Any]:
-    response = client.safe_list_all(
-        "crm.activity.list",
-        {
-            "order": {"LAST_UPDATED": "ASC", "ID": "ASC"},
-            "filter": {
-                "RESPONSIBLE_ID": manager_ids,
-                ">=LAST_UPDATED": _iso(start),
-                "<LAST_UPDATED": _iso(end),
+    with bitrix_trace_context(component="manager_trajectory_core"):
+        response = client.safe_list_all(
+            "crm.activity.list",
+            {
+                "order": {"LAST_UPDATED": "ASC", "ID": "ASC"},
+                "filter": {
+                    "RESPONSIBLE_ID": manager_ids,
+                    ">=LAST_UPDATED": _iso(start),
+                    "<LAST_UPDATED": _iso(end),
+                },
+                "select": ACTIVITY_SELECT_V3,
             },
-            "select": ACTIVITY_SELECT_V3,
-        },
-    )
+        )
     errors: dict[str, Any] = {}
     _errors_add(errors, "crm.activity.list", response)
     facts: list[dict[str, Any]] = []
@@ -403,7 +405,8 @@ def collect_timeline_comment_facts(client: Any, entity_refs: Iterable[Any], mana
         )
         for entity_type, entity_id, _ref_manager in refs
     ]
-    responses = _safe_list_many(client, requests_to_run)
+    with bitrix_trace_context(component="manager_trajectory_timeline"):
+        responses = _safe_list_many(client, requests_to_run)
     for entity_type, entity_id, _ref_manager in refs:
         key = f"{entity_type}:{entity_id}"
         response = responses[key]
@@ -461,7 +464,8 @@ def collect_task_history_facts(client: Any, activities: Iterable[dict[str, Any]]
         (f"task:{task_id}", "task.ctasklogitem.list", {"TASKID": task_id})
         for task_id in sorted(task_context)
     ]
-    responses = _safe_list_many(client, requests_to_run)
+    with bitrix_trace_context(component="manager_trajectory_task_history"):
+        responses = _safe_list_many(client, requests_to_run)
     for task_id, (entity_key, _fallback_manager) in sorted(task_context.items()):
         response = responses[f"task:{task_id}"]
         _errors_add(errors, f"task:{task_id}", response)
@@ -538,7 +542,8 @@ def collect_stage_history_facts(client: Any, entity_refs: Iterable[Any]) -> dict
         )
         for entity_type, entity_id, _manager_id in refs
     ]
-    responses = _safe_list_many(client, requests_to_run)
+    with bitrix_trace_context(component="manager_trajectory_stage_history"):
+        responses = _safe_list_many(client, requests_to_run)
     for entity_type, entity_id, manager_id in refs:
         response = responses[f"{entity_type}:{entity_id}"]
         key = f"{entity_type}:{entity_id}"
@@ -570,13 +575,14 @@ def collect_stage_history_facts(client: Any, entity_refs: Iterable[Any]) -> dict
 
 def collect_presence_snapshots(client: Any, manager_ids: Iterable[str]) -> dict[str, Any]:
     ids = sorted({str(value).strip() for value in manager_ids if str(value).strip()})
-    response = client.safe_list_all(
-        "user.get",
-        {
-            "filter": {"ID": ids},
-            "select": ["ID", "NAME", "LAST_NAME", "IS_ONLINE", "LAST_ACTIVITY_DATE", "LAST_LOGIN"],
-        },
-    )
+    with bitrix_trace_context(component="manager_presence"):
+        response = client.safe_list_all(
+            "user.get",
+            {
+                "filter": {"ID": ids},
+                "select": ["ID", "NAME", "LAST_NAME", "IS_ONLINE", "LAST_ACTIVITY_DATE", "LAST_LOGIN"],
+            },
+        )
     errors: dict[str, Any] = {}
     _errors_add(errors, "user.get", response)
     observed_at = datetime.now(MSK_TZ).isoformat(timespec="seconds")

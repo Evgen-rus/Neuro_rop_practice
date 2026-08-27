@@ -6,15 +6,34 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from setup import LOGS_DIR, MSK_TZ
 
 
 logger = logging.getLogger(__name__)
 DEFAULT_DAILY_USAGE_DIR = LOGS_DIR / "bitrix_usage_daily"
+
+KNOWN_COMPONENTS = frozenset(
+    {
+        "deal_control",
+        "manager_trajectory_core",
+        "manager_trajectory_timeline",
+        "manager_trajectory_stage_history",
+        "manager_trajectory_task_history",
+        "manager_presence",
+        "audio_discovery",
+        "audio_readiness",
+        "other",
+    }
+)
+
+_COMPONENT: ContextVar[str | None] = ContextVar("bitrix_trace_component", default=None)
+_RUN_ID: ContextVar[str | None] = ContextVar("bitrix_trace_run_id", default=None)
 
 
 def daily_usage_dir() -> Path:
@@ -32,6 +51,35 @@ def _safe_filter_key(value: Any) -> str:
     text = str(value or "").strip()
     cleaned = re.sub(r"[^A-Za-z0-9_.><=!@%]+", "_", text)[:120]
     return cleaned or "unknown"
+
+
+def normalize_component(value: Any) -> str:
+    name = _safe_name(value, default="other")
+    return name if name in KNOWN_COMPONENTS else "other"
+
+
+def resolve_component(explicit: str | None = None) -> str:
+    return normalize_component(explicit if explicit is not None else _COMPONENT.get())
+
+
+def resolve_run_id(fallback: str) -> str:
+    override = _RUN_ID.get()
+    return _safe_name(override or fallback)
+
+
+@contextmanager
+def bitrix_trace_context(*, component: str | None = None, run_id: str | None = None) -> Iterator[None]:
+    """Attach privacy-safe trace metadata without changing REST payloads."""
+    tokens: list[tuple[ContextVar[str | None], Token[str | None]]] = []
+    if component is not None:
+        tokens.append((_COMPONENT, _COMPONENT.set(normalize_component(component))))
+    if run_id is not None:
+        tokens.append((_RUN_ID, _RUN_ID.set(_safe_name(run_id))))
+    try:
+        yield
+    finally:
+        for var, token in reversed(tokens):
+            var.reset(token)
 
 
 def build_request_shape(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -61,6 +109,20 @@ def response_item_count(data: dict[str, Any] | None) -> int:
     return 0
 
 
+def batch_command_methods(payload: dict[str, Any] | None) -> list[str]:
+    """Return sanitized batch method names; never keep query values."""
+    cmd = (payload or {}).get("cmd") if isinstance(payload, dict) else None
+    if not isinstance(cmd, dict):
+        return []
+    methods: list[str] = []
+    for raw in cmd.values():
+        text = str(raw or "").strip()
+        method = text.split("?", 1)[0].strip()
+        if method:
+            methods.append(_safe_name(method))
+    return methods
+
+
 def build_trace_event(
     *,
     run_id: str,
@@ -72,26 +134,37 @@ def build_trace_event(
     http_status: int | None,
     data: dict[str, Any] | None,
     error_type: str | None = None,
+    component: str | None = None,
 ) -> dict[str, Any]:
     requested_at = datetime.now(MSK_TZ)
-    item_count = response_item_count(data)
+    safe_method = _safe_name(method)
+    is_batch = safe_method == "batch"
+    item_count = 0 if is_batch else response_item_count(data)
     api_error = (data or {}).get("error") if isinstance(data, dict) else None
-    return {
+    cmd_methods = batch_command_methods(payload) if is_batch else []
+    event = {
         "requested_at": requested_at.isoformat(timespec="milliseconds"),
-        "run_id": _safe_name(run_id),
+        "run_id": resolve_run_id(run_id),
         "pid": os.getpid(),
-        "method": _safe_name(method),
+        "component": resolve_component(component),
+        "method": safe_method,
         "request_shape": build_request_shape(payload),
         "attempt": int(attempt),
+        "is_retry": int(attempt) > 1,
         "duration_ms": round(max(0.0, float(duration_ms)), 3),
         "ok": bool(ok),
         "http_status": int(http_status) if isinstance(http_status, int) else None,
         "item_count": item_count,
-        "empty": item_count == 0,
+        "empty": item_count == 0 and not is_batch,
         "has_next_page": bool((data or {}).get("next")) if isinstance(data, dict) else False,
         "api_error_code": _safe_name(api_error, default="") or None,
         "error_type": _safe_name(error_type, default="") or None,
     }
+    if is_batch:
+        event["batch_cmd_count"] = len(cmd_methods)
+        event["batch_cmd_methods"] = sorted(set(cmd_methods))
+        event["empty"] = len(cmd_methods) == 0
+    return event
 
 
 def append_trace_event(event: dict[str, Any]) -> None:
