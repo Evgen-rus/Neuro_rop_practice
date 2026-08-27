@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from api.deal_manager_quick_help import _load_local_communications
+from api.deal_communication_content import _stored_daily_event
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT, deal_workspace_dir, entity_workspace_dir
+from storage.rop_db import DEFAULT_DB_PATH
 
 
 MAX_TRANSCRIPT_CHARS = 1_000_000
@@ -90,7 +92,9 @@ def find_call_transcript(entity_type: str, entity_id: str, activity_id: str) -> 
     return None
 
 
-def get_deal_call_transcript(deal_id: str, event_id: str) -> dict[str, Any]:
+def get_deal_call_transcript(
+    deal_id: str, event_id: str, *, db_path: str | Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
     """Return a transcript only when the call event belongs to this deal."""
 
     wanted_event_id = str(event_id or "").strip()
@@ -102,6 +106,8 @@ def get_deal_call_transcript(deal_id: str, event_id: str) -> dict[str, Any]:
         ),
         None,
     )
+    if event is None:
+        event = _stored_daily_event(db_path, str(deal_id), wanted_event_id)
     if not isinstance(event, dict) or str(event.get("channel") or "") != "call":
         raise DealCallTranscriptNotFound("Звонок не найден в истории этой сделки")
 
@@ -110,6 +116,9 @@ def get_deal_call_transcript(deal_id: str, event_id: str) -> dict[str, Any]:
         raise DealCallTranscriptNotFound("Для звонка отсутствует идентификатор CRM-активности")
 
     transcript = find_call_transcript("deal", str(deal_id), activity_id)
+    lead_id = event.get("source_lead_id") or (event.get("entity_id") if event.get("entity_type") == "lead" else None)
+    if not transcript and lead_id:
+        transcript = find_call_transcript("lead", str(lead_id), activity_id)
     if transcript:
         return {
             "deal_id": str(deal_id),

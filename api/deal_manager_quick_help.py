@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from bitrix.customer_history import build_normalized_communications
+from bitrix.deals.communication_history import include_saved_source_lead_communications
 from bitrix.workspace import DEFAULT_RAW_DIR, deal_workspace_dir
 from api.deal_manager_situation import (
     DEFAULT_DB_PATH,
@@ -375,7 +376,9 @@ def load_local_communication_bundle(deal_id: str) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(value, dict):
-            bundle = value
+            bundle = include_saved_source_lead_communications(
+                value, path.with_name(f"deal_{deal_id}_context.json"), deal_id=str(deal_id),
+            )
             break
     return bundle
 

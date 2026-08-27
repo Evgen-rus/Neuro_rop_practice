@@ -49,7 +49,8 @@ class DealCallTranscriptTests(unittest.TestCase):
         self.assertFalse(result["truncated"])
 
     def test_rejects_event_that_does_not_belong_to_deal(self) -> None:
-        with patch.object(transcript_api, "_load_local_communications", return_value=[]):
+        with patch.object(transcript_api, "_load_local_communications", return_value=[]), \
+             patch.object(transcript_api, "_stored_daily_event", return_value=None):
             with self.assertRaisesRegex(
                 transcript_api.DealCallTranscriptNotFound,
                 "истории этой сделки",
@@ -78,7 +79,33 @@ class DealCallTranscriptTests(unittest.TestCase):
             result = app_api.deal_call_transcript_get("101", "crm_activity:77")
         self.assertEqual(result, payload)
         require.assert_called_once_with("101", action="open")
-        read.assert_called_once_with("101", "crm_activity:77")
+        read.assert_called_once_with("101", "crm_activity:77", db_path=app_api.DEFAULT_DB_PATH)
+
+    def test_reads_source_lead_transcript_for_verified_daily_event(self) -> None:
+        event = {**CALL_EVENT, "entity_type": "lead", "entity_id": "202"}
+        with patch.object(transcript_api, "_load_local_communications", return_value=[]), \
+             patch.object(transcript_api, "_stored_daily_event", return_value=event) as stored, \
+             patch.object(transcript_api, "find_call_transcript", side_effect=[None, {"text": "Звонок лида", "truncated": False}]) as read:
+            result = transcript_api.get_deal_call_transcript("101", "crm_activity:77", db_path=Path("unused.sqlite"))
+        self.assertEqual(result["text"], "Звонок лида")
+        stored.assert_called_once_with(Path("unused.sqlite"), "101", "crm_activity:77")
+        self.assertEqual([call.args for call in read.call_args_list], [("deal", "101", "77"), ("lead", "202", "77")])
+
+    def test_does_not_search_other_workspaces_for_unverified_event(self) -> None:
+        with patch.object(transcript_api, "_load_local_communications", return_value=[]), \
+             patch.object(transcript_api, "_stored_daily_event", return_value=None), \
+             patch.object(transcript_api, "find_call_transcript") as read:
+            with self.assertRaises(transcript_api.DealCallTranscriptNotFound):
+                transcript_api.get_deal_call_transcript("101", "crm_activity:77")
+        read.assert_not_called()
+
+    def test_duplicate_binding_can_read_transcript_kept_in_source_lead_workspace(self) -> None:
+        event = {**CALL_EVENT, "entity_type": "deal", "entity_id": "101", "source_lead_id": "202"}
+        with patch.object(transcript_api, "_load_local_communications", return_value=[event]), \
+             patch.object(transcript_api, "find_call_transcript", side_effect=[None, {"text": "Разговор", "truncated": False}]) as read:
+            result = transcript_api.get_deal_call_transcript("101", "crm_activity:77")
+        self.assertEqual(result["text"], "Разговор")
+        self.assertEqual(read.call_args.args, ("lead", "202", "77"))
 
     def test_http_endpoint_maps_missing_transcript_to_404(self) -> None:
         with patch.object(app_api, "require_deal"), patch.object(

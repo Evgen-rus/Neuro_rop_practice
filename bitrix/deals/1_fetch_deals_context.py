@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
+from bitrix.deals.communication_history import include_source_lead_communications
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.context_sync import (
     ContextReadClient, atomic_json, dialog_delta, has_failed_source, retain_failed_sources,
@@ -674,6 +675,9 @@ def main() -> None:
                 preloaded_companies=preloaded_companies,
                 force_full=not args.incremental_context,
                 rediscover_chats=args.rediscover_chats,
+            )
+            customer_history = include_source_lead_communications(
+                customer_history, bundle, deal_id=str(deal_id),
             )
             customer_history["deal_operational_context"] = {
                 "deal": bundle.get("deal"),

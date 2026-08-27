@@ -73,15 +73,17 @@ class FakeBitrixClient:
     def safe_list_all(self, method, payload=None):
         self.calls.append((method, payload or {}))
         if method == "crm.timeline.comment.list":
-            entity_id = str(((payload or {}).get("filter") or {}).get("ENTITY_ID") or "")
-            return {"ok": True, "items": list(self.comments.get(entity_id, []))}
+            filters = (payload or {}).get("filter") or {}
+            entity_id = str(filters.get("ENTITY_ID") or "")
+            return {"ok": True, "items": list(self.comments.get((filters.get("ENTITY_TYPE"), entity_id), self.comments.get(entity_id, [])))}
         if method != "crm.activity.list":
             raise AssertionError(method)
         owner_ids = ((payload or {}).get("filter") or {}).get("OWNER_ID") or []
         owner_ids = owner_ids if isinstance(owner_ids, list) else [owner_ids]
         result = []
         for owner_id in owner_ids:
-            result.extend(self.activities.get(str(owner_id), []))
+            owner_type = str(((payload or {}).get("filter") or {}).get("OWNER_TYPE_ID"))
+            result.extend(self.activities.get((owner_type, str(owner_id)), self.activities.get(str(owner_id), [])))
         activity_filter = (payload or {}).get("filter") or {}
         if activity_filter.get("PROVIDER_ID"):
             result = [item for item in result if item.get("PROVIDER_ID") == activity_filter["PROVIDER_ID"]]
@@ -936,6 +938,101 @@ class DealControlTests(unittest.TestCase):
 
             self.assertFalse(result["deals"][0]["communications_today"]["available"])
             self.assertTrue(result["sync_errors"])
+
+    def test_sync_includes_source_lead_events_without_duplicates_or_foreign_deals(self):
+        from api.daily_control import build_daily_control_snapshot
+
+        call = {
+            "ID": "700", "OWNER_ID": "202", "TYPE_ID": "2", "DIRECTION": "2", "COMPLETED": "Y",
+            "START_TIME": "2026-07-20T00:10:00+03:00", "END_TIME": "2026-07-20T00:12:00+03:00",
+            "LAST_UPDATED": "2026-07-20T00:12:00+03:00", "FILES": [{"ID": "1"}],
+        }
+        email = {
+            "ID": "701", "OWNER_ID": "202", "TYPE_ID": "4", "DIRECTION": "1", "COMPLETED": "Y",
+            "START_TIME": "2026-07-19T21:15:00Z", "LAST_UPDATED": "2026-07-20T00:15:00+03:00",
+            "DESCRIPTION": "Ответ на КП",
+        }
+        mirror = {"ID": "702", "CREATED": "2026-07-20T10:00:00+03:00", "COMMENT": "[img]https://example/max.png[/img] Клиент:\nПолучил"}
+        client = FakeBitrixClient(
+            initial={"101": {**deal("101", manager_id="10"), "LEAD_ID": "202"}},
+            pipeline=[deal("303", manager_id="10")],
+            activities={
+                ("2", "101"): [{**call, "OWNER_ID": "101"}],
+                ("1", "202"): [call, email, {**call, "ID": "703", "START_TIME": "2026-07-19T20:59:00Z"},
+                                 {**call, "ID": "704", "COMPLETED": "N"}],
+                ("2", "303"): [],
+                ("1", "999"): [{**email, "ID": "799"}],
+            },
+            comments={
+                ("deal", "101"): [mirror],
+                ("lead", "202"): [{**mirror, "ID": "705"}, {"ID": "706", "CREATED": mirror["CREATED"], "COMMENT": "Внутренняя заметка"}],
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}), \
+                 patch("api.deal_control.load_local_communication_bundle", return_value={}), \
+                 patch("api.deal_control.find_call_transcript", return_value=None):
+                result = refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 14, tzinfo=MSK))
+            rows = {row["deal_id"]: row for row in result["deals"]}
+            summary = rows["101"]["communications_today"]
+            self.assertEqual((summary["calls"], summary["emails"], summary["messenger_messages"]), (1, 1, 1))
+            self.assertEqual(summary["completed"], 3)
+            self.assertEqual(summary["calls_connected"], 1)
+            self.assertIsNone(summary["conversation_duration_seconds"])
+            self.assertEqual(summary["duration_seconds"], 120)
+            self.assertEqual(rows["303"]["communications_today"]["completed"], 0)
+            self.assertEqual(rows["101"]["review"]["communications_today"]["completed"], 3)
+            snapshot = build_daily_control_snapshot(result)
+            self.assertEqual(next(row for row in snapshot["deals"] if row["deal_id"] == "101")["communications_today"]["completed"], 3)
+        lead_requests = [p for m, p in client.calls if m == "crm.activity.list" and str(p["filter"]["OWNER_TYPE_ID"]) == "1"]
+        self.assertEqual(len(lead_requests), 1)
+        self.assertEqual(lead_requests[0]["filter"]["OWNER_ID"], ["202"])
+        self.assertEqual(lead_requests[0]["filter"]["COMPLETED"], "Y")
+        self.assertTrue(all("LEAD_ID" in p["select"] for m, p in client.calls if m == "crm.deal.list"))
+
+    def test_sync_marks_source_lead_failure_unavailable_and_does_not_reuse_removed_link(self):
+        class SourceFailure(FakeBitrixClient):
+            fail = False
+
+            def safe_list_all(self, method, payload=None):
+                if self.fail and method == "crm.activity.list" and str(payload["filter"]["OWNER_TYPE_ID"]) == "1":
+                    return {"ok": False, "items": [], "error": "source unavailable"}
+                return super().safe_list_all(method, payload)
+
+        client = SourceFailure(
+            initial={"101": {**deal("101", manager_id="10"), "LEAD_ID": "202"}},
+            activities={("1", "202"): [{"ID": "700", "OWNER_ID": "202", "TYPE_ID": "4", "COMPLETED": "Y",
+                                          "START_TIME": "2026-07-20T09:00:00+03:00", "LAST_UPDATED": "2026-07-20T09:00:00+03:00"}]},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                def refresh():
+                    return refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 7, 20, 14, tzinfo=MSK))
+                self.assertEqual(refresh()["deals"][0]["communications_today"]["completed"], 1)
+                client.fail = True
+                failed = refresh()["deals"][0]
+                self.assertFalse(failed["communications_today"]["available"])
+                self.assertTrue(failed["review"]["communications_today"]["unavailable"])
+                client.initial["101"]["LEAD_ID"] = "0"
+                client.calls.clear()
+                cleared = refresh()["deals"][0]["communications_today"]
+                self.assertTrue(cleared["available"])
+                self.assertEqual(cleared["completed"], 0)
+                self.assertFalse(any(m == "crm.activity.list" and str(p["filter"]["OWNER_TYPE_ID"]) == "1" for m, p in client.calls))
+
+    def test_source_lead_transcript_can_classify_daily_call(self):
+        call = {"ID": "700", "OWNER_ID": "202", "TYPE_ID": "2", "COMPLETED": "Y", "DIRECTION": "2",
+                "START_TIME": "2026-07-20T10:00:00+03:00", "END_TIME": "2026-07-20T10:02:00+03:00"}
+        with patch("api.deal_control.find_call_transcript", side_effect=[None, {"text": "Разговор"}]) as lookup:
+            result = _today_communications([], datetime(2026, 7, 20, 14, tzinfo=MSK), deal_id="101", lead_id="202", lead_activities=[call])
+        self.assertEqual(result["calls_connected"], 1)
+        self.assertTrue(result["items"][0]["content_available"])
+        self.assertEqual(result["items"][0]["entity_type"], "lead")
+        self.assertEqual([call.args for call in lookup.call_args_list], [("deal", "101", "700"), ("lead", "202", "700")])
 
     def test_dashboard_reads_legacy_wrapped_bitrix_tasks_json(self):
         """DB may still hold `{tasks, scheduled_activities}` after a format rollback."""

@@ -1333,7 +1333,7 @@ def deal_manager_companion_get(deal_id: str) -> dict[str, Any]:
 def deal_call_transcript_get(deal_id: str, event_id: str) -> dict[str, Any]:
     require_deal(deal_id, action="open")
     try:
-        return get_deal_call_transcript(deal_id, event_id)
+        return get_deal_call_transcript(deal_id, event_id, db_path=DEFAULT_DB_PATH)
     except DealCallTranscriptNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 

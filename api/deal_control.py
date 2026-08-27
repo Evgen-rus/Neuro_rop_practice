@@ -25,6 +25,7 @@ from bitrix.customer_history import (
     classify_call_outcome,
 )
 from bitrix.usage_trace import bitrix_trace_context
+from bitrix.deals.communication_history import source_lead_id
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from progress_events import compact_decision_status
 from setup import MSK_TZ
@@ -62,7 +63,7 @@ from storage.rop_db import (
 
 DEAL_SELECT = [
     "ID", "TITLE", "STAGE_ID", "STAGE_SEMANTIC_ID", "CATEGORY_ID", "CLOSED", "OPPORTUNITY",
-    "CURRENCY_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY", "CLOSEDATE",
+    "CURRENCY_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY", "CLOSEDATE", "LEAD_ID",
 ]
 TOKEN_RE = re.compile(r"[\wа-яё-]{3,}", re.IGNORECASE)
 MANAGER_SITUATION_REFINED_FIELDS = frozenset({
@@ -355,6 +356,8 @@ def _fetch_deal_timeline_comments(
     client: Any,
     deal_ids: list[str],
     day_start: datetime,
+    *,
+    entity_type: str = "deal",
 ) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {deal_id: [] for deal_id in deal_ids}
     if not deal_ids:
@@ -366,7 +369,7 @@ def _fetch_deal_timeline_comments(
             {
                 "order": {"CREATED": "ASC", "ID": "ASC"},
                 "filter": {
-                    "ENTITY_TYPE": "deal",
+                    "ENTITY_TYPE": entity_type,
                     "ENTITY_ID": deal_id,
                     ">=CREATED": day_start.isoformat(timespec="seconds"),
                 },
@@ -394,26 +397,33 @@ def _today_communications(
     comments: list[dict[str, Any]] | None = None,
     client_names: set[str] | None = None,
     deal_id: str = "",
+    lead_id: str = "",
+    lead_activities: list[dict[str, Any]] | None = None,
+    lead_comments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     current = now if now.tzinfo else now.replace(tzinfo=MSK_TZ)
     current_date = current.astimezone(MSK_TZ).date()
     entity_id = str(deal_id or "")
     touchpoints: list[dict[str, Any]] = []
     activities_by_id: dict[str, dict[str, Any]] = {}
-    for activity in activities:
+    lead_activity_ids = {str(activity.get("ID") or "") for activity in lead_activities or []} if lead_id else set()
+    sources = [(activity, "deal", entity_id) for activity in activities]
+    if lead_id:
+        sources.extend((activity, "lead", lead_id) for activity in lead_activities or [])
+    for activity, entity_type, owner_id in sources:
         kind = activity_type(activity)
         activity_id = str(activity.get("ID") or "")
         if activity_id:
-            activities_by_id[activity_id] = activity
+            activities_by_id.setdefault(activity_id, activity)
         if kind not in {"call", "email", "message"} or not _is_completed(activity):
             continue
-        owner_id = str(activity.get("OWNER_ID") or entity_id)
+        owner_id = owner_id or str(activity.get("OWNER_ID") or "")
         touchpoints.append({
             "when": activity.get("START_TIME") or activity.get("CREATED") or activity.get("END_TIME"),
             "event_type": kind,
-            "entity_type": "deal",
+            "entity_type": entity_type,
             "entity_id": owner_id,
-            "entity_key": f"deal:{owner_id}",
+            "entity_key": f"{entity_type}:{owner_id}",
             "id": activity_id,
             "subject": str(activity.get("SUBJECT") or ""),
             "text": str(activity.get("DESCRIPTION") or ""),
@@ -421,18 +431,21 @@ def _today_communications(
             "raw": activity,
         })
     internal_context: list[dict[str, Any]] = []
-    for comment in comments or []:
+    comment_sources = [(comment, "deal", entity_id) for comment in comments or []]
+    if lead_id:
+        comment_sources.extend((comment, "lead", lead_id) for comment in lead_comments or [])
+    for comment, entity_type, owner_id in comment_sources:
         if not isinstance(comment, dict):
             continue
         text = str(comment.get("COMMENT") or comment.get("TEXT") or comment.get("DESCRIPTION") or "")
-        owner_id = str(comment.get("ENTITY_ID") or entity_id)
+        owner_id = owner_id or str(comment.get("ENTITY_ID") or "")
         internal_context.append({
             "when": comment.get("CREATED") or comment.get("DATE_CREATE"),
             "category": "timeline_comment",
             "event_type": "internal_comment",
-            "entity_type": "deal",
+            "entity_type": entity_type,
             "entity_id": owner_id,
-            "entity_key": f"deal:{owner_id}",
+            "entity_key": f"{entity_type}:{owner_id}",
             "id": str(comment.get("ID") or ""),
             "text": text,
         })
@@ -466,10 +479,18 @@ def _today_communications(
             "contact_class": str(event.get("contact_class") or "attempt"),
             "participant_name": _communication_contact_label(event, raw),
             "source_type": str(event.get("source_type") or ""),
+            # Server-side provenance for lazy transcript lookup; not an access grant from the UI.
+            "entity_type": event.get("entity_type"),
+            "entity_id": event.get("entity_id"),
         }
         if channel == "call":
+            if source_id in lead_activity_ids:
+                item["source_lead_id"] = lead_id
             has_transcript = bool(
-                entity_id and source_id and find_call_transcript("deal", entity_id, source_id)
+                entity_id and source_id and (
+                    find_call_transcript("deal", entity_id, source_id)
+                    or (source_id in lead_activity_ids and find_call_transcript("lead", lead_id, source_id))
+                )
             )
             classified = classify_call_outcome(raw, has_transcript=has_transcript)
             item["call_outcome"] = classified["call_outcome"]
@@ -764,6 +785,11 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
     ]
     sync_deal_ids = [str(item["deal_id"]) for item in deals]
     sync_entities = [("deal", {"ID": deal_id}) for deal_id in sync_deal_ids]
+    lead_ids_by_deal = {
+        deal_id: source_lead_id(rows_by_id.get(deal_id) or {}) for deal_id in sync_deal_ids
+    }
+    source_lead_ids = sorted({value for value in lead_ids_by_deal.values() if value})
+    communication_entities = [*sync_entities, *[("lead", {"ID": value}) for value in source_lead_ids]]
     day_start = current.astimezone(MSK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     with bitrix_trace_context(component="deal_control"):
         open_task_activities = fetch_candidate_activities_bulk(
@@ -773,10 +799,13 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         )
         completed_today_activities = fetch_candidate_activities_bulk(
             crm,
-            sync_entities,
+            communication_entities,
             additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
         )
         today_comments = _fetch_deal_timeline_comments(crm, sync_deal_ids, day_start)
+        lead_comments = _fetch_deal_timeline_comments(
+            crm, source_lead_ids, day_start, entity_type="lead",
+        )
         deals_by_id = {str(item["deal_id"]): item for item in deals}
         sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
         task_deal_ids = list(dict.fromkeys(str(task["deal_id"]) for task in sync_tasks))
@@ -791,7 +820,13 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
             ("deal", deal_id),
             ([], "completed activities unavailable"),
         )
-        activity_errors = [str(value) for value in (open_error, completed_error) if value]
+        lead_id = lead_ids_by_deal.get(deal_id, "")
+        lead_items, lead_error = completed_today_activities.get(
+            ("lead", lead_id), ([], "source lead activities unavailable"),
+        ) if lead_id else ([], None)
+        activity_errors = [str(value) for value in (open_error, completed_error, lead_error) if value]
+        if deal_id not in rows_by_id:
+            activity_errors.append("deal source relationship unavailable")
         if activity_errors:
             errors.append(f"Сделка #{deal_id}: {'; '.join(activity_errors)}")
             save_deal_control_communications_today(
@@ -812,7 +847,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         )
         comments = today_comments.get(deal_id, [])
         client_names: set[str] = set()
-        if comments:
+        if comments or lead_comments.get(lead_id):
             client_names = _bundle_client_names(load_local_communication_bundle(deal_id))
         save_deal_control_communications_today(
             db_path,
@@ -823,6 +858,9 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
                 comments=comments,
                 client_names=client_names,
                 deal_id=deal_id,
+                lead_id=lead_id,
+                lead_activities=lead_items,
+                lead_comments=lead_comments.get(lead_id, []),
             ),
         )
     reported_task_activity_errors: set[str] = set()

@@ -24,6 +24,7 @@ from bitrix.customer_history import (
 )
 from bitrix.deals.history_compaction import compact_history_section_coverage
 from bitrix.deals.email_text import strip_quoted_history
+from bitrix.deals.communication_history import include_saved_source_lead_communications
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT, deal_workspace_dir
 from openai_api.audio.transcript_context import transcript_items
 from setup import MSK_TZ
@@ -75,7 +76,10 @@ def load_bundle(path: Path) -> dict[str, Any]:
         raise ValueError(f"Некорректный JSON customer history bundle: {path}") from error
     if not isinstance(value, dict) or value.get("bundle_type") != "customer_history_bundle":
         raise ValueError(f"Файл не является customer_history_bundle: {path}")
-    return value
+    deal_id = path.name.removeprefix("deal_").removesuffix("_customer_history_bundle.json")
+    return include_saved_source_lead_communications(
+        value, path.with_name(f"deal_{deal_id}_context.json"), deal_id=deal_id,
+    )
 
 
 def _source_key(item: dict[str, Any]) -> tuple[str, str, str]:
