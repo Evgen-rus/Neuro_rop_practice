@@ -121,6 +121,22 @@ def _communication_channel_from_comment(text: str) -> str | None:
     return None
 
 
+def messenger_mirror_from_comment(text: str) -> dict[str, Any] | None:
+    """Return channel, speaker and content if the CRM comment is a Wazzup messenger mirror."""
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return None
+    channel = _communication_channel_from_comment(cleaned)
+    if not channel:
+        return None
+    speaker, content = _parse_mirrored_message(cleaned)
+    return {
+        "channel": channel,
+        "speaker": speaker,
+        "content": content or cleaned,
+    }
+
+
 def _parse_mirrored_message(text: str) -> tuple[str | None, str]:
     cleaned = re.sub(r"\[img\].*?\[/img\]", "", text, flags=re.I | re.S).strip()
     first_line, _, remainder = cleaned.partition("\n")

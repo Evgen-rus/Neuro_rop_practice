@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from bitrix.customer_history import build_normalized_communications
+from bitrix.customer_history import build_normalized_communications, messenger_mirror_from_comment
 
 
 def response(item: dict) -> dict:
@@ -125,6 +125,16 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         self.assertEqual(events[1]["channel"], "internal_chat")
         self.assertEqual(events[1]["contact_class"], "internal_information")
         self.assertEqual(events[1]["evidence_level"], "reported")
+
+    def test_messenger_mirror_from_comment_detects_max_and_ignores_plain_notes(self) -> None:
+        mirrored = messenger_mirror_from_comment(
+            "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Александр:\nНаправляем предварительное КП."
+        )
+        self.assertEqual(mirrored["channel"], "max")
+        self.assertEqual(mirrored["speaker"], "Александр")
+        self.assertEqual(mirrored["content"], "Направляем предварительное КП.")
+        self.assertIsNone(messenger_mirror_from_comment("Контроль завтра"))
+        self.assertIsNone(messenger_mirror_from_comment(""))
 
 
 if __name__ == "__main__":

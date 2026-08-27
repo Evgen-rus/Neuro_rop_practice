@@ -343,6 +343,104 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
         )
         self.assertEqual(report["managers"][0]["counts"]["crm_activity_observed"], 2)
 
+    def test_messenger_mirror_comments_are_collected_for_responsible_card(self) -> None:
+        class MessengerBitrixClient(FakeBitrixClient):
+            def safe_list_all(self, method, payload):
+                if method == "crm.timeline.comment.list":
+                    entity_id = str((payload.get("filter") or {}).get("ENTITY_ID") or "")
+                    return {"ok": True, "items": [
+                        {
+                            "ID": f"note-{entity_id}", "AUTHOR_ID": "99",
+                            "COMMENT": "Контроль завтра",
+                            "CREATED": "2026-08-16T19:47:00+03:00",
+                        },
+                        {
+                            "ID": f"max-{entity_id}", "AUTHOR_ID": "99",
+                            "COMMENT": (
+                                "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] "
+                                "Александр:\nНаправляем предварительное КП."
+                            ),
+                            "CREATED": "2026-08-16T19:48:00+03:00",
+                        },
+                    ]}
+                return super().safe_list_all(method, payload)
+
+        result = collect_manager_trajectory(
+            MessengerBitrixClient(), db_path=self.db_path,
+            from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["counts"]["timeline_comments"], 2)
+        events = list_manager_trajectory_events(
+            self.db_path, from_at=(NOW - timedelta(days=1)).isoformat(),
+            to_at=NOW.isoformat(), manager_ids=["10"],
+        )
+        comments = [item for item in events if item["event_type"] == "crm_timeline_comment_observed"]
+        self.assertEqual(len(comments), 2)
+        self.assertTrue(all(item["payload"].get("is_messenger_mirror") for item in comments))
+        self.assertTrue(all(item["payload"].get("channel") == "max" for item in comments))
+        self.assertFalse(any("Контроль завтра" == item["payload"].get("comment") for item in comments))
+
+        report = build_manager_trajectory_report(
+            db_path=self.db_path, from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        mirrors = [
+            item
+            for entity in report["managers"][0]["workday"]["entities"]
+            for item in entity.get("timeline_comments") or []
+        ]
+        self.assertEqual(len(mirrors), 2)
+        self.assertTrue(all(item["activity_kind"] == "message" for item in mirrors))
+        self.assertTrue(all(item["subject"] == "Сообщение Max" for item in mirrors))
+        self.assertTrue(all(item["description"] == "Направляем предварительное КП." for item in mirrors))
+
+    def test_duplicate_messenger_activity_is_not_stored_twice(self) -> None:
+        class DedupBitrixClient(FakeBitrixClient):
+            def safe_list_all(self, method, payload):
+                if method == "crm.activity.list":
+                    parent = super().safe_list_all(method, payload)
+                    items = [item for item in parent["items"] if str(item.get("RESPONSIBLE_ID")) == "10"]
+                    items.append({
+                        "ID": "msg1", "OWNER_TYPE_ID": "2", "OWNER_ID": "900",
+                        "RESPONSIBLE_ID": "10", "PROVIDER_ID": "WAZZUP",
+                        "DESCRIPTION": "Направляем предварительное КП.",
+                        "COMPLETED": "Y",
+                        "START_TIME": "2026-08-16T19:10:00+03:00",
+                        "LAST_UPDATED": "2026-08-16T19:20:00+03:00",
+                    })
+                    return {"ok": True, "items": items}
+                if method == "crm.timeline.comment.list":
+                    entity_id = str((payload.get("filter") or {}).get("ENTITY_ID") or "")
+                    if entity_id != "900":
+                        return {"ok": True, "items": []}
+                    return {"ok": True, "items": [{
+                        "ID": "max-900", "AUTHOR_ID": "99",
+                        "COMMENT": (
+                            "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] "
+                            "Александр:\nНаправляем предварительное КП."
+                        ),
+                        "CREATED": "2026-08-16T19:48:00+03:00",
+                    }]}
+                return super().safe_list_all(method, payload)
+
+        result = collect_manager_trajectory(
+            DedupBitrixClient(), db_path=self.db_path,
+            from_at=NOW - timedelta(days=1), to_at=NOW,
+        )
+        self.assertEqual(result["counts"]["timeline_comments"], 0)
+        events = list_manager_trajectory_events(
+            self.db_path, from_at=(NOW - timedelta(days=1)).isoformat(),
+            to_at=NOW.isoformat(), manager_ids=["10"],
+        )
+        self.assertFalse(any(
+            item["event_type"] == "crm_timeline_comment_observed" for item in events
+        ))
+        self.assertTrue(any(
+            item["event_type"] == "crm_activity_observed"
+            and item["payload"].get("activity_kind") == "message"
+            for item in events
+        ))
+
     def test_planned_activity_is_saved_but_not_projected_as_observed_work(self) -> None:
         scheduled_at = (NOW + timedelta(hours=2)).isoformat()
         last_updated = (NOW - timedelta(minutes=10)).isoformat()

@@ -240,6 +240,54 @@ class ManagerTrajectorySourcesTests(unittest.TestCase):
         self.assertEqual(result["facts"][0]["source_event_key"], "crm_timeline_comment:deal:101:c1")
         self.assertEqual(result["facts"][0]["payload"]["author_id"], "10")
 
+    def test_messenger_mirror_comment_is_kept_for_responsible_manager(self) -> None:
+        class MessengerClient(FakeClient):
+            def safe_list_all(self, method: str, payload: dict) -> dict:
+                if method == "crm.timeline.comment.list":
+                    return {
+                        "ok": True,
+                        "items": [
+                            {
+                                "ID": "note",
+                                "CREATED": "2026-08-21T10:02:00+03:00",
+                                "AUTHOR_ID": "99",
+                                "COMMENT": "Контроль завтра",
+                            },
+                            {
+                                "ID": "max",
+                                "CREATED": "2026-08-21T10:03:00+03:00",
+                                "AUTHOR_ID": "99",
+                                "COMMENT": (
+                                    "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] "
+                                    "Александр:\nНаправляем предварительное КП."
+                                ),
+                            },
+                            {
+                                "ID": "own",
+                                "CREATED": "2026-08-21T10:04:00+03:00",
+                                "AUTHOR_ID": "10",
+                                "COMMENT": "Комментарий менеджера",
+                            },
+                        ],
+                    }
+                return super().safe_list_all(method, payload)
+
+        result = collect_timeline_comment_facts(
+            MessengerClient(),
+            [{"entity_type": "deal", "entity_id": "101", "manager_id": "10"}],
+            ["10"],
+        )
+        self.assertFalse(result["errors"])
+        by_id = {item["payload"]["comment_id"]: item for item in result["facts"]}
+        self.assertNotIn("note", by_id)
+        self.assertEqual(by_id["max"]["manager_id"], "10")
+        self.assertTrue(by_id["max"]["payload"]["is_messenger_mirror"])
+        self.assertEqual(by_id["max"]["payload"]["channel"], "max")
+        self.assertEqual(by_id["max"]["payload"]["content"], "Направляем предварительное КП.")
+        self.assertFalse(by_id["max"]["payload"]["author_is_manager"])
+        self.assertEqual(by_id["own"]["manager_id"], "10")
+        self.assertNotIn("is_messenger_mirror", by_id["own"]["payload"])
+
     def test_task_history_uses_task_ctasklogitem_list(self) -> None:
         client = FakeClient()
         result = collect_task_history_facts(

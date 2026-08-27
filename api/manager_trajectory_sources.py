@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from api.candidates import DEAL_OWNER_TYPE_ID, LEAD_OWNER_TYPE_ID, parse_bitrix_dt
-from bitrix.customer_history import activity_type
+from bitrix.customer_history import activity_type, messenger_mirror_from_comment
 from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
 
@@ -407,10 +407,11 @@ def collect_timeline_comment_facts(client: Any, entity_refs: Iterable[Any], mana
     ]
     with bitrix_trace_context(component="manager_trajectory_timeline"):
         responses = _safe_list_many(client, requests_to_run)
-    for entity_type, entity_id, _ref_manager in refs:
+    for entity_type, entity_id, ref_manager in refs:
         key = f"{entity_type}:{entity_id}"
         response = responses[key]
         _errors_add(errors, key, response)
+        responsible_id = ref_manager if ref_manager in managers else None
         for item in _result_items(response):
             comment_id = _string(item.get("ID"))
             if not comment_id:
@@ -420,19 +421,38 @@ def collect_timeline_comment_facts(client: Any, entity_refs: Iterable[Any], mana
                 continue
             seen.add(event_key)
             author_id = _string(item.get("AUTHOR_ID") or item.get("CREATED_BY"))
-            manager_id = author_id if author_id in managers else None
+            comment = item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION")
+            mirror = messenger_mirror_from_comment(str(comment or ""))
+            if author_id in managers:
+                manager_id = author_id
+            elif mirror is not None and responsible_id:
+                # Зеркало Max/WhatsApp/Telegram вешаем на ответственного карточки,
+                # даже если запись в CRM создала интеграция, а не менеджер.
+                manager_id = responsible_id
+            else:
+                continue
+            payload = {
+                "comment_id": comment_id,
+                "author_id": author_id,
+                "comment": comment,
+                "files": item.get("FILES") if isinstance(item.get("FILES"), list) else [],
+                "responsible_id": responsible_id,
+                "author_is_manager": author_id in managers if author_id else False,
+            }
+            if mirror is not None:
+                payload.update({
+                    "is_messenger_mirror": True,
+                    "channel": mirror["channel"],
+                    "speaker": mirror["speaker"],
+                    "content": mirror["content"],
+                })
             facts.append(_fact(
                 source_event_key=event_key,
                 entity_type=entity_type,
                 entity_id=entity_id,
                 manager_id=manager_id,
                 occurred_at=_first_datetime(item, ("CREATED", "DATE_CREATE")),
-                payload={
-                    "comment_id": comment_id,
-                    "author_id": author_id,
-                    "comment": item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION"),
-                    "files": item.get("FILES") if isinstance(item.get("FILES"), list) else [],
-                },
+                payload=payload,
             ))
     return {"facts": facts, "errors": errors}
 

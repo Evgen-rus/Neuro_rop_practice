@@ -472,6 +472,73 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
             )
         self.assertIsNone(no_transcript["transcript_text"])
 
+    def test_messenger_mirror_is_a_communication_in_ui_and_json(self) -> None:
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="crm_timeline_comment_observed", source="bitrix_timeline",
+            source_event_key="comment:max-1",
+            occurred_at=(START + timedelta(minutes=25)).isoformat(),
+            payload={
+                "comment_id": "max-1",
+                "author_id": "99",
+                "comment": (
+                    "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] "
+                    "Александр:\nНаправляем предварительное КП."
+                ),
+                "is_messenger_mirror": True,
+                "channel": "max",
+                "speaker": "Александр",
+                "content": "Направляем предварительное КП.",
+                "author_is_manager": False,
+                "responsible_id": "10",
+            },
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="crm_timeline_comment_observed", source="bitrix_timeline",
+            source_event_key="comment:note-1",
+            occurred_at=(START + timedelta(minutes=26)).isoformat(),
+            payload={"comment_id": "note-1", "author_id": "10", "comment": "Заметка менеджера"},
+        )
+
+        day = build_day_projection(value=DAY, bucket_minutes=60, db_path=self.db_path)
+        self.assertEqual(day["managers"][0]["totals"]["communications"], 3)
+        self.assertGreaterEqual(day["managers"][0]["totals"]["crm"], 1)
+
+        entity = build_entity_projection(
+            entity_type="deal", entity_id="101", value=DAY, db_path=self.db_path,
+        )
+        labels = [item["label"] for item in entity["chronology"]]
+        self.assertIn("Сообщение Max", labels)
+        self.assertIn("Комментарий CRM", labels)
+        message = next(item for item in entity["chronology"] if item["label"] == "Сообщение Max")
+        self.assertEqual(message["category"], "communications")
+        self.assertEqual(message["description"], "Направляем предварительное КП.")
+        note = next(item for item in entity["chronology"] if item["label"] == "Комментарий CRM")
+        self.assertEqual(note["category"], "crm")
+
+        export = build_day_export(value=DAY, db_path=self.db_path)
+        comments = [
+            item
+            for entity_row in export["managers"][0]["workday"]["entities"]
+            for item in entity_row.get("timeline_comments") or []
+            if entity_row.get("entity_id") == "101"
+        ]
+        mirrored = next(item for item in comments if item["payload"].get("channel") == "max")
+        self.assertEqual(mirrored["activity_kind"], "message")
+        self.assertEqual(mirrored["subject"], "Сообщение Max")
+        self.assertEqual(mirrored["description"], "Направляем предварительное КП.")
+        self.assertEqual(mirrored["payload"]["author_id"], "99")
+
+        communications = build_day_export(value=DAY, category="communications", db_path=self.db_path)
+        exported_comments = [
+            item
+            for entity_row in communications["managers"][0]["workday"]["entities"]
+            for item in entity_row.get("timeline_comments") or []
+        ]
+        self.assertTrue(any(item["payload"].get("channel") == "max" for item in exported_comments))
+        self.assertFalse(any(item["payload"].get("comment_id") == "note-1" for item in exported_comments))
+
 
 class ManagerTrajectoryUiAccessTests(unittest.TestCase):
     def test_day_endpoint_requires_admin_server_side(self) -> None:

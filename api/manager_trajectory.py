@@ -18,6 +18,7 @@ from api.manager_trajectory_sources import (
     fetch_activity_facts,
 )
 from bitrix.client import BitrixReadOnlyClient
+from bitrix.customer_history import messenger_mirror_from_comment
 from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
 from storage.rop_db import (
@@ -41,6 +42,11 @@ COLLECTION_OVERLAP = timedelta(minutes=15)
 HIDDEN_RECOMMENDATION_USAGE_FIELDS = (
     "generated_at", "shown_at", "generated_count", "shown_count",
 )
+MESSENGER_CHANNEL_LABELS = {
+    "max": "Сообщение Max",
+    "whatsapp": "Сообщение WhatsApp",
+    "telegram": "Сообщение Telegram",
+}
 
 
 def _aware(value: datetime) -> datetime:
@@ -49,6 +55,23 @@ def _aware(value: datetime) -> datetime:
 
 def _iso(value: datetime) -> str:
     return _aware(value).astimezone(MSK_TZ).isoformat(timespec="seconds")
+
+
+def _communication_text_key(entity_type: Any, entity_id: Any, text: Any) -> tuple[str, str, str] | None:
+    normalized = " ".join(str(text or "").split()).casefold()
+    if not str(entity_type or "").strip() or not str(entity_id or "").strip() or not normalized:
+        return None
+    return (str(entity_type), str(entity_id), normalized)
+
+
+def _comment_messenger(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if payload.get("is_messenger_mirror") and str(payload.get("channel") or "").strip():
+        return {
+            "channel": str(payload.get("channel") or "").strip().lower(),
+            "speaker": payload.get("speaker"),
+            "content": payload.get("content") or payload.get("comment"),
+        }
+    return messenger_mirror_from_comment(str(payload.get("comment") or ""))
 
 
 def _bitrix_datetime(value: datetime) -> str:
@@ -220,6 +243,17 @@ def collect_manager_trajectory(
     for source_name, result in supplementary.items():
         errors.update({f"{source_name}:{key}": str(value) for key, value in result["errors"].items()})
 
+    activity_message_keys = {
+        key
+        for fact in activity_facts
+        if (key := _communication_text_key(
+            fact.get("entity_type"),
+            fact.get("entity_id"),
+            (fact.get("payload") or {}).get("description")
+            or (fact.get("payload") or {}).get("subject"),
+        ))
+        and str((fact.get("payload") or {}).get("activity_kind") or "") == "message"
+    }
     for source_name, event_type, count_key in (
         ("timeline", "crm_timeline_comment_observed", "timeline_comments"),
         ("tasks", "crm_task_history_observed", "task_history"),
@@ -229,12 +263,21 @@ def collect_manager_trajectory(
             manager_id = str(fact.get("manager_id") or "").strip()
             if manager_id not in allowed:
                 continue
+            payload = fact.get("payload") if isinstance(fact.get("payload"), dict) else {}
+            if (
+                source_name == "timeline"
+                and payload.get("is_messenger_mirror")
+                and _communication_text_key(
+                    fact.get("entity_type"), fact.get("entity_id"), payload.get("content"),
+                ) in activity_message_keys
+            ):
+                continue
             record_manager_trajectory_event(
                 db_path,
                 entity_type=fact["entity_type"], entity_id=fact["entity_id"], manager_id=manager_id,
                 event_type=event_type, source=f"bitrix_{source_name}",
                 source_event_key=fact["source_event_key"],
-                occurred_at=fact.get("occurred_at") or _iso(end), payload=fact["payload"],
+                occurred_at=fact.get("occurred_at") or _iso(end), payload=payload,
             )
             counts[count_key] += 1
 
@@ -345,12 +388,20 @@ def _detail_action(event: dict[str, Any]) -> dict[str, Any]:
     """Keep source payload intact for machine analysis while adding common keys."""
     payload = _event_payload(event)
     event_type = str(event.get("event_type") or "")
+    messenger = _comment_messenger(payload) if event_type == "crm_timeline_comment_observed" else None
     kind = {
         "crm_task_history_observed": "task_history",
-        "crm_timeline_comment_observed": "timeline_comment",
+        "crm_timeline_comment_observed": "message" if messenger else "timeline_comment",
         "crm_business_field_changed": "business_field_change",
         "crm_stage_history_observed": "stage_history",
     }.get(event_type, event_type)
+    if messenger:
+        channel = str(messenger.get("channel") or "")
+        subject = MESSENGER_CHANNEL_LABELS.get(channel) or "Сообщение"
+        description = messenger.get("content")
+    else:
+        subject = payload.get("field_label") or payload.get("field") or payload.get("comment_id")
+        description = payload.get("comment")
     return {
         "event_id": int(event["id"]),
         "event_type": event_type,
@@ -363,8 +414,8 @@ def _detail_action(event: dict[str, Any]) -> dict[str, Any]:
         "recorded_at": event.get("recorded_at"),
         "source": event.get("source"),
         "payload": payload,
-        "subject": payload.get("field_label") or payload.get("field") or payload.get("comment_id"),
-        "description": payload.get("comment"),
+        "subject": subject,
+        "description": description,
         "is_system_creation": (
             event_type == "crm_stage_history_observed"
             and str(payload.get("history_type_id") or "") == "1"

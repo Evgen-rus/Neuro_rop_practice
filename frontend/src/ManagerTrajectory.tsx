@@ -76,7 +76,7 @@ function timeLabel(value: string) {
 function eventIcon(event: TrajectoryEvent) {
   if (event.category === 'neurorop') return '✦'
   if (event.label === 'Звонок') return '☎'
-  if (event.label === 'Письмо' || event.label === 'Сообщение') return '✉'
+  if (event.label === 'Письмо' || event.label === 'Сообщение' || event.label.startsWith('Сообщение ')) return '✉'
   if (event.category === 'tasks') return '☑'
   if (event.event_type.includes('stage')) return '⚑'
   return '•'

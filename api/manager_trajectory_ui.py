@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from api.deal_call_transcript import find_call_transcript
 from api.manager_trajectory import (
+    MESSENGER_CHANNEL_LABELS,
     build_manager_trajectory_report,
     neurorop_display_label,
     project_manager_trajectory_for_display,
@@ -119,7 +120,9 @@ def _entity_meta(manager: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any
 
 def _action_category(action: dict[str, Any]) -> str:
     kind = str(action.get("activity_kind") or action.get("action_type") or "").lower()
-    if kind in {"call", "email", "message", "meeting"}:
+    payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    channel = str(payload.get("channel") or "").lower()
+    if kind in {"call", "email", "message", "meeting"} or channel in MESSENGER_CHANNEL_LABELS:
         return "communications"
     if kind in {"task", "task_history"}:
         return "tasks"
@@ -127,6 +130,10 @@ def _action_category(action: dict[str, Any]) -> str:
 
 
 def _activity_label(action: dict[str, Any]) -> str:
+    payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    channel = str(payload.get("channel") or "").lower()
+    if channel in MESSENGER_CHANNEL_LABELS:
+        return MESSENGER_CHANNEL_LABELS[channel]
     kind = str(action.get("activity_kind") or action.get("action_type") or "other").lower()
     labels = {
         "call": "Звонок",
@@ -157,7 +164,7 @@ def _base_event(
     payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
     call = action.get("call") if isinstance(action.get("call"), dict) else {}
     subject = action.get("subject") or payload.get("field_label") or payload.get("field_name")
-    description = action.get("description") or payload.get("comment")
+    description = action.get("description") or payload.get("content") or payload.get("comment")
     if action.get("action_type") == "stage_change" or action.get("activity_kind") == "stage_history":
         before = action.get("from_stage_name") or action.get("from_stage_id")
         after = action.get("to_stage_name") or action.get("to_stage_id")
@@ -561,6 +568,7 @@ def build_event_detail_projection(
                 payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
                 full_description = (
                     action.get("description")
+                    or payload.get("content")
                     or payload.get("comment")
                     or payload.get("description")
                 )
@@ -607,7 +615,7 @@ def _event_like(
         "subject": subject if subject is not None else item.get("subject") or payload.get("subject"),
         "description": (
             description if description is not None
-            else item.get("description") or payload.get("description") or payload.get("comment")
+            else item.get("description") or payload.get("content") or payload.get("description") or payload.get("comment")
         ),
     }
 
