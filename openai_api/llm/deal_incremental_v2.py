@@ -432,6 +432,8 @@ def build_materialization_contract(
             "evidence": "required non-empty array, max 5",
         }
     if "communication_quality_audit" in affected_sections:
+        from openai_api.llm.analyze_deal import COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE
+
         constraints["communication_quality_audit"] = {
             "assessed": (
                 "all three criteria scores are integer 0 or 1; zero_reasons contains "
@@ -442,6 +444,7 @@ def build_materialization_contract(
                 "all three scores are null; zero_reasons is []; summary_for_rop is null; "
                 "insufficient_reason is non-empty"
             ),
+            "next_action": COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE,
         }
     return structural, continuity, constraints
 

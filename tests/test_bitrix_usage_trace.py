@@ -177,6 +177,73 @@ class BitrixUsageTraceTests(unittest.TestCase):
         self.assertEqual(nested["component"], "deal_control")
         self.assertTrue(nested["is_retry"])
 
+    def test_env_fallback_and_diagnostic_entity_id(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BITRIX_TRACE_RUN_ID": "from-env-run",
+                "BITRIX_TRACE_COMPONENT": "per_deal_context",
+                "BITRIX_TRACE_ALLOW_ENTITY_ID": "1",
+                "BITRIX_TRACE_ENTITY_ID": "18507",
+            },
+            clear=False,
+        ):
+            event = build_trace_event(
+                run_id="client-uuid",
+                method="crm.deal.get",
+                payload={"id": "18507"},
+                attempt=1,
+                duration_ms=1,
+                ok=True,
+                http_status=200,
+                data={"result": {"ID": "18507"}},
+            )
+        self.assertEqual(event["run_id"], "from-env-run")
+        self.assertEqual(event["component"], "per_deal_context")
+        self.assertEqual(event["entity_id"], "18507")
+
+        with patch.dict(os.environ, {"BITRIX_TRACE_ALLOW_ENTITY_ID": "", "BITRIX_TRACE_ENTITY_ID": "18507"}):
+            hidden = build_trace_event(
+                run_id="client-uuid",
+                method="crm.deal.get",
+                payload={"id": "18507"},
+                attempt=1,
+                duration_ms=1,
+                ok=True,
+                http_status=200,
+                data={"result": {"ID": "18507"}},
+            )
+        self.assertNotIn("entity_id", hidden)
+
+    def test_write_guard_blocks_mutation_before_http(self) -> None:
+        from bitrix.client import BitrixWriteBlockedError
+
+        events: list[dict] = []
+        with (
+            patch.dict(os.environ, {"BITRIX_DENY_WRITE_METHODS": "1"}),
+            patch("bitrix.client.requests.post", side_effect=AssertionError("HTTP must not run")),
+            patch("bitrix.client.append_trace_event", side_effect=events.append),
+        ):
+            client = BitrixReadOnlyClient("https://secret.example/rest/hook", retry_policy=NO_RETRY)
+            with self.assertRaises(BitrixWriteBlockedError):
+                client.call("crm.deal.update", {"id": "1", "fields": {"TITLE": "x"}})
+            with self.assertRaises(BitrixWriteBlockedError):
+                client.call(
+                    "batch",
+                    {"halt": 0, "cmd": {"r0": "crm.timeline.comment.add?fields[COMMENT]=x"}},
+                )
+        self.assertEqual(events, [])
+
+    def test_write_guard_allows_reads(self) -> None:
+        with (
+            patch.dict(os.environ, {"BITRIX_DENY_WRITE_METHODS": "1"}),
+            patch("bitrix.client.requests.post", return_value=FakeResponse(200, {"result": []})),
+            patch("bitrix.client.append_trace_event"),
+        ):
+            client = BitrixReadOnlyClient("https://secret.example/rest/hook", retry_policy=NO_RETRY)
+            data = client.call("crm.deal.list", {"filter": {"CLOSED": "N"}})
+        self.assertEqual(data["result"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

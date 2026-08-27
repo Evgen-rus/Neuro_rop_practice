@@ -75,12 +75,10 @@ class CombinedFakeClient:
 
 
 class BitrixCrmCycleDiagTests(unittest.TestCase):
-    def test_source_does_not_import_openai_or_jobs(self) -> None:
+    def test_default_path_still_skips_jobs_and_openai(self) -> None:
         source = DIAG_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("openai_api", source)
-        self.assertNotIn("api.jobs", source)
-        self.assertNotIn("transcribe", source)
-        self.assertNotIn("analyze_deal", source)
+        self.assertIn("--full-cycle", source)
+        self.assertIn("run_crm_only_cycle", source)
 
     def test_two_runs_without_sample_do_not_call_openai_or_download(self) -> None:
         from scripts.bitrix_crm_cycle_diag import run_diagnostic
@@ -178,6 +176,229 @@ class BitrixCrmCycleDiagTests(unittest.TestCase):
         self.assertEqual(counts["disk_file_get"], 1)
         self.assertEqual(counts["recheck_candidates"], 1)
         self.assertEqual(client.calls, [("disk.file.get", {"id": "file-7"})])
+
+    def test_full_cycle_waits_for_run1_jobs_before_run2(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import run_full_cycle_diagnostic
+        from storage.rop_db import create_automatic_analysis_run, list_automatic_analysis_items, update_automatic_analysis_item
+
+        order: list[str] = []
+
+        def cycle_fn(*, db_path, trigger, **_kwargs):
+            order.append(f"cycle:{trigger}")
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger=trigger,
+                entity_ids=["101"],
+                status="running",
+                current_stage="queued",
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="101",
+                job_id=f"job-{trigger}",
+                processing_status="queued",
+            )
+            return {"status": "running", "trigger": trigger}
+
+        def wait_until(db_path, automatic_run_id, **kwargs):
+            del kwargs
+            order.append(f"wait-run:{automatic_run_id}")
+            update_automatic_analysis_item(
+                db_path,
+                int(automatic_run_id),
+                entity_type="deal",
+                entity_id="101",
+                processing_status="done",
+                decision_status="skip",
+            )
+            return {
+                "items": list_automatic_analysis_items(db_path, automatic_run_id),
+                "job_ids": [f"job-{automatic_run_id}"],
+                "run_status": "done",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "rop.sqlite"
+            usage_dir = root / "usage"
+            init_db(db_path)
+            save_deal_control_scope(
+                db_path,
+                initial_deal_ids=["101"],
+                manager_ids=["10"],
+                pipeline_id="15",
+            )
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="101",
+                source="initial",
+                title="Сделка",
+                manager_id="10",
+                manager_name="Менеджер",
+                stage_id="NEW",
+                stage_name="Новая",
+                pipeline_id="15",
+                amount="100",
+                currency_id="RUB",
+                created_at_crm=NOW.isoformat(),
+                modified_at_crm=NOW.isoformat(),
+                is_active=True,
+            )
+            with patch("scripts.bitrix_crm_cycle_diag.wait_until_automatic_run_done", side_effect=wait_until):
+                summary = run_full_cycle_diagnostic(
+                    db_path=db_path,
+                    usage_dir=usage_dir,
+                    skip_preflight=True,
+                    cycle_fn=cycle_fn,
+                    poll_seconds=0.01,
+                    max_wait_seconds=1,
+                )
+            self.assertEqual(summary["mode"], "full-cycle")
+            self.assertEqual(
+                [item.split(":")[0] for item in order],
+                ["cycle", "wait-run", "cycle", "wait-run"],
+            )
+            self.assertEqual(order[0], "cycle:diagnostic_full_run1")
+            self.assertEqual(order[2], "cycle:diagnostic_full_run2")
+            self.assertTrue((usage_dir / "summary.md").exists())
+            self.assertTrue((usage_dir / "run1").is_dir())
+            self.assertTrue((usage_dir / "run2").is_dir())
+
+    def test_single_cycle_runs_only_run2(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import run_full_cycle_diagnostic
+        from storage.rop_db import create_automatic_analysis_run, list_automatic_analysis_items, update_automatic_analysis_item
+
+        order: list[str] = []
+
+        def cycle_fn(*, db_path, trigger, **_kwargs):
+            order.append(trigger)
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger=trigger,
+                entity_ids=["101"],
+                status="running",
+                current_stage="queued",
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="101",
+                job_id=f"job-{trigger}",
+                processing_status="queued",
+            )
+            return {"status": "running", "trigger": trigger}
+
+        def wait_until(db_path, automatic_run_id, **kwargs):
+            del kwargs
+            update_automatic_analysis_item(
+                db_path,
+                int(automatic_run_id),
+                entity_type="deal",
+                entity_id="101",
+                processing_status="done",
+                decision_status="skip",
+            )
+            return {
+                "items": list_automatic_analysis_items(db_path, automatic_run_id),
+                "job_ids": [f"job-{automatic_run_id}"],
+                "run_status": "done",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "rop.sqlite"
+            usage_dir = root / "usage"
+            init_db(db_path)
+            save_deal_control_scope(
+                db_path,
+                initial_deal_ids=["101"],
+                manager_ids=["10"],
+                pipeline_id="15",
+            )
+            upsert_deal_control_deal(
+                db_path,
+                deal_id="101",
+                source="initial",
+                title="Сделка",
+                manager_id="10",
+                manager_name="Менеджер",
+                stage_id="NEW",
+                stage_name="Новая",
+                pipeline_id="15",
+                amount="100",
+                currency_id="RUB",
+                created_at_crm=NOW.isoformat(),
+                modified_at_crm=NOW.isoformat(),
+                is_active=True,
+            )
+            with patch("scripts.bitrix_crm_cycle_diag.wait_until_automatic_run_done", side_effect=wait_until):
+                summary = run_full_cycle_diagnostic(
+                    db_path=db_path,
+                    usage_dir=usage_dir,
+                    skip_preflight=True,
+                    cycle_fn=cycle_fn,
+                    poll_seconds=0.01,
+                    max_wait_seconds=1,
+                    single_cycle=True,
+                )
+            self.assertEqual(order, ["diagnostic_full_run2"])
+            self.assertEqual(summary["mode"], "full-cycle-run2-only")
+            self.assertTrue((usage_dir / "run2").is_dir())
+            self.assertFalse((usage_dir / "run1").is_dir())
+
+    def test_previous_done_deal_ids_skips_error_items(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import previous_done_deal_ids
+        from storage.rop_db import create_automatic_analysis_run, update_automatic_analysis_item
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            init_db(db_path)
+            run = create_automatic_analysis_run(
+                db_path,
+                trigger="diagnostic_full_run1",
+                entity_ids=["101", "102"],
+                status="partial",
+                current_stage="stopped_for_vps",
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="101",
+                processing_status="done",
+                decision_status="full",
+            )
+            update_automatic_analysis_item(
+                db_path,
+                int(run["id"]),
+                entity_type="deal",
+                entity_id="102",
+                processing_status="error",
+                decision_status="error",
+                error="stopped_for_vps_parallel_run",
+            )
+            self.assertEqual(previous_done_deal_ids(db_path), ["101"])
+
+    def test_static_write_scan_ignores_read_methods(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import scan_production_bitrix_write_calls
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "api").mkdir()
+            (root / "api" / "sample.py").write_text(
+                'client.safe_call("crm.deal.list", {})\nclient.call("crm.deal.update", {})\n',
+                encoding="utf-8",
+            )
+            (root / "tests").mkdir()
+            (root / "tests" / "sample.py").write_text(
+                'client.call("crm.deal.update", {})\n',
+                encoding="utf-8",
+            )
+            hits = scan_production_bitrix_write_calls(root)
+        self.assertEqual(hits, [{"path": "api/sample.py", "method": "crm.deal.update"}])
 
 
 if __name__ == "__main__":

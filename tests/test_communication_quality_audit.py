@@ -6,7 +6,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api.deal_control import _analysis_coaching
-from openai_api.llm.analyze_deal import build_prompt, render_report
+from openai_api.llm.analyze_deal import (
+    COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE,
+    DEAL_INCREMENTAL_PROMPT_CACHE_KEY,
+    DEAL_PROMPT_CACHE_KEY,
+    build_prompt,
+    render_report,
+)
+from openai_api.llm.deal_incremental_v2 import (
+    build_materialization_contract,
+    build_materialization_prompt,
+)
 from openai_api.llm.validation import (
     AnalysisValidationError,
     _validate_deal_management_shapes,
@@ -198,6 +208,119 @@ class CommunicationQualityAuditTests(unittest.TestCase):
         self.assertIn("## Контроль качества ведения сделки", report)
         self.assertIn("Критерий 1 — Next Action: 0", report)
         self.assertIn("Как решите, дайте знать.", report)
+
+
+NEXT_ACTION_SCORE_ONE_EXAMPLES = (
+    "Завтра наберу",
+    "Во вторник наберу",
+    "На следующей неделе во вторник созвонимся",
+    "Через пару дней дам ответ",
+    "В течение двух рабочих дней подготовим",
+    "К концу недели вернусь с ответом",
+    "В первой половине следующей недели дадим результат",
+    "Завтра постараюсь уточнить и вам отзвонюсь",
+    "Завтра днём информация уже должна быть",
+)
+
+NEXT_ACTION_SCORE_ZERO_EXAMPLES = (
+    "На следующей неделе созвонимся",
+    "В ближайшее время",
+    "На днях",
+    "Попозже",
+    "Скоро",
+    "Будет время, посмотрю",
+    "Чуть-чуть подождите",
+    "Я сейчас передам информацию на склад",
+)
+
+VALUE_DEVELOPMENT_RULE = (
+    "value_development=1 только если касание имело конкретный информационный повод, "
+    "добавляло ценность или уточняло производство, сроки либо бюджет; пустое «не надумали?» — 0."
+)
+DATA_COLLECTION_RULE = (
+    "data_collection=1 только если менеджер, опираясь на историю, собрал или актуализировал "
+    "необходимые технические, логистические, реквизитные данные либо сведения о ЛПР; "
+    "игнорирование существенного пробела — 0."
+)
+
+
+class NextActionRubricTests(unittest.TestCase):
+    def test_shared_rule_accepts_concrete_time_anchors_without_exact_clock(self) -> None:
+        rule = COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE
+        self.assertIn("Точное время НЕ обязательно", rule)
+        self.assertIn("не проверяй, является ли действие шагом к договору", rule)
+        self.assertNotIn("точной датой и временем", rule)
+        for phrase in NEXT_ACTION_SCORE_ONE_EXAMPLES:
+            with self.subTest(score=1, phrase=phrase):
+                self.assertIn(phrase, rule)
+
+    def test_shared_rule_rejects_vague_or_missing_time_anchors(self) -> None:
+        rule = COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE
+        self.assertIn("без дня или более узкого периода", rule)
+        self.assertIn("без срока результата", rule)
+        for phrase in NEXT_ACTION_SCORE_ZERO_EXAMPLES:
+            with self.subTest(score=0, phrase=phrase):
+                self.assertIn(phrase, rule)
+
+    def test_full_prompt_uses_shared_next_action_rule(self) -> None:
+        with patch("openai_api.llm.analyze_deal.COMMUNICATION_QUALITY_AUDIT_ENABLED", True):
+            prompt = build_prompt("7", "История", "Транскрипт", "Диагностика", [], {})
+        self.assertIn(COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE, prompt)
+        self.assertIn(VALUE_DEVELOPMENT_RULE, prompt)
+        self.assertIn(DATA_COLLECTION_RULE, prompt)
+        self.assertNotIn("точной датой и временем", prompt)
+
+    def test_incremental_v1_prompt_uses_shared_next_action_rule(self) -> None:
+        with patch("openai_api.llm.analyze_deal.COMMUNICATION_QUALITY_AUDIT_ENABLED", True):
+            prompt = build_prompt(
+                "7",
+                "История не должна попасть",
+                "",
+                "Диагностика",
+                [],
+                {},
+                incremental_context={
+                    "previous_analysis": {"deal_id": "7"},
+                    "new_events": [],
+                    "crm_delta": {},
+                },
+            )
+        self.assertIn(COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE, prompt)
+        self.assertIn(VALUE_DEVELOPMENT_RULE, prompt)
+        self.assertIn(DATA_COLLECTION_RULE, prompt)
+        self.assertNotIn("точной датой и временем", prompt)
+
+    def test_incremental_v2_materialization_uses_the_same_next_action_rule(self) -> None:
+        _, _, constraints = build_materialization_contract(
+            {"communication_quality_audit": {}},
+            ["communication_quality_audit"],
+        )
+        self.assertEqual(
+            constraints["communication_quality_audit"]["next_action"],
+            COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE,
+        )
+        prompt = build_materialization_prompt(
+            previous_analysis={"communication_quality_audit": {}},
+            semantic_state={"schema_version": "deal-semantic-state-v1"},
+            evidence_delta=[{"evidence_id": "call:9"}],
+            affected_sections=["communication_quality_audit"],
+            stage_policy={},
+            prior_recommendation=None,
+            daily_checklist=None,
+            compact_policy_text="POLICY",
+        )
+        self.assertIn(COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE, prompt)
+        for phrase in NEXT_ACTION_SCORE_ONE_EXAMPLES + NEXT_ACTION_SCORE_ZERO_EXAMPLES:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, prompt)
+
+    def test_cache_keys_and_other_audit_criteria_stay_unchanged(self) -> None:
+        self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v2")
+        self.assertEqual(DEAL_INCREMENTAL_PROMPT_CACHE_KEY, "neuro-rop:incremental-deal:v1")
+        with patch("openai_api.llm.analyze_deal.COMMUNICATION_QUALITY_AUDIT_ENABLED", True):
+            prompt = build_prompt("7", "История", "Транскрипт", "Диагностика", [], {})
+        self.assertIn(VALUE_DEVELOPMENT_RULE, prompt)
+        self.assertIn(DATA_COLLECTION_RULE, prompt)
 
 
 if __name__ == "__main__":

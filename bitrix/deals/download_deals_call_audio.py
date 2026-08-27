@@ -34,6 +34,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, save_json
 from bitrix.customer_history import parse_bitrix_datetime
+from bitrix.usage_trace import bitrix_trace_context
 from openai_api.audio.short_call import enrich_download_with_duration, enrich_manifest_calls
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, run_with_retry
 from progress_events import emit_progress, retry_progress_callback
@@ -239,7 +240,8 @@ def filename_from_response(response: requests.Response, fallback: str) -> str:
 
 
 def file_download_url(client: BitrixReadOnlyClient, file_id: str) -> tuple[str | None, dict[str, Any] | None]:
-    response = client.safe_call("disk.file.get", {"id": file_id})
+    with bitrix_trace_context(component="disk_file_get"):
+        response = client.safe_call("disk.file.get", {"id": file_id})
     if not response.get("ok"):
         return None, response
 
@@ -576,7 +578,8 @@ def _transcribed_source_growth(
         previous_size = int(source_size)
     except (TypeError, ValueError):
         return False, None, None, None, None
-    download_url, disk_response = file_download_url(client, source_file_id)
+    with bitrix_trace_context(component="audio_readiness"):
+        download_url, disk_response = file_download_url(client, source_file_id)
     remote_size = disk_file_size(disk_response)
     grew = remote_size is not None and remote_size > previous_size
     return grew, source_file_id, download_url, disk_response, remote_size
@@ -591,56 +594,57 @@ def _refresh_existing_downloads(
     if not should_recheck_recording(activity):
         return mark_existing_downloads(existing_downloads), False
 
-    refreshed: list[dict[str, Any]] = []
-    any_growth = False
-    files = [item for item in (activity.get("FILES") or []) if isinstance(item, dict)]
-    file_ids = [str(item.get("id") or item.get("ID") or "") for item in files]
-    if not any(file_ids):
-        file_ids = [str(item.get("file_id") or "") for item in existing_downloads]
+    with bitrix_trace_context(component="audio_readiness"):
+        refreshed: list[dict[str, Any]] = []
+        any_growth = False
+        files = [item for item in (activity.get("FILES") or []) if isinstance(item, dict)]
+        file_ids = [str(item.get("id") or item.get("ID") or "") for item in files]
+        if not any(file_ids):
+            file_ids = [str(item.get("file_id") or "") for item in existing_downloads]
 
-    for file_id in file_ids:
-        if not file_id:
-            continue
-        previous = _existing_download_for_file(existing_downloads, file_id)
-        if previous is None:
-            continue
-        download_url, disk_response = file_download_url(client, file_id)
-        remote_size = disk_file_size(disk_response)
-        local_path = Path(str(previous.get("local_path") or ""))
-        local_size = local_path.stat().st_size if local_path.exists() else 0
-        grew = remote_size is not None and remote_size > local_size
-        if grew and download_url:
-            try:
-                result = try_download_url(
-                    str(download_url),
-                    deal_audio_dir,
-                    f"activity_{activity.get('ID') or ''}_file_{file_id}",
-                    client.retry_callback,
-                    replace_existing=True,
+        for file_id in file_ids:
+            if not file_id:
+                continue
+            previous = _existing_download_for_file(existing_downloads, file_id)
+            if previous is None:
+                continue
+            download_url, disk_response = file_download_url(client, file_id)
+            remote_size = disk_file_size(disk_response)
+            local_path = Path(str(previous.get("local_path") or ""))
+            local_size = local_path.stat().st_size if local_path.exists() else 0
+            grew = remote_size is not None and remote_size > local_size
+            if grew and download_url:
+                try:
+                    result = try_download_url(
+                        str(download_url),
+                        deal_audio_dir,
+                        f"activity_{activity.get('ID') or ''}_file_{file_id}",
+                        client.retry_callback,
+                        replace_existing=True,
+                    )
+                except requests.RequestException as error:
+                    result = dict(previous)
+                    result["status"] = "refresh_download_request_error"
+                    result["refresh_error_type"] = type(error).__name__
+                any_growth = any_growth or bool(
+                    result.get("ok") and result.get("status") == "redownloaded_grown_file"
                 )
-            except requests.RequestException as error:
+            else:
                 result = dict(previous)
-                result["status"] = "refresh_download_request_error"
-                result["refresh_error_type"] = type(error).__name__
-            any_growth = any_growth or bool(
-                result.get("ok") and result.get("status") == "redownloaded_grown_file"
+                result["status"] = "already_downloaded"
+                result["size_bytes"] = local_size
+            result["file_id"] = file_id
+            result["source"] = "disk.file.get"
+            result = recording_readiness(
+                result,
+                activity,
+                previous=previous,
+                remote_size_bytes=remote_size,
+                size_changed=grew,
             )
-        else:
-            result = dict(previous)
-            result["status"] = "already_downloaded"
-            result["size_bytes"] = local_size
-        result["file_id"] = file_id
-        result["source"] = "disk.file.get"
-        result = recording_readiness(
-            result,
-            activity,
-            previous=previous,
-            remote_size_bytes=remote_size,
-            size_changed=grew,
-        )
-        refreshed.append(result)
+            refreshed.append(result)
 
-    return (refreshed or mark_existing_downloads(existing_downloads)), any_growth
+        return (refreshed or mark_existing_downloads(existing_downloads)), any_growth
 
 
 def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | None = None) -> bool:
@@ -654,6 +658,26 @@ def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | No
 
 
 def process_call(
+    client: BitrixReadOnlyClient,
+    deal_audio_dir: Path,
+    activity: dict[str, Any],
+    *,
+    existing_downloads: list[dict[str, Any]] | None = None,
+    existing_transcription: dict[str, Any] | None = None,
+    missing_only: bool = True,
+) -> dict[str, Any]:
+    with bitrix_trace_context(component="audio_discovery"):
+        return _process_call(
+            client,
+            deal_audio_dir,
+            activity,
+            existing_downloads=existing_downloads,
+            existing_transcription=existing_transcription,
+            missing_only=missing_only,
+        )
+
+
+def _process_call(
     client: BitrixReadOnlyClient,
     deal_audio_dir: Path,
     activity: dict[str, Any],

@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
+from bitrix.usage_trace import bitrix_trace_context
 from progress_events import retry_progress_callback
 from bitrix.customer_history import (
     DEFAULT_HISTORY_DAYS,
@@ -120,7 +121,8 @@ def build_stage_lookup(pipeline_map_path: Path) -> dict[str, dict[str, Any]]:
 def fetch_entity_by_id(client: BitrixReadOnlyClient, method: str, entity_id: Any) -> dict[str, Any]:
     if not is_real_id(entity_id):
         return {"ok": False, "method": method, "payload": {"id": entity_id}, "error": "empty id"}
-    return client.safe_call(method, {"id": entity_id})
+    with bitrix_trace_context(component="entity_get"):
+        return client.safe_call(method, {"id": entity_id})
 
 
 def fetch_users(client: BitrixReadOnlyClient, ids: list[Any]) -> dict[str, Any]:
@@ -174,12 +176,13 @@ def fetch_timeline_comments(
     del owner_type_id
     timeline_filter: dict[str, Any] = {"ENTITY_TYPE": entity_type, "ENTITY_ID": entity_id}
     del created_after
-    return [
-        client.safe_list_all(
-            "crm.timeline.comment.list",
-            {"order": {"CREATED": "ASC", "ID": "ASC"}, "filter": timeline_filter},
-        )
-    ]
+    with bitrix_trace_context(component="timeline"):
+        return [
+            client.safe_list_all(
+                "crm.timeline.comment.list",
+                {"order": {"CREATED": "ASC", "ID": "ASC"}, "filter": timeline_filter},
+            )
+        ]
 
 
 def fetch_activities_for_owner(
@@ -197,7 +200,8 @@ def fetch_activities_for_owner(
         "filter": activity_filter,
         "select": ["*", "FILES", "COMMUNICATIONS"],
     }
-    return client.safe_list_all("crm.activity.list", payload)
+    with bitrix_trace_context(component="per_deal_context"):
+        return client.safe_list_all("crm.activity.list", payload)
 
 
 def fetch_activities(client: BitrixReadOnlyClient, deal_id: str) -> dict[str, Any]:
@@ -331,15 +335,16 @@ def strip_attachment_references(value: Any) -> Any:
 
 
 def fetch_deal_stage_history(client: BitrixReadOnlyClient, deal_id: str) -> dict[str, Any]:
-    return client.safe_list_all(
-        "crm.stagehistory.list",
-        {
-            "entityTypeId": DEAL_OWNER_TYPE_ID,
-            "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
-            "filter": {"OWNER_ID": deal_id},
-            "select": ["*"],
-        },
-    )
+    with bitrix_trace_context(component="stage_history"):
+        return client.safe_list_all(
+            "crm.stagehistory.list",
+            {
+                "entityTypeId": DEAL_OWNER_TYPE_ID,
+                "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
+                "filter": {"OWNER_ID": deal_id},
+                "select": ["*"],
+            },
+        )
 
 
 def fetch_task_context(
@@ -351,31 +356,32 @@ def fetch_task_context(
         (f"task:{task_id}", "tasks.task.get", {"taskId": task_id, "select": ["*"]})
         for task_id in task_ids
     ]
-    batch = getattr(client, "safe_batch_call", None)
-    responses = (
-        batch(requests_to_run)
-        if callable(batch)
-        else {
-            key: client.safe_call(method, payload)
-            for key, method, payload in requests_to_run
-        }
-    )
-    task_responses = {
-        task_id: responses[f"task:{task_id}"]
-        for task_id in task_ids
-    }
-    open_task_ids = select_open_task_ids(task_responses)
-    task_chats: dict[str, dict[str, Any]] = {}
-    for task_id in open_task_ids:
-        chat_id = task_chat_id(task_item(task_responses.get(task_id)))
-        if not chat_id:
-            continue
-        response = client.safe_call(
-            "im.dialog.messages.get",
-            {"DIALOG_ID": f"chat{chat_id}", "LIMIT": 50},
+    with bitrix_trace_context(component="task_history"):
+        batch = getattr(client, "safe_batch_call", None)
+        responses = (
+            batch(requests_to_run)
+            if callable(batch)
+            else {
+                key: client.safe_call(method, payload)
+                for key, method, payload in requests_to_run
+            }
         )
-        task_chats[task_id] = strip_attachment_references(response)
-    return task_responses, open_task_ids, task_chats
+        task_responses = {
+            task_id: responses[f"task:{task_id}"]
+            for task_id in task_ids
+        }
+        open_task_ids = select_open_task_ids(task_responses)
+        task_chats: dict[str, dict[str, Any]] = {}
+        for task_id in open_task_ids:
+            chat_id = task_chat_id(task_item(task_responses.get(task_id)))
+            if not chat_id:
+                continue
+            response = client.safe_call(
+                "im.dialog.messages.get",
+                {"DIALOG_ID": f"chat{chat_id}", "LIMIT": 50},
+            )
+            task_chats[task_id] = strip_attachment_references(response)
+        return task_responses, open_task_ids, task_chats
 
 
 def fetch_source_lead_context(
@@ -575,7 +581,7 @@ def fetch_deal_bundle(
         "deal_contacts": contact_items_response,
         "users": fetch_users(client, user_ids),
         "fields": fetch_field_schemas(client, (previous_bundle or {}).get("fields")),
-        "product_rows": client.safe_call("crm.deal.productrows.get", {"id": deal_id}),
+        "product_rows": None,
         "source_lead": source_lead,
         "activities": activities_response,
         "activity_details": activity_details,
@@ -583,10 +589,7 @@ def fetch_deal_bundle(
         "bitrix_open_task_ids": open_task_ids,
         "bitrix_task_chats": bitrix_task_chats,
         "timeline_comments": timeline_comments,
-        "invoice_attempts": [
-            client.safe_list_all("crm.invoice.list", {"filter": {"UF_DEAL_ID": deal_id}, "select": ["*"]}),
-            client.safe_list_all("crm.item.list", {"entityTypeId": 31, "filter": {"parentId2": deal_id}}),
-        ],
+        "invoice_attempts": [],
         "file_and_recording_refs": extract_refs(references_source),
         "sync": {
             "mode": "incremental" if incremental else "full",
@@ -596,6 +599,13 @@ def fetch_deal_bundle(
             "automatic_full_reconciliation": False,
         },
     }
+    with bitrix_trace_context(component="product_rows"):
+        bundle["product_rows"] = client.safe_call("crm.deal.productrows.get", {"id": deal_id})
+    with bitrix_trace_context(component="invoice"):
+        bundle["invoice_attempts"] = [
+            client.safe_list_all("crm.invoice.list", {"filter": {"UF_DEAL_ID": deal_id}, "select": ["*"]}),
+            client.safe_list_all("crm.item.list", {"entityTypeId": 31, "filter": {"parentId2": deal_id}}),
+        ]
     return bundle
 
 

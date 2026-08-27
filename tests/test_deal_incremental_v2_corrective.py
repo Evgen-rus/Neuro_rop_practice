@@ -27,6 +27,7 @@ from openai_api.llm.deal_semantic_dependencies import (
     ALWAYS_RECOMPUTE_ON_NEW_CLIENT_EVIDENCE,
     resolve_affected_sections,
 )
+from openai_api.llm.analyze_deal import COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE
 from openai_api.llm.deal_incremental_v2 import (
     IncrementalV2Result,
     _estimated_cost_summary,
@@ -631,6 +632,18 @@ class SemanticDriftTests(unittest.TestCase):
         for status in RECOMMENDATION_FEEDBACK_STATUSES:
             self.assertIn(status, prompt)
         self.assertNotIn("x" * 100, prompt)
+
+    def test_communication_quality_audit_reuses_full_next_action_rule(self) -> None:
+        _, _, constraints = build_materialization_contract(
+            {"communication_quality_audit": {}},
+            ["communication_quality_audit"],
+        )
+        self.assertEqual(
+            constraints["communication_quality_audit"]["next_action"],
+            COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE,
+        )
+        self.assertIn("Точное время НЕ обязательно", constraints["communication_quality_audit"]["next_action"])
+        self.assertNotIn("точной датой и временем", constraints["communication_quality_audit"]["next_action"])
 
     def test_materialization_rejects_invalid_recommendation_feedback_enum(self) -> None:
         previous = {

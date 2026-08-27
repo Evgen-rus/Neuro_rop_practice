@@ -15,7 +15,13 @@ from urllib.parse import urlencode
 import requests
 
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, RetryPolicy, run_with_retry
-from bitrix.usage_trace import append_trace_event, build_trace_event, resolve_run_id
+from bitrix.usage_trace import (
+    append_trace_event,
+    batch_command_methods,
+    build_trace_event,
+    env_flag,
+    resolve_run_id,
+)
 
 
 PAGE_SIZE = 50
@@ -25,6 +31,56 @@ DEFAULT_BATCH_CHUNK_SIZE = 20
 
 class BitrixTransientError(RuntimeError):
     status_code = 429
+
+
+class BitrixWriteBlockedError(Exception):
+    """Diagnostic guard: a mutation method was about to be sent. Not a RuntimeError so safe_call cannot swallow it."""
+
+
+_WRITE_METHOD_PARTS = frozenset(
+    {
+        "add",
+        "update",
+        "delete",
+        "move",
+        "complete",
+        "start",
+        "pause",
+        "renew",
+        "share",
+        "upload",
+        "copy",
+        "setstatus",
+    }
+)
+
+
+def forbidden_write_methods(method: str, payload: dict[str, Any] | None = None) -> list[str]:
+    """Return REST methods that look like Bitrix mutations, including batch subcommands."""
+    candidates = [str(method or "").strip()]
+    if candidates[0] == "batch":
+        candidates.extend(batch_command_methods(payload))
+    blocked: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        name = str(raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        parts = [part.lower() for part in name.replace("-", ".").split(".") if part]
+        if any(part in _WRITE_METHOD_PARTS for part in parts):
+            blocked.append(name)
+    return blocked
+
+
+def assert_read_only_method(method: str, payload: dict[str, Any] | None = None) -> None:
+    if not env_flag("BITRIX_DENY_WRITE_METHODS"):
+        return
+    blocked = forbidden_write_methods(method, payload)
+    if blocked:
+        raise BitrixWriteBlockedError(
+            "Диагностика остановила Bitrix write до HTTP: " + ", ".join(blocked)
+        )
 
 
 class BitrixReadOnlyClient:
@@ -46,6 +102,7 @@ class BitrixReadOnlyClient:
         return f"{self.webhook_url}/{method}"
 
     def call(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert_read_only_method(method, payload)
         attempt = 0
 
         def request_once() -> tuple[requests.Response, dict[str, Any]]:

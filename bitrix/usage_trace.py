@@ -26,14 +26,23 @@ KNOWN_COMPONENTS = frozenset(
         "manager_trajectory_stage_history",
         "manager_trajectory_task_history",
         "manager_presence",
+        "per_deal_context",
+        "timeline",
+        "stage_history",
+        "task_history",
+        "invoice",
+        "entity_get",
+        "product_rows",
         "audio_discovery",
         "audio_readiness",
+        "disk_file_get",
         "other",
     }
 )
 
 _COMPONENT: ContextVar[str | None] = ContextVar("bitrix_trace_component", default=None)
 _RUN_ID: ContextVar[str | None] = ContextVar("bitrix_trace_run_id", default=None)
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 
 
 def daily_usage_dir() -> Path:
@@ -53,18 +62,40 @@ def _safe_filter_key(value: Any) -> str:
     return cleaned or "unknown"
 
 
+def env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in _TRUTHY_ENV
+
+
 def normalize_component(value: Any) -> str:
     name = _safe_name(value, default="other")
     return name if name in KNOWN_COMPONENTS else "other"
 
 
 def resolve_component(explicit: str | None = None) -> str:
-    return normalize_component(explicit if explicit is not None else _COMPONENT.get())
+    if explicit is not None:
+        return normalize_component(explicit)
+    context_value = _COMPONENT.get()
+    if context_value:
+        return normalize_component(context_value)
+    return normalize_component(os.getenv("BITRIX_TRACE_COMPONENT"))
 
 
 def resolve_run_id(fallback: str) -> str:
     override = _RUN_ID.get()
-    return _safe_name(override or fallback)
+    if override:
+        return _safe_name(override)
+    env_id = os.getenv("BITRIX_TRACE_RUN_ID", "").strip()
+    if env_id:
+        return _safe_name(env_id)
+    return _safe_name(fallback)
+
+
+def resolve_entity_id() -> str | None:
+    """Deal/lead id only for local diagnostic traces, never in default production JSONL."""
+    if not env_flag("BITRIX_TRACE_ALLOW_ENTITY_ID"):
+        return None
+    value = os.getenv("BITRIX_TRACE_ENTITY_ID", "").strip()
+    return _safe_name(value) if value else None
 
 
 @contextmanager
@@ -160,6 +191,9 @@ def build_trace_event(
         "api_error_code": _safe_name(api_error, default="") or None,
         "error_type": _safe_name(error_type, default="") or None,
     }
+    entity_id = resolve_entity_id()
+    if entity_id:
+        event["entity_id"] = entity_id
     if is_batch:
         event["batch_cmd_count"] = len(cmd_methods)
         event["batch_cmd_methods"] = sorted(set(cmd_methods))

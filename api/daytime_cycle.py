@@ -398,6 +398,38 @@ def _monitor_automatic_run(
         )
 
 
+DIAGNOSTIC_JOB_ENV_KEYS = (
+    "BITRIX_USAGE_DAILY_DIR",
+    "BITRIX_TRACE_RUN_ID",
+    "BITRIX_TRACE_COMPONENT",
+    "BITRIX_TRACE_ALLOW_ENTITY_ID",
+    "BITRIX_DENY_WRITE_METHODS",
+    "OPENAI_USAGE_DAILY_DIR",
+    "OPENAI_USAGE_TRACE_PATH",
+    "SPEND_DIARY_DIR",
+)
+
+
+def _job_extra_env(entity_id: str, *, batch_path: str | None, automatic_run_id: int) -> dict[str, str]:
+    """Copy diagnostic env into the analysis subprocess; production extra_env stays spend-diary only."""
+    from openai_api.spend_diary import BATCH_ENV, RUN_ENV
+
+    extra = {
+        BATCH_ENV: str(batch_path or ""),
+        RUN_ENV: str(automatic_run_id),
+    }
+    for key in DIAGNOSTIC_JOB_ENV_KEYS:
+        value = os.getenv(key, "").strip()
+        if value:
+            extra[key] = value
+    allow_entity = extra.get("BITRIX_TRACE_ALLOW_ENTITY_ID", "").strip().lower()
+    if allow_entity in {"1", "true", "yes", "on"}:
+        extra["BITRIX_TRACE_ENTITY_ID"] = str(entity_id)
+    if extra.get("BITRIX_USAGE_DAILY_DIR") and not extra.get("BITRIX_TRACE_COMPONENT"):
+        extra["BITRIX_TRACE_COMPONENT"] = "per_deal_context"
+    return extra
+
+
 def _launch_automatic_run_jobs(
     *,
     db_path: str | Path,
@@ -407,7 +439,6 @@ def _launch_automatic_run_jobs(
     started_at: str,
 ) -> list[str]:
     from api.jobs import AnalyzeOptions, start_analyze_job
-    from openai_api.spend_diary import BATCH_ENV, RUN_ENV
 
     job_ids: list[str] = []
     for entity_id in deal_ids:
@@ -423,10 +454,11 @@ def _launch_automatic_run_jobs(
                     transcript_mode="all",
                     automatic_analysis_run_id=automatic_run_id,
                     storage_db_path=str(db_path),
-                    extra_env={
-                        BATCH_ENV: str(batch_path or ""),
-                        RUN_ENV: str(automatic_run_id),
-                    },
+                    extra_env=_job_extra_env(
+                        entity_id,
+                        batch_path=batch_path,
+                        automatic_run_id=automatic_run_id,
+                    ),
                 )
             )
         except Exception as error:  # noqa: BLE001 - do not duplicate a manual job that won the race

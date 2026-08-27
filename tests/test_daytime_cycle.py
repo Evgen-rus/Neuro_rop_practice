@@ -317,7 +317,8 @@ class DaytimeCycleRunTests(unittest.TestCase):
              patch("api.daytime_cycle.threading.Thread.start"), \
              patch("api.daytime_cycle._summarize_decisions", return_value={
                  "checked": 1, "changed": 0, "full": 0, "mini": 0, "skip": 1, "error": 0,
-             }):
+             }), \
+             patch.dict(os.environ, {"BITRIX_USAGE_DAILY_DIR": "", "BITRIX_TRACE_ALLOW_ENTITY_ID": ""}):
             start.return_value = {"job_id": "abc"}
             payload = _analyze_work_pool(
                 db_path=self.db_path,
@@ -331,7 +332,29 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertIsNotNone(options.automatic_analysis_run_id)
         self.assertEqual(options.storage_db_path, str(self.db_path))
         self.assertTrue(options.extra_env and "SPEND_DIARY_BATCH_PATH" in options.extra_env)
+        self.assertNotIn("BITRIX_USAGE_DAILY_DIR", options.extra_env)
         self.assertEqual(payload["job_id"], "abc")
+
+    def test_job_extra_env_copies_diagnostic_vars_and_entity_id(self) -> None:
+        from api.daytime_cycle import _job_extra_env
+
+        with patch.dict(
+            os.environ,
+            {
+                "BITRIX_USAGE_DAILY_DIR": "C:/tmp/bitrix",
+                "BITRIX_TRACE_RUN_ID": "diag-run1",
+                "BITRIX_TRACE_ALLOW_ENTITY_ID": "1",
+                "BITRIX_DENY_WRITE_METHODS": "1",
+                "OPENAI_USAGE_TRACE_PATH": "C:/tmp/openai.jsonl",
+            },
+        ):
+            extra = _job_extra_env("18507", batch_path="C:/tmp/batch.jsonl", automatic_run_id=9)
+        self.assertEqual(extra["BITRIX_USAGE_DAILY_DIR"], "C:/tmp/bitrix")
+        self.assertEqual(extra["BITRIX_TRACE_RUN_ID"], "diag-run1")
+        self.assertEqual(extra["BITRIX_TRACE_ENTITY_ID"], "18507")
+        self.assertEqual(extra["BITRIX_TRACE_COMPONENT"], "per_deal_context")
+        self.assertEqual(extra["BITRIX_DENY_WRITE_METHODS"], "1")
+        self.assertIn("SPEND_DIARY_BATCH_PATH", extra)
 
     def test_analyze_work_pool_skips_deals_with_running_jobs(self) -> None:
         from api.daytime_cycle import _analyze_work_pool
