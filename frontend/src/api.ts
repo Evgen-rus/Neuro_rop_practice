@@ -865,6 +865,8 @@ export type DailyControlDeal = {
     cutoff_at: string
     task_buckets: string[]
     activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'bitrix_task_rescheduled' | 'local_task_completed' | 'checklist_completed'>
+    had_day_obligation?: boolean
+    untouched?: boolean
     legacy: boolean
   }
 }
@@ -1013,6 +1015,7 @@ export type DailyControlReportMeta = {
   id: number
   business_date: string
   creation_kind: DailyControlCreationKind
+  heading?: string
   started_at: string
   cutoff_at: string
   created_at: string

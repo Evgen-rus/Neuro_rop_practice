@@ -22,6 +22,7 @@ from api.daily_control import (
     publish_daily_control_report,
     publish_day_end_daily_control_report,
     publish_planning_daily_control_report,
+    report_heading,
     report_payload,
 )
 from openai_api.llm.validation import _validate_deal_management_shapes
@@ -466,12 +467,13 @@ class ReportDayScopeTests(unittest.TestCase):
         row['communications_today']['date'] = '2026-08-17'
         self.assertEqual(project_report_day_scope(project_deal_review_card(row), NOW)['activity_kinds'], [])
 
-    def test_completed_checklist_is_work_but_not_a_crm_task_completion(self) -> None:
+    def test_completed_checklist_is_not_day_work(self) -> None:
         row = _deal_row(communications_today={}, checklist={'items': [
             {'id': '1', 'completed': True, 'completed_at': NOW.isoformat()},
         ]})
         scope = project_report_day_scope(project_deal_review_card(row), NOW)
-        self.assertEqual(scope['activity_kinds'], ['checklist_completed'])
+        self.assertEqual(scope['activity_kinds'], [])
+        self.assertFalse(scope['had_day_obligation'])
 
 
 class DailyControlStorageTests(unittest.TestCase):
@@ -481,8 +483,16 @@ class DailyControlStorageTests(unittest.TestCase):
         init_db(self.db_path)
         self.audit_patch = patch("api.deal_control.COMMUNICATION_QUALITY_AUDIT_ENABLED", True)
         self.audit_patch.start()
+        self.crm_refresh = patch(
+            "api.daily_control._refresh_final_sources",
+            side_effect=lambda **kwargs: build_deal_control_dashboard(
+                db_path=kwargs.get("db_path", self.db_path),
+                now=kwargs.get("now", NOW),
+            ),
+        ).start()
 
     def tearDown(self) -> None:
+        self.crm_refresh.stop()
         self.audit_patch.stop()
         self.temp.cleanup()
 
@@ -542,13 +552,15 @@ class DailyControlStorageTests(unittest.TestCase):
         dashboard = {'deals': [_deal_row(deal_id=key, communications_today={}) for key in ('101', '102')]}
         first = publish_daily_control_report(db_path=self.db_path, creation_kind='manual', started_at=NOW, now=NOW, dashboard=dashboard)
         rows = {item['deal_id']: item for item in first['snapshot']['deals']}
-        self.assertEqual(rows['101']['day_scope']['activity_kinds'], ['bitrix_task_completed', 'call', 'comment', 'message', 'stage_change'])
-        self.assertEqual(rows['102']['day_scope']['activity_kinds'], [])
+        self.assertEqual(list(rows), ['101'])
+        self.assertEqual(rows['101']['day_scope']['activity_kinds'], ['bitrix_task_completed', 'call', 'message'])
+        self.assertNotIn('comment', rows['101']['day_scope']['activity_kinds'])
+        self.assertNotIn('stage_change', rows['101']['day_scope']['activity_kinds'])
         self.assertEqual(first['snapshot']['team']['no_movement'], {'count': 0, 'total': 1})
         event('later-call', 'crm_activity_observed', {'activity_kind': 'call', 'completed': True}, entity_id='102')
         old = report_payload(first['id'], {'role': 'admin'}, db_path=self.db_path, now=NOW.replace(day=19))
-        old_rows = {item['deal_id']: item for item in old['snapshot']['deals']}
-        self.assertEqual(old_rows['102']['day_scope']['activity_kinds'], [])
+        old_ids = [item['deal_id'] for item in old['snapshot']['deals']]
+        self.assertEqual(old_ids, ['101'])
         self.assertEqual(get_daily_control_report(self.db_path, first['id'])['snapshot'], first['snapshot'])
 
     def test_legacy_report_never_gets_work_backfilled_from_current_database(self) -> None:
@@ -580,11 +592,14 @@ class DailyControlStorageTests(unittest.TestCase):
         with patch('storage.rop_db.utcish_now', return_value=NOW.isoformat()):
             record_manager_trajectory_event(
                 self.db_path, entity_type='deal', entity_id='101', manager_id='10',
-                event_type='crm_timeline_comment_observed', source='test', source_event_key='comment',
-                occurred_at=NOW.isoformat(), payload={},
+                event_type='crm_activity_observed', source='test', source_event_key='later-call',
+                occurred_at=NOW.isoformat(), payload={'activity_kind': 'call', 'completed': True},
             )
         self.assertEqual(freshness_for_report(first, db_path=self.db_path, now=NOW)['state'], 'stale')
-        self.assertNotIn('comment', get_daily_control_report(self.db_path, first['id'])['snapshot']['deals'][0]['day_scope']['activity_kinds'])
+        self.assertEqual(
+            get_daily_control_report(self.db_path, first['id'])['snapshot']['deals'][0]['day_scope']['activity_kinds'],
+            first['snapshot']['deals'][0]['day_scope']['activity_kinds'],
+        )
 
     def test_planning_report_uses_moscow_business_date_and_is_not_duplicated(self) -> None:
         _seed_deal(self.db_path)
@@ -595,6 +610,15 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(first["creation_kind"], "automatic_planning")
         self.assertEqual(first["business_date"], "2026-08-18")
         self.assertEqual(first["cutoff_at"][:16], "2026-08-18T15:45")
+        self.assertEqual(
+            report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
+            "ОТЧЕТ К ПЛАНЕРКЕ 18.08 15:45",
+        )
+        self.assertEqual(
+            report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=due)["heading"],
+            "ОТЧЕТ К ПЛАНЕРКЕ 18.08 15:45",
+        )
+        self.crm_refresh.assert_called()
 
     def test_day_end_report_refreshes_crm_without_llm_and_stays_independent(self) -> None:
         from storage.rop_db import create_automatic_analysis_run
@@ -619,6 +643,10 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertNotEqual(first["id"], planning["id"])
         self.assertEqual(first["creation_kind"], "automatic_day_end")
         self.assertEqual(first["cutoff_at"][:16], "2026-08-18T23:00")
+        self.assertEqual(
+            report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
+            "ОТЧЕТ ФИНАЛЬНЫЙ ЗА 18.08 23:00",
+        )
         self.assertEqual(len(list_daily_control_reports(self.db_path)), 2)
 
     def test_morning_opens_previous_workday_final_report(self) -> None:
@@ -664,7 +692,7 @@ class DailyControlStorageTests(unittest.TestCase):
                 "deadline": "2026-08-19T18:00:00+03:00", "completed": True,
                 "bitrix_completed_at": NOW.isoformat(), "time_bucket": "tomorrow",
             }],
-            communications_today={},
+            communications_today={"date": "2026-08-18", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": []},
         )]}
         report = publish_daily_control_report(
             db_path=self.db_path, creation_kind="manual", started_at=NOW, now=NOW, dashboard=dashboard,
@@ -677,6 +705,8 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertTrue(task["completed_today"])
         self.assertEqual(task["reschedules"][0]["from_deadline"], "2026-08-18T18:00:00+03:00")
         self.assertEqual(task["reschedules"][0]["to_deadline"], "2026-08-19T18:00:00+03:00")
+        self.assertTrue(deal["day_scope"]["had_day_obligation"])
+        self.assertTrue(deal["day_scope"]["untouched"])
         self.assertEqual(report["snapshot"]["team"]["tasks_completed"], 1)
         self.assertEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
 
@@ -808,6 +838,161 @@ class DailyControlStorageTests(unittest.TestCase):
         paths = [getattr(route, "path", "") for route in app.routes]
         self.assertTrue(any(path.startswith("/api/daily-control/reports") for path in paths))
         self.assertFalse(any("daily-control" in path and "checklist" in path for path in paths))
+
+
+class DailySnapshotSelectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp.name) / "daily.sqlite"
+        init_db(self.db_path)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _publish(self, dashboard, *, kind="manual", now=NOW):
+        return publish_daily_control_report(
+            db_path=self.db_path, creation_kind=kind, started_at=now, cutoff_at=now, now=now, dashboard=dashboard,
+        )
+
+    def test_heading_uses_kind_date_and_cutoff_time(self) -> None:
+        planning = datetime(2026, 8, 27, 15, 45, tzinfo=MSK_TZ)
+        final = datetime(2026, 8, 27, 23, 0, tzinfo=MSK_TZ)
+        self.assertEqual(report_heading("automatic_planning", "2026-08-27", planning), "ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45")
+        self.assertEqual(report_heading("automatic_day_end", "2026-08-27", final), "ОТЧЕТ ФИНАЛЬНЫЙ ЗА 27.08 23:00")
+        self.assertEqual(report_heading("manual", "2026-08-27", NOW), "ОТЧЕТ ВРУЧНУЮ 27.08 16:00")
+
+    def test_future_deal_with_internal_activity_stays_out_unless_client_contact(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        def event(key, kind, payload, entity_id="101"):
+            with patch("storage.rop_db.utcish_now", return_value=NOW.isoformat()):
+                record_manager_trajectory_event(
+                    self.db_path, entity_type="deal", entity_id=entity_id, manager_id="10",
+                    event_type=kind, source="test", source_event_key=key, occurred_at=NOW.isoformat(), payload=payload,
+                )
+
+        event("stage", "crm_stage_history_observed", {"history_type_id": 2, "stage_id": "C15:PREPARATION"})
+        event("comment", "crm_timeline_comment_observed", {"comment": "Внутренняя заметка"})
+        future_task = {"time_bucket": "future", "completion_state": "open"}
+        report = self._publish({"deals": [
+            _deal_row(deal_id="101", communications_today={}, primary_bitrix_task=future_task, bitrix_tasks=[future_task]),
+            _deal_row(
+                deal_id="102", title="Сделка 102",
+                communications_today={
+                    "date": "2026-08-18", "available": True, "calls": 1, "messages": 0, "completed": 1,
+                    "items": [{"event_id": "c1", "channel": "call", "occurred_at": "2026-08-18T10:00:00+03:00"}],
+                },
+                primary_bitrix_task=future_task, bitrix_tasks=[future_task],
+            ),
+        ]})
+        self.assertEqual([item["deal_id"] for item in report["snapshot"]["deals"]], ["102"])
+        self.assertEqual(report["snapshot"]["team"]["deals_total"], 1)
+        self.assertEqual(report["snapshot"]["team"]["calls"], 1)
+
+    def test_closed_today_task_stays_in_snapshot_even_if_primary_looks_missing(self) -> None:
+        report = self._publish({"deals": [_deal_row(
+            communications_today={"date": "2026-08-18", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": []},
+            primary_bitrix_task=None,
+            bitrix_tasks=[{
+                "task_id": "9", "time_bucket": "today", "completed": True,
+                "completion_state": "bitrix", "bitrix_completed_at": "2026-08-18T12:00:00+03:00",
+                "deadline": "2026-08-18T18:00:00+03:00",
+            }],
+        )]})
+        self.assertEqual(len(report["snapshot"]["deals"]), 1)
+        deal = report["snapshot"]["deals"][0]
+        self.assertTrue(deal["day_scope"]["had_day_obligation"])
+        self.assertTrue(deal["day_scope"]["untouched"])
+        self.assertEqual(deal["bitrix_task_time_bucket"], "missing")
+
+    def test_reschedule_of_future_task_does_not_add_the_deal(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        with patch("storage.rop_db.utcish_now", return_value=NOW.isoformat()):
+            record_manager_trajectory_event(
+                self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+                event_type="crm_task_history_observed", source="test", source_event_key="move",
+                occurred_at="2026-08-18T12:00:00+03:00",
+                payload={
+                    "task_id": "9", "field": "DEADLINE",
+                    "from_value": "2026-08-25T18:00:00+03:00", "to_value": "2026-08-26T18:00:00+03:00",
+                },
+            )
+        report = self._publish({"deals": [_deal_row(
+            communications_today={},
+            bitrix_tasks=[{
+                "task_id": "9", "deadline": "2026-08-26T18:00:00+03:00",
+                "time_bucket": "future", "completion_state": "open",
+            }],
+        )]})
+        self.assertEqual(report["snapshot"]["deals"], [])
+        self.assertEqual(report["snapshot"]["team"]["deals_total"], 0)
+
+    def test_unavailable_comms_keep_obligation_and_do_not_add_future_without_contact(self) -> None:
+        report = self._publish({"deals": [
+            _deal_row(
+                deal_id="101",
+                communications_today={"date": "2026-08-18", "available": False, "completed": 0, "items": []},
+                primary_bitrix_task={"time_bucket": "today", "completion_state": "open"},
+                bitrix_tasks=[{"time_bucket": "today", "completion_state": "open"}],
+            ),
+            _deal_row(
+                deal_id="102", title="Сделка 102",
+                communications_today={"date": "2026-08-18", "available": False, "completed": 0, "items": []},
+                primary_bitrix_task={"time_bucket": "future", "completion_state": "open"},
+                bitrix_tasks=[{"time_bucket": "future", "completion_state": "open"}],
+            ),
+        ]})
+        self.assertEqual([item["deal_id"] for item in report["snapshot"]["deals"]], ["101"])
+        deal = report["snapshot"]["deals"][0]
+        self.assertTrue(deal["day_scope"]["had_day_obligation"])
+        self.assertFalse(deal["day_scope"]["untouched"])
+        self.assertEqual(report["snapshot"]["team"]["no_movement"]["total"], 0)
+
+    def test_day_end_keeps_planning_obligation_and_adds_later_contact(self) -> None:
+        planning_due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
+        final_due = datetime(2026, 8, 18, 23, 0, tzinfo=MSK_TZ)
+        planning = publish_daily_control_report(
+            db_path=self.db_path, creation_kind="automatic_planning",
+            started_at=planning_due, cutoff_at=planning_due, now=planning_due,
+            dashboard={"deals": [_deal_row(
+                communications_today={"date": "2026-08-18", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": []},
+                primary_bitrix_task={"time_bucket": "today", "completion_state": "open"},
+                bitrix_tasks=[{"task_id": "9", "time_bucket": "today", "completion_state": "open", "deadline": "2026-08-18T18:00:00+03:00"}],
+            )], "managers": [], "sync_errors": []},
+        )
+        self.assertEqual([item["deal_id"] for item in planning["snapshot"]["deals"]], ["101"])
+        self.assertTrue(planning["snapshot"]["deals"][0]["day_scope"]["had_day_obligation"])
+        final = publish_day_end_daily_control_report(
+            db_path=self.db_path, now=final_due,
+            refresh_fn=lambda **_kwargs: {"deals": [
+                _deal_row(
+                    communications_today={"date": "2026-08-18", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": []},
+                    primary_bitrix_task={"time_bucket": "tomorrow", "completion_state": "open"},
+                    bitrix_tasks=[{
+                        "task_id": "9", "time_bucket": "tomorrow", "completion_state": "open",
+                        "deadline": "2026-08-19T18:00:00+03:00",
+                    }],
+                ),
+                _deal_row(
+                    deal_id="202", title="Сделка 202",
+                    communications_today={
+                        "date": "2026-08-18", "available": True, "calls": 1, "completed": 1,
+                        "items": [{"event_id": "late", "channel": "call", "occurred_at": "2026-08-18T18:10:00+03:00"}],
+                    },
+                    primary_bitrix_task={"time_bucket": "future", "completion_state": "open"},
+                    bitrix_tasks=[{"time_bucket": "future", "completion_state": "open"}],
+                ),
+            ], "managers": [], "sync_errors": []},
+            clock=lambda: final_due,
+        )
+        ids = [item["deal_id"] for item in final["snapshot"]["deals"]]
+        self.assertEqual(sorted(ids), ["101", "202"])
+        rows = {item["deal_id"]: item for item in final["snapshot"]["deals"]}
+        self.assertTrue(rows["101"]["day_scope"]["had_day_obligation"])
+        self.assertTrue(rows["101"]["day_scope"]["untouched"])
+        self.assertIn("call", rows["202"]["day_scope"]["activity_kinds"])
+        self.assertEqual(final["snapshot"]["team"]["deals_total"], 2)
 
 
 class DailyControlAccessTests(unittest.TestCase):

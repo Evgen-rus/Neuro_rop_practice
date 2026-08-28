@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canFilterReport, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, shouldOpenLatestReport } from './dailyControlView.ts'
+import { canFilterReport, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
   day_scope: { business_date: '2026-08-27', cutoff_at: '2026-08-27T15:45:00+03:00', task_buckets: bucket === 'missing' ? [] : [bucket], activity_kinds: [], legacy: false },
 }))
 
-test('default day keeps due and overdue tasks, not an idle deal with no task', () => {
+test('default view shows the saved report set; today keeps due tasks, not idle deals', () => {
   const filtered = deals.filter((deal) => dealMatchesTime(deal, DEFAULT_TIME_FILTER))
-  assert.deepEqual(filtered.map((deal) => deal.bitrix_task_time_bucket), ['today', 'overdue'])
-  assert.equal(firstReviewDeal(filtered, '1').deal_id, '0')
+  assert.equal(filtered.length, deals.length)
+  assert.deepEqual(deals.filter((deal) => dealMatchesTime(deal, 'today')).map((deal) => deal.bitrix_task_time_bucket), ['today', 'overdue'])
+  assert.equal(firstReviewDeal(deals.filter((deal) => dealMatchesTime(deal, 'today')), '1').deal_id, '0')
   const tomorrow = deals.filter((deal) => dealMatchesTime(deal, 'tomorrow'))
   assert.equal(firstReviewDeal(tomorrow, '1').deal_id, '3')
   assert.equal(firstReviewDeal([], '1'), undefined)
@@ -26,15 +27,19 @@ test('historical day filtering uses the frozen scope independently of the browse
   assert.equal(canFilterReport([{ deal_id: 'old-server' }]), false)
 })
 
-test('future tasks with work belong to the report day and the left row explains the work', () => {
-  for (const activity of ['call', 'message', 'stage_change', 'comment', 'bitrix_task_completed', 'bitrix_task_rescheduled', 'local_task_completed', 'checklist_completed']) {
+test('only client contact brings a future-task deal into the today slice', () => {
+  for (const activity of ['call', 'message']) {
     const deal = { ...deals[4], day_scope: { ...deals[4].day_scope, activity_kinds: [activity] } }
     assert.equal(dealMatchesTime(deal, 'today'), true, activity)
     assert.equal(dealMatchesTime(deal, 'future'), true)
     assert.equal(reportDayLabels(deal).filter((item) => item.kind === 'work').length, 1)
   }
+  for (const activity of ['stage_change', 'comment', 'bitrix_task_completed', 'bitrix_task_rescheduled', 'local_task_completed', 'checklist_completed']) {
+    const deal = { ...deals[4], day_scope: { ...deals[4].day_scope, activity_kinds: [activity] } }
+    assert.equal(dealMatchesTime(deal, 'today'), false, activity)
+  }
   const completed = { ...deals[2], day_scope: { ...deals[2].day_scope, activity_kinds: ['bitrix_task_completed'] } }
-  assert.equal(dealMatchesTime(completed, 'today'), true)
+  assert.equal(dealMatchesTime(completed, 'today'), false)
   assert.deepEqual(reportDayLabels(deals[0]), [{ kind: 'due', text: 'Задача на этот день' }])
   assert.deepEqual(reportDayLabels(deals[1]), [{ kind: 'due', text: 'Просрочена к срезу' }])
   assert.deepEqual(reportDayLabels(deals[4]), [])
@@ -50,7 +55,7 @@ test('a task moved to tomorrow still belongs to today and search looks inside th
   const deal = {
     ...deals[3],
     title: 'Поставка линии',
-    day_scope: { ...deals[3].day_scope, activity_kinds: ['bitrix_task_rescheduled'] },
+    day_scope: { ...deals[3].day_scope, had_day_obligation: true, activity_kinds: ['bitrix_task_rescheduled'] },
     task_results: [{ key: 'task:9', subject: 'Согласовать КП', completed_today: true, reschedules: [{ occurred_at: '2026-08-27T12:00:00+03:00' }] }],
   }
   assert.equal(dealMatchesTime(deal, 'today'), true)
@@ -59,6 +64,24 @@ test('a task moved to tomorrow still belongs to today and search looks inside th
   assert.equal(matchesDailySearch(deal, '101'), false)
   assert.equal(matchesDailySearch(deal, 'поставка'), true)
   assert.equal(matchesDailySearch(deal, 'согласовать'), true)
+})
+
+test('untouched obligation is the first visible label', () => {
+  const deal = { ...deals[0], day_scope: { ...deals[0].day_scope, had_day_obligation: true, untouched: true } }
+  assert.deepEqual(reportDayLabels(deal)[0], { kind: 'untouched', text: 'Не дожали' })
+  assert.equal(dealMatchesTime(deal, 'today'), true)
+})
+
+test('report heading puts date and cutoff time in the title', () => {
+  assert.equal(
+    reportHeading({ creation_kind: 'automatic_planning', business_date: '2026-08-27', cutoff_at: '2026-08-27T15:45:00+03:00' }),
+    'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45',
+  )
+  assert.equal(
+    reportHeading({ creation_kind: 'automatic_day_end', business_date: '2026-08-27', cutoff_at: '2026-08-27T23:00:00+03:00' }),
+    'ОТЧЕТ ФИНАЛЬНЫЙ ЗА 27.08 23:00',
+  )
+  assert.equal(reportHeading({ heading: 'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45' }), 'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45')
 })
 
 test('background refresh opens a new report only outside an active review or chosen history', () => {

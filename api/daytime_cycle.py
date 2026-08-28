@@ -745,7 +745,7 @@ def _set_next_at(value: datetime | None) -> None:
 
 
 def _publish_planning_report(due: datetime) -> dict[str, Any]:
-    """Snapshot persisted deal-control state; do not wait for in-flight LLM jobs."""
+    """Read-only CRM sync then snapshot; do not wait for in-flight LLM jobs."""
     from api.daily_control import publish_planning_daily_control_report
 
     started_at = _iso(due)

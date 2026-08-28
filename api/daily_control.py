@@ -75,6 +75,8 @@ INVENTED_CONTENT_KEYS = (
     "description",
     "content",
 )
+CLIENT_CONTACT_KINDS = frozenset({"call", "message"})
+DAY_OBLIGATION_BUCKETS = frozenset({"today", "overdue"})
 
 logger = get_logger(__file__)
 
@@ -121,17 +123,13 @@ def _daily_trajectory_events(db_path: str | Path, cutoff: datetime) -> list[dict
 
 
 def _day_activity_kind(event: dict[str, Any]) -> str | None:
-    """Only observed work, never planned activities or a generic CRM modification."""
+    """Client contact or Bitrix-task outcome. Stage, comment and card edits are not day work."""
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     kind = event.get("event_type")
     if kind == "crm_activity_observed" and payload.get("completed") is True:
         return {"call": "call", "message": "message", "email": "message", "task": "bitrix_task_completed"}.get(payload.get("activity_kind"))
     if kind == "crm_timeline_comment_observed":
-        return "message" if payload.get("is_messenger_mirror") else "comment"
-    if kind == "crm_stage_history_observed" and str(payload.get("history_type_id") or "") != "1":
-        return "stage_change"
-    if kind == "deal_stage_changed" and payload.get("from_stage_id") != payload.get("to_stage_id"):
-        return "stage_change"
+        return "message" if payload.get("is_messenger_mirror") else None
     if kind == "crm_task_history_observed":
         if is_reschedule(payload):
             return "bitrix_task_rescheduled"
@@ -140,6 +138,45 @@ def _day_activity_kind(event: dict[str, Any]) -> str | None:
         if (field == "STATUS" and value == "5") or (field == "COMPLETED" and value in {"Y", "1", "TRUE"}):
             return "bitrix_task_completed"
     return None
+
+
+def report_heading(
+    creation_kind: str | None,
+    business_date: str | None,
+    cutoff_at: datetime | str | None,
+) -> str:
+    """Human title: kind + date + cutoff time, so history does not need a tiny caption."""
+    cutoff: datetime | None
+    if isinstance(cutoff_at, datetime):
+        cutoff = _aware(cutoff_at).astimezone(MSK_TZ)
+    elif cutoff_at:
+        try:
+            cutoff = _aware(datetime.fromisoformat(str(cutoff_at).replace("Z", "+00:00"))).astimezone(MSK_TZ)
+        except ValueError:
+            cutoff = None
+    else:
+        cutoff = None
+    day = None
+    if business_date:
+        try:
+            day = datetime.fromisoformat(str(business_date)[:10]).date()
+        except ValueError:
+            day = None
+    if day is None and cutoff is not None:
+        day = cutoff.date()
+    if day is None:
+        return "Ежедневный контроль"
+    stamp = f"{day.strftime('%d.%m')}"
+    if cutoff is not None:
+        stamp = f"{stamp} {cutoff.strftime('%H:%M')}"
+    kind = str(creation_kind or "")
+    if kind == "automatic_planning":
+        return f"ОТЧЕТ К ПЛАНЕРКЕ {stamp}"
+    if kind == "automatic_day_end":
+        return f"ОТЧЕТ ФИНАЛЬНЫЙ ЗА {stamp}"
+    if kind == "manual":
+        return f"ОТЧЕТ ВРУЧНУЮ {stamp}"
+    return f"Ежедневный контроль {stamp}"
 
 
 def project_report_day_scope(
@@ -156,12 +193,18 @@ def project_report_day_scope(
         buckets = set()
         for task in source_deal["bitrix_tasks"]:
             state = str(task.get("completion_state") or "open")
+            task_bucket = str(task.get("time_bucket") or "unscheduled")
             if state == "open" and not task.get("completed"):
-                buckets.add(str(task.get("time_bucket") or "unscheduled"))
-            if task.get("completed") and _at_or_before(task.get("bitrix_completed_at"), current):
+                buckets.add(task_bucket)
+            completed_today = bool(
+                (task.get("completed") and _at_or_before(task.get("bitrix_completed_at"), current))
+                or (task.get("local_completed") and _at_or_before(task.get("local_completed_at"), current))
+            )
+            if completed_today:
                 activity.add("bitrix_task_completed")
-            if task.get("local_completed") and _at_or_before(task.get("local_completed_at"), current):
-                activity.add("local_task_completed")
+                # Closed tasks may look missing on the live card; keep the day's obligation.
+                if task_bucket in DAY_OBLIGATION_BUCKETS:
+                    buckets.add(task_bucket)
 
     communications = deal.get("communications_today") or {}
     if communications.get("date") == current.date().isoformat() and communications.get("available"):
@@ -181,9 +224,6 @@ def project_report_day_scope(
                 activity.add("call")
             if int(communications.get("messages") or 0) > 0:
                 activity.add("message")
-    checklist = deal.get("checklist") or {}
-    if any(item.get("completed") and _at_or_before(item.get("completed_at"), current) for item in checklist.get("items") or []):
-        activity.add("checklist_completed")
     for event in events or []:
         if _at_or_before(event.get("occurred_at"), current) and (
             not event.get("recorded_at") or _at_or_before(event.get("recorded_at"), current, same_day=False)
@@ -191,20 +231,84 @@ def project_report_day_scope(
             kind = _day_activity_kind(event)
             if kind:
                 activity.add(kind)
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            if kind == "bitrix_task_rescheduled":
+                before = stamp(payload.get("from_value"))
+                if before is not None:
+                    if before.date() < current.date():
+                        buckets.add("overdue")
+                    elif before.date() == current.date():
+                        buckets.add("today")
     return {
         "business_date": current.date().isoformat(),
         "cutoff_at": _iso(current),
         "task_buckets": sorted(buckets),
         "activity_kinds": sorted(activity),
+        "had_day_obligation": bool(buckets & DAY_OBLIGATION_BUCKETS),
+        "untouched": False,
         "legacy": source_deal is None,
     }
 
 
-def _has_report_day_work(deal: dict[str, Any]) -> bool:
+def _has_client_contact(deal: dict[str, Any]) -> bool:
     scope = deal.get("day_scope")
     if isinstance(scope, dict):
-        return bool(scope.get("activity_kinds"))
-    return int((deal.get("communications_today") or {}).get("completed") or 0) > 0
+        return bool(CLIENT_CONTACT_KINDS.intersection(scope.get("activity_kinds") or []))
+    communications = deal.get("communications_today") or {}
+    return int(communications.get("completed") or 0) > 0
+
+
+def _has_report_day_work(deal: dict[str, Any]) -> bool:
+    return _has_client_contact(deal)
+
+
+def _has_day_obligation(deal: dict[str, Any]) -> bool:
+    scope = deal.get("day_scope") if isinstance(deal.get("day_scope"), dict) else {}
+    if set(scope.get("task_buckets") or []) & DAY_OBLIGATION_BUCKETS:
+        return True
+    return any(
+        task.get("was_due") or task.get("overdue")
+        for task in deal.get("task_results") or []
+        if isinstance(task, dict)
+    )
+
+
+def _mark_day_membership(deal: dict[str, Any], *, carried: bool = False) -> None:
+    scope = deal.get("day_scope")
+    if not isinstance(scope, dict):
+        return
+    buckets = set(scope.get("task_buckets") or [])
+    obligation = _has_day_obligation(deal) or carried
+    if carried and not (buckets & DAY_OBLIGATION_BUCKETS):
+        buckets.add("today")
+        scope["task_buckets"] = sorted(buckets)
+    unavailable = bool((deal.get("communications_today") or {}).get("unavailable"))
+    scope["had_day_obligation"] = obligation
+    scope["untouched"] = obligation and not _has_client_contact(deal) and not unavailable
+
+
+def _belongs_to_daily_snapshot(deal: dict[str, Any]) -> bool:
+    scope = deal.get("day_scope") if isinstance(deal.get("day_scope"), dict) else {}
+    return bool(scope.get("had_day_obligation")) or _has_client_contact(deal)
+
+
+def _planning_obligation_ids(db_path: str | Path, business_date: str) -> set[str]:
+    """Deals that entered today's 15:45 snapshot because of a same-day Bitrix obligation."""
+    ids: set[str] = set()
+    for item in list_daily_control_reports(db_path):
+        if item.get("creation_kind") != "automatic_planning" or item.get("business_date") != business_date:
+            continue
+        full = get_daily_control_report(db_path, int(item["id"]), include_snapshot=True)
+        for deal in ((full or {}).get("snapshot") or {}).get("deals") or []:
+            if not isinstance(deal, dict):
+                continue
+            scope = deal.get("day_scope") if isinstance(deal.get("day_scope"), dict) else {}
+            if scope.get("had_day_obligation") or set(scope.get("task_buckets") or []) & DAY_OBLIGATION_BUCKETS:
+                deal_id = str(deal.get("deal_id") or "")
+                if deal_id:
+                    ids.add(deal_id)
+        break
+    return ids
 
 
 def generation_status() -> dict[str, Any] | None:
@@ -676,7 +780,9 @@ def _sort_deals(deals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rank = {"red": 0, "yellow": 1, "green": 2}
 
     def key(deal: dict[str, Any]) -> tuple[Any, ...]:
+        untouched = 0 if (deal.get("day_scope") or {}).get("untouched") else 1
         return (
+            untouched,
             rank.get(str(deal.get("status")), 9),
             str(deal.get("title") or ""),
             str(deal.get("deal_id") or ""),
@@ -703,6 +809,7 @@ def build_daily_control_snapshot(
     warnings: list[str] | None = None,
     cutoff_at: datetime | None = None,
     activity_events: list[dict[str, Any]] | None = None,
+    carried_obligation_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     deals = [project_deal_review_card(deal) for deal in dashboard.get("deals") or [] if isinstance(deal, dict)]
     if cutoff_at is not None:
@@ -711,6 +818,8 @@ def build_daily_control_snapshot(
         for event in activity_events or []:
             if event.get("entity_type") == "deal":
                 events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)
+        carried = {str(item) for item in (carried_obligation_ids or set())}
+        selected: list[dict[str, Any]] = []
         for deal in deals:
             deal["task_results"] = task_results(
                 sources[deal["deal_id"]].get("bitrix_tasks") or [],
@@ -719,6 +828,10 @@ def build_daily_control_snapshot(
             deal["day_scope"] = project_report_day_scope(
                 deal, cutoff_at, source_deal=sources[deal["deal_id"]], events=events_by_deal.get(deal["deal_id"]),
             )
+            _mark_day_membership(deal, carried=deal["deal_id"] in carried)
+            if _belongs_to_daily_snapshot(deal):
+                selected.append(deal)
+        deals = selected
     deals = _sort_deals(deals)
     managers_by_id: dict[str, dict[str, Any]] = {}
     unavailable_comms = 0
@@ -851,9 +964,13 @@ def publish_daily_control_report(
     else:
         cutoff_dt = cutoff
     cutoff_dt = _aware(cutoff_dt).astimezone(MSK_TZ)
+    carried_ids = None
+    if creation_kind == "automatic_day_end":
+        carried_ids = _planning_obligation_ids(db_path, _business_date(cutoff_dt))
     snapshot = build_daily_control_snapshot(
         payload, warnings=warnings, cutoff_at=cutoff_dt,
         activity_events=_daily_trajectory_events(db_path, cutoff_dt),
+        carried_obligation_ids=carried_ids,
     )
     snapshot["source_preparation"] = preparation
     watermark = compute_source_watermark(db_path, now=cutoff_dt)
@@ -879,10 +996,11 @@ def publish_planning_daily_control_report(
     *,
     db_path: str | Path = DEFAULT_DB_PATH,
     now: datetime | None = None,
+    refresh_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Publish today's planning snapshot from the last prepared persisted state.
+    """Publish today's planning snapshot after a read-only CRM sync, without waiting for LLM.
 
-    Does not wait for in-flight LLM jobs and does not start a new analysis.
+    Does not start a new analysis job. Uses the last automatic-batch status as a visible warning.
     """
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     existing = [
@@ -896,14 +1014,23 @@ def publish_planning_daily_control_report(
         if latest is not None:
             logger.info("Планировочный daily-control за %s уже опубликован (id=%s).", current.date().isoformat(), latest.get("id"))
             return latest
-    logger.info("Публикация планировочного daily-control из persisted state на %s.", _iso(current))
+    logger.info("Публикация планировочного daily-control после CRM sync без AI на %s.", _iso(current))
+    from api.deal_control import build_deal_control_dashboard
+
+    try:
+        dashboard = (refresh_fn or _refresh_final_sources)(db_path=db_path, now=current)
+    except Exception as error:  # noqa: BLE001 - fail-soft snapshot from persisted state
+        logger.warning("Ежедневный контроль 15:45: Bitrix sync не удался, публикуем persisted state.")
+        dashboard = build_deal_control_dashboard(
+            db_path=db_path, now=current, sync_errors=[f"Bitrix sync: {error}"],
+        )
     return publish_daily_control_report(
         db_path=db_path,
         creation_kind="automatic_planning",
         started_at=current,
         cutoff_at=current,
         now=current,
-        refresh=False,
+        dashboard=dashboard,
     )
 
 
@@ -1128,6 +1255,11 @@ def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | No
                 )},
                 "position": len(reports) - index,
                 "total": len(reports),
+                "heading": report_heading(
+                    str(report.get("creation_kind") or ""),
+                    str(report.get("business_date") or ""),
+                    report.get("cutoff_at"),
+                ),
                 "freshness": freshness_for_report(report, db_path=db_path, now=now, live_watermark=live),
             }
         )
@@ -1154,12 +1286,16 @@ def report_payload(
         return None
     snapshot = project_daily_control_snapshot(report.get("snapshot") or {}, user)
     cutoff = _aware(datetime.fromisoformat(str(report["cutoff_at"]).replace("Z", "+00:00"))).astimezone(MSK_TZ)
+    deals = []
+    for deal in snapshot.get("deals") or []:
+        if not isinstance(deal, dict):
+            continue
+        row = {**deal, "day_scope": deal.get("day_scope") or project_report_day_scope(deal, cutoff)}
+        _mark_day_membership(row, carried=bool((row.get("day_scope") or {}).get("had_day_obligation")))
+        deals.append(row)
     snapshot = {
         **snapshot,
-        "deals": [
-            {**deal, "day_scope": deal.get("day_scope") or project_report_day_scope(deal, cutoff)}
-            for deal in snapshot.get("deals") or []
-        ],
+        "deals": deals,
     }
     live = compute_source_watermark(db_path, now=now)
     history = list_daily_control_reports(db_path)
@@ -1170,6 +1306,11 @@ def report_payload(
         "id": report.get("id"),
         "business_date": report.get("business_date"),
         "creation_kind": report.get("creation_kind"),
+        "heading": report_heading(
+            str(report.get("creation_kind") or ""),
+            str(report.get("business_date") or ""),
+            report.get("cutoff_at"),
+        ),
         "started_at": report.get("started_at"),
         "cutoff_at": report.get("cutoff_at"),
         "created_at": report.get("created_at"),

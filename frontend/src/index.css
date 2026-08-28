@@ -7984,9 +7984,9 @@ ul.facts.bad li:before {
 
 .dc-daily-head-copy h1 {
   margin: 0;
-  font-size: 18px;
-  line-height: 22px;
-  font-weight: 700;
+  font-size: 22px;
+  line-height: 26px;
+  font-weight: 800;
   letter-spacing: 0;
   white-space: normal;
 }
@@ -8082,9 +8082,14 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-banner.warn {
-  border-color: #f3d7a3;
-  background: #fff8ea;
-  color: #7a5410;
+  color: #9a3412;
+  background: #fff4e5;
+  border-color: #f0c27a;
+}
+
+.dc-daily-banner.dc-daily-prep {
+  font-size: 14px;
+  font-weight: 650;
 }
 
 .dc-daily-team {
@@ -8470,10 +8475,31 @@ ul.facts.bad li:before {
 
 .dc-daily-deal strong { overflow-wrap: anywhere; }
 
+.dc-daily-deal.untouched {
+  border-color: #f0b429;
+  background: #fff6e5;
+  box-shadow: inset 3px 0 0 #ce2940;
+}
+
+.dc-daily-deal.untouched.selected {
+  border-color: #e2a21a;
+  background: #ffefd2;
+}
+
+.dc-daily-untouched-flag {
+  display: block;
+  margin-top: 8px;
+  color: #ce2940;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 800;
+}
+
 .dc-daily-day-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .dc-daily-day-labels span { padding: 3px 7px; border-radius: 6px; font-size: 11px; line-height: 1.4; }
 .dc-daily-day-labels .due { background: #fff3d9; color: #795000; }
 .dc-daily-day-labels .work { background: #e8f5ee; color: #17613b; }
+.dc-daily-day-labels .untouched { background: #ce2940; color: #fff; font-weight: 700; }
 .dc-daily-work-note { display: block; margin-top: 6px; color: #526981; }
 .dc-deal-pipeline-stage { display: block; margin-top: 2px; }
 .dc-daily-deal p { margin: 6px 0; color: #38516d; }

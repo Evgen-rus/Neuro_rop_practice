@@ -553,11 +553,12 @@ class PlanningReportSlotTests(unittest.TestCase):
         from storage.rop_db import list_daily_control_reports
 
         due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
-        with patch("api.deal_control.refresh_deal_control") as refresh, \
+        dashboard = {"deals": [], "managers": [], "sync_errors": []}
+        with patch("api.daily_control._refresh_final_sources", return_value=dashboard) as refresh, \
              patch("api.jobs.start_analyze_job") as analyze:
             first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
             second = publish_planning_daily_control_report(db_path=self.db_path, now=due)
-        refresh.assert_not_called()
+        refresh.assert_called()
         analyze.assert_not_called()
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["creation_kind"], "automatic_planning")

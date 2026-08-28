@@ -17,7 +17,7 @@ import { formatMoscowDateTime, moscowDateInputValue, parseMoscowDateTime } from 
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { canFilterReport, DEFAULT_TIME_FILTER, dealMatchesTime, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, shouldOpenLatestReport, type DailyControlTimeFilter } from './dailyControlView'
+import { canFilterReport, DEFAULT_TIME_FILTER, dealMatchesTime, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, type DailyControlTimeFilter } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
@@ -32,10 +32,10 @@ const STATUS_FILTERS: Array<{ id: 'all' | DailyControlStatus; label: string }> =
   { id: 'green', label: 'Зелёные' },
 ]
 const TIME_FILTERS: Array<{ id: DailyControlTimeFilter; label: string; hint: string }> = [
-  { id: 'all', label: 'Все', hint: 'Все сделки команды в этом отчёте' },
-  { id: 'today', label: 'Сегодня', hint: 'Задачи на день отчёта, просроченные к срезу и сделки с работой в этот день' },
-  { id: 'tomorrow', label: 'Завтра', hint: 'Открытая задача Bitrix на следующий день после даты отчёта' },
-  { id: 'future', label: 'Будущие', hint: 'Открытая задача Bitrix позже следующего дня или без срока, относительно даты отчёта' },
+  { id: 'all', label: 'Все', hint: 'Все сделки этого отчёта' },
+  { id: 'today', label: 'Сегодня', hint: 'Обязательство на день отчёта или контакт с клиентом до среза' },
+  { id: 'tomorrow', label: 'Завтра', hint: 'Внутри этого отчёта: открытая задача Bitrix на следующий день' },
+  { id: 'future', label: 'Будущие', hint: 'Внутри этого отчёта: открытая задача Bitrix позже следующего дня или без срока' },
 ]
 
 function formatClock(value?: string | null) {
@@ -445,11 +445,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const newerReportAvailable = Boolean(report && history?.latest_id && history.latest_id > report.id)
   const preparation = snapshot?.source_preparation
   const preparationFinished = preparation?.status === 'done' && preparation.finished_at
+  const preparationReady = Boolean(preparationFinished && preparation?.business_date === report?.business_date)
   const historicalDay = Boolean(report && report.business_date !== today)
   const legacyDayScope = allDeals?.some((deal) => deal.day_scope?.legacy)
-  const sourceTag = report?.creation_kind === 'automatic_planning' ? 'Авто · к планёрке' : report?.creation_kind === 'automatic_day_end' ? 'Авто · итог дня' : report ? 'Вручную' : ''
-  const reportPurpose = report?.creation_kind === 'automatic_day_end' ? 'Результат всего дня' : report?.creation_kind === 'automatic_planning' ? 'Для планёрки' : 'Ручной срез'
-    const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
+  const heading = report ? reportHeading(report) : 'Ежедневный контроль'
+  const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
   const managerCounts = {
     all: managerDeals.length,
     red: managerDeals.filter((deal) => deal.status === 'red').length,
@@ -465,13 +465,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
     <section className="dc-daily">
       <header className="dc-daily-head">
         <div className="dc-daily-head-copy">
-          <h1>Ежедневный контроль{report ? ` за ${formatMoscowDateTime(report.business_date, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</h1>
+          <h1>{heading}</h1>
           <p>
-            <strong className="dc-daily-purpose">{report ? `${reportPurpose} · срез на ${formatClock(report.cutoff_at)} МСК` : 'Сохранённого отчёта пока нет'}</strong>
             {report && !sameMinute(report.cutoff_at, report.created_at) && formatClock(report.created_at)
-              ? ` · сформирован ${formatClock(report.created_at)}`
-              : ''}
-            {sourceTag ? <span className={`dc-daily-source ${report?.creation_kind || ''}`}>{sourceTag}</span> : null}
+              ? `сформирован ${formatClock(report.created_at)}`
+              : null}
             {freshness ? <span className={`dc-daily-freshness ${freshness.state}`}>{freshness.label}</span> : null}
           </p>
         </div>
@@ -507,15 +505,17 @@ export function DailyControl({ user }: { user: AuthUser }) {
       {error ? <div className="dc-alert error">{error}</div> : null}
       {history?.missing_morning_final ? <div className="dc-daily-banner warn">Итоговый отчёт за предыдущий рабочий день ещё не найден. На экране — доступный сохранённый срез. Автоматические отчёты формируются по будням в 15:45 и 23:00 МСК.</div> : null}
       {newerReportAvailable ? <div className="dc-daily-banner">Появился новый отчёт. Текущий разбор сохранён на экране. <button type="button" className="dc-button" onClick={() => void openReport(history?.latest_id)}>Открыть новый отчёт</button></div> : null}
-      {legacyDayScope ? <div className="dc-daily-banner">Старый срез: отбор и подписи используют только сохранённые в нём сроки, коммуникации и отметки. История стадий, комментариев и задач из текущей базы не добавляется. Для полного сохранённого списка выберите «Все».</div> : null}
+      {legacyDayScope ? <div className="dc-daily-banner">Старый срез: отбор и подписи используют только сохранённые в нём сроки, коммуникации и отметки. История стадий, комментариев и задач из текущей базы не добавляется.</div> : null}
       {generating && report ? <div className="dc-daily-banner">Формируется новый отчёт. Предыдущий срез остаётся на экране до публикации.</div> : null}
       {freshness?.state === 'stale' ? <div className="dc-daily-banner">После этого среза появились более свежие данные. Сохранённый отчёт не меняется.{canGenerate ? ' Можно сформировать новый отчёт.' : ''}</div> : null}
-      {preparation ? <div className={`dc-daily-banner${preparationFinished && preparation.business_date === report?.business_date ? '' : ' warn'}`}>
-        {preparationFinished
-          ? `На момент создания среза последний автоматический пакет завершён ${formatMoscowDateTime(preparationFinished, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} МСК.`
+      {preparation ? <div className={`dc-daily-banner dc-daily-prep${preparationReady ? '' : ' warn'}`}>
+        {preparationReady
+          ? `Анализ к срезу: последний автоматический пакет завершён ${formatMoscowDateTime(preparation.finished_at || '', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} МСК. Новый AI перед этим отчётом не запускался.`
           : preparation.status === 'running'
-            ? 'На момент создания среза автоматический пакет ещё выполнялся. После его завершения можно сформировать новый отчёт.'
-            : 'На момент создания среза успешное завершение автоматического пакета не подтверждено. Использованы последние сохранённые данные.'}
+            ? 'Анализ к срезу: автоматический пакет ещё выполнялся. Отчёт опубликован вовремя, без ожидания модели. После завершения пакета можно сформировать новый отчёт.'
+            : preparation.status === 'error' || preparation.status === 'interrupted'
+              ? 'Анализ к срезу: автоматический пакет не завершился успешно. Отчёт собран из последних сохранённых данных, без нового AI.'
+              : 'Анализ к срезу: успешное завершение автоматического пакета за сегодня не подтверждено. Использованы последние сохранённые данные, без нового AI.'}
       </div> : null}
       {report?.warnings?.length ? <details className="dc-sync-errors"><summary>Оговорки об актуальности и доступности данных: {report.warnings.length}</summary><ul>{report.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
@@ -675,8 +675,9 @@ export function DailyControl({ user }: { user: AuthUser }) {
 function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selected: boolean; onSelect: () => void }) {
   const communications = deal.communications_today
   const dayLabels = reportDayLabels(deal)
+  const untouched = Boolean(deal.day_scope?.untouched)
   return (
-    <button type="button" className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}`} role="tab" aria-selected={selected} onClick={onSelect}>
+    <button type="button" className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''} ${untouched ? 'untouched' : ''}`} role="tab" aria-selected={selected} onClick={onSelect}>
       <DealStatusIndicator status={deal.status} label={deal.status_label} />
       <div>
         <header>
@@ -684,10 +685,11 @@ function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selecte
           <b>{money(deal.amount, deal.currency_id || 'RUB')}</b>
         </header>
         <small className="dc-deal-pipeline-stage">{formatDealPipelineStage(deal)}</small>
+        {untouched ? <strong className="dc-daily-untouched-flag">Не дожали — к задаче на сегодня не прикоснулись</strong> : null}
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        {deal.day_scope && !deal.day_scope.activity_kinds.length ? <small className="dc-daily-work-note">Работа за этот день в срезе не зафиксирована</small> : null}
+        {deal.day_scope && !untouched && !hasReportDayWork(deal) ? <small className="dc-daily-work-note">Работа за этот день в срезе не зафиксирована</small> : null}
         {deal.checklist.total > 0 ? <small className="dc-daily-work-note">Чек-лист на момент среза: {deal.checklist.completed} из {deal.checklist.total} выполнено</small> : null}
         <p className={selected ? 'full' : 'clamp'}>{deal.attention_reason}</p>
         <footer>
