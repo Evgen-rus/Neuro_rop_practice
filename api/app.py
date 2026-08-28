@@ -28,6 +28,7 @@ from api.candidates import (
 )
 from api.access import (
     actor_source_role,
+    automatic_analysis_details_payload,
     automatic_analysis_latest_payload,
     can_view_job,
     deal_access,
@@ -823,7 +824,11 @@ def automatic_analysis_latest() -> dict[str, Any]:
         return {"latest": None}
     items = list_automatic_analysis_items(DEFAULT_DB_PATH, int(run["id"]))
     visible = scoped_automatic_analysis_items(items, user)
-    return {"latest": automatic_analysis_latest_payload(run, visible)}
+    latest = automatic_analysis_latest_payload(run, visible)
+    if user.get("role") == "admin":
+        decisions = storage.list_automatic_analysis_decisions(DEFAULT_DB_PATH, int(run["id"]))
+        latest["details"] = automatic_analysis_details_payload(decisions)
+    return {"latest": latest}
 
 
 @app.get("/api/admin/trajectory/day")

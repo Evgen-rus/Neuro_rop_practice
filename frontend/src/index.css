@@ -642,9 +642,6 @@ textarea {
 }
 
 .dc-auto-analysis {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
   margin: 0 0 14px;
   padding: 10px 12px;
   border: 1px solid var(--dc-line);
@@ -664,14 +661,69 @@ textarea {
   background: rgba(176, 70, 70, 0.06);
 }
 
-.dc-auto-analysis div {
+.dc-auto-analysis-summary {
   display: grid;
+  flex: 1;
   gap: 2px;
   min-width: 0;
 }
 
 .dc-auto-analysis strong {
   font-size: 13px;
+}
+
+.dc-auto-analysis > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dc-auto-analysis > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dc-auto-analysis > summary::before {
+  content: '▸';
+}
+
+.dc-auto-analysis[open] > summary::before {
+  content: '▾';
+}
+
+.dc-auto-analysis > summary:focus-visible {
+  outline: 2px solid #1768f2;
+  outline-offset: 4px;
+}
+
+.dc-auto-analysis-summary strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dc-auto-analysis-details {
+  margin-top: 10px;
+  border-top: 1px solid var(--dc-line);
+  padding-top: 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.dc-auto-analysis-items {
+  display: grid;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dc-auto-analysis-items ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
 }
 
 .dc-auto-analysis-current {
@@ -8401,6 +8453,12 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-deal strong { overflow-wrap: anywhere; }
+
+.dc-daily-day-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.dc-daily-day-labels span { padding: 3px 7px; border-radius: 6px; font-size: 11px; line-height: 1.4; }
+.dc-daily-day-labels .due { background: #fff3d9; color: #795000; }
+.dc-daily-day-labels .work { background: #e8f5ee; color: #17613b; }
+.dc-daily-work-note { display: block; margin-top: 6px; color: #526981; }
 .dc-deal-pipeline-stage { display: block; margin-top: 2px; }
 .dc-daily-deal p { margin: 6px 0; color: #38516d; }
 .dc-daily-deal p.clamp {

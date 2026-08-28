@@ -355,6 +355,84 @@ class AuthMiddlewareTests(unittest.TestCase):
 
 
 class AutomaticAnalysisAccessTests(unittest.TestCase):
+    def test_details_translate_full_fallback_and_mini_without_private_payloads(self) -> None:
+        items = [
+            {"entity_id": "101", "decision_status": "full", "decision_reason": {
+                "reasons": [
+                    "Обнаружены новые evidence для incremental-анализа: transcript_changed.",
+                    "Безопасный FULL fallback: optimization_disabled.",
+                ],
+                "diff": {"details": {"private": "must not cross the projection"}},
+            }},
+            {"entity_id": "202", "decision_status": "mini", "decision_reason": {
+                "reasons": ["Hard-изменений для LLM нет, но есть soft-изменения или контрольные триггеры."],
+                "triggers": [
+                    {"trigger_type": "overdue_open_task", "details": "private CRM task"},
+                    {"trigger_type": "overdue_open_task"},
+                    {"trigger_type": "soft_change_without_llm", "change": "amount_changed"},
+                ],
+            }},
+            {"entity_id": "303", "decision_status": "skip"},
+        ]
+        with patch.object(access, "_deal_rows", return_value=[_deal("101", "10"), _deal("202", "10")]):
+            details = access.automatic_analysis_details_payload(items)
+        self.assertEqual([row["deal_id"] for row in details], ["101", "202"])
+        self.assertEqual(details[0]["title"], "Deal 101")
+        self.assertEqual(details[0]["reasons"], [
+            "Изменилась расшифровка разговора",
+            "Переход к FULL: Инкрементальный анализ отключён в настройках",
+        ])
+        self.assertEqual(details[1]["reasons"], [
+            "Изменения или контрольные триггеры не требуют LLM",
+            "Просрочена открытая задача",
+            "Изменилась сумма сделки",
+        ])
+        self.assertNotIn("private", json.dumps(details))
+
+    def test_details_handle_missing_reasons_and_hide_fallback_exception_text(self) -> None:
+        with patch.object(access, "_deal_rows", return_value=[]):
+            details = access.automatic_analysis_details_payload([
+                {"entity_id": "101", "decision_status": "full", "engine_status": "INCREMENTAL_LLM_ANALYSIS"},
+                {"entity_id": "202", "decision_status": "full", "decision_reason": {
+                    "reasons": ["Безопасный FULL fallback: v2:RuntimeError:private exception payload."],
+                }},
+                {"entity_id": "303", "decision_status": "mini", "decision_reason": {
+                    "reasons": "malformed", "triggers": [None, {"trigger_type": "private unknown"}],
+                }},
+            ])
+        self.assertTrue(details[0]["incremental"])
+        self.assertEqual(details[0]["title"], "Сделка 101")
+        self.assertEqual(details[0]["reasons"], ["Причина для этого запуска не сохранена"])
+        self.assertIn("V2", details[1]["reasons"][0])
+        self.assertNotIn("private", json.dumps(details))
+
+    def test_latest_details_are_admin_only_but_other_roles_keep_refresh_snapshot(self) -> None:
+        from fastapi.testclient import TestClient
+
+        run = {"id": 42, "status": "done", "started_at": "2026-08-28T10:00:00+03:00"}
+        items = [{"entity_id": "101", "decision_status": "full", "publication_status": "published"}]
+        for role in ("admin", "rop", "manager"):
+            with self.subTest(role=role), \
+                 patch.object(app_api, "authenticate_request", return_value=_user(role, manager_id="10")), \
+                 patch.object(app_api, "get_latest_automatic_analysis_run", return_value=run), \
+                 patch.object(app_api, "list_automatic_analysis_items", return_value=items), \
+                 patch.object(access, "get_deal", return_value=_deal("101", "10")), \
+                 patch.object(access, "_rop_team_manager_ids", return_value={"10"}), \
+                 patch.object(access, "_deal_rows", return_value=[_deal("101", "10")]), \
+                 patch.object(app_api.storage, "list_automatic_analysis_decisions", return_value=items) as read_details:
+                response = TestClient(app_api.app).get("/api/automatic-analysis/latest?role=admin")
+            self.assertEqual(response.status_code, 200)
+            latest = response.json()["latest"]
+            self.assertEqual(latest["reports_published"], 1)
+            self.assertEqual(latest["started_at"], run["started_at"])
+            if role == "admin":
+                read_details.assert_called_once_with(app_api.DEFAULT_DB_PATH, 42)
+                self.assertEqual(latest["details"][0]["deal_id"], "101")
+            else:
+                read_details.assert_not_called()
+                self.assertNotIn("details", latest)
+                self.assertNotIn("Deal 101", response.text)
+
     def test_manager_aggregate_includes_only_own_deals_without_crm_ids(self) -> None:
         manager = _user("manager", manager_id="10", user_id=10)
         items = [

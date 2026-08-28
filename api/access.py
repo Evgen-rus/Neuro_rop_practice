@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from api.auth import current_user
+from openai_api.change_detection.decision_engine import trigger_label
 from storage import rop_db as storage
 
 
@@ -471,3 +472,91 @@ def automatic_analysis_latest_payload(
         "updated_at": run.get("updated_at"),
         "finished_at": run.get("finished_at"),
     }
+
+
+_AUTOMATIC_CHANGE_LABELS = {
+    "commercial_refs_changed": "Изменились ссылки на КП, счёт или договор",
+    "transcript_changed": "Изменилась расшифровка разговора",
+    "new_inbound_customer_message": "Появилось новое входящее сообщение клиента",
+    "deal_closed": "Сделка закрыта",
+    "significant_amount_changed": "Существенно изменилась сумма сделки",
+    "new_activity": "Добавлена CRM-активность",
+    "activity_removed": "Удалена CRM-активность",
+    "amount_changed": "Изменилась сумма сделки",
+    "stage_moved_time_changed": "Изменилось время перехода по стадии",
+    "closed_flag_changed": "Изменился признак закрытия сделки",
+}
+
+_AUTOMATIC_FALLBACK_LABELS = {
+    "optimization_disabled": "Инкрементальный анализ отключён в настройках",
+    "shadow_mode": "Инкрементальный анализ работает в теневом режиме",
+    "force_full_fallback": "В настройках включён переход к полному анализу",
+    "incremental_analyzer_failed": "Инкрементальный анализ завершился ошибкой",
+    "previous_analysis_missing": "Нет предыдущего анализа для инкрементального обновления",
+    "previous_analysis_not_object": "Предыдущий анализ имеет неподходящий формат",
+    "previous_analysis_invalid": "Предыдущий анализ не прошёл проверку",
+    "new_transcript_unavailable": "Новая расшифровка недоступна для инкрементального обновления",
+    "transcript_changed_in_place": "Изменён текст уже существующей расшифровки",
+    "transcript_evidence_identity_missing": "Не удалось установить источник расшифровки",
+    "no_materialized_new_events": "Не удалось подготовить новые события для инкрементального анализа",
+}
+
+
+def _automatic_decision_reasons(value: Any) -> list[str]:
+    """Project known decision reasons; never return diff payloads or exception text."""
+    decision = value if isinstance(value, dict) else {}
+    raw_reasons = decision.get("reasons") if isinstance(value, dict) else value
+    reasons: list[str] = []
+    for reason in raw_reasons if isinstance(raw_reasons, list) else []:
+        if not isinstance(reason, str):
+            continue
+        if reason == "Нет предыдущего состояния сделки в SQLite.":
+            reasons.append("Первый анализ: предыдущее состояние сделки отсутствует")
+        elif reason == "Ручной принудительный запуск: --force-llm.":
+            reasons.append("Запрошен принудительный полный анализ")
+        elif reason.startswith(("Обнаружены hard-изменения для прямого FULL: ",
+                                "Обнаружены новые evidence для incremental-анализа: ")):
+            for code in reason.split(": ", 1)[1].rstrip(".").split(", "):
+                reasons.append(_AUTOMATIC_CHANGE_LABELS.get(code, "Сохранённый тип изменения не распознан"))
+        elif reason.startswith("Безопасный FULL fallback: "):
+            code = reason.removeprefix("Безопасный FULL fallback: ").removesuffix(".")
+            fallback = _AUTOMATIC_FALLBACK_LABELS.get(code)
+            if not fallback and code.startswith("v2:"):
+                fallback = "Инкрементальный анализ V2 не завершён или не прошёл проверку"
+            reasons.append(f"Переход к FULL: {fallback or 'сохранённая причина перехода не распознана'}")
+        elif reason == "Hard-изменений для LLM нет, но есть soft-изменения или контрольные триггеры.":
+            reasons.append("Изменения или контрольные триггеры не требуют LLM")
+        elif reason.startswith("V2 evidence identity подтвердил, что выбранное представление транскрипта уже покрыто предыдущим анализом."):
+            reasons.append("Эта расшифровка уже учтена в предыдущем анализе")
+        elif reason.startswith("После отсечения ложного transcript change остались soft-изменения или контрольные триггеры:"):
+            reasons.append("После исключения повторной расшифровки остались контрольные причины для MINI")
+        else:
+            reasons.append("Сохранённая причина не распознана")
+    triggers = decision.get("triggers")
+    for trigger in triggers if isinstance(triggers, list) else []:
+        if not isinstance(trigger, dict) or not isinstance(trigger.get("trigger_type"), str):
+            continue
+        label = trigger_label({"trigger_type": trigger["trigger_type"]})
+        if label == trigger["trigger_type"]:
+            label = "Сохранённый контрольный триггер не распознан"
+        elif trigger["trigger_type"] == "soft_change_without_llm":
+            change = trigger.get("change")
+            label = _AUTOMATIC_CHANGE_LABELS.get(change, label) if isinstance(change, str) else label
+        reasons.append(label)
+    return list(dict.fromkeys(reasons)) or ["Причина для этого запуска не сохранена"]
+
+
+def automatic_analysis_details_payload(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Admin projection. The endpoint must check the server session before reading it."""
+    deals = {str(row.get("deal_id")): row for row in _deal_rows()} if items else {}
+    return [
+        {
+            "deal_id": str(item["entity_id"]),
+            "title": str((deals.get(str(item["entity_id"])) or {}).get("title") or f"Сделка {item['entity_id']}"),
+            "decision": item["decision_status"],
+            "incremental": item.get("engine_status") == "INCREMENTAL_LLM_ANALYSIS",
+            "reasons": _automatic_decision_reasons(item.get("decision_reason")),
+        }
+        for item in items
+        if item.get("decision_status") in {"full", "mini"}
+    ]

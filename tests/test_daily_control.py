@@ -18,6 +18,7 @@ from api.daily_control import (
     freshness_for_report,
     history_payload,
     project_deal_review_card,
+    project_report_day_scope,
     publish_daily_control_report,
     publish_planning_daily_control_report,
     report_payload,
@@ -426,6 +427,52 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertEqual(card["attention_reason"], "КП отправлено, клиент сравнивает условия.")
 
 
+class ReportDayScopeTests(unittest.TestCase):
+    def test_scope_uses_all_open_tasks_and_only_completion_before_cutoff(self) -> None:
+        row = _deal_row(
+            communications_today={'date': '2026-08-18', 'available': False},
+            bitrix_tasks=[
+                {'time_bucket': 'overdue', 'completed': True, 'completion_state': 'bitrix', 'bitrix_completed_at': '2026-08-17T15:00:00+03:00'},
+                {'time_bucket': 'today', 'completion_state': 'open'},
+                {'time_bucket': 'future', 'completion_state': 'open'},
+                {'time_bucket': 'today', 'completion_state': 'local', 'local_completed': True, 'local_completed_at': '2026-08-18T17:00:00+03:00'},
+            ],
+        )
+        scope = project_report_day_scope(project_deal_review_card(row), NOW, source_deal=row)
+        self.assertEqual(scope['task_buckets'], ['future', 'today'])
+        self.assertEqual(scope['activity_kinds'], [])
+        self.assertFalse(scope['legacy'])
+
+    def test_old_snapshot_uses_its_day_and_does_not_count_future_or_undated_marks(self) -> None:
+        row = _deal_row(
+            communications_today={
+                'date': '2026-08-18', 'available': True, 'calls': 2, 'messages': 1,
+                'items': [
+                    {'event_id': 'before', 'channel': 'call', 'occurred_at': '2026-08-18T12:00:00Z'},
+                    {'event_id': 'after', 'channel': 'call', 'occurred_at': '2026-08-18T14:00:00Z'},
+                    {'event_id': 'previous-day', 'channel': 'message', 'occurred_at': '2026-08-18T01:00:00+07:00'},
+                ],
+            },
+            checklist={'items': [
+                {'id': '1', 'completed': True, 'completed_at': '2026-08-18T17:00:00+03:00'},
+                {'id': '2', 'completed': True},
+            ]},
+        )
+        scope = project_report_day_scope(project_deal_review_card(row), NOW)
+        self.assertEqual(scope['activity_kinds'], ['call'])
+        self.assertEqual(scope['business_date'], '2026-08-18')
+        self.assertTrue(scope['legacy'])
+        row['communications_today']['date'] = '2026-08-17'
+        self.assertEqual(project_report_day_scope(project_deal_review_card(row), NOW)['activity_kinds'], [])
+
+    def test_completed_checklist_is_work_but_not_a_crm_task_completion(self) -> None:
+        row = _deal_row(communications_today={}, checklist={'items': [
+            {'id': '1', 'completed': True, 'completed_at': NOW.isoformat()},
+        ]})
+        scope = project_report_day_scope(project_deal_review_card(row), NOW)
+        self.assertEqual(scope['activity_kinds'], ['checklist_completed'])
+
+
 class DailyControlStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -470,15 +517,123 @@ class DailyControlStorageTests(unittest.TestCase):
         reloaded = get_daily_control_report(self.db_path, int(first["id"]))
         self.assertEqual(reloaded["snapshot"]["deals"][0]["title"], "Сделка 101")
 
+    def test_snapshot_freezes_existing_day_events_and_ignores_plans_and_late_evidence(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        def event(key, kind, payload, *, occurred=NOW.isoformat(), recorded=NOW.isoformat(), entity_id='101', entity_type='deal'):
+            with patch('storage.rop_db.utcish_now', return_value=recorded):
+                record_manager_trajectory_event(
+                    self.db_path, entity_type=entity_type, entity_id=entity_id, manager_id='10',
+                    event_type=kind, source='test', source_event_key=key, occurred_at=occurred, payload=payload,
+                )
+
+        event('call', 'crm_activity_observed', {'activity_kind': 'call', 'completed': True})
+        event('message', 'crm_timeline_comment_observed', {'is_messenger_mirror': True})
+        event('comment', 'crm_timeline_comment_observed', {'comment': 'Внутренняя заметка'})
+        event('stage', 'crm_stage_history_observed', {'history_type_id': 2, 'stage_id': 'C15:PREPARATION'})
+        event('task', 'crm_task_history_observed', {'field': 'STATUS', 'to_value': '5'})
+        event('plan', 'crm_activity_planned', {'activity_kind': 'call', 'completed': False}, entity_id='102')
+        event('creation', 'crm_stage_history_observed', {'history_type_id': 1}, entity_id='102')
+        event('task-deadline', 'crm_task_history_observed', {'field': 'DEADLINE', 'to_value': 'tomorrow'}, entity_id='102')
+        event('future', 'crm_timeline_comment_observed', {}, occurred='2026-08-18T17:00:00+03:00', entity_id='102')
+        event('late', 'crm_timeline_comment_observed', {}, recorded='2026-08-18T17:00:00+03:00', entity_id='102')
+        event('lead', 'crm_timeline_comment_observed', {}, entity_id='102', entity_type='lead')
+        dashboard = {'deals': [_deal_row(deal_id=key, communications_today={}) for key in ('101', '102')]}
+        first = publish_daily_control_report(db_path=self.db_path, creation_kind='manual', started_at=NOW, now=NOW, dashboard=dashboard)
+        rows = {item['deal_id']: item for item in first['snapshot']['deals']}
+        self.assertEqual(rows['101']['day_scope']['activity_kinds'], ['bitrix_task_completed', 'call', 'comment', 'message', 'stage_change'])
+        self.assertEqual(rows['102']['day_scope']['activity_kinds'], [])
+        self.assertEqual(first['snapshot']['team']['no_movement'], {'count': 0, 'total': 1})
+        event('later-call', 'crm_activity_observed', {'activity_kind': 'call', 'completed': True}, entity_id='102')
+        old = report_payload(first['id'], {'role': 'admin'}, db_path=self.db_path, now=NOW.replace(day=19))
+        old_rows = {item['deal_id']: item for item in old['snapshot']['deals']}
+        self.assertEqual(old_rows['102']['day_scope']['activity_kinds'], [])
+        self.assertEqual(get_daily_control_report(self.db_path, first['id'])['snapshot'], first['snapshot'])
+
+    def test_legacy_report_never_gets_work_backfilled_from_current_database(self) -> None:
+        from storage.rop_db import create_daily_control_report, record_manager_trajectory_event
+
+        snapshot = build_daily_control_snapshot({'deals': [_deal_row()]})
+        saved = create_daily_control_report(
+            self.db_path, business_date='2026-08-18', creation_kind='manual',
+            started_at=NOW.isoformat(), cutoff_at=NOW.isoformat(), snapshot=snapshot, source_watermark='old',
+        )
+        record_manager_trajectory_event(
+            self.db_path, entity_type='deal', entity_id='101', manager_id='10',
+            event_type='crm_timeline_comment_observed', source='test', source_event_key='newly-discovered',
+            occurred_at=NOW.isoformat(), payload={},
+        )
+        viewed = report_payload(saved['id'], {'role': 'admin'}, db_path=self.db_path, now=NOW.replace(day=19))
+        scope = viewed['snapshot']['deals'][0]['day_scope']
+        self.assertEqual(scope['activity_kinds'], ['call'])
+        self.assertTrue(scope['legacy'])
+        self.assertEqual(scope['business_date'], '2026-08-18')
+        stored = get_daily_control_report(self.db_path, saved['id'])
+        self.assertNotIn('day_scope', stored['snapshot']['deals'][0])
+
+    def test_work_event_changes_freshness_but_does_not_rewrite_snapshot(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        _seed_deal(self.db_path)
+        first = publish_daily_control_report(db_path=self.db_path, creation_kind='manual', started_at=NOW, now=NOW)
+        with patch('storage.rop_db.utcish_now', return_value=NOW.isoformat()):
+            record_manager_trajectory_event(
+                self.db_path, entity_type='deal', entity_id='101', manager_id='10',
+                event_type='crm_timeline_comment_observed', source='test', source_event_key='comment',
+                occurred_at=NOW.isoformat(), payload={},
+            )
+        self.assertEqual(freshness_for_report(first, db_path=self.db_path, now=NOW)['state'], 'stale')
+        self.assertNotIn('comment', get_daily_control_report(self.db_path, first['id'])['snapshot']['deals'][0]['day_scope']['activity_kinds'])
+
     def test_planning_report_uses_moscow_business_date_and_is_not_duplicated(self) -> None:
         _seed_deal(self.db_path)
-        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)
         first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
-        second = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(minute=46))
+        second = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(hour=12))
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["creation_kind"], "automatic_planning")
         self.assertEqual(first["business_date"], "2026-08-18")
-        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T15:45")
+        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T07:55")
+
+    def test_source_preparation_is_frozen_and_manual_regeneration_uses_finished_batch(self) -> None:
+        from storage.rop_db import create_automatic_analysis_run, finish_automatic_analysis_run
+
+        _seed_deal(self.db_path)
+        due = NOW.replace(hour=7, minute=55)
+        run = create_automatic_analysis_run(self.db_path, trigger='test', business_date=due.date().isoformat())
+        first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
+        self.assertEqual(first['snapshot']['source_preparation']['status'], 'running')
+        self.assertEqual(first['source_status'], 'partial')
+        self.assertTrue(any('ещё выполнялся' in item for item in first['warnings']))
+        finish_automatic_analysis_run(self.db_path, run['id'], status='done')
+        with patch('api.jobs.start_analyze_job') as analyze:
+            second = publish_daily_control_report(
+                db_path=self.db_path, creation_kind='manual', started_at=due,
+                now=due.replace(hour=8), refresh=True,
+                refresh_fn=lambda **_kwargs: {'deals': [], 'managers': []},
+            )
+        analyze.assert_not_called()
+        self.assertNotEqual(first['id'], second['id'])
+        self.assertEqual(second['snapshot']['source_preparation']['status'], 'done')
+        self.assertIsNotNone(second['snapshot']['source_preparation']['finished_at'])
+        frozen = get_daily_control_report(self.db_path, first['id'])
+        self.assertEqual(frozen['snapshot']['source_preparation']['status'], 'running')
+        detail = report_payload(second['id'], {'role': 'admin'}, db_path=self.db_path, now=due)
+        self.assertEqual(detail['snapshot']['source_preparation'], second['snapshot']['source_preparation'])
+
+    def test_old_or_missing_batch_does_not_claim_todays_sources_are_ready(self) -> None:
+        from storage.rop_db import create_automatic_analysis_run
+
+        for status in (None, 'done'):
+            with self.subTest(status=status):
+                if status:
+                    create_automatic_analysis_run(self.db_path, trigger='test', status=status, business_date='2026-08-17')
+                report = publish_daily_control_report(
+                    db_path=self.db_path, creation_kind='manual', started_at=NOW, now=NOW,
+                    dashboard={'deals': [], 'managers': []},
+                )
+                self.assertEqual(report['source_status'], 'partial')
+                self.assertTrue(any('за сегодня не подтверждено' in warning for warning in report['warnings']))
 
     def test_latest_report_becomes_stale_after_source_changes(self) -> None:
         _seed_deal(self.db_path)

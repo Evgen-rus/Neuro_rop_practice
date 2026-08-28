@@ -40,7 +40,7 @@ from storage.rop_db import (
 CYCLE_INTERVAL = timedelta(minutes=30)
 WORKDAY_START = time(7, 0)
 WORKDAY_END = time(18, 0)
-PLANNING_REPORT_TIME = time(15, 45)
+PLANNING_REPORT_TIME = time(7, 55)
 WEEKDAY_MONDAY = 0
 WEEKDAY_FRIDAY = 4
 FULL_STATUSES = {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}
@@ -53,6 +53,7 @@ _stop_event = threading.Event()
 _run_lock = threading.Lock()
 _state_lock = threading.Lock()
 _thread: threading.Thread | None = None
+_cycle_thread: threading.Thread | None = None
 _last_cycle: dict[str, Any] | None = None
 _next_at: str | None = None
 
@@ -82,7 +83,7 @@ def _is_workday(day: date) -> bool:
 
 
 def slot_times_for_day() -> list[time]:
-    """Weekday slots from 07:00 to 18:00 MSK every 30 minutes, plus 15:45 planning publish."""
+    """Weekday slots from 07:00 to 18:00 MSK every 30 minutes, plus 07:55 publication."""
     slots: list[time] = []
     cursor = datetime.combine(date.min, WORKDAY_START)
     last = datetime.combine(date.min, WORKDAY_END)
@@ -132,7 +133,7 @@ def daytime_cycle_status() -> dict[str, Any]:
         "interval_minutes": int(CYCLE_INTERVAL.total_seconds() // 60),
         "workdays": "mon-fri",
         "work_hours": "07:00-18:00",
-        "planning_report_at": "15:45",
+        "planning_report_at": PLANNING_REPORT_TIME.strftime("%H:%M"),
         "timezone": "Europe/Moscow",
         "next_at": next_at,
         "last": last,
@@ -775,9 +776,47 @@ def _publish_planning_report(due: datetime) -> dict[str, Any]:
         )
 
 
+def _start_interval_cycle(due: datetime) -> None:
+    """Keep slow CRM/analysis work off the publication clock; never overlap workers."""
+    global _cycle_thread
+    if _cycle_thread is not None and _cycle_thread.is_alive():
+        logger.info("Предыдущий дневной цикл ещё выполняется; новый цикл не запускается.")
+        return
+
+    def run() -> None:
+        try:
+            run_daytime_cycle(trigger="interval_30m", now=due)
+        except Exception:  # noqa: BLE001 - a failed worker must not kill future ticks
+            logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
+
+    _cycle_thread = threading.Thread(
+        target=run,
+        name="neuro-rop-daytime-worker",
+        daemon=True,
+    )
+    _cycle_thread.start()
+
+
+def _planning_report_is_due(now: datetime, published_on: date | None) -> bool:
+    current = _aware(now).astimezone(MSK_TZ)
+    return (
+        _is_workday(current.date())
+        and current.time() >= PLANNING_REPORT_TIME
+        and current.date() != published_on
+    )
+
+
 def _scheduler_loop() -> None:
-    logger.info("Планировщик дневного цикла: будни 07:00–18:00 МСК каждые 30 минут и публикация отчёта в 15:45.")
+    logger.info("Планировщик дневного цикла: будни 07:00–18:00 МСК каждые 30 минут и публикация отчёта в 07:55.")
+    published_on: date | None = None
     while not _stop_event.is_set():
+        current = datetime.now(MSK_TZ)
+        # Catch up after a restart or delayed tick using the actual publication time.
+        # The existing SQLite uniqueness constraint also protects across restarts.
+        if _planning_report_is_due(current, published_on):
+            result = _publish_planning_report(current)
+            if result.get("status") == "success":
+                published_on = current.date()
         due = next_scheduled_at()
         _set_next_at(due)
         wait_seconds = max(0.0, (due - datetime.now(MSK_TZ)).total_seconds())
@@ -785,10 +824,8 @@ def _scheduler_loop() -> None:
         if _stop_event.wait(timeout=wait_seconds):
             break
         try:
-            if due.hour == 15 and due.minute == 45:
-                _publish_planning_report(due)
-            else:
-                run_daytime_cycle(trigger="interval_30m", now=due)
+            if due.time() != PLANNING_REPORT_TIME:
+                _start_interval_cycle(due)
         except Exception:  # noqa: BLE001 - a failed tick must not kill the loop
             logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
     _set_next_at(None)

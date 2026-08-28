@@ -2885,6 +2885,36 @@ def get_automatic_analysis_item(
     return _row_to_automatic_analysis_item(row)
 
 
+def list_automatic_analysis_decisions(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
+    """Read decisions linked to this packet, never a newer analysis of the same deal."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT items.entity_id, items.decision_status,
+                   analysis.status AS engine_status, analysis.decision_reason_json
+            FROM automatic_analysis_items AS items
+            LEFT JOIN analysis_runs AS analysis
+              ON analysis.id = items.analysis_run_id
+             AND analysis.entity_type = items.entity_type
+             AND analysis.entity_id = items.entity_id
+            WHERE items.run_id = ? AND items.entity_type = 'deal'
+              AND items.decision_status IN ('full', 'mini')
+            ORDER BY items.id ASC
+            """,
+            (int(run_id),),
+        ).fetchall()
+    return [
+        {
+            "entity_id": row["entity_id"],
+            "decision_status": row["decision_status"],
+            "engine_status": row["engine_status"],
+            "decision_reason": loads_json(row["decision_reason_json"], None),
+        }
+        for row in rows
+    ]
+
+
 def update_automatic_analysis_item(
     db_path: str | Path,
     run_id: int,

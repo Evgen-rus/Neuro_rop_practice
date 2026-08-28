@@ -843,6 +843,13 @@ export type DailyControlDeal = {
   analysis_checked_at?: string | null
   analysis_check_status?: string | null
   bitrix_task_time_bucket?: 'overdue' | 'today' | 'tomorrow' | 'future' | 'unscheduled' | 'missing'
+  day_scope?: {
+    business_date: string
+    cutoff_at: string
+    task_buckets: string[]
+    activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'local_task_completed' | 'checklist_completed'>
+    legacy: boolean
+  }
 }
 
 export type DealControlDeal = {
@@ -956,6 +963,12 @@ export type DailyControlSnapshot = {
   deals: DailyControlDeal[]
   source_warnings: string[]
   communications_unavailable_count?: number
+  source_preparation?: {
+    business_date?: string | null
+    status?: string | null
+    started_at?: string | null
+    finished_at?: string | null
+  }
 }
 
 export type DailyControlFreshness = {
@@ -2253,23 +2266,7 @@ export function fetchJob(jobId: string) {
   return api<JobState>(`/api/jobs/${jobId}`)
 }
 
-export type AutomaticAnalysisLatest = {
-  business_date: string | null
-  status: string
-  processed: number
-  total: number
-  succeeded: number
-  errors: number
-  skipped: number
-  full: number
-  mini: number
-  reports_published: number
-  current_stage: string | null
-  current?: { title: string; stage: string | null } | null
-  started_at: string | null
-  updated_at: string | null
-  finished_at: string | null
-}
+export type AutomaticAnalysisLatest = import('./automaticAnalysis').AutomaticAnalysisLatest
 
 export function fetchAutomaticAnalysisLatest() {
   return api<{ latest: AutomaticAnalysisLatest | null }>('/api/automatic-analysis/latest')

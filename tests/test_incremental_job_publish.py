@@ -16,8 +16,10 @@ from storage.rop_db import (
     init_db,
     interrupt_running_automatic_analysis_runs,
     list_automatic_analysis_items,
+    list_automatic_analysis_decisions,
     list_ui_reports,
     save_analysis_run,
+    update_automatic_analysis_item,
 )
 
 
@@ -46,6 +48,29 @@ def _ready(job: JobState, entity_id: str, *, run_id: int, decision: str) -> None
 
 
 class IncrementalJobPublishTests(unittest.TestCase):
+    def test_packet_decisions_use_linked_runs_not_latest_deal_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            old_packet = create_automatic_analysis_run(db_path, trigger="test", entity_ids=["999"])
+            packet = create_automatic_analysis_run(db_path, trigger="test", entity_ids=["101", "202", "303", "404"])
+            reason = {"reasons": ["Нет предыдущего состояния сделки в SQLite."]}
+            linked = save_analysis_run(db_path, entity_type="deal", entity_id="101",
+                                       status="FIRST_FULL_ANALYSIS", decision_reason=reason)
+            save_analysis_run(db_path, entity_type="deal", entity_id="101",
+                              status="FULL_LLM_ANALYSIS", decision_reason={"reasons": ["newer unrelated"]})
+            for entity_id, decision, analysis_id in [("101", "full", linked), ("202", "mini", None),
+                                                       ("303", "skip", None), ("404", "full", linked)]:
+                update_automatic_analysis_item(db_path, packet["id"], entity_type="deal", entity_id=entity_id,
+                                               decision_status=decision, analysis_run_id=analysis_id)
+            update_automatic_analysis_item(db_path, old_packet["id"], entity_type="deal", entity_id="999",
+                                           decision_status="full")
+            details = list_automatic_analysis_decisions(db_path, packet["id"])
+        self.assertEqual([row["entity_id"] for row in details], ["101", "202", "404"])
+        self.assertEqual(details[0]["decision_reason"], reason)
+        self.assertEqual(details[0]["engine_status"], "FIRST_FULL_ANALYSIS")
+        self.assertIsNone(details[1]["decision_reason"])
+        self.assertIsNone(details[2]["decision_reason"], "An unrelated entity's analysis must never be used")
+
     def test_compact_decision_status_maps_engine_values(self) -> None:
         self.assertEqual(compact_decision_status("FIRST_FULL_ANALYSIS"), "full")
         self.assertEqual(compact_decision_status("FULL_LLM_ANALYSIS"), "full")

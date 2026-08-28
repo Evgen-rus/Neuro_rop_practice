@@ -14,6 +14,14 @@ export type AutomaticAnalysisCurrent = {
   stage: string | null
 }
 
+export type AutomaticAnalysisDetail = {
+  deal_id: string
+  title: string
+  decision: 'full' | 'mini'
+  incremental: boolean
+  reasons: string[]
+}
+
 export type AutomaticAnalysisLatest = {
   business_date: string | null
   status: AutomaticAnalysisStatus
@@ -30,6 +38,11 @@ export type AutomaticAnalysisLatest = {
   started_at: string | null
   updated_at: string | null
   finished_at: string | null
+  details?: AutomaticAnalysisDetail[]
+}
+
+export function canViewAutomaticAnalysis(role: string): boolean {
+  return role === 'admin'
 }
 
 export const AUTOMATIC_ANALYSIS_RUNNING_POLL_MS = 2500

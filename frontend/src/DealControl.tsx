@@ -68,13 +68,10 @@ import { laterCheckCopy, reviewFromLabel, reviewHeadlineAt } from './analysisRev
 import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
-  automaticAnalysisCountersText,
-  automaticAnalysisCurrentText,
   automaticAnalysisPollInterval,
-  automaticAnalysisStageLabel,
-  automaticAnalysisStatusLabel,
   shouldReloadAfterAutomaticAnalysis,
 } from './automaticAnalysis'
+import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
 import {
   freshQuickHelpIdFromJob,
   latestQuickHelpEntryId,
@@ -445,7 +442,8 @@ function NoticeToast({ message, onClose }: { message: string; onClose: () => voi
   )
 }
 
-function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: () => void }) {
+function AutomaticAnalysisStatus({ onReportsPublished, role }: { onReportsPublished: () => void; role: string }) {
+  // Keep polling for every role so hiding the panel does not disable dashboard refreshes.
   const [snapshot, setSnapshot] = useState<AutomaticAnalysisLatest | null>(null)
   const previousSnapshotRef = useRef<AutomaticAnalysisLatest | null>(null)
 
@@ -477,25 +475,7 @@ function AutomaticAnalysisStatus({ onReportsPublished }: { onReportsPublished: (
     }
   }, [onReportsPublished])
 
-  if (!snapshot) return null
-  const current = automaticAnalysisCurrentText(snapshot)
-  const stage = current ? null : automaticAnalysisStageLabel(snapshot.current_stage)
-  const updated = snapshot.updated_at || snapshot.started_at
-  return (
-    <div className={`dc-auto-analysis ${snapshot.status}`} role="status">
-      {snapshot.status === 'running' ? <span className="dc-spinner" /> : null}
-      <div>
-        <strong>{automaticAnalysisStatusLabel(snapshot.status)}</strong>
-        {current ? <span className="dc-auto-analysis-current">{current}</span> : null}
-        <small>
-          {snapshot.business_date ? `${snapshot.business_date} · ` : ''}
-          {automaticAnalysisCountersText(snapshot)}
-          {stage ? ` · этап: ${stage}` : ''}
-          {updated ? ` · обновлено ${dateTime(updated)}` : ''}
-        </small>
-      </div>
-    </div>
-  )
+  return <AutomaticAnalysisPanel snapshot={snapshot} role={role} />
 }
 
 export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; onLogout?: () => Promise<void>; user: AuthUser }) {
@@ -979,7 +959,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           </button>
         </div>
       </header>
-      <AutomaticAnalysisStatus onReportsPublished={() => { void reload() }} />
+      <AutomaticAnalysisStatus role={user.role} onReportsPublished={() => { void reload() }} />
 
       {error ? <div className="dc-alert error">{error}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
