@@ -283,6 +283,7 @@ export function DealReviewCard(props: {
   emptyText?: string
   contentNote?: string
   scriptHint?: string
+  showChecklist?: boolean
 }) {
   const [eventsOpen, setEventsOpen] = useState(false)
   const deal = props.deal
@@ -292,7 +293,6 @@ export function DealReviewCard(props: {
   const communications = deal.communications_today
   const summary = summaryView(communications)
   const events = displayEvents(communications.items || [])
-  const checklist = deal.checklist
   const contentNote = props.contentNote || DEFAULT_CONTENT_NOTE
   const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
   const script = meetingScript(deal)
@@ -457,16 +457,17 @@ export function DealReviewCard(props: {
         )}
       </article>
 
+      {props.showChecklist !== false ? (
       <article className="dc-daily-block">
         <header className="dc-daily-block-title">
           <span className="dc-daily-title-with-icon">
             <span className="dc-daily-ico"><DailyIcon name="check" /></span>
             <h3>Чек-лист на сегодня</h3>
           </span>
-          <small>{checklist.completed} из {checklist.total} выполнено</small>
+          <small>{deal.checklist.completed} из {deal.checklist.total} выполнено</small>
         </header>
         <div className="dc-daily-checklist">
-          {checklist.items.length ? checklist.items.map((item) => (
+          {deal.checklist.items.length ? deal.checklist.items.map((item) => (
             <div key={item.id} className={item.completed ? 'done' : ''}>
               <span aria-hidden="true">{item.completed ? '✓' : ''}</span>
               <div>
@@ -477,6 +478,7 @@ export function DealReviewCard(props: {
           )) : <p className="dc-daily-block-note">{NO_DATA}</p>}
         </div>
       </article>
+      ) : null}
     </section>
   )
 }

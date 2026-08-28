@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canFilterReport, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport } from './dailyControlView.ts'
+import { canFilterReport, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
@@ -66,9 +66,10 @@ test('a task moved to tomorrow still belongs to today and search looks inside th
   assert.equal(matchesDailySearch(deal, 'согласовать'), true)
 })
 
-test('untouched obligation is the first visible label', () => {
+test('untouched obligation stays in the report without a separate badge', () => {
   const deal = { ...deals[0], day_scope: { ...deals[0].day_scope, had_day_obligation: true, untouched: true } }
-  assert.deepEqual(reportDayLabels(deal)[0], { kind: 'untouched', text: 'Не дожали' })
+  assert.deepEqual(reportDayLabels(deal)[0], { kind: 'due', text: 'Задача на этот день' })
+  assert.equal(reportDayLabels(deal).some((item) => item.text.includes('Не дожали')), false)
   assert.equal(dealMatchesTime(deal, 'today'), true)
 })
 
@@ -91,4 +92,14 @@ test('background refresh opens a new report only outside an active review or cho
   assert.equal(shouldOpenLatestReport(10, 11, false, true), false)
   assert.equal(shouldOpenLatestReport(10, 10, false, false), false)
   assert.equal(shouldOpenLatestReport(10, null, false, false), false)
+})
+
+test('open task without overdue or reschedule waits for completion', () => {
+  assert.deepEqual(taskStripStatus({ status: 'completed', overdue: true, reschedules: [{}] }), { kind: 'completed', text: 'выполнена' })
+  assert.deepEqual(taskStripStatus({ status: 'open', overdue: true }), { kind: 'overdue', text: 'просрочена' })
+  assert.deepEqual(taskStripStatus({ status: 'open', reschedules: [{ occurred_at: '2026-08-27T12:00:00+03:00' }] }), { kind: 'rescheduled', text: 'перенесена' })
+  assert.deepEqual(taskStripStatus({ status: 'open' }), { kind: 'waiting', text: 'ждет выполнения' })
+  assert.deepEqual(tasksStripSummary([{ status: 'open' }, { status: 'completed' }]), { kind: 'waiting', text: 'Задача ждет выполнения' })
+  assert.deepEqual(tasksStripSummary([{ status: 'open', overdue: true }, { status: 'open' }]), { kind: 'overdue', text: 'Задача просрочена' })
+  assert.deepEqual(tasksStripSummary([]), { kind: 'empty', text: 'Задачи в срезе не зафиксированы' })
 })

@@ -29,11 +29,10 @@ export function hasReportDayWork(deal: DailyControlDeal) {
   return Number(deal.communications_today?.completed || 0) > 0
 }
 
-export function reportDayLabels(deal: DailyControlDeal): Array<{ kind: 'due' | 'work' | 'untouched'; text: string }> {
+export function reportDayLabels(deal: DailyControlDeal): Array<{ kind: 'due' | 'work'; text: string }> {
   const scope = deal.day_scope
   if (!scope) return []
-  const labels: Array<{ kind: 'due' | 'work' | 'untouched'; text: string }> = []
-  if (scope.untouched) labels.push({ kind: 'untouched', text: 'Не дожали' })
+  const labels: Array<{ kind: 'due' | 'work'; text: string }> = []
   if (scope.task_buckets.includes('today') || (scope.had_day_obligation && !scope.task_buckets.includes('overdue'))) {
     labels.push({ kind: 'due', text: 'Задача на этот день' })
   }
@@ -48,6 +47,27 @@ export function reportDayLabels(deal: DailyControlDeal): Array<{ kind: 'due' | '
     if (workLabels[kind]) labels.push({ kind: 'work', text: workLabels[kind] })
   }
   return labels
+}
+
+export type TaskStripKind = 'overdue' | 'completed' | 'rescheduled' | 'waiting' | 'unknown' | 'empty'
+
+export function taskStripStatus(task: { status?: string; overdue?: boolean; reschedules?: unknown[] }): { kind: TaskStripKind; text: string } {
+  if (task.status === 'completed') return { kind: 'completed', text: 'выполнена' }
+  if (task.overdue) return { kind: 'overdue', text: 'просрочена' }
+  if ((task.reschedules || []).length) return { kind: 'rescheduled', text: 'перенесена' }
+  if (task.status === 'open') return { kind: 'waiting', text: 'ждет выполнения' }
+  return { kind: 'unknown', text: 'статус не сохранён' }
+}
+
+export function tasksStripSummary(tasks?: Array<{ status?: string; overdue?: boolean; reschedules?: unknown[] }>): { kind: TaskStripKind; text: string } {
+  if (!tasks) return { kind: 'unknown', text: 'Подробности задач в этом старом срезе не сохранялись' }
+  if (!tasks.length) return { kind: 'empty', text: 'Задачи в срезе не зафиксированы' }
+  const kinds = tasks.map((task) => taskStripStatus(task).kind)
+  if (kinds.includes('overdue')) return { kind: 'overdue', text: 'Задача просрочена' }
+  if (kinds.includes('rescheduled')) return { kind: 'rescheduled', text: 'Задача перенесена' }
+  if (kinds.includes('waiting')) return { kind: 'waiting', text: 'Задача ждет выполнения' }
+  if (kinds.includes('completed')) return { kind: 'completed', text: 'Задача выполнена' }
+  return { kind: 'unknown', text: 'Задача: статус не сохранён' }
 }
 
 export function reportHeading(report: {
