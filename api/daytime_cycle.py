@@ -38,7 +38,7 @@ from storage.rop_db import (
 
 
 CYCLE_INTERVAL = timedelta(minutes=30)
-WORKDAY_START = time(8, 0)
+WORKDAY_START = time(7, 0)
 WORKDAY_END = time(18, 0)
 PLANNING_REPORT_TIME = time(15, 45)
 WEEKDAY_MONDAY = 0
@@ -82,7 +82,7 @@ def _is_workday(day: date) -> bool:
 
 
 def slot_times_for_day() -> list[time]:
-    """Weekday slots from 08:00 to 18:00 MSK every 30 minutes, plus 15:45 planning publish."""
+    """Weekday slots from 07:00 to 18:00 MSK every 30 minutes, plus 15:45 planning publish."""
     slots: list[time] = []
     cursor = datetime.combine(date.min, WORKDAY_START)
     last = datetime.combine(date.min, WORKDAY_END)
@@ -131,7 +131,7 @@ def daytime_cycle_status() -> dict[str, Any]:
         "running": _thread is not None and _thread.is_alive(),
         "interval_minutes": int(CYCLE_INTERVAL.total_seconds() // 60),
         "workdays": "mon-fri",
-        "work_hours": "08:00-18:00",
+        "work_hours": "07:00-18:00",
         "planning_report_at": "15:45",
         "timezone": "Europe/Moscow",
         "next_at": next_at,
@@ -776,7 +776,7 @@ def _publish_planning_report(due: datetime) -> dict[str, Any]:
 
 
 def _scheduler_loop() -> None:
-    logger.info("Планировщик дневного цикла: будни 08:00–18:00 МСК каждые 30 минут и публикация отчёта в 15:45.")
+    logger.info("Планировщик дневного цикла: будни 07:00–18:00 МСК каждые 30 минут и публикация отчёта в 15:45.")
     while not _stop_event.is_set():
         due = next_scheduled_at()
         _set_next_at(due)

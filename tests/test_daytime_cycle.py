@@ -55,15 +55,17 @@ def _scope(db_path: Path) -> None:
 class DaytimeCycleScheduleTests(unittest.TestCase):
     def test_slots_cover_weekday_hours_and_planning_prep_once(self) -> None:
         pairs = [(item.hour, item.minute) for item in slot_times_for_day()]
-        self.assertEqual(pairs[0], (8, 0))
+        self.assertEqual(pairs[0], (7, 0))
         self.assertEqual(pairs[-1], (18, 0))
+        self.assertIn((7, 0), pairs)
+        self.assertIn((7, 30), pairs)
         self.assertIn((8, 0), pairs)
         self.assertIn((8, 30), pairs)
         self.assertIn((15, 30), pairs)
         self.assertIn((15, 45), pairs)
         self.assertIn((16, 0), pairs)
         self.assertIn((18, 0), pairs)
-        self.assertNotIn((7, 30), pairs)
+        self.assertNotIn((6, 30), pairs)
         self.assertNotIn((0, 0), pairs)
         self.assertNotIn((15, 50), pairs)
         self.assertNotIn((18, 30), pairs)
@@ -83,26 +85,34 @@ class DaytimeCycleScheduleTests(unittest.TestCase):
             datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ),
         )
 
-    def test_next_slot_stays_on_weekdays_between_eight_and_eighteen(self) -> None:
+    def test_next_slot_stays_on_weekdays_between_seven_and_eighteen(self) -> None:
+        self.assertEqual(
+            next_scheduled_at(datetime(2026, 8, 18, 6, 50, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 7, 0, tzinfo=MSK_TZ),
+        )
+        self.assertEqual(
+            next_scheduled_at(datetime(2026, 8, 18, 7, 0, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 7, 30, tzinfo=MSK_TZ),
+        )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 18, 7, 50, tzinfo=MSK_TZ)),
             datetime(2026, 8, 18, 8, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 18, 18, 0, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 19, 8, 0, tzinfo=MSK_TZ),
+            datetime(2026, 8, 19, 7, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 21, 18, 0, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 24, 8, 0, tzinfo=MSK_TZ),
+            datetime(2026, 8, 24, 7, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 22, 12, 0, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 24, 8, 0, tzinfo=MSK_TZ),
+            datetime(2026, 8, 24, 7, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 23, 21, 0, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 24, 8, 0, tzinfo=MSK_TZ),
+            datetime(2026, 8, 24, 7, 0, tzinfo=MSK_TZ),
         )
 
 
