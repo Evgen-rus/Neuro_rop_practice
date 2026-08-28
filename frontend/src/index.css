@@ -2889,8 +2889,8 @@ textarea {
 
 .dc-task-columns,
 .dc-task-row {
-  grid-template-columns: 36px minmax(180px, 1.15fr) minmax(125px, .75fr) minmax(185px, 1.15fr) 82px 105px;
-  min-width: 715px;
+  grid-template-columns: 36px minmax(180px, 1.15fr) minmax(125px, .75fr) minmax(185px, 1.15fr) 82px 140px;
+  min-width: 750px;
 }
 
 .dc-deal-columns span,
@@ -2999,8 +2999,8 @@ textarea {
 
 .dc-deal-columns,
 .dc-deal-row {
-  grid-template-columns: minmax(210px, 1.4fr) minmax(108px, .46fr) minmax(155px, 1fr) minmax(210px, 1.15fr);
-  min-width: 690px;
+  grid-template-columns: minmax(210px, 1.4fr) minmax(152px, .46fr) minmax(155px, 1fr) minmax(210px, 1.15fr);
+  min-width: 734px;
 }
 
 .dc-deal-row {
@@ -7718,6 +7718,66 @@ ul.facts.bad li:before {
 .dc-daily-task-results b.completed { color: #00845c; }
 .dc-daily-task-results b.overdue { color: #ce2940; }
 .dc-task-reschedules { display: grid; gap: 4px; color: #996000; overflow-wrap: anywhere; }
+
+.dc-shell .dc-reschedule-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  gap: 3px;
+  max-width: 100%;
+  min-height: 28px;
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px solid #c6d8f3;
+  border-radius: 7px;
+  background: #fff;
+  color: #315b98;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dc-shell .dc-reschedule-trigger:hover,
+.dc-shell .dc-reschedule-trigger[aria-expanded="true"] { background: #e9f1ff; border-color: #7ea8f5; }
+.dc-reschedule-popover {
+  position: fixed;
+  inset: auto;
+  box-sizing: border-box;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  max-height: min(360px, calc(100dvh - 24px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #ccd9ed;
+  border-radius: 12px;
+  background: #fff;
+  color: #132238;
+  box-shadow: 0 10px 28px #18335926;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.dc-reschedule-popover > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.dc-reschedule-popover > header > strong { font-size: 13px; }
+.dc-shell .dc-reschedule-popover > header > button { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: #f1f5fb; color: #526786; font-size: 20px; cursor: pointer; }
+.dc-reschedule-popover ol { list-style: none; margin: 0; padding: 0; }
+.dc-reschedule-popover li { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 7px; padding: 10px 0; border-top: 1px solid #e1e9f5; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.dc-reschedule-from { color: #596e8b; }
+.dc-reschedule-arrow { color: #426fae; }
+.dc-reschedule-popover li > strong { font-weight: 600; }
+@media (pointer: coarse) {
+  .dc-shell .dc-reschedule-trigger { min-height: 44px; }
+  .dc-shell .dc-reschedule-popover > header > button { width: 44px; height: 44px; }
+}
 
 .dc-daily-head-copy p {
   display: flex;

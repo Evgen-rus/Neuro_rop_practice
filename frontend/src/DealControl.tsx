@@ -72,6 +72,7 @@ import {
 } from './automaticAnalysis'
 import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
 import { TaskReschedules } from './TaskDayResults'
+import { TaskReschedulePopover } from './TaskReschedulePopover'
 import {
   freshQuickHelpIdFromJob,
   latestQuickHelpEntryId,
@@ -1201,7 +1202,7 @@ function ControlTimeChip({ task, bitrixTask }: {
       : bitrixTask.time_bucket === 'tomorrow'
         ? 'На завтра'
         : 'Будущее'
-  return <><span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span><TaskReschedules task={bitrixTask.day_result} /></>
+  return <><span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span><TaskReschedulePopover task={bitrixTask.day_result} /></>
 }
 
 function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunicationsToday | null }) {
