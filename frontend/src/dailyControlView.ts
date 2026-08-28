@@ -1,4 +1,5 @@
-import type { DailyControlCreationKind, DailyControlDeal } from './api'
+import type { DailyControlCreationKind, DailyControlDeal, DailyTaskResult } from './api'
+import { formatMoscowDateTime, moscowDateInputValue, parseMoscowDateTime } from './dateTime.ts'
 
 export type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
 export const DEFAULT_TIME_FILTER: DailyControlTimeFilter = 'all'
@@ -29,21 +30,73 @@ export function hasReportDayWork(deal: DailyControlDeal) {
   return Number(deal.communications_today?.completed || 0) > 0
 }
 
-export function reportDayLabels(deal: DailyControlDeal): Array<{ kind: 'due' | 'work'; text: string }> {
+function validStamp(value?: string | null): number | null {
+  if (!value) return null
+  const stamp = parseMoscowDateTime(value).getTime()
+  return Number.isFinite(stamp) ? stamp : null
+}
+
+export function communicationDayLabels(deal: DailyControlDeal, cutoffAt?: string): string[] {
+  const communications = deal.communications_today
+  const cutoff = cutoffAt || deal.day_scope?.cutoff_at
+  const cutoffStamp = validStamp(cutoff)
+  const day = cutoffStamp !== null ? moscowDateInputValue(cutoffStamp) : deal.day_scope?.business_date
+  if (!communications?.available || communications.unavailable || (day && communications.date !== day)) {
+    return ['Данные о коммуникациях недоступны']
+  }
+  const sourceItems = communications.items || []
+  const items = sourceItems.filter((item) => {
+    const stamp = validStamp(item.occurred_at)
+    return stamp !== null && (!day || moscowDateInputValue(stamp) === day)
+      && (cutoffStamp === null || stamp <= cutoffStamp)
+  })
+  const calls = items.filter((item) => item.channel === 'call')
+  const messages = items.filter((item) => ['email', 'message', 'whatsapp', 'telegram', 'max', 'sms'].includes(item.channel))
+  // Old snapshots may only have counters. Never infer a result or direction from them.
+  const legacy = sourceItems.length === 0
+  const callCount = legacy ? (communications.calls_total ?? communications.calls ?? 0) : calls.length
+  const messageCount = legacy ? (communications.messages || 0) : messages.length
+  const labels: string[] = []
+  if (callCount) {
+    const attempts = calls.filter((item) => item.direction === 'outgoing' && item.call_outcome === 'no_answer').length
+    const connected = calls.some((item) => item.call_outcome === 'connected')
+    // contact_class=attempt is a default for calls, not evidence of a missed call.
+    // Neither connection, duration nor a transcript proves a substantive conversation.
+    if (!legacy && attempts === callCount) labels.push(callCount === 1 ? 'Была попытка связи' : 'Были попытки связи')
+    else if (connected) labels.push(callCount === 1 ? 'Был звонок' : 'Были звонки')
+    else labels.push(callCount === 1 ? 'Был звонок · результат не определён' : 'Были звонки · результат не определён')
+  }
+  if (messageCount) {
+    const incoming = messages.some((item) => item.direction === 'incoming')
+    const outgoing = messages.some((item) => item.direction === 'outgoing')
+    const unknown = messages.some((item) => !['incoming', 'outgoing'].includes(item.direction))
+    if (incoming && outgoing) labels.push('Была переписка')
+    else if (legacy || unknown) labels.push(messageCount === 1 ? 'Было сообщение' : 'Были сообщения')
+    else if (incoming) labels.push(messageCount === 1 ? 'Получено сообщение клиента' : 'Получены сообщения клиента')
+    else labels.push(messageCount === 1 ? 'Отправлено сообщение' : 'Отправлены сообщения')
+  }
+  return labels.length ? labels : ['Сегодня коммуникаций нет']
+}
+
+type DayLabel = { kind: 'due' | 'work' | 'no-contact' | 'unavailable'; text: string }
+
+export function reportDayLabels(deal: DailyControlDeal, cutoffAt?: string): DayLabel[] {
   const scope = deal.day_scope
-  if (!scope) return []
-  const labels: Array<{ kind: 'due' | 'work'; text: string }> = []
-  if (scope.task_buckets.includes('today') || (scope.had_day_obligation && !scope.task_buckets.includes('overdue'))) {
+  const labels: DayLabel[] = []
+  if (scope && (scope.task_buckets.includes('today') || (scope.had_day_obligation && !scope.task_buckets.includes('overdue')))) {
     labels.push({ kind: 'due', text: 'Задача на этот день' })
   }
-  if (scope.task_buckets.includes('overdue')) labels.push({ kind: 'due', text: 'Просрочена к срезу' })
+  if (scope?.task_buckets.includes('overdue')) labels.push({ kind: 'due', text: 'Просрочена к срезу' })
+  labels.push(...communicationDayLabels(deal, cutoffAt).map((text): DayLabel => ({
+    kind: text === 'Сегодня коммуникаций нет' ? 'no-contact'
+      : text === 'Данные о коммуникациях недоступны' ? 'unavailable' : 'work',
+    text,
+  })))
   const workLabels: Record<string, string> = {
-    call: 'Были звонки',
-    message: 'Была переписка',
     bitrix_task_completed: 'Задача завершена в CRM',
     bitrix_task_rescheduled: 'Задача перенесена',
   }
-  for (const kind of scope.activity_kinds) {
+  for (const kind of scope?.activity_kinds || []) {
     if (workLabels[kind]) labels.push({ kind: 'work', text: workLabels[kind] })
   }
   return labels
@@ -59,15 +112,48 @@ export function taskStripStatus(task: { status?: string; overdue?: boolean; resc
   return { kind: 'unknown', text: 'статус не сохранён' }
 }
 
-export function tasksStripSummary(tasks?: Array<{ status?: string; overdue?: boolean; reschedules?: unknown[] }>): { kind: TaskStripKind; text: string } {
+type TaskStripTask = Partial<Pick<DailyTaskResult, 'key' | 'status' | 'deadline' | 'completed_at' | 'overdue' | 'reschedules'>>
+
+function taskDate(value?: string | null, cutoffAt?: string): string | null {
+  const stamp = validStamp(value)
+  if (stamp === null) return null
+  const cutoff = validStamp(cutoffAt)
+  const sameDay = cutoff !== null && moscowDateInputValue(stamp) === moscowDateInputValue(cutoff)
+  const time = formatMoscowDateTime(stamp, { hour: '2-digit', minute: '2-digit' })
+  if (sameDay) return `сегодня, ${time}`
+  const otherYear = cutoff === null || moscowDateInputValue(stamp).slice(0, 4) !== moscowDateInputValue(cutoff).slice(0, 4)
+  const date = formatMoscowDateTime(stamp, { day: 'numeric', month: 'long', ...(otherYear ? { year: 'numeric' as const } : {}) })
+  return `${date}, ${time}`
+}
+
+export function taskDeadlineLabel(task: TaskStripTask, cutoffAt?: string): { kind: TaskStripKind; text: string } {
+  const date = taskDate(task.deadline, cutoffAt)
+  if (task.status === 'completed') {
+    const completed = taskDate(task.completed_at, cutoffAt)
+    return { kind: 'completed', text: completed ? `Задача выполнена ${completed}` : 'Задача выполнена · время не сохранено' }
+  }
+  if (task.status !== 'open') return { kind: 'unknown', text: `Задача: статус не сохранён${date ? ` · срок ${date}` : ''}` }
+  if (task.overdue) return { kind: 'overdue', text: `Задача просрочена${date ? ` · срок ${date}` : ''}` }
+  if (!task.deadline) return { kind: 'waiting', text: 'Задача без срока' }
+  if (!date) return { kind: 'unknown', text: 'Задача: срок не определён' }
+  const cutoff = validStamp(cutoffAt)
+  const future = cutoff !== null && moscowDateInputValue(task.deadline) > moscowDateInputValue(cutoff)
+  return { kind: 'waiting', text: `Задача на ${date}${future ? ' · не сегодня' : ''}` }
+}
+
+export function sortDayTasks<T extends TaskStripTask>(tasks: T[]): T[] {
+  const rank = (task: TaskStripTask) => task.status === 'open' ? (task.overdue ? 0 : 1) : task.status === 'completed' ? 3 : 2
+  return [...tasks].sort((left, right) => rank(left) - rank(right)
+    || (validStamp(left.deadline) ?? Infinity) - (validStamp(right.deadline) ?? Infinity)
+    || String(left.key || '').localeCompare(String(right.key || '')))
+}
+
+export function tasksStripSummary(tasks?: TaskStripTask[], cutoffAt?: string): { kind: TaskStripKind; text: string } {
   if (!tasks) return { kind: 'unknown', text: 'Подробности задач в этом старом срезе не сохранялись' }
-  if (!tasks.length) return { kind: 'empty', text: 'Задачи в срезе не зафиксированы' }
-  const kinds = tasks.map((task) => taskStripStatus(task).kind)
-  if (kinds.includes('overdue')) return { kind: 'overdue', text: 'Задача просрочена' }
-  if (kinds.includes('rescheduled')) return { kind: 'rescheduled', text: 'Задача перенесена' }
-  if (kinds.includes('waiting')) return { kind: 'waiting', text: 'Задача ждет выполнения' }
-  if (kinds.includes('completed')) return { kind: 'completed', text: 'Задача выполнена' }
-  return { kind: 'unknown', text: 'Задача: статус не сохранён' }
+  if (!tasks.length) return { kind: 'empty', text: 'Открытых задач нет' }
+  const first = sortDayTasks(tasks)[0]
+  const summary = taskDeadlineLabel(first, cutoffAt)
+  return tasks.length === 1 ? summary : { ...summary, text: `Задач: ${tasks.length} · ${summary.text}` }
 }
 
 export function reportHeading(report: {

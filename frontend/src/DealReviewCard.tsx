@@ -74,7 +74,7 @@ function channelLabel(channel: string) {
 function directionLabel(direction: string) {
   if (direction === 'incoming') return 'входящий'
   if (direction === 'outgoing') return 'исходящий'
-  return NO_DATA
+  return ''
 }
 
 const INSUFFICIENT_QUALITY_LABEL = 'Нет данных для оценки'
@@ -415,7 +415,7 @@ export function DealReviewCard(props: {
                           <time>{formatClock(item.occurred_at)}</time>
                           <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
                           <span className="dc-daily-event-main">
-                            <span>{channelLabel(item.channel)} · {directionLabel(item.direction)}</span>
+                            <span>{[channelLabel(item.channel), directionLabel(item.direction)].filter(Boolean).join(' · ')}</span>
                             <span className={`dc-daily-event-status${attempt ? ' attempt' : ''}`}>{eventStatus(item)}</span>
                           </span>
                           <span className="dc-daily-event-contact">{item.participant_name || item.subject || ''}</span>

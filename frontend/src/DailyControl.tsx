@@ -177,8 +177,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [openEventId, setOpenEventId] = useState('')
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const dealScrollRef = useRef<HTMLDivElement | null>(null)
-  const cardAnchorRef = useRef<HTMLDivElement | null>(null)
-  const previousDealId = useRef(dealId)
   const generating = generation?.status === 'running' || generation?.status === 'queued'
 
   const snapshot = report?.snapshot
@@ -316,13 +314,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }, [dealId, managerId, selectedDeal, selectedManager, snapshot])
 
   useLayoutEffect(() => {
-    const previous = previousDealId.current
-    previousDealId.current = dealId
-    if (!previous || !dealId || previous === dealId) return
-    cardAnchorRef.current?.scrollIntoView({ block: 'start' })
-  }, [dealId])
-
-  useLayoutEffect(() => {
     dealScrollRef.current?.scrollTo({ top: 0 })
   }, [filter, managerId, search])
 
@@ -364,10 +355,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
 
   function selectDeal(nextId: string) {
     reviewStarted.current = true
-    if (nextId === dealId) {
-      cardAnchorRef.current?.scrollIntoView({ block: 'start' })
-      return
-    }
     setDealId(nextId)
   }
 
@@ -643,6 +630,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
                 <DealRow
                   key={deal.deal_id}
                   deal={deal}
+                  cutoffAt={report?.cutoff_at}
                   selected={deal.deal_id === selectedDeal?.deal_id}
                   onSelect={() => selectDeal(deal.deal_id)}
                 />
@@ -668,7 +656,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
             onKeyDown={onSplitterKey}
           />
 
-          <div className="dc-daily-card-anchor" ref={cardAnchorRef}>
+          <div className="dc-daily-card-anchor">
             <DealReviewCard
               deal={selectedDeal}
               asked={askedState}
@@ -685,10 +673,9 @@ export function DailyControl({ user }: { user: AuthUser }) {
   )
 }
 
-function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selected: boolean; onSelect: () => void }) {
+function DealRow({ deal, cutoffAt, selected, onSelect }: { deal: DailyControlDeal; cutoffAt?: string; selected: boolean; onSelect: () => void }) {
   const communications = deal.communications_today
-  const dayLabels = reportDayLabels(deal)
-  const untouched = Boolean(deal.day_scope?.untouched)
+  const dayLabels = reportDayLabels(deal, cutoffAt)
   return (
     <div
       className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}`}
@@ -715,13 +702,12 @@ function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selecte
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        {deal.day_scope && !untouched && !hasReportDayWork(deal) ? <small className="dc-daily-work-note">Работа за этот день в срезе не зафиксирована</small> : null}
         <p className={selected ? 'full' : 'clamp'}>{deal.attention_reason}</p>
         <footer>
-          <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза · ${talkTime(communications.duration_seconds)} разговоров`}</span>
+          <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>
         </footer>
-        <TaskDayResults tasks={deal.task_results} />
+        <TaskDayResults tasks={deal.task_results} cutoffAt={cutoffAt || deal.day_scope?.cutoff_at} />
       </div>
     </div>
   )
