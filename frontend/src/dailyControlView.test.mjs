@@ -45,6 +45,14 @@ test('only client contact brings a future-task deal into the today slice', () =>
   assert.deepEqual(reportDayLabels(deals[4]), [])
 })
 
+test('legacy daily checklist cannot affect report activity or task totals', () => {
+  const baseline = deals[4]
+  const legacy = { ...baseline, checklist: { completed: 5, total: 5, items: [{ completed: true }] } }
+  assert.deepEqual(dailyTaskTotals([legacy]), dailyTaskTotals([baseline]))
+  assert.deepEqual(reportDayLabels(legacy), reportDayLabels(baseline))
+  assert.equal(dealMatchesTime(legacy, 'today'), false)
+})
+
 test('a completed primary task cannot hide a different open task due on the report day', () => {
   const deal = { ...deals[2], day_scope: { ...deals[2].day_scope, task_buckets: ['today', 'future'] } }
   assert.equal(dealMatchesTime(deal, 'today'), true)

@@ -294,6 +294,51 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
 
 
 class FullSectionRepairTests(unittest.TestCase):
+    def test_full_and_v2_share_contract_without_daily_checklist(self):
+        from openai_api.llm.deal_incremental_v2 import run_incremental_v2
+        from openai_api.llm.deal_semantic_state import bootstrap_semantic_state
+        from openai_api.llm.deal_semantic_dependencies import resolve_affected_sections
+
+        legacy = deepcopy(self.good)
+        legacy["daily_checklist_update"] = {"add": [{"text": "legacy marker"}]}
+        legacy["manager_action_block"]["manager_checklist"] = ["legacy marker"]
+        normalized = deepcopy(legacy)
+        normalize_analysis_for_validation(normalized)
+        validate_deal_analysis(normalized)
+        self.assertNotIn("daily_checklist_update", normalized)
+        self.assertNotIn("manager_checklist", normalized["manager_action_block"])
+
+        state = bootstrap_semantic_state(self.good, deal_id="42", source_analysis_run_id=1,
+                                         source_fingerprint="old", evidence_coverage={})
+        delta = [{"evidence_id": "call:2", "kind": "call_transcript", "delta_kind": "new_evidence", "text": "test"}]
+        affected = resolve_affected_sections([], delta)
+        self.assertNotIn("daily_checklist_update", affected)
+        materialized = {key: deepcopy(legacy.get(key, {})) for key in affected}
+        responses = iter([
+            {"changed_domains": [], "change_reasons": {}, "semantic_state": state},
+            {"sections": materialized},
+        ])
+
+        def caller(prompt, **kwargs):
+            for retired in ("manager_checklist", "daily_checklist_update", "CURRENT_DAILY_MANAGER_CHECKLIST", "legacy marker"):
+                self.assertNotIn(retired, prompt)
+            response = next(responses)
+            kwargs["normalizer"](response)
+            kwargs["validator"](response)
+            return response, {}
+
+        with patch("openai_api.llm.deal_incremental_v2.call_validated_analysis_json", side_effect=caller):
+            result = run_incremental_v2(
+                deal_id="42", previous_analysis=legacy, previous_semantic_state=state,
+                evidence_delta=delta, next_evidence_coverage={}, crm_delta={}, stage_policy={},
+                prior_recommendation=None, source_fingerprint="new", model="test-model", compact_policy_text="test rules",
+            )
+        validate_deal_analysis(result.analysis)
+        self.assertNotIn("daily_checklist_update", result.analysis)
+        self.assertNotIn("manager_checklist", result.analysis["manager_action_block"])
+        self.assertIn("manager_checklist", legacy["manager_action_block"])
+        self.assertIn("competitor_defense_checklist", result.analysis)
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -580,7 +625,7 @@ class FullSectionRepairTests(unittest.TestCase):
                     stack.enter_context(patch.object(module, "call_analysis_json", side_effect=caller))
                     stack.enter_context(patch.object(module, "load_context_diagnostics_for_analysis", return_value=("", None, {})))
                     if entity == "deal":
-                        for name in ("get_latest_neuro_rop_recommendation_projection", "get_deal_daily_checklist_analysis_projection"):
+                        for name in ("get_latest_neuro_rop_recommendation_projection",):
                             stack.enter_context(patch.object(module, name, return_value=None))
                         stack.enter_context(patch.object(module, "build_deal_stage_policy", return_value={}))
                     else:

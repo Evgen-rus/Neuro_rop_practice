@@ -1,7 +1,7 @@
 """Immutable daily-control snapshots for the ROP planning meeting.
 
 The builder reuses the existing deal-control dashboard. It does not create a
-second checklist, a second analysis, or Bitrix write methods.
+second analysis or Bitrix write methods.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from storage.rop_db import (
     get_latest_ui_report,
     list_daily_control_reports,
     list_deal_control_deals,
-    list_deal_daily_checklist_summaries,
     list_manager_trajectory_events,
     utcish_now,
 )
@@ -36,11 +35,6 @@ STATUS_LABELS = {
     "red": "Требует решения РОПа",
     "yellow": "Нужна проверка",
     "green": "В норме",
-}
-CHECKLIST_WHY = {
-    "missing": "Нет подтверждённого факта в анализе",
-    "focus": "Фокус проверки на сегодня",
-    "crm": "Нужно зафиксировать в CRM",
 }
 COMMUNICATION_ITEM_KEYS = (
     "event_id",
@@ -330,7 +324,7 @@ def compute_source_watermark(
 ) -> str:
     """Fingerprint persisted sources that affect a daily-control snapshot.
 
-    Read-only: does not seed checklists or call Bitrix/LLM.
+    Read-only: does not call Bitrix/LLM.
     """
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     business_date = current.date().isoformat()
@@ -378,8 +372,6 @@ def compute_source_watermark(
     for event in _daily_trajectory_events(db_path, current):
         if str(event.get("entity_id")) in active_ids and _day_activity_kind(event):
             parts.append(f"day_activity:{event['id']}")
-    for summary in list_deal_daily_checklist_summaries(db_path, business_date=business_date):
-        parts.append(dumps_json(summary))
     latest_run = get_latest_automatic_analysis_run(db_path)
     if latest_run:
         parts.append(
@@ -405,12 +397,6 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
         else {}
     )
     bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
-    communications = (
-        deal.get("communications_today")
-        if isinstance(deal.get("communications_today"), dict)
-        else {}
-    )
-    checklist = deal.get("checklist") if isinstance(deal.get("checklist"), dict) else {}
     scores = _audit_scores(audit)
     zero_count = sum(1 for score in scores.values() if score == 0)
     next_action_zero = scores.get("next_action") == 0
@@ -421,9 +407,6 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
         and str(bitrix_task.get("completion_state") or "open") == "open"
     )
     no_analysis = not coaching.get("report_id")
-    comms_available = communications.get("available") is True
-    no_movement = comms_available and int(communications.get("completed") or 0) == 0
-    open_checklist = int(checklist.get("total") or 0) > int(checklist.get("completed") or 0)
 
     # Локальное поручение РОПа не красит светофор: в UI рабочий объект — открытая
     # задача Bitrix. Скрытый AI-срок не должен зажигать красный.
@@ -435,7 +418,6 @@ def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
         or next_action_zero
         or zero_count >= 1
         or overdue_bitrix
-        or (no_movement and open_checklist)
     ):
         return "yellow", STATUS_LABELS["yellow"]
     return "green", STATUS_LABELS["green"]
@@ -533,41 +515,6 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
         "content_available": False,
     }
     return payload
-
-
-def _checklist_why(item: dict[str, Any]) -> str | None:
-    if str(item.get("change_kind") or "") == "carried":
-        return "Перенесено с предыдущего дня"
-    source = str(item.get("source") or "")
-    return CHECKLIST_WHY.get(source)
-
-
-def _project_checklist(value: Any) -> dict[str, Any]:
-    source = value if isinstance(value, dict) else {}
-    items = []
-    for raw in source.get("items") or []:
-        if not isinstance(raw, dict):
-            continue
-        items.append(
-            {
-                "id": str(raw.get("id") or ""),
-                "text": str(raw.get("text") or ""),
-                "completed": bool(raw.get("completed")),
-                "completed_at": raw.get("completed_at"),
-                "source": raw.get("source"),
-                "change_kind": raw.get("change_kind"),
-                "why": _checklist_why(raw),
-            }
-        )
-    completed = sum(1 for item in items if item["completed"])
-    return {
-        "business_date": source.get("business_date"),
-        "revision": source.get("revision"),
-        "source_report_id": source.get("source_report_id"),
-        "completed": completed,
-        "total": len(items),
-        "items": items,
-    }
 
 
 def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
@@ -678,22 +625,12 @@ def build_direct_manager_question(deal: dict[str, Any]) -> str:
     if stored:
         return stored
     fragments: list[str] = []
-    checklist = deal.get("checklist") if isinstance(deal.get("checklist"), dict) else {}
-    for item in checklist.get("items") or []:
-        if not isinstance(item, dict) or item.get("completed"):
-            continue
-        question = _action_to_you_question(str(item.get("text") or ""))
+    for unknown in coaching.get("unknowns") or []:
+        question = _action_to_you_question(str(unknown))
         if question and question not in fragments:
             fragments.append(question)
         if len(fragments) >= 3:
             break
-    if len(fragments) < 2:
-        for unknown in coaching.get("unknowns") or []:
-            question = _action_to_you_question(str(unknown))
-            if question and question not in fragments:
-                fragments.append(question)
-            if len(fragments) >= 3:
-                break
     if not fragments:
         focus = str(coaching.get("what_to_check_now") or "").strip()
         if focus:
@@ -724,7 +661,7 @@ def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
     """Project a live deal-control deal into the shared ROP review card.
 
     Used by the immutable daily snapshot and the live ROP card. Does not call
-    LLM, Bitrix, or a second checklist store.
+    LLM or Bitrix.
     """
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
     quality = _quality_block(coaching)
@@ -767,7 +704,6 @@ def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
         "script": script,
         "script_variants": variants,
         "communications_today": communications,
-        "checklist": _project_checklist(deal.get("checklist")),
         "has_analysis": bool(coaching.get("report_id")),
         "analysis_created_at": coaching.get("analysis_created_at"),
         "analysis_checked_at": coaching.get("analysis_checked_at"),
@@ -845,8 +781,6 @@ def build_daily_control_snapshot(
                 "manager_id": deal.get("manager_id"),
                 "manager_name": deal.get("manager_name") or "Без ответственного",
                 "deals_count": 0,
-                "checklist_completed": 0,
-                "checklist_total": 0,
                 "calls": 0,
                 "messages": 0,
                 "talk_seconds": 0,
@@ -856,9 +790,6 @@ def build_daily_control_snapshot(
             },
         )
         bucket["deals_count"] += 1
-        checklist = deal.get("checklist") or {}
-        bucket["checklist_completed"] += int(checklist.get("completed") or 0)
-        bucket["checklist_total"] += int(checklist.get("total") or 0)
         communications = deal.get("communications_today") or {}
         has_work = _has_report_day_work(deal)
         if has_work or not communications.get("unavailable"):
@@ -1175,6 +1106,18 @@ def project_daily_control_snapshot(snapshot: dict[str, Any], user: dict[str, Any
     """Apply the same deal-access contract as live deal-control. Stored JSON stays intact."""
     from api.access import deal_access, rop_team_manager_ids
 
+    # Retired fields in historical snapshots stay on disk, not in the API contract.
+    snapshot = {
+        **snapshot,
+        "deals": [
+            {key: value for key, value in deal.items() if key != "checklist"}
+            for deal in snapshot.get("deals") or [] if isinstance(deal, dict)
+        ],
+        "managers": [
+            {key: value for key, value in manager.items() if key not in {"checklist_completed", "checklist_total"}}
+            for manager in snapshot.get("managers") or [] if isinstance(manager, dict)
+        ],
+    }
     role = str(user.get("role") or "")
     if role == "admin":
         return snapshot

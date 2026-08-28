@@ -29,6 +29,7 @@ from openai_api.llm.validation import (
     RECOMMENDATION_FEEDBACK_STATUSES,
     AnalysisValidationError,
     normalize_analysis_for_validation,
+    remove_retired_deal_fields,
     validate_deal_analysis,
 )
 
@@ -80,7 +81,6 @@ SECTION_POLICY_FILES: dict[str, frozenset[str]] = {
     "rop_action": frozenset({"risk_signals.md", "funnel.md"}),
     "priority_recommendation": frozenset({"risk_signals.md", "funnel.md"}),
     "recommendation_feedback": frozenset({"funnel.md"}),
-    "daily_checklist_update": frozenset({"funnel.md"}),
     "memory_update": frozenset({"funnel.md"}),
     "qualification_assessment": frozenset({"technical_data.md", "funnel.md"}),
     "price_comparability_check": frozenset({"commercial_offer_followup.md", "objections.md"}),
@@ -367,6 +367,8 @@ def _json_compact(value: Any) -> str:
 def build_materialization_contract(
     previous_analysis: dict[str, Any], affected_sections: list[str]
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    previous_analysis = copy.deepcopy(previous_analysis)
+    remove_retired_deal_fields(previous_analysis)
     compact_sections = set(ALWAYS_RECOMPUTE_ON_NEW_CLIENT_EVIDENCE)
     structural = {
         section: _compact_shape(previous_analysis.get(section), section)
@@ -482,7 +484,7 @@ NEW_OR_REVISED_EVIDENCE является единственным новым к�
 def build_materialization_prompt(
     *, previous_analysis: dict[str, Any], semantic_state: dict[str, Any], evidence_delta: list[dict[str, Any]],
     affected_sections: list[str], stage_policy: dict[str, Any], prior_recommendation: dict[str, Any] | None,
-    daily_checklist: dict[str, Any] | None, compact_policy_text: str,
+    compact_policy_text: str,
     compact_diagnostics_text: str = "",
 ) -> str:
     structural_templates, continuity_content, constraints = build_materialization_contract(
@@ -499,8 +501,6 @@ COMPACT_STRUCTURAL_TEMPLATES является обязательным стру�
 - во всех элементах deal_context сохраняй обязательный непустой массив evidence из template, пока новое evidence явно не заменяет его;
 - category critical fact использует только deadline|budget|need|authority|technical|delivery|payment|competitor|commitment|other;
 - длины списков не увеличивай сверх длины template и текущих validator limits;
-- daily_checklist_update содержит business_date, base_revision и массивы add/retire/reopen; add-элемент всегда {{"text":"...","reason":"..."}}, retire/reopen — {{"item_id":"...","reason":"..."}};
-- не создавай checklist add/reopen/retire без фактической необходимости из нового evidence.
 
 ## V2_COMPACT_POLICY
 {compact_policy_text.strip()}
@@ -531,9 +531,6 @@ COMPACT_STRUCTURAL_TEMPLATES является обязательным стру�
 
 ## PRIOR_NEURO_ROP_RECOMMENDATION
 {_json_compact(prior_recommendation)}
-
-## CURRENT_DAILY_MANAGER_CHECKLIST
-{_json_compact(daily_checklist)}
 """
 
 
@@ -585,10 +582,12 @@ def run_incremental_v2(
     *, deal_id: str, previous_analysis: dict[str, Any], previous_semantic_state: dict[str, Any],
     evidence_delta: list[dict[str, Any]], next_evidence_coverage: dict[str, Any], crm_delta: dict[str, Any],
     stage_policy: dict[str, Any], prior_recommendation: dict[str, Any] | None,
-    daily_checklist: dict[str, Any] | None, source_fingerprint: str, model: str,
+    source_fingerprint: str, model: str,
     compact_policy_text: str = "", compact_policy: dict[str, Any] | None = None,
     compact_diagnostics_text: str = "",
 ) -> IncrementalV2Result:
+    previous_analysis = copy.deepcopy(previous_analysis)
+    remove_retired_deal_fields(previous_analysis)
     if not evidence_delta:
         raise IncrementalV2Error("no_genuinely_new_or_revised_evidence")
     policy_payload = compact_policy or build_v2_compact_policy(
@@ -644,7 +643,6 @@ def run_incremental_v2(
         affected_sections=affected_sections,
         stage_policy=stage_policy,
         prior_recommendation=prior_recommendation,
-        daily_checklist=daily_checklist,
         compact_policy_text=materialization_policy_text,
         compact_diagnostics_text=compact_diagnostics_text,
     )
@@ -659,7 +657,6 @@ def run_incremental_v2(
         new_evidence=evidence_delta,
         stage_policy=stage_policy,
         prior_recommendation=prior_recommendation,
-        daily_checklist=daily_checklist,
         structural_templates=structural_templates,
         validation_constraints=constraints,
         previous_continuity_content=continuity_content,

@@ -30,7 +30,6 @@ import {
   transcribeManagerVoice,
   updateDealControlDeal,
   updateDealControlBitrixTaskCompletion,
-  updateDealControlChecklistItemCompletion,
   updateDealContextLeverPriority,
   type DealControlDashboard,
   type DealControlBitrixTask,
@@ -813,18 +812,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }
 
-  async function toggleChecklistItem(deal: DealControlDeal, itemId: string, completed: boolean) {
-    if (!deal.can_edit) return
-    setError('')
-    try {
-      await updateDealControlChecklistItemCompletion(deal.deal_id, itemId, completed)
-      setNotice(completed ? 'Пункт чек-листа выполнен.' : 'Пункт чек-листа возвращён в работу.')
-      await reload()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
   async function copy(text: string, label: string) {
     if (!text.trim()) {
       setNotice(`${label} пока не сформирован: нужен сохранённый анализ сделки.`)
@@ -1025,7 +1012,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           onCopy={copy}
           onNotice={(message) => { setError(''); setNotice(message) }}
           onToggleBitrixCompletion={toggleBitrixCompletion}
-          onToggleChecklistItem={toggleChecklistItem}
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
@@ -1237,7 +1223,6 @@ function DealDetail(props: {
   onCopy: (text: string, label: string) => Promise<void>
   onNotice: (message: string) => void
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   analysisJob: JobState | null
   analyzingDealId: string
   onAnalyze: (deal: DealControlDeal) => Promise<void>
@@ -1696,7 +1681,6 @@ function DealDetail(props: {
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
       onToggleBitrixCompletion={props.onToggleBitrixCompletion}
-      onToggleChecklistItem={props.onToggleChecklistItem}
       asked={askedByDeal[deal.deal_id] || [false, false]}
       onToggleAsked={toggleAsked}
     /> : <RopDealScreen
@@ -1749,7 +1733,6 @@ type ManagerDealScreenProps = {
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
 }
@@ -1784,7 +1767,6 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         loading={props.assistantLoading}
         onOpen={props.onOpenAssistant}
       />
-      <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
       <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
       {props.deal.review ? (
         <section className="dc-daily-card">
@@ -1810,7 +1792,6 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         onCopy={props.onCopy}
         onTranscribe={props.onTranscribe}
         onCompleteCommunication={props.onCompleteCommunication}
-        onToggleChecklistItem={props.onToggleChecklistItem}
         freshEntryId={props.freshQuickHelpId}
         onFreshAnswerConsumed={props.onFreshAnswerConsumed}
         onRecommendationEvent={props.onRecommendationEvent}
@@ -1849,41 +1830,6 @@ function RopDealScreen({
     contentNote="Содержимое коммуникации загружается отдельно при раскрытии."
     scriptHint="Для разговора с менеджером"
   />
-}
-
-function DealChecklistCard({ deal, editable, onToggle }: {
-  deal: DealControlDeal
-  editable: boolean
-  onToggle?: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
-}) {
-  const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
-  const changeLabel = (kind?: string) => kind === 'carried'
-    ? 'Перенесено'
-    : kind === 'reopened'
-      ? 'Возобновлено'
-      : kind === 'new'
-        ? 'Новое'
-        : ''
-  return <section className="dc-deal-checklist">
-    <header>
-      <span className="dc-deal-checklist-icon">✓</span>
-      <div><h3>Чек-лист на сегодня</h3><p>Короткий план действий по этой сделке на текущий день</p></div>
-      <strong>{checklist.completed} из {checklist.total}</strong>
-    </header>
-    <div className="dc-deal-checklist-body">
-      <div className="dc-deal-checklist-progress"><span style={{ width: `${checklist.progress_percent}%` }} /><b>Выполнено {checklist.progress_percent}%</b></div>
-      {checklist.items.length ? <ul>{checklist.items.map((item) => <li className={item.completed ? 'done' : ''} key={item.id}>
-        <button
-          type="button"
-          disabled={!editable || !onToggle}
-          aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
-          onClick={() => onToggle ? void onToggle(deal, item.id, !item.completed) : undefined}
-        >{item.completed ? '✓' : ''}</button>
-        <span>{item.text}{changeLabel(item.change_kind) ? <small className={`dc-checklist-origin ${item.change_kind}`}>{changeLabel(item.change_kind)}</small> : null}</span>
-        <em>{item.completed ? 'Выполнено' : 'Не выполнено'}</em>
-      </li>)}</ul> : <p className="dc-deal-checklist-empty">Чек-лист появится после успешного анализа сделки.</p>}
-    </div>
-  </section>
 }
 
 function ManagerSituationActions(props: {
@@ -2024,7 +1970,7 @@ function ManagerQuickHelp(props: {
   </section>
 }
 
-function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, onComplete, onBitrix, onToggleChecklistItem, onRevealFinished }: {
+function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, onComplete, onBitrix, onRevealFinished }: {
   deal: DealControlDeal
   entry: ManagerQuickHelpEntry
   animate?: boolean
@@ -2033,7 +1979,6 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, on
   onEdit: () => void
   onComplete: () => void
   onBitrix: () => void
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   onRevealFinished?: () => void
 }) {
   const content: ManagerQuickHelpContent = entry.content
@@ -2120,7 +2065,6 @@ function ManagerQuickHelpAnswer({ deal, entry, animate, mode, onCopy, onEdit, on
       error={fullScriptError}
       onClose={() => setFullScriptOpen(false)}
       onCopy={onCopy}
-      onToggleChecklistItem={onToggleChecklistItem}
     /> : null}
   </>
 }
@@ -2138,7 +2082,6 @@ function ConversationScriptModal(props: {
   failed: boolean
   onCopy: (text: string, label: string) => Promise<void>
   onClose: () => void
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
 }) {
   const [objectionsOpen, setObjectionsOpen] = useState(false)
   const [activeObjection, setActiveObjection] = useState(0)
@@ -2214,9 +2157,6 @@ function ConversationScriptModal(props: {
             </section>
           </> : null}
         </section>
-        <aside className="dc-call-script-aside">
-          <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} variant="panel" />
-        </aside>
       </div>}
   </section>
 }
@@ -2230,7 +2170,6 @@ function ManagerFullScriptModal(props: {
   error: string
   onClose: () => void
   onCopy: (text: string, label: string) => Promise<void>
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
 }) {
   const onClose = props.onClose
   useEffect(() => {
@@ -2295,7 +2234,6 @@ function ManagerFullScriptModal(props: {
         failed={failed}
         onCopy={props.onCopy}
         onClose={props.onClose}
-        onToggleChecklistItem={props.onToggleChecklistItem}
       />
     </div>, document.body)
   }
@@ -2306,80 +2244,9 @@ function ManagerFullScriptModal(props: {
       {props.error ? <p className="dc-manager-error" role="alert">{props.error}</p> : null}
       {!emailScript && failed ? <div className="dc-manager-full-script-failed"><strong>Сценарий не сформирован</strong><p>Закройте окно и попробуйте открыть скрипт ещё раз.</p><button className="dc-button" onClick={props.onClose}>Закрыть</button></div> : !emailScript ? <div className="dc-manager-full-script-loading"><span className="dc-spinner" /><strong>{props.job?.detail || 'Подготавливаем сценарий разговора'}</strong><small>{props.job?.percent || 5}%</small></div> : <div className="dc-manager-full-script-grid">
         <EmailScriptResultView script={emailScript} />
-        <aside><ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} defaultOpen /></aside>
       </div>}
     </section>
   </div>, document.body)
-}
-
-function ManagerAssistantChecklist({ deal, onToggle, defaultOpen = false, variant = 'compact' }: {
-  deal: DealControlDeal
-  onToggle: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
-  defaultOpen?: boolean
-  variant?: 'compact' | 'panel'
-}) {
-  const [pendingItemId, setPendingItemId] = useState<string | null>(null)
-  const checklist = deal.checklist || { items: [], completed: 0, total: 0, progress_percent: 0 }
-  const nextItem = checklist.items.find((item) => !item.completed)
-  const preview = nextItem?.text
-    || (checklist.total ? 'Все пункты на сегодня выполнены' : 'Пункты появятся после анализа сделки')
-  const changeLabel = (kind?: string) => kind === 'carried'
-    ? 'Перенесено'
-    : kind === 'reopened'
-      ? 'Возобновлено'
-      : kind === 'new'
-        ? 'Новое'
-        : ''
-
-  async function toggle(itemId: string, completed: boolean) {
-    if (pendingItemId) return
-    setPendingItemId(itemId)
-    try {
-      await onToggle(deal, itemId, completed)
-    } finally {
-      setPendingItemId(null)
-    }
-  }
-
-  const items = checklist.items.length ? <ul>{checklist.items.map((item) => {
-    const label = changeLabel(item.change_kind)
-    return <li className={item.completed ? 'done' : ''} key={item.id}>
-      <button
-        type="button"
-        disabled={Boolean(pendingItemId)}
-        aria-busy={pendingItemId === item.id}
-        aria-label={item.completed ? 'Вернуть пункт в работу' : 'Отметить пункт выполненным'}
-        onClick={() => void toggle(item.id, !item.completed)}
-      >{pendingItemId === item.id ? '…' : item.completed ? '✓' : ''}</button>
-      <span>{item.text}{label ? <small className={`dc-checklist-origin ${item.change_kind}`}>{label}</small> : null}</span>
-    </li>
-  })}</ul> : <p>Чек-лист появится после успешного анализа сделки.</p>
-
-  if (variant === 'panel') {
-    return <section className="dc-call-script-check-panel">
-      <h2>Чек-лист на сегодня</h2>
-      <p className="dc-call-script-check-count"><b>{checklist.completed} из {checklist.total}</b> выполнено</p>
-      <div className="dc-call-script-check-list">{items}</div>
-    </section>
-  }
-
-  return <details className="dc-manager-assistant-checklist" open={defaultOpen || undefined}>
-    <summary>
-      <span className="dc-manager-assistant-checklist-icon">✓</span>
-      <span className="dc-manager-assistant-checklist-heading">
-        <strong>Чек-лист на сегодня</strong>
-        <small>{preview}</small>
-      </span>
-      <b>{checklist.completed} из {checklist.total}</b>
-      <i aria-hidden="true">⌄</i>
-      <span className="dc-manager-assistant-checklist-progress">
-        <span style={{ width: `${checklist.progress_percent}%` }} />
-      </span>
-    </summary>
-    <div className="dc-manager-assistant-checklist-body">
-      {items}
-    </div>
-  </details>
 }
 
 function ManagerAssistantModal(props: {
@@ -2396,7 +2263,6 @@ function ManagerAssistantModal(props: {
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
   onCompleteCommunication: (quickHelpId: number) => void
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   freshEntryId: number | null
   onFreshAnswerConsumed: () => void
   onRecommendationEvent: (eventType: 'shown' | 'viewed', recommendationId: number) => void
@@ -2661,7 +2527,6 @@ function ManagerAssistantModal(props: {
           <button className={view === 'followups' ? 'active' : ''} onClick={() => setView('followups')}><span>↗</span>Фоллоуапы</button>
           <button className={view === 'companion' ? 'active' : ''} onClick={() => setView('companion')}><span>✉</span>Сопроводительный текст</button>
         </nav>
-        <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
         <p className="dc-manager-assistant-context-status">Контекст сделки подгружен. Ответ учитывает этап, задачу и предыдущие коммуникации.</p>
         </>}
       </aside>
@@ -2691,9 +2556,6 @@ function ManagerAssistantModal(props: {
             onLeaveAttempt={setLabUnsaved}
             onConfirmLeave={() => setWorkspaceMode('work')}
           /> : <>
-          <div className="dc-manager-assistant-checklist-mobile">
-            <ManagerAssistantChecklist deal={props.deal} onToggle={props.onToggleChecklistItem} />
-          </div>
           {view === 'answer' ? <section className="dc-manager-assistant-thread">
             {answerPane === 'empty' ? <div className="dc-manager-assistant-empty">
               <p>Рекомендация по этой сделке ещё не сформирована.</p>
@@ -2722,7 +2584,6 @@ function ManagerAssistantModal(props: {
                 onEdit={props.onEditSituation}
                 onComplete={() => complete(visibleEntry)}
                 onBitrix={() => void prepareBitrixComment(visibleEntry)}
-                onToggleChecklistItem={props.onToggleChecklistItem}
                 onRevealFinished={onFreshAnswerConsumed}
               /> : busy ? null : <p className="dc-manager-assistant-missing-mode">В этом режиме ответа на этот запрос ещё нет.</p>}
             </div> : null}
@@ -2731,7 +2592,6 @@ function ManagerAssistantModal(props: {
           {view === 'history' ? <section className="dc-manager-assistant-history"><h3>История работы по сделке</h3>{props.workspace.timeline.length ? <ol>{props.workspace.timeline.map((item) => <li key={item.id}><time>{dateTime(item.occurred_at)}</time><i /><div><p>{item.text}</p>{item.kind === 'communication' && item.channel ? <CommunicationContent dealId={props.deal.deal_id} eventId={item.id} channel={item.channel} /> : null}</div></li>)}</ol> : <p>История по сделке пока не сформирована.</p>}</section> : null}
           {view === 'context' ? <ManagerDealContextView
             deal={props.deal}
-            onToggleChecklistItem={props.onToggleChecklistItem}
             dealId={props.deal.deal_id}
             context={props.workspace.context.deal_context || null}
             stage={props.workspace.context.stage}
@@ -2882,7 +2742,6 @@ function DealMarkdownReport(props: {
 
 function ManagerDealContextView(props: {
   deal: DealControlDeal
-  onToggleChecklistItem: (deal: DealControlDeal, itemId: string, completed: boolean) => Promise<void>
   dealId: string
   context: DealContextSnapshot | null
   stage: string
@@ -2903,7 +2762,6 @@ function ManagerDealContextView(props: {
   const [priorityBusy, setPriorityBusy] = useState('')
   const [priorityError, setPriorityError] = useState('')
   const context = props.context
-  const checklist = <DealChecklistCard deal={props.deal} editable onToggle={props.onToggleChecklistItem} />
 
   useEffect(() => {
     const next: Record<string, 1 | 2 | 3 | null> = {}
@@ -2937,7 +2795,6 @@ function ManagerDealContextView(props: {
   )
 
   if (!context) return <section className="dc-deal-context">
-    {checklist}
     <section className="dc-manager-assistant-context-grid">
       <div><small>Этап</small><strong>{props.stage || 'Не указан'}</strong></div>
       <div><small>Текущая задача</small><strong>{props.currentTask || 'Нет открытой задачи'}</strong></div>
@@ -2980,7 +2837,6 @@ function ManagerDealContextView(props: {
   }
 
   return <section className="dc-deal-context">
-    {checklist}
     <header className="dc-deal-context-heading"><div><h3>Живая карта сделки</h3><p>Информационный срез последнего полного анализа. Выбранные рычаги пока не влияют на дожим и фоллоуапы.</p></div><span>Отчёт #{props.report?.report_id || '—'}</span></header>
 
     {props.lastCommunication ? <section className="dc-deal-context-section">

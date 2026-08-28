@@ -119,7 +119,7 @@ class DealIncrementalV2Tests(unittest.TestCase):
             result = run_incremental_v2(
                 deal_id="7", previous_analysis=previous_analysis, previous_semantic_state=previous_state,
                 evidence_delta=[{"evidence_id": "call:2", "kind": "call_transcript", "delta_kind": "new_evidence", "text": "new"}], next_evidence_coverage={},
-                crm_delta={}, stage_policy={}, prior_recommendation=None, daily_checklist=None,
+                crm_delta={}, stage_policy={}, prior_recommendation=None,
                 source_fingerprint="new", model="test-model",
             )
         self.assertEqual(result.analysis["unaffected"], {"exact": [1, 2]})

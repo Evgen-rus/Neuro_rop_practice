@@ -306,7 +306,6 @@ class NextActionRubricTests(unittest.TestCase):
             affected_sections=["communication_quality_audit"],
             stage_policy={},
             prior_recommendation=None,
-            daily_checklist=None,
             compact_policy_text="POLICY",
         )
         self.assertIn(COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE, prompt)

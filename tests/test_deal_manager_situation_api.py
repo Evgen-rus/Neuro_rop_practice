@@ -151,7 +151,6 @@ class DealManagerSituationTests(unittest.TestCase):
             "questions": ["Когда будет принято решение?"],
             "script": "Подскажите, когда будет принято решение по КП?",
             "script_variants": [],
-            "crm_checklist": ["Дата решения"],
             "script_channel": "звонок",
         }
         with patch(
@@ -229,7 +228,6 @@ class DealManagerSituationTests(unittest.TestCase):
             "questions": ["Когда вернётесь к решению?"],
             "script": "Добрый день! Подскажите, когда вернётесь к решению по КП?",
             "script_variants": [],
-            "crm_checklist": ["Дата следующего шага"],
             "script_channel": "звонок",
         }
 
@@ -286,7 +284,6 @@ class DealManagerSituationTests(unittest.TestCase):
             "questions": ["Когда будет принято решение?"],
             "script": "Подскажите, когда вернётесь с решением?",
             "script_variants": [],
-            "crm_checklist": ["Дата следующего контакта"],
             "script_channel": "звонок",
         }
         calls = []
@@ -378,7 +375,6 @@ class DealManagerSituationTests(unittest.TestCase):
                     "questions": ["Когда будет решение?"],
                     "script": "Когда будет решение по КП?",
                     "script_variants": [],
-                    "crm_checklist": [],
                     "script_channel": "звонок",
                 },
                 ensure_ascii=False,

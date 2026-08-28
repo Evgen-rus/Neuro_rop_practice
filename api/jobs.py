@@ -33,7 +33,6 @@ from progress_events import (
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
-    apply_deal_daily_checklist_update,
     apply_deal_recommendation_feedback,
     complete_daily_summary_item,
     get_automatic_analysis_item,
@@ -807,19 +806,6 @@ def _apply_deal_control_projections(entity_id: str, report_id: int, analysis: di
         analysis.get("recommendation_feedback"),
         report_id,
         analysis,
-    )
-    manager_action = analysis.get("manager_action_block")
-    fallback_checklist = manager_action.get("manager_checklist") if isinstance(manager_action, dict) else []
-    apply_deal_daily_checklist_update(
-        DEFAULT_DB_PATH,
-        deal_id=entity_id,
-        source_report_id=report_id,
-        update=analysis.get("daily_checklist_update"),
-        fallback_items=[
-            {"text": str(text), "source": "crm"}
-            for text in (fallback_checklist or [])
-            if str(text).strip()
-        ],
     )
     materialized_task = materialize_deal_recommendation_from_report(
         DEFAULT_DB_PATH,

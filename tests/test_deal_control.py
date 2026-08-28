@@ -13,7 +13,6 @@ from api.deal_control import (
     _today_communications,
     build_deal_control_dashboard,
     refresh_deal_control,
-    save_checklist_item_completion,
 )
 from storage.rop_db import (
     confirm_deal_control_task_crm_match,
@@ -515,7 +514,7 @@ class DealControlTests(unittest.TestCase):
         self.assertEqual(result["last_activity"]["event_id"], "crm_activity:2")
         self.assertIsNone(result["last_confirmed_contact"])
 
-    def test_analysis_coaching_projects_manager_message_call_variants_and_crm_checklist(self):
+    def test_analysis_coaching_projects_message_and_variants_without_retired_alias(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
             save_ui_report(
@@ -553,7 +552,7 @@ class DealControlTests(unittest.TestCase):
 
             self.assertTrue(coaching["manager_coaching"].startswith("Красавчик"))
             self.assertEqual(len(coaching["script_variants"]), 2)
-            self.assertEqual(coaching["crm_checklist"], ["Позиция клиента", "Дата следующего шага"])
+            self.assertNotIn("crm_checklist", coaching)
             self.assertEqual(coaching["communication_quality_audit"]["status"], "insufficient_evidence")
             self.assertTrue(coaching["analysis_created_at"])
             self.assertIsNone(coaching["analysis_checked_at"])
@@ -634,11 +633,11 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(review["status"], "yellow")
             self.assertEqual(review["ai_context"]["current_situation"], "Клиент получил КП.")
             self.assertEqual(review["attention_reason"], "Решение зависло у юриста, срок договора сгорает 25.08.")
-            self.assertEqual(review["checklist"]["completed"], deal["checklist"]["completed"])
-            self.assertEqual(review["checklist"]["total"], deal["checklist"]["total"])
+            self.assertNotIn("checklist", review)
+            self.assertNotIn("checklist", deal)
             self.assertFalse(review["communications_today"].get("content_available"))
 
-    def test_shared_deal_checklist_projects_actions_and_persists_manager_completion(self):
+    def test_legacy_report_does_not_seed_daily_checklist(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "state.sqlite"
             upsert_deal_control_deal(
@@ -671,26 +670,14 @@ class DealControlTests(unittest.TestCase):
                 },
             )
 
-            first = build_deal_control_dashboard(db_path=db_path)["deals"][0]["checklist"]
-            self.assertEqual(first["completed"], 0)
-            self.assertEqual(first["total"], 5)
-            self.assertEqual(first["items"][0]["text"], "Подтвердить ЛПР.")
-            self.assertIn("Подтвердить бюджет клиента.", [item["text"] for item in first["items"]])
-            self.assertIn("Подтвердить дату решения.", [item["text"] for item in first["items"]])
-            self.assertIn("Зафиксировать в CRM следующий шаг.", [item["text"] for item in first["items"]])
-
-            updated = save_checklist_item_completion(
-                db_path=db_path,
-                deal_id="101",
-                item_id=first["items"][0]["id"],
-                completed=True,
-            )
-            self.assertEqual(updated["completed"], 1)
-            self.assertTrue(updated["items"][0]["completed"])
-
-            projected = build_deal_control_dashboard(db_path=db_path)["deals"][0]["checklist"]
-            self.assertEqual(projected["completed"], 1)
-            self.assertEqual(projected["progress_percent"], 20)
+            deal = build_deal_control_dashboard(db_path=db_path)["deals"][0]
+            self.assertNotIn("checklist", deal)
+            self.assertNotIn("checklist_state", deal)
+            self.assertNotIn("crm_checklist", deal["coaching"])
+            self.assertEqual(deal["coaching"]["unknowns"], ["Не подтверждён ЛПР", "Бюджет клиента", "Дата решения"])
+            with connect(db_path) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            self.assertFalse(any(name.startswith("deal_daily_checklist") for name in tables))
 
     def test_scope_is_local_and_has_no_embedded_crm_defaults(self):
         with tempfile.TemporaryDirectory() as directory:

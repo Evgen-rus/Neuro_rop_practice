@@ -176,7 +176,6 @@ def expand_and_save_strategy_materials(
     """Batch helper for tests. Production cards are generated on icon click via start_full_script_job."""
     tactics = quick_help_content.get("lifehacks")
     relevant_tactics = tactics if isinstance(tactics, list) else []
-    checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, deal_id=str(deal_id))
     objections = _public_objections(context["analysis_projection"])
     inputs = {
         "context": context,
@@ -192,7 +191,6 @@ def expand_and_save_strategy_materials(
         "situation_projection": context["situation_projection"],
         "deal": context["deal"],
         "current_bitrix_task": context["current_bitrix_task"],
-        "checklist": checklist,
         "communication_pattern_context": communication_pattern_context,
         "quick_help": quick_help_content,
         "relevant_tactics": relevant_tactics,
@@ -264,11 +262,6 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
             _touch(job, stage="done", detail="Открываем сохранённый актуальный сценарий", percent=100)
             return
         context = inputs["context"]
-        checklist = _storage_call(
-            "get_deal_daily_checklist_analysis_projection",
-            db_path,
-            deal_id=str(job.deal_id),
-        )
         tactics = inputs["quick_help_content"].get("lifehacks")
         relevant_tactics = tactics if isinstance(tactics, list) else []
         communication_context = build_communication_pattern_context(_load_local_communications(job.deal_id))
@@ -276,7 +269,7 @@ def _run_full_script_job(job_id: str, db_path: str | Path) -> None:
         generator = generate_deal_manager_email if job.script_mode == "email" else generate_deal_manager_full_script
         script, metadata = generator(
             analysis_projection=context["analysis_projection"], situation_projection=context["situation_projection"],
-            deal=context["deal"], current_bitrix_task=context["current_bitrix_task"], checklist=checklist,
+            deal=context["deal"], current_bitrix_task=context["current_bitrix_task"],
             communication_pattern_context=communication_context, quick_help=inputs["quick_help_content"],
             selected_strategy=job.selected_strategy, relevant_tactics=relevant_tactics, script_mode=job.script_mode,
             objection_handling=_public_objections(context["analysis_projection"]),
@@ -331,15 +324,9 @@ def get_full_script_workspace(*, db_path: str | Path = DEFAULT_DB_PATH, deal_id:
         raise ValueError("Неизвестный режим сценария")
     inputs = _current_inputs(db_path, str(deal_id), int(quick_help_id), selected_strategy)
     script = _cached_script(db_path, inputs, selected_strategy, script_mode)
-    checklist = _storage_call(
-        "get_deal_daily_checklist_analysis_projection",
-        db_path,
-        deal_id=str(deal_id),
-    )
     return {
         "script": script,
         "script_mode": script_mode,
         "disc_profile": public_disc_profile(inputs["context"]["analysis_projection"]),
-        "checklist": checklist,
         "objection_handling": _public_objections(inputs["context"]["analysis_projection"]),
     }

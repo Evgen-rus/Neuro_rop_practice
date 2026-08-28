@@ -236,7 +236,6 @@ class DependencyCoreTests(unittest.TestCase):
             "rop_manager_message_block",
             "rop_action",
             "recommendation_feedback",
-            "daily_checklist_update",
             "memory_update",
             "priority_recommendation",
             "new_event",
@@ -458,7 +457,6 @@ class CompactPolicyTests(unittest.TestCase):
             affected_sections=["new_event"],
             stage_policy={},
             prior_recommendation=None,
-            daily_checklist=None,
             compact_policy_text="POLICY_MARKER",
         )
         self.assertIn("## V2_COMPACT_POLICY\nPOLICY_MARKER", semantic_prompt)
@@ -627,7 +625,7 @@ class SemanticDriftTests(unittest.TestCase):
             semantic_state=_bootstrap_state(),
             evidence_delta=[{"evidence_id": "call:9"}],
             affected_sections=["recommendation_feedback", "manager_action_block"],
-            stage_policy={}, prior_recommendation=None, daily_checklist=None,
+            stage_policy={}, prior_recommendation=None,
             compact_policy_text="POLICY",
         )
         for status in RECOMMENDATION_FEEDBACK_STATUSES:
@@ -809,7 +807,7 @@ class UsageAndReportMetadataTests(unittest.TestCase):
                     paths=paths,
                     args=SimpleNamespace(deal_id="7", deal_root=str(root)),
                     result=result, stage_policy={}, prior_recommendation=None,
-                    daily_checklist=None, production=True,
+                    production=True,
                 )
         metadata = render.call_args.args[1]
         self.assertEqual(metadata["model"], "test-model")
@@ -892,7 +890,6 @@ class V2StagePolicyImportTests(unittest.TestCase):
                 analyze_deal_if_changed, "build_deal_stage_policy", return_value={"stage_id": "NEW"},
             ))
             stack.enter_context(patch.object(analyze_deal_if_changed, "get_latest_neuro_rop_recommendation_projection", return_value=None))
-            stack.enter_context(patch.object(analyze_deal_if_changed, "get_deal_daily_checklist_analysis_projection", return_value=None))
             stack.enter_context(patch.object(
                 analyze_deal_if_changed, "load_context_diagnostics_for_analysis",
                 return_value=("", {}, []),

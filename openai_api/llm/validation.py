@@ -251,6 +251,19 @@ def _normalize_communication_quality_audit(
         )
 
 
+def remove_retired_deal_fields(analysis: dict[str, Any]) -> list[dict[str, Any]]:
+    """Drop retired fields in memory, without rewriting historical reports."""
+    changes: list[dict[str, Any]] = []
+    if "daily_checklist_update" in analysis:
+        analysis.pop("daily_checklist_update")
+        changes.append({"path": "daily_checklist_update", "action": "removed_retired_field"})
+    manager = analysis.get("manager_action_block")
+    if isinstance(manager, dict) and "manager_checklist" in manager:
+        manager.pop("manager_checklist")
+        changes.append({"path": "manager_action_block.manager_checklist", "action": "removed_retired_field"})
+    return changes
+
+
 def normalize_analysis_for_validation(
     analysis: dict[str, Any],
     *,
@@ -267,6 +280,8 @@ def normalize_analysis_for_validation(
     """
 
     changes: list[dict[str, Any]] = []
+    if "deal_state" in analysis:
+        changes.extend(remove_retired_deal_fields(analysis))
     _normalize_qualification_assessment(
         analysis,
         changes,
@@ -739,42 +754,6 @@ def _validate_recommendation_feedback(value: Any, errors: list[str]) -> None:
         errors.append(f"{path} next_action fields must be null when next_action_required=false")
 
 
-def _validate_daily_checklist_update(value: Any, errors: list[str]) -> None:
-    path = "daily_checklist_update"
-    update = _expect_dict(value, path, errors)
-    if not update:
-        return
-    _require_fields(update, {"business_date", "base_revision", "add", "retire", "reopen"}, path, errors)
-    business_date = update.get("business_date")
-    if not isinstance(business_date, str):
-        errors.append(f"expected ISO date string at {path}.business_date")
-    else:
-        try:
-            datetime.strptime(business_date, "%Y-%m-%d")
-        except ValueError:
-            errors.append(f"expected ISO date string at {path}.business_date")
-    base_revision = update.get("base_revision")
-    if isinstance(base_revision, bool) or not isinstance(base_revision, int) or base_revision < 0:
-        errors.append(f"expected non-negative integer at {path}.base_revision")
-
-    for field in ("add", "retire", "reopen"):
-        actions = _expect_max_list_length(update.get(field), f"{path}.{field}", 5, errors)
-        for index, action in enumerate(actions):
-            action_path = f"{path}.{field}[{index}]"
-            item = _expect_dict(action, action_path, errors)
-            if not item:
-                continue
-            required = {"text", "reason"} if field == "add" else {"item_id", "reason"}
-            _require_fields(item, required, action_path, errors)
-            if field == "add":
-                _expect_non_empty_string(item.get("text"), f"{action_path}.text", errors)
-            else:
-                item_id = item.get("item_id")
-                if isinstance(item_id, bool) or not isinstance(item_id, (str, int)) or not str(item_id).strip():
-                    errors.append(f"expected string or integer item id at {action_path}.item_id")
-            _expect_non_empty_string(item.get("reason"), f"{action_path}.reason", errors)
-
-
 def _expect_non_empty_text_without_markers(value: Any, path: str, errors: list[str]) -> None:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"expected non-empty string at {path}")
@@ -782,7 +761,7 @@ def _expect_non_empty_text_without_markers(value: Any, path: str, errors: list[s
     _validate_no_forbidden_markers(path, value, errors)
 
 
-def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None:
+def _validate_common_shapes(analysis: dict[str, Any], errors: list[str], *, lead_contract: bool = False) -> None:
     _expect_dict(analysis.get("main_risk"), "main_risk", errors)
     _expect_dict(analysis.get("manager_quality"), "manager_quality", errors)
     _expect_dict(analysis.get("call_attempt_recommendation"), "call_attempt_recommendation", errors)
@@ -830,7 +809,8 @@ def _validate_common_shapes(analysis: dict[str, Any], errors: list[str]) -> None
         if not no_client_contact:
             _expect_dict(manager_action.get("primary_text"), "manager_action_block.primary_text", errors)
         _expect_list(manager_action.get("backup_texts"), "manager_action_block.backup_texts", errors)
-        _expect_list(manager_action.get("manager_checklist"), "manager_action_block.manager_checklist", errors)
+        if lead_contract:
+            _expect_list(manager_action.get("manager_checklist"), "manager_action_block.manager_checklist", errors)
         _validate_client_texts(manager_action, errors)
 
 
@@ -2186,8 +2166,6 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _validate_deal_context(analysis.get("deal_context"), errors)
     if "recommendation_feedback" in analysis:
         _validate_recommendation_feedback(analysis.get("recommendation_feedback"), errors)
-    if "daily_checklist_update" in analysis:
-        _validate_daily_checklist_update(analysis.get("daily_checklist_update"), errors)
     _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:
@@ -2364,7 +2342,7 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
             errors.append("loss_diagnosis.evidence must not be empty")
     _validate_qualification_assessment(analysis, errors, lead_contract=True)
     _validate_lead_qualification_consistency(analysis, errors)
-    _validate_common_shapes(analysis, errors)
+    _validate_common_shapes(analysis, errors, lead_contract=True)
     rop_manager = analysis.get("rop_manager_message_block")
     if isinstance(rop_manager, dict):
         review_text = rop_manager.get("manager_review_text")

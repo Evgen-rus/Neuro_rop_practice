@@ -28,12 +28,12 @@ from api.daily_control import (
 from openai_api.llm.validation import _validate_deal_management_shapes
 from setup import MSK_TZ
 from storage.rop_db import (
+    connect,
     get_daily_control_report,
     init_db,
     list_daily_control_reports,
     save_deal_control_communications_today,
     save_deal_control_scope,
-    save_deal_daily_checklist_item_completion,
     save_ui_report,
     upsert_deal_control_deal,
 )
@@ -65,7 +65,6 @@ def _deal_row(**overrides):
             "duration_seconds": 90,
             "items": [],
         },
-        "checklist": {"completed": 1, "total": 2, "items": []},
         "coaching": {"report_id": 1, "communication_quality_audit": None},
     }
     row.update(overrides)
@@ -153,11 +152,21 @@ def _seed_deal(db_path: Path, *, deal_id="101", manager_id="10", title="Сдел
 
 
 class ClassifierTests(unittest.TestCase):
+    def test_legacy_open_checklist_cannot_turn_healthy_deal_yellow(self) -> None:
+        deal = _deal_row(
+            coaching={"report_id": 1, "communication_quality_audit": _audit()},
+            communications_today={"available": True, "completed": 0},
+        )
+        baseline = classify_deal_status(deal)
+        deal["checklist"] = {"completed": 0, "total": 5, "items": [{"text": "legacy marker"}]}
+        self.assertEqual(classify_deal_status(deal), baseline)
+        self.assertEqual(baseline[0], "green")
+        self.assertNotIn("legacy marker", build_direct_manager_question(deal))
+
     def test_overdue_local_rop_task_does_not_force_red(self) -> None:
         status, label = classify_deal_status(_deal_row(
             current_task={"time_bucket": "overdue"},
             coaching={"report_id": 1, "communication_quality_audit": _audit()},
-            checklist={"completed": 2, "total": 2, "items": []},
         ))
         self.assertEqual(status, "green")
         self.assertEqual(label, "В норме")
@@ -181,7 +190,6 @@ class ClassifierTests(unittest.TestCase):
     def test_healthy_deal_is_green(self) -> None:
         status, label = classify_deal_status(_deal_row(
             coaching={"report_id": 1, "communication_quality_audit": _audit()},
-            checklist={"completed": 2, "total": 2, "items": []},
         ))
         self.assertEqual(status, "green")
         self.assertEqual(label, "В норме")
@@ -199,7 +207,7 @@ class DirectQuestionTests(unittest.TestCase):
             coaching={"direct_manager_question": "", "unknowns": ["дата решения"]},
             checklist={"items": [{"text": "Подтвердить дату решения.", "completed": False}]},
         ))
-        self.assertIn("Ты подтвердил", question)
+        self.assertIn("дата решения", question)
         self.assertTrue(question.endswith("?") or "?" in question)
 
     def test_optional_direct_question_is_valid_when_absent(self) -> None:
@@ -477,6 +485,23 @@ class ReportDayScopeTests(unittest.TestCase):
 
 
 class DailyControlStorageTests(unittest.TestCase):
+    def test_legacy_snapshot_api_omits_daily_fields_without_rewriting_history(self) -> None:
+        from storage.rop_db import create_daily_control_report
+
+        snapshot = build_daily_control_snapshot({"deals": [_deal_row()], "managers": []}, cutoff_at=NOW)
+        snapshot["deals"][0]["checklist"] = {"completed": 1, "total": 2, "items": []}
+        snapshot["managers"][0].update(checklist_completed=1, checklist_total=2)
+        saved = create_daily_control_report(
+            self.db_path, business_date=NOW.date().isoformat(), creation_kind="manual",
+            started_at=NOW.isoformat(), cutoff_at=NOW.isoformat(), snapshot=snapshot,
+            source_watermark="legacy", source_status="ok",
+        )
+        viewed = report_payload(saved["id"], {"role": "admin"}, db_path=self.db_path, now=NOW)
+        self.assertNotIn("checklist", viewed["snapshot"]["deals"][0])
+        self.assertNotIn("checklist_completed", viewed["snapshot"]["managers"][0])
+        self.assertNotIn("checklist_total", viewed["snapshot"]["managers"][0])
+        self.assertEqual(get_daily_control_report(self.db_path, saved["id"])["snapshot"], snapshot)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "daily.sqlite"
@@ -783,40 +808,24 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertNotEqual(stale["live_watermark"], report["source_watermark"])
         self.assertNotEqual(compute_source_watermark(self.db_path, now=NOW), report["source_watermark"])
 
-    def test_report_uses_manager_checklist_and_stays_frozen_after_later_marks(self) -> None:
+    def test_reports_ignore_legacy_checklist_in_snapshot_and_freshness(self) -> None:
         _seed_deal(self.db_path)
         first = publish_daily_control_report(
-            db_path=self.db_path,
-            creation_kind="manual",
-            started_at=NOW,
-            cutoff_at=NOW,
-            now=NOW,
-            refresh=False,
+            db_path=self.db_path, creation_kind="manual", started_at=NOW,
+            cutoff_at=NOW, now=NOW, refresh=False,
         )
-        deal = first["snapshot"]["deals"][0]
-        self.assertGreaterEqual(deal["checklist"]["total"], 1)
-        open_item = next(item for item in deal["checklist"]["items"] if not item["completed"])
-        save_deal_daily_checklist_item_completion(
-            self.db_path,
-            deal_id="101",
-            item_id=open_item["id"],
-            completed=True,
-            business_date="2026-08-18",
-        )
+        self.assertNotIn("checklist", first["snapshot"]["deals"][0])
+        self.assertNotIn("checklist_completed", first["snapshot"]["managers"][0])
+        self.assertNotIn("checklist_total", first["snapshot"]["managers"][0])
+        watermark = compute_source_watermark(self.db_path, now=NOW)
+        # Simulate orphaned tables from an older version, not a runtime storage API.
+        with connect(self.db_path) as conn:
+            conn.execute("CREATE TABLE deal_daily_checklists (id INTEGER, revision INTEGER)")
+            conn.execute("INSERT INTO deal_daily_checklists VALUES (1, 99)")
+        self.assertEqual(compute_source_watermark(self.db_path, now=NOW), watermark)
         frozen = get_daily_control_report(self.db_path, int(first["id"]))
-        frozen_item = next(item for item in frozen["snapshot"]["deals"][0]["checklist"]["items"] if item["id"] == open_item["id"])
-        self.assertFalse(frozen_item["completed"])
-        later = publish_daily_control_report(
-            db_path=self.db_path,
-            creation_kind="manual",
-            started_at=NOW.replace(hour=18),
-            cutoff_at=NOW.replace(hour=18),
-            now=NOW.replace(hour=18),
-            refresh=False,
-        )
-        later_item = next(item for item in later["snapshot"]["deals"][0]["checklist"]["items"] if item["id"] == open_item["id"])
-        self.assertTrue(later_item["completed"])
-        self.assertEqual(later["snapshot"]["managers"][0]["checklist_completed"], later["snapshot"]["deals"][0]["checklist"]["completed"])
+        self.assertEqual(frozen["snapshot"], first["snapshot"])
+
 
     def test_old_analysis_without_direct_question_still_renders(self) -> None:
         _seed_deal(self.db_path)
@@ -837,7 +846,7 @@ class DailyControlStorageTests(unittest.TestCase):
 
         paths = [getattr(route, "path", "") for route in app.routes]
         self.assertTrue(any(path.startswith("/api/daily-control/reports") for path in paths))
-        self.assertFalse(any("daily-control" in path and "checklist" in path for path in paths))
+        self.assertFalse(any("/checklist/" in path for path in paths))
 
 
 class DailySnapshotSelectionTests(unittest.TestCase):

@@ -73,7 +73,6 @@ from api.deal_control import record_task_event as record_deal_control_task_event
 from api.deal_control import (
     refresh_deal_control,
     save_bitrix_task_completion,
-    save_checklist_item_completion,
     save_deal_fields,
     save_scope as save_deal_control_scope,
 )
@@ -301,10 +300,6 @@ class DealControlTaskUpdateRequest(BaseModel):
 
 class DealControlBitrixTaskCompletionRequest(BaseModel):
     deal_id: str = Field(min_length=1, max_length=80)
-    completed: bool
-
-
-class DealControlChecklistItemCompletionRequest(BaseModel):
     completed: bool
 
 
@@ -632,16 +627,6 @@ def _job_is_visible(job: dict[str, Any], user: dict[str, Any]) -> bool:
 
 def _require_admin_paid() -> dict[str, Any]:
     return _require_roles("admin")
-
-
-def _require_checklist_edit(deal_id: str) -> dict[str, Any]:
-    user = auth_current_user()
-    if str(user.get("role")) == "admin":
-        return user
-    require_deal(deal_id, user=user, action="edit")
-    if str(user.get("role")) != "manager":
-        raise HTTPException(status_code=403, detail="Only the manager can edit the daily checklist")
-    return user
 
 
 def _require_analyze_scope(entity_type: str, ids: list[str], *, paid: bool) -> dict[str, Any]:
@@ -1354,25 +1339,6 @@ def deal_communication_content_get(deal_id: str, event_id: str) -> dict[str, Any
         )
     except DealCommunicationContentNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-
-
-@app.put("/api/deal-control/deals/{deal_id}/checklist/{item_id}/completion")
-def deal_control_checklist_item_completion(
-    deal_id: str,
-    item_id: str,
-    body: DealControlChecklistItemCompletionRequest,
-) -> dict[str, Any]:
-    _require_checklist_edit(deal_id)
-    try:
-        checklist = save_checklist_item_completion(
-            db_path=DEFAULT_DB_PATH,
-            deal_id=deal_id,
-            item_id=item_id,
-            completed=body.completed,
-        )
-        return {"ok": True, "checklist": checklist}
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/deal-control/deals/{deal_id}/assistant-workspace")

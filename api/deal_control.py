@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +38,6 @@ from storage.rop_db import (
     get_entity_state,
     get_latest_deal_manager_situation_review,
     get_latest_ui_report,
-    get_or_create_deal_daily_checklist,
     list_deal_control_bitrix_task_states,
     list_deal_control_deals,
     list_deal_control_task_history,
@@ -48,7 +46,6 @@ from storage.rop_db import (
     save_deal_control_scope,
     save_deal_control_bitrix_tasks,
     save_deal_control_communications_today,
-    save_deal_daily_checklist_item_completion,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -77,11 +74,9 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
     "questions",
     "script",
     "script_variants",
-    "crm_checklist",
     "script_channel",
 })
 DAILY_COMMUNICATION_TARGET = 3
-CHECKLIST_LIMIT = 5
 MESSENGER_CHANNELS = frozenset({"message", "whatsapp", "telegram", "max"})
 INTERNAL_CHANNELS = frozenset({"internal_chat", "internal_comment"})
 LAST_ACTIVITY_LABELS = {
@@ -1023,7 +1018,6 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
         "questions": questions,
         "script": str(brief.get("call_script") or primary.get("text") or primary.get("call_script") or backup_script),
         "script_variants": script_variants,
-        "crm_checklist": texts(manager.get("manager_checklist")),
         "script_channel": str(manager.get("recommended_channel") or ""),
         "rop_task_hint": str(rop.get("message_to_manager") or rop.get("check_for_rop") or ""),
         "expected_crm_update": str(rop.get("expected_crm_update") or money.get("next_required_fact") or ""),
@@ -1071,97 +1065,6 @@ def _has_refined_value(value: Any) -> bool:
     if isinstance(value, dict):
         return bool(value)
     return True
-
-
-def _checklist_action(value: Any, *, source: str) -> str:
-    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n.;:")
-    if not text:
-        return ""
-    lowered = text.lower()
-    negative_match = re.match(
-        r"^не\s+(?:подтвержд[её]н(?:а|о|ы)?|зафиксирован(?:а|о|ы)?|согласован(?:а|о|ы)?)\s+(.+)$",
-        lowered,
-    )
-    if negative_match:
-        action = f"Подтвердить {negative_match.group(1)}"
-    elif lowered.startswith("нет данных о "):
-        action = f"Уточнить {lowered.removeprefix('нет данных о ')}"
-    elif source == "crm":
-        action = f"Зафиксировать в CRM {lowered}"
-    elif re.match(r"^(кто|когда|где|как|какой|какая|какие|актуален ли|актуальна ли)\b", lowered):
-        action = f"Уточнить, {lowered}"
-    elif lowered.startswith("дата "):
-        action = f"Подтвердить дату {lowered.removeprefix('дата ')}"
-    elif re.match(r"^(бюджет|срок|ЛПР)\b", text, flags=re.IGNORECASE):
-        action = f"Подтвердить {lowered}"
-    elif lowered.startswith("точный состав "):
-        action = f"Получить {lowered}"
-    elif re.match(r"^(уточнить|подтвердить|получить|зафиксировать|согласовать|обновить|назначить|проверить|определить)\b", lowered):
-        action = text[0].upper() + text[1:]
-    else:
-        action = f"Уточнить {lowered}"
-    action = re.sub(r"\bлпр\b", "ЛПР", action, flags=re.IGNORECASE)
-    action = re.sub(r"\bчз\b", "ЧЗ", action, flags=re.IGNORECASE)
-    action = re.sub(r"\b1с\b", "1С", action, flags=re.IGNORECASE)
-    return action.rstrip(".") + "."
-
-
-def _deal_checklist_candidates(
-    coaching: dict[str, Any],
-    legacy_state: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    report_id = int(coaching.get("report_id") or 0)
-    candidates: list[tuple[str, str]] = []
-    for value in coaching.get("unknowns") or []:
-        candidates.append(("missing", _checklist_action(value, source="missing")))
-    candidates.append(("focus", _checklist_action(coaching.get("what_to_check_now"), source="focus")))
-    for value in coaching.get("crm_checklist") or []:
-        candidates.append(("crm", _checklist_action(value, source="crm")))
-
-    seen: set[str] = set()
-    legacy_items = (
-        legacy_state.get("items")
-        if isinstance(legacy_state, dict) and int(legacy_state.get("source_report_id") or 0) == report_id
-        else {}
-    )
-    if not isinstance(legacy_items, dict):
-        legacy_items = {}
-    items: list[dict[str, Any]] = []
-    for source, text in candidates:
-        normalized = re.sub(r"\W+", " ", text.lower(), flags=re.UNICODE).strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        legacy_item_id = hashlib.sha256(f"{report_id}:{source}:{normalized}".encode("utf-8")).hexdigest()[:16]
-        legacy_item = legacy_items.get(legacy_item_id) if isinstance(legacy_items.get(legacy_item_id), dict) else {}
-        items.append({
-            "text": text,
-            "source": source,
-            "completed": bool(legacy_item.get("completed")),
-            "completed_at": legacy_item.get("completed_at"),
-            "completed_by": legacy_item.get("completed_by"),
-        })
-        if len(items) >= CHECKLIST_LIMIT:
-            break
-    return items
-
-
-def _deal_checklist(
-    db_path: str | Path,
-    deal_id: str,
-    coaching: dict[str, Any],
-    *,
-    business_date: datetime | str | None = None,
-    legacy_state: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    report_id = int(coaching.get("report_id") or 0)
-    return get_or_create_deal_daily_checklist(
-        db_path,
-        deal_id=str(deal_id),
-        business_date=business_date,
-        seed_items=_deal_checklist_candidates(coaching, legacy_state) if report_id else [],
-        source_report_id=report_id or None,
-    )
 
 
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
@@ -1262,13 +1165,6 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         else:
             missing += 1
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
-        deal["checklist"] = _deal_checklist(
-            db_path,
-            str(deal["deal_id"]),
-            deal["coaching"],
-            business_date=current,
-            legacy_state=deal.get("checklist_state") if isinstance(deal.get("checklist_state"), dict) else None,
-        )
         deal["manager_situation"] = get_deal_manager_situation_state(
             db_path,
             deal_id=str(deal["deal_id"]),
@@ -1356,39 +1252,6 @@ def save_bitrix_task_completion(
         activity_id=activity_id,
         completed=completed,
         source_role=source_role,
-    )
-
-
-def save_checklist_item_completion(
-    *,
-    db_path: str | Path,
-    deal_id: str,
-    item_id: str,
-    completed: bool,
-) -> dict[str, Any]:
-    deal = next(
-        (item for item in list_deal_control_deals(db_path) if str(item.get("deal_id")) == str(deal_id)),
-        None,
-    )
-    if deal is None:
-        raise ValueError("Сделка ещё не добавлена в контур контроля")
-    coaching = _analysis_coaching(db_path, str(deal_id))
-    checklist = _deal_checklist(
-        db_path,
-        str(deal_id),
-        coaching,
-        legacy_state=deal.get("checklist_state") if isinstance(deal.get("checklist_state"), dict) else None,
-    )
-    report_id = checklist.get("source_report_id")
-    if not report_id:
-        raise ValueError("Чек-лист появится после успешного анализа сделки")
-    if not any(str(item.get("id")) == str(item_id) for item in checklist["items"]):
-        raise ValueError("Пункт не найден в актуальном чек-листе")
-    return save_deal_daily_checklist_item_completion(
-        db_path,
-        deal_id=str(deal_id),
-        item_id=str(item_id),
-        completed=completed,
     )
 
 

@@ -749,26 +749,6 @@ export type DealControlCommunicationsToday = {
   items: DealControlCommunicationItem[]
 }
 
-export type DealControlChecklistItem = {
-  id: string
-  text: string
-  completed: boolean
-  completed_at?: string | null
-  completed_by?: 'manager' | null
-  source: 'missing' | 'focus' | 'crm' | string
-  change_kind?: 'new' | 'carried' | 'reopened' | 'completed' | 'returned' | string
-}
-
-export type DealControlChecklist = {
-  business_date?: string | null
-  revision?: number
-  source_report_id?: number | null
-  items: DealControlChecklistItem[]
-  completed: number
-  total: number
-  progress_percent: number
-}
-
 export type CommunicationQualityAuditCriterion = {
   score: 0 | 1 | null
 }
@@ -846,15 +826,6 @@ export type DailyControlDeal = {
     content_available?: boolean
     items: Array<DealControlCommunicationItem & { content_available?: boolean }>
   }
-  checklist: {
-    business_date?: string | null
-    revision?: number
-    source_report_id?: number | null
-    completed: number
-    total: number
-    progress_percent?: number
-    items: Array<DealControlChecklistItem & { why?: string | null }>
-  }
   has_analysis: boolean
   analysis_created_at?: string | null
   analysis_checked_at?: string | null
@@ -864,7 +835,7 @@ export type DailyControlDeal = {
     business_date: string
     cutoff_at: string
     task_buckets: string[]
-    activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'bitrix_task_rescheduled' | 'local_task_completed' | 'checklist_completed'>
+    activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'bitrix_task_rescheduled' | 'local_task_completed'>
     had_day_obligation?: boolean
     untouched?: boolean
     legacy: boolean
@@ -901,7 +872,6 @@ export type DealControlDeal = {
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
   manager_situation?: ManagerSituationState | null
-  checklist: DealControlChecklist
   coaching: {
     report_id?: number | null
     analysis_created_at?: string | null
@@ -919,7 +889,6 @@ export type DealControlDeal = {
     questions: string[]
     script?: string
     script_variants: string[]
-    crm_checklist: string[]
     script_channel?: string
     rop_task_hint?: string
     expected_crm_update?: string
@@ -962,8 +931,6 @@ export type DailyControlManager = {
   manager_id?: string | null
   manager_name: string
   deals_count: number
-  checklist_completed: number
-  checklist_total: number
   calls: number
   messages: number
   talk_seconds: number
@@ -1276,7 +1243,6 @@ export type ManagerFullScriptWorkspace = {
   script: ManagerFullScriptRecord | null
   script_mode: ManagerFullScriptMode
   disc_profile: ManagerDiscProfile | null
-  checklist: Record<string, unknown>
   objection_handling: ManagerObjectionHandling | null
 }
 
@@ -1535,12 +1501,6 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
     last_confirmed_contact: null,
     items: [],
   }
-  const emptyChecklist: DealControlChecklist = {
-    items: [],
-    completed: 0,
-    total: 0,
-    progress_percent: 0,
-  }
   const emptyCoaching: DealControlDeal['coaching'] = {
     strengths: [],
     weaknesses: [],
@@ -1548,7 +1508,6 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
     unknowns: [],
     questions: [],
     script_variants: [],
-    crm_checklist: [],
   }
   const deals = (Array.isArray(payload.deals) ? payload.deals : []).map((deal) => {
     const foreignProjection = deal.read_only === true && deal.can_open !== true
@@ -1568,7 +1527,6 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
       tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
       current_task: foreignProjection ? null : (deal.current_task || null),
       manager_situation: foreignProjection ? null : (deal.manager_situation || null),
-      checklist: foreignProjection ? emptyChecklist : (deal.checklist || emptyChecklist),
       coaching: foreignProjection ? emptyCoaching : (deal.coaching || emptyCoaching),
       review: foreignProjection ? undefined : deal.review,
     }
@@ -2126,17 +2084,6 @@ export function updateDealControlBitrixTaskCompletion(
     method: 'PUT',
     body: JSON.stringify({ deal_id: dealId, completed }),
   })
-}
-
-export function updateDealControlChecklistItemCompletion(
-  dealId: string,
-  itemId: string,
-  completed: boolean,
-) {
-  return api<{ ok: boolean; checklist: DealControlChecklist }>(
-    `/api/deal-control/deals/${encodeURIComponent(dealId)}/checklist/${encodeURIComponent(itemId)}/completion`,
-    { method: 'PUT', body: JSON.stringify({ completed }) },
-  )
 }
 
 export function fetchDealControlMetrics() {

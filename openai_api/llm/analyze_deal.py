@@ -5,6 +5,7 @@ Analyze a prepared deal workspace using history, one transcript, and processed O
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -31,14 +32,13 @@ from openai_api.llm.deal_evidence import (
 )
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
-from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_deal_analysis
+from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, remove_retired_deal_fields, validate_deal_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
 from progress_events import emit_progress, retry_progress_callback
 from setup import MSK_TZ
 from storage.rop_db import (
     DEFAULT_DB_PATH,
-    get_deal_daily_checklist_analysis_projection,
     get_latest_neuro_rop_recommendation_projection,
 )
 
@@ -234,7 +234,6 @@ def build_prompt(
     okf_sections: list[tuple[Path, str]],
     stage_policy: dict[str, Any],
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
-    daily_checklist_context: dict[str, Any] | None = None,
     incremental_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
@@ -243,11 +242,6 @@ def build_prompt(
     stage_policy_text = json.dumps(stage_policy, ensure_ascii=False, indent=2)
     prior_recommendation_text = json.dumps(
         prior_neuro_rop_recommendation,
-        ensure_ascii=False,
-        indent=2,
-    )
-    daily_checklist_text = json.dumps(
-        daily_checklist_context,
         ensure_ascii=False,
         indent=2,
     )
@@ -260,7 +254,9 @@ def build_prompt(
 
 {history_text.strip()}"""
     if incremental_context is not None:
-        previous_analysis_text = json.dumps(incremental_context.get("previous_analysis"), ensure_ascii=False, indent=2)
+        previous_analysis = copy.deepcopy(incremental_context.get("previous_analysis") or {})
+        remove_retired_deal_fields(previous_analysis)
+        previous_analysis_text = json.dumps(previous_analysis, ensure_ascii=False, indent=2)
         new_events_text = json.dumps(incremental_context.get("new_events"), ensure_ascii=False, indent=2)
         crm_delta_text = json.dumps(incremental_context.get("crm_delta"), ensure_ascii=False, indent=2)
         incremental_rules = """
@@ -268,7 +264,7 @@ def build_prompt(
 PREVIOUS_ANALYSIS — бизнес-состояние сделки на момент последнего успешного анализа, а не новое evidence.
 Сохраняй ранее подтверждённые факты, если NEW_EVENTS или CRM_DELTA им не противоречат. Не превращай прежние гипотезы модели в доказанные факты.
 Новый evidence имеет приоритет только когда он действительно подтверждает изменение. При противоречии пересмотри вывод и все зависимые рекомендации.
-CRM_STAGE_POLICY, PRIOR_NEURO_ROP_RECOMMENDATION и CURRENT_DAILY_MANAGER_CHECKLIST переданы в актуальном состоянии и имеют приоритет над старыми значениями.
+CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в актуальном состоянии и имеют приоритет над старыми значениями.
 Верни полный актуальный analysis JSON того же контракта, включая все обязательные блоки. Не возвращай patch, diff или сокращённый отчёт.
 Старая raw-история намеренно не повторяется. Её отсутствие в prompt не означает, что старых событий не было или что прошлый контекст был полным.
 </incremental_analysis_rules>
@@ -444,7 +440,7 @@ competitor_defense_checklist внутри deal_context: они уже счита
 
 <length_limits>
 - summary/reason/description: максимум 2-3 коротких предложения.
-- Списки what_changed, what_done_well, missed_points, manager_checklist: максимум 5 пунктов.
+- Списки what_changed, what_done_well, missed_points: максимум 5 пунктов.
 - call_opening_variants: ровно 2 коротких альтернативных начала разговора, если выбран звонок; это не две другие стратегии.
 - Списки allowed_work, blocked_work, defense_points, questions_to_client: максимум 5 пунктов.
 - Списки missing_confirmation, next_actions: максимум 5 пунктов.
@@ -497,7 +493,6 @@ competitor_defense_checklist внутри deal_context: они уже счита
 - manager_action_block.primary_text — готовый текст именно для клиента, без инструкций менеджеру, без фраз "внеси в CRM", "по сделке" и без служебных запретов. Он должен звучать как естественное деловое сообщение или сценарий звонка.
 - Для сделки вопросы в одном контакте должны относиться к нашему КП и составу решения, сумме/бюджету, тому, что клиент сравнивает, ЛПР и сроку решения. Спрашивай только факты, которых нет в истории.
 - Не смешивай дату решения клиента с датой потребности в оборудовании или запуска. Заполняй обе отдельно только по фактам, а следующий шаг и deadline назначай по сроку принятия решения.
-- manager_action_block.manager_checklist — короткий список того, что внести в CRM сразу после контакта. Не повторяй в нём задачу или текст клиенту.
 
 Правила сравнения технических чисел:
 - Сначала нормализуй сопоставимые единицы. Для производительности: значение в минуту умножь на 60 для значения в час; значение в час раздели на 60 для значения в минуту.
@@ -588,21 +583,6 @@ competitor_defense_checklist внутри deal_context: они уже счита
 what_manager_did и evidence должны быть короткими фактами, evidence — не более 7 пунктов. Если next_action_required=true, заполни все три next_action-поля; иначе оставь их null. Не выдумывай следующий шаг, срок или результат.
 next_action_at — ISO datetime с часовым поясом, например 2026-08-27T16:00:00+03:00. Время без явно указанной зоны трактуется как МСК. Если известна только дата, системный срок контроля — 18:00 МСК этой даты; это не подтверждённое клиентом время. Не превращай «после обеда» или неизвестный срок в выдуманную точную дату.
 </recommendation_feedback_rules>
-
-<daily_checklist_rules>
-CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной список менеджера, а не доказательство фактов клиента.
-Отметка completed=true означает только самоотчёт менеджера о выполненном действии. Не используй её как evidence контакта, согласия клиента, результата рекомендации или движения сделки.
-Верни в daily_checklist_update только дельту относительно переданного списка:
-- base_revision и business_date скопируй из CURRENT_DAILY_MANAGER_CHECKLIST;
-- add — только действительно новый актуальный пункт, которого нет в списке даже под другой формулировкой;
-- retire — только открытый пункт, который по новым фактам стал неактуален;
-- reopen — только выполненный пункт, который снова стал нужен из-за нового явно подтверждённого обстоятельства; обязательно укажи конкретную причину;
-- неизменившиеся пункты не перечисляй ни в одном массиве;
-- не переформулируй существующий пункт через add и не создавай смысловые дубли;
-- если изменений нет, верни пустые add, retire и reopen;
-- после применения изменений видимых пунктов должно быть не больше 5.
-Если tracked=false или items пуст, сформируй начальный дневной список через add. Пункты должны быть короткими конкретными действиями менеджера на сегодня, а не текстами для РОПа и не общими советами.
-</daily_checklist_rules>
 
 Перед финальным JSON проверь:
 1. JSON валиден и соответствует указанной структуре.
@@ -795,19 +775,6 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
     "next_action_at": null,
     "next_action_reason": null
   }},
-  "daily_checklist_update": {{
-    "business_date": "YYYY-MM-DD из CURRENT_DAILY_MANAGER_CHECKLIST",
-    "base_revision": 0,
-    "add": [
-      {{"text": "новое короткое действие менеджера на сегодня", "reason": "почему пункт нужен по текущим фактам"}}
-    ],
-    "retire": [
-      {{"item_id": "ID открытого пункта", "reason": "почему пункт больше не актуален"}}
-    ],
-    "reopen": [
-      {{"item_id": "ID выполненного пункта", "reason": "какое новое подтверждённое обстоятельство снова требует действия"}}
-    ]
-  }},
   "new_event": {{
     "type": "call|missed_call|email|unknown",
     "summary": "что произошло",
@@ -948,8 +915,7 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
     "backup_texts": [
       {{"type": "messenger", "title": "Короткое сообщение", "text": "текст"}},
       {{"type": "call_script", "title": "Скрипт звонка", "text": "текст"}}
-    ],
-    "manager_checklist": ["что проверить перед отправкой"]
+    ]
   }},
   "rop_action": {{
     "required": true,
@@ -986,9 +952,6 @@ CURRENT_DAILY_MANAGER_CHECKLIST — это рабочий дневной спи�
 
 {prior_recommendation_text}
 
-## CURRENT_DAILY_MANAGER_CHECKLIST
-
-{daily_checklist_text}
 """
 
 
@@ -1461,11 +1424,7 @@ def render_report(
 
 ### Запасные варианты
 
-{backup_md}
-
-### Чеклист менеджера
-
-{bullet_list(manager.get('manager_checklist'))}"""
+{backup_md}"""
 
     deal_id = analysis.get("deal_id", "")
     bitrix_url = bitrix_entity_url("deal", deal_id)
@@ -1711,10 +1670,6 @@ def main() -> None:
         DEFAULT_DB_PATH,
         str(args.deal_id),
     )
-    daily_checklist_context = get_deal_daily_checklist_analysis_projection(
-        DEFAULT_DB_PATH,
-        str(args.deal_id),
-    )
 
     if not history_path.exists():
         raise FileNotFoundError(f"History file not found: {history_path}")
@@ -1749,7 +1704,6 @@ def main() -> None:
         okf_sections,
         stage_policy,
         prior_neuro_rop_recommendation,
-        daily_checklist_context,
         incremental_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -1855,7 +1809,6 @@ def main() -> None:
         },
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
-        "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist_context,
         "analysis_mode": "incremental" if incremental_context is not None else "full",
         "evidence_ids_included": sorted(set(
             (

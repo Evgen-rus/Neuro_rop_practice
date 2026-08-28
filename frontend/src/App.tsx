@@ -391,7 +391,7 @@ function getManagerBrief(analysis: Record<string, unknown> | null | undefined): 
     ),
     clientChannel: asString(manager.recommended_channel),
     crm: formatMoneyText(
-      asStringList(manager.manager_checklist).join('\n') || asString(rop.expected_crm_update) || '—',
+      (!analysis?.deal_state ? asStringList(manager.manager_checklist).join('\n') : '') || asString(rop.expected_crm_update) || '—',
     ),
   }
 }

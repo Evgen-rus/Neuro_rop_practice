@@ -161,7 +161,7 @@ def _section(name: str, value: Any) -> str:
     return f"{name}:\n{json.dumps(value, ensure_ascii=False, indent=2)}"
 
 
-def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, checklist: dict[str, Any], communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]], script_mode: str = "message", objection_handling: dict[str, Any] | None = None) -> str:
+def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_projection: dict[str, Any], deal: dict[str, Any], current_bitrix_task: dict[str, Any] | None, communication_pattern_context: dict[str, Any], quick_help: dict[str, Any], selected_strategy: str, relevant_tactics: list[dict[str, Any]], script_mode: str = "message", objection_handling: dict[str, Any] | None = None) -> str:
     if script_mode not in SCRIPT_MODES:
         raise ValueError("Неизвестный режим сценария")
     if script_mode == "call":
@@ -209,14 +209,13 @@ def build_full_script_prompt(*, analysis_projection: dict[str, Any], situation_p
         "- Продолжай ровно выбранный менеджером вариант сообщения. Используй LOCKED_MOVE, SELECTED_STRATEGY, ASSISTANT_MODE и pressure_lever.\n"
         "- Если ASSISTANT_MODE = push, держи экспертный коммерческий тон выбранного дожима: уверенно, предметно, через выбранный рычаг, без канцелярита и без пустого «посмотрели КП?». Если ASSISTANT_MODE = reanimator, держи мягкое восстановление контакта: приветствие, при необходимости кто мы и на чём остановились, польза ответить, низкое усилие, один следующий шаг. Не смешивай эти голоса.\n"
         + shape_rules +
-        "- Незакрытые пункты CURRENT_DAILY_CHECKLIST помоги получить естественно, но не создавай новый checklist и не объявляй отметки менеджера фактами клиента.\n"
         "- RELEVANT_TACTICS — допустимые условные приёмы. Не обещай их доступность и не превращай в факт без подтверждения контекстом.\n"
         "- Не выполняй новый анализ возражений и не генерируй новые ответы: UI покажет готовую проекцию полного анализа отдельно.\n"
         "- Не придумывай даты, суммы, наличие оборудования, специалистов, рассрочки, повышение цен, договорённости или слова клиента.\n"
         + closing_rule,
         _section("ANALYSIS_CONTEXT", analysis_projection), _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)), _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
-        _section("CURRENT_DAILY_CHECKLIST", checklist), _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
+        _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
         _section("SCRIPT_MODE", script_mode),
         _section("LOCKED_MOVE", locked_move),
         _section("QUICK_HELP", project_quick_help_for_material(quick_help, selected_strategy)),
@@ -245,7 +244,6 @@ def full_script_static_prompt(script_mode: str = "message") -> str:
         situation_projection={},
         deal={},
         current_bitrix_task=None,
-        checklist={},
         communication_pattern_context={},
         quick_help=dummy_help,
         selected_strategy="primary",

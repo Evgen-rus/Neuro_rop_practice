@@ -7,9 +7,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from api.jobs import JobState, _collect_results, _publish_deal_result
+from api.jobs import JobState, _apply_deal_control_projections, _collect_results, _publish_deal_result
 from progress_events import compact_decision_status
 from storage.rop_db import (
+    connect,
     create_automatic_analysis_run,
     get_latest_automatic_analysis_run,
     get_or_create_ui_report_for_analysis_run,
@@ -48,6 +49,23 @@ def _ready(job: JobState, entity_id: str, *, run_id: int, decision: str) -> None
 
 
 class IncrementalJobPublishTests(unittest.TestCase):
+    def test_successful_publish_materializes_recommendation_without_daily_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            init_db(db_path)
+            analysis = _analysis()
+            analysis["manager_action_block"]["manager_checklist"] = ["Legacy item"]
+            analysis["daily_checklist_update"] = {"add": [{"text": "Legacy item"}]}
+            with patch("api.jobs.DEFAULT_DB_PATH", db_path), \
+                 patch("api.jobs.apply_deal_recommendation_feedback") as feedback, \
+                 patch("api.jobs.materialize_deal_recommendation_from_report", return_value={"id": 1}) as materialize:
+                _apply_deal_control_projections("101", 1, analysis)
+            feedback.assert_called_once()
+            materialize.assert_called_once()
+            with connect(db_path) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertFalse(any(name.startswith("deal_daily_checklist") for name in tables))
+
     def test_packet_decisions_use_linked_runs_not_latest_deal_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.sqlite"
@@ -123,7 +141,6 @@ class IncrementalJobPublishTests(unittest.TestCase):
                  patch("api.jobs.get_or_create_ui_report_for_analysis_run", side_effect=create), \
                  patch("api.jobs.get_automatic_analysis_item", return_value=None), \
                  patch("api.jobs.apply_deal_recommendation_feedback"), \
-                 patch("api.jobs.apply_deal_daily_checklist_update"), \
                  patch("api.jobs.materialize_deal_recommendation_from_report", side_effect=materialize):
                 _publish_deal_result(job, "101", allow_raise=False)
                 _publish_deal_result(job, "202", allow_raise=False)

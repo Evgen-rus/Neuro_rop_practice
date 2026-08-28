@@ -62,7 +62,6 @@ def build_strategy_pack_prompt(
     situation_projection: dict[str, Any],
     deal: dict[str, Any],
     current_bitrix_task: dict[str, Any] | None,
-    checklist: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     quick_help: dict[str, Any],
     selected_strategy: str,
@@ -79,14 +78,12 @@ def build_strategy_pack_prompt(
         "- email — тот же заход в формате письма: тема, обращение, контекст, 1–4 связанных вопроса только ради одной цели, аргумент, следующий шаг, завершение. Не анкета.\n"
         "- message_script — продолжение переписки. Первое сообщение — сам selected_client_message или его естественное продолжение в том же голосе. 3–6 коротких блоков, не телефонный разговор.\n"
         "- call_script — устный разговор. Готовое сообщение ещё не сказано по телефону: первый блок — живая устная версия того же захода, не «продолжение с середины» и не дословная переписка. Перед каждым существенным вопросом дай связку «зачем спрашиваю» и сам вопрос в той же реплике spoken_text. Не выноси вопрос в clarifying_question: это поле всегда пустое. Финал — резюме только подтверждённого + следующий шаг + «всё верно зафиксировал?». Не выдумывай будущие договорённости.\n"
-        "- Незакрытые пункты CURRENT_DAILY_CHECKLIST помоги получить естественно, но не создавай новый checklist.\n"
         "- RELEVANT_TACTICS — только условные приёмы. OBJECTION_HANDLING не переписывай: в call_script укажи не более двух существующих objection_id, если уместны.\n"
         "- Не придумывай даты, суммы, имена, договорённости или слова клиента. Верни только JSON по схеме на русском языке.",
         _section("ANALYSIS_CONTEXT", analysis_projection),
         _section("SITUATION_CONTEXT", situation_projection),
         _section("DEAL_CONTEXT", project_deal(deal)),
         _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
-        _section("CURRENT_DAILY_CHECKLIST", checklist),
         _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
         _section("RELEVANT_TACTICS", relevant_tactics),
         _section("OBJECTION_HANDLING", objection_handling or {"items": []}),

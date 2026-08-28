@@ -1,7 +1,7 @@
 """Explicit paid replay of one local evidence item through deal V2.
 
 This benchmark never updates entity_state, analysis_runs, ui_reports, reports,
-checklists, feedback, or recommendation materialization. Full candidate content
+feedback or recommendation materialization. Full candidate content
 stays under ignored reports runtime; stdout contains privacy-safe metrics only.
 """
 
@@ -26,7 +26,6 @@ from openai_api.llm.validation import normalize_analysis_for_validation, validat
 from storage.rop_db import (
     DEFAULT_DB_PATH,
     connect,
-    get_deal_daily_checklist_analysis_projection,
     get_entity_state,
     get_latest_neuro_rop_recommendation_projection,
     loads_json,
@@ -88,7 +87,6 @@ def main() -> None:
         crm_delta={"change_types": ["benchmark_evidence_replay"], "details": {}},
         stage_policy=build_deal_stage_policy(deal_dir, str(args.deal_id)),
         prior_recommendation=get_latest_neuro_rop_recommendation_projection(db_path, str(args.deal_id)),
-        daily_checklist=get_deal_daily_checklist_analysis_projection(db_path, str(args.deal_id)),
         source_fingerprint=fingerprint,
         model=args.model,
     )

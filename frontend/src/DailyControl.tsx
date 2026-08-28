@@ -106,8 +106,6 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
       manager_id: deal.manager_id,
       manager_name: deal.manager_name || 'Без ответственного',
       deals_count: 0,
-      checklist_completed: 0,
-      checklist_total: 0,
       calls: 0,
       messages: 0,
       talk_seconds: 0,
@@ -116,8 +114,6 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
       green: 0,
     }
     current.deals_count += 1
-    current.checklist_completed += Number(deal.checklist?.completed || 0)
-    current.checklist_total += Number(deal.checklist?.total || 0)
     const communications = deal.communications_today
     const hasWork = hasReportDayWork(deal)
     if (hasWork || !communications?.unavailable) {
@@ -681,7 +677,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
               copyNotice={copyNotice}
               openEventId={openEventId}
               onToggleEvent={(eventId) => setOpenEventId((current) => current === eventId ? '' : eventId)}
-              showChecklist={false}
             />
           </div>
         </div>

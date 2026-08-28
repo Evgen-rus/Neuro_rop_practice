@@ -329,11 +329,6 @@ def _production_current(
 def _snapshot_context(db_path: Path, deal_id: str) -> dict[str, Any]:
     context = load_manager_screen_context(db_path, str(deal_id), require_confirmed_situation=False)
     communications = _load_local_communications(str(deal_id))
-    checklist = None
-    try:
-        checklist = _storage_call("get_deal_daily_checklist_analysis_projection", db_path, deal_id=str(deal_id))
-    except Exception:
-        checklist = {}
     last_contact = find_last_contact(str(deal_id))
     tactics = load_manager_tactics()
     bounded = {
@@ -343,7 +338,6 @@ def _snapshot_context(db_path: Path, deal_id: str) -> dict[str, Any]:
         "situation_projection": context["situation_projection"],
         "current_bitrix_task": context.get("current_bitrix_task"),
         "communication_pattern_context": build_communication_pattern_context(communications),
-        "checklist": checklist or {},
         "last_contact": last_contact,
         "objection_handling": _public_objections(context["analysis_projection"]),
         "source_report_id": context.get("source_report_id"),
@@ -369,7 +363,6 @@ def get_or_create_snapshot(*, deal_id: str, db_path: Path = DEFAULT_DB_PATH, lab
             "deal_projection": bounded["deal_projection"],
             "current_bitrix_task": bounded["current_bitrix_task"],
             "communication_pattern_context": bounded["communication_pattern_context"],
-            "checklist": bounded["checklist"],
             "last_contact": bounded["last_contact"],
             "manager_tactics_hash": bounded["manager_tactics_hash"],
         })
@@ -664,7 +657,6 @@ def _generate_kwargs(spec: dict[str, Any], snapshot: dict[str, Any], extra: dict
     else:
         quick_help = extra.get("quick_help") or {}
         kwargs.update({
-            "checklist": context.get("checklist") or {},
             "quick_help": quick_help,
             "selected_strategy": extra.get("selected_strategy") or "primary",
             "relevant_tactics": quick_help.get("lifehacks") if isinstance(quick_help.get("lifehacks"), list) else [],
@@ -685,7 +677,6 @@ def _run_generator(spec: dict[str, Any], kwargs: dict[str, Any], model: str, rea
         return generate_deal_manager_companion(**kwargs)
     if spec.get("script_mode") == "email":
         kwargs.pop("script_mode", None)
-        kwargs.pop("checklist", None)
         kwargs.pop("relevant_tactics", None)
         kwargs.pop("objection_handling", None)
         return generate_deal_manager_email(**kwargs)

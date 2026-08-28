@@ -113,19 +113,17 @@ class DealManagerFullScriptTests(unittest.TestCase):
             situation_projection=CONTEXT["situation_projection"],
             deal=DEAL,
             current_bitrix_task=CONTEXT["current_bitrix_task"],
-            checklist={"items": [{"id": "1", "text": "Дата решения", "completed": False}]},
             communication_pattern_context={"total_attempts": 2},
             quick_help=ANSWER,
             selected_strategy="alternative",
             relevant_tactics=ANSWER["lifehacks"],
             objection_handling={"items": [{"objection_id": "technical_doubt", "objection": "Нужно проверить", "manager_reply": "Проверим", "follow_up_question": "Что критично?", "next_step_goal": "Зафиксировать", "what_not_to_do": "Не обещать"}]},
         )
-        self.assertIn("CURRENT_DAILY_CHECKLIST", prompt)
+        self.assertNotIn("CURRENT_DAILY_CHECKLIST", prompt)
         self.assertIn("ASSISTANT_MODE", prompt)
         self.assertIn("PRESSURE_LEVER", prompt)
         self.assertIn("LOCKED_MOVE", prompt)
         self.assertIn(ANSWER["client_messages"]["alternative"], prompt)
-        self.assertIn("не создавай новый checklist", prompt)
         self.assertIn("не генерируй новые ответы", prompt)
         self.assertNotIn("checklist", full_script_schema()["properties"])
         self.assertNotIn("objection_handling", full_script_schema()["properties"])
@@ -147,7 +145,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
         call_prompt = build_full_script_prompt(
             analysis_projection=CONTEXT["analysis_projection"],
             situation_projection=CONTEXT["situation_projection"], deal=DEAL,
-            current_bitrix_task=CONTEXT["current_bitrix_task"], checklist={"items": []},
+            current_bitrix_task=CONTEXT["current_bitrix_task"],
             communication_pattern_context={"total_attempts": 2}, quick_help=ANSWER,
             selected_strategy="alternative", relevant_tactics=ANSWER["lifehacks"], script_mode="call",
             objection_handling={"items": [{"objection_id": "technical_doubt"}]},
@@ -300,7 +298,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertEqual(result["script_id"], 51)
         self.assertEqual(result["script_mode"], "call")
 
-    def test_uncached_job_reads_checklist_with_named_deal_id_and_saves_script(self) -> None:
+    def test_uncached_job_only_saves_script_without_daily_storage(self) -> None:
         inputs = {
             "context": {
                 "deal": DEAL,
@@ -318,8 +316,6 @@ class DealManagerFullScriptTests(unittest.TestCase):
 
         def storage_call(name, db_path, **kwargs):
             storage_calls.append((name, kwargs))
-            if name == "get_deal_daily_checklist_analysis_projection":
-                return {"tracked": True, "items": []}
             if name == "save_deal_manager_full_script":
                 return {"id": 44}
             raise AssertionError(name)
@@ -337,8 +333,7 @@ class DealManagerFullScriptTests(unittest.TestCase):
 
         result = full_script_api.get_full_script_job(job.job_id)
         self.assertEqual(result["status"], "done")
-        checklist_call = next(call for call in storage_calls if call[0] == "get_deal_daily_checklist_analysis_projection")
-        self.assertEqual(checklist_call[1], {"deal_id": "101"})
+        self.assertEqual([name for name, _ in storage_calls], ["save_deal_manager_full_script"])
 
     def test_workspace_exposes_existing_disc_labels_without_calculation(self) -> None:
         inputs = {
@@ -389,8 +384,6 @@ class DealManagerFullScriptTests(unittest.TestCase):
         saved = []
 
         def storage_call(name, db_path, **kwargs):
-            if name == "get_deal_daily_checklist_analysis_projection":
-                return {"items": []}
             if name.startswith("get_deal_manager_"):
                 return None
             if name.startswith("save_deal_manager_"):
@@ -439,8 +432,6 @@ class DealManagerFullScriptTests(unittest.TestCase):
         saved = []
 
         def storage_call(name, db_path, **kwargs):
-            if name == "get_deal_daily_checklist_analysis_projection":
-                return {"items": []}
             if name.startswith("get_deal_manager_"):
                 return None
             if name.startswith("save_deal_manager_"):

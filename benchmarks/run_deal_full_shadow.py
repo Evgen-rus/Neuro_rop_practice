@@ -2,7 +2,7 @@
 
 The runner reads the prepared local deal workspace and production knowledge, but
 writes only an ignored benchmark artifact under ``analysis/full_shadow``. It does
-not update SQLite, entity state, UI reports, recommendations, or checklists.
+not update SQLite, entity state, UI reports, or recommendations.
 """
 
 from __future__ import annotations
@@ -39,7 +39,6 @@ from openai_api.llm.validation import (
 )
 from storage.rop_db import (
     DEFAULT_DB_PATH,
-    get_deal_daily_checklist_analysis_projection,
     get_latest_neuro_rop_recommendation_projection,
 )
 
@@ -81,7 +80,6 @@ def main() -> None:
     okf_sections = [(path, read_text(path)) for path in knowledge_files(knowledge_dir, entity_type="deal")]
     stage_policy = build_deal_stage_policy(deal_dir, deal_id)
     prior_recommendation = get_latest_neuro_rop_recommendation_projection(DEFAULT_DB_PATH, deal_id)
-    daily_checklist = get_deal_daily_checklist_analysis_projection(DEFAULT_DB_PATH, deal_id)
     prompt = build_prompt(
         deal_id,
         history_text,
@@ -90,7 +88,6 @@ def main() -> None:
         okf_sections,
         stage_policy,
         prior_recommendation,
-        daily_checklist,
         None,
     )
     prompt_budget = build_prompt_budget(

@@ -338,7 +338,6 @@ class PriorNeuroRopRecommendationTests(unittest.TestCase):
                  patch.object(jobs, "get_or_create_ui_report_for_analysis_run", side_effect=save), \
                  patch.object(jobs, "get_automatic_analysis_item", return_value=None), \
                  patch.object(jobs, "apply_deal_recommendation_feedback", side_effect=lambda *_args, **_kwargs: calls.append("apply")), \
-                 patch.object(jobs, "apply_deal_daily_checklist_update"), \
                  patch.object(jobs, "materialize_deal_recommendation_from_report", side_effect=materialize):
                 jobs._collect_results(job, "deal", ["101"])
             self.assertEqual(calls, ["save", "apply", "materialize"])

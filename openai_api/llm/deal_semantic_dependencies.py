@@ -5,7 +5,7 @@ from __future__ import annotations
 
 TRANSIENT_SECTIONS = {
     "new_event", "what_changed", "deal_progress", "recommendation_feedback",
-    "daily_checklist_update", "memory_update", "communication_quality_audit", "manager_quality",
+    "memory_update", "communication_quality_audit", "manager_quality",
 }
 
 # Sections that always follow genuinely new or revised client evidence, even if
@@ -23,7 +23,6 @@ ALWAYS_RECOMPUTE_ON_NEW_CLIENT_EVIDENCE = frozenset({
     "rop_manager_message_block",
     "rop_action",
     "recommendation_feedback",
-    "daily_checklist_update",
     "memory_update",
     "priority_recommendation",
 })

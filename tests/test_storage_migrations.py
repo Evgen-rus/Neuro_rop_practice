@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from storage.rop_db import init_db
+from storage.rop_db import connect, init_db
 
 
 INDEX_NAME = "idx_deal_control_tasks_neuro_report"
@@ -24,6 +24,25 @@ def index_sql(db_path: Path) -> str | None:
 
 
 class StorageMigrationTests(unittest.TestCase):
+    def test_daily_checklist_tables_are_not_created_and_legacy_data_is_preserved(self) -> None:
+        tables = ("deal_daily_checklists", "deal_daily_checklist_items", "deal_daily_checklist_events")
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            init_db(db_path)
+            with connect(db_path) as conn:
+                existing = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                self.assertTrue(set(tables).isdisjoint(existing))
+                self.assertNotIn("checklist_state_json", {row[1] for row in conn.execute("PRAGMA table_info(deal_control_deals)")})
+                for table in tables:
+                    conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, payload TEXT)")
+                    conn.execute(f"INSERT INTO {table} VALUES (1, ?)", ("Исторические отметки",))
+                conn.execute("ALTER TABLE deal_control_deals ADD COLUMN checklist_state_json TEXT DEFAULT '{}'")
+            init_db(db_path)
+            init_db(db_path)
+            with connect(db_path) as conn:
+                for table in tables:
+                    self.assertEqual([row[0] for row in conn.execute(f"SELECT payload FROM {table}")], ["Исторические отметки"])
+
     def test_legacy_deal_control_tasks_migrates_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "legacy.sqlite"

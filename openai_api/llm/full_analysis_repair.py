@@ -31,7 +31,7 @@ DEAL_REPAIR_DOMAINS = {
 LEAD_LOCAL_SECTIONS = frozenset({"rop_manager_message_block", "manager_action_block", "memory_update"})
 LOCAL_SECTIONS = frozenset({
     "rop_manager_message_block", "manager_action_block", "memory_update",
-    "recommendation_feedback", "daily_checklist_update", "communication_quality_audit",
+    "recommendation_feedback", "communication_quality_audit",
     "deal_control_brief", "objection_handling", "competitor_defense_checklist",
     "resource_control", "closed_deal_review", "shaker_question", "priority_recommendation",
 })
@@ -41,7 +41,6 @@ SECTION_RULE_TAGS = {
     "price_comparability_check": ("price_comparability_rules",),
     "communication_quality_audit": ("communication_quality_audit_rules",),
     "recommendation_feedback": ("recommendation_feedback_rules",),
-    "daily_checklist_update": ("daily_checklist_rules",),
 }
 PATH = r"[a-z][a-z0-9_]*(?:\[\d+\])?(?:\.[a-z][a-z0-9_]*(?:\[\d+\])?)*"
 LOCAL_ERROR = re.compile(

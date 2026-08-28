@@ -82,7 +82,6 @@ from storage.rop_db import (
     get_today_mini_trigger_types,
     get_entity_memory,
     get_entity_state,
-    get_deal_daily_checklist_analysis_projection,
     get_latest_deal_semantic_checkpoint,
     get_latest_neuro_rop_recommendation_projection,
     init_db,
@@ -279,7 +278,7 @@ def _int_or_none(value: Any) -> int | None:
 def _write_v2_candidate(
     *, paths: dict[str, Path], args: argparse.Namespace, result: IncrementalV2Result,
     stage_policy: dict[str, Any], prior_recommendation: dict[str, Any] | None,
-    daily_checklist: dict[str, Any] | None, production: bool,
+    production: bool,
 ) -> dict[str, Any]:
     payload = {
         "deal_id": str(args.deal_id),
@@ -289,7 +288,6 @@ def _write_v2_candidate(
         },
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_recommendation,
-        "CURRENT_DAILY_MANAGER_CHECKLIST": daily_checklist,
         "evidence_ids_included": sorted(result.semantic_state.get("evidence_coverage") or {}),
         "analysis": result.analysis,
     }
@@ -629,9 +627,6 @@ def main() -> None:
                 prior_recommendation = get_latest_neuro_rop_recommendation_projection(
                     db_path, str(args.deal_id)
                 )
-                daily_checklist = get_deal_daily_checklist_analysis_projection(
-                    db_path, str(args.deal_id)
-                )
                 context_diagnostics = load_context_diagnostics_for_analysis(
                     entity_type="deal",
                     entity_id=str(args.deal_id),
@@ -654,7 +649,6 @@ def main() -> None:
                     crm_delta=_v2_crm_delta(snapshot, cumulative_diff),
                     stage_policy=stage_policy,
                     prior_recommendation=prior_recommendation,
-                    daily_checklist=daily_checklist,
                     source_fingerprint=fingerprint,
                     model=str(args.model or ANALYSIS_MODEL),
                     compact_policy=compact_policy,
@@ -666,7 +660,6 @@ def main() -> None:
                     result=v2_result,
                     stage_policy=stage_policy,
                     prior_recommendation=prior_recommendation,
-                    daily_checklist=daily_checklist,
                     production=DEAL_INCREMENTAL_V2_MODE == "on",
                 )
                 save_deal_incremental_v2_run(

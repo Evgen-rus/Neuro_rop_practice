@@ -114,12 +114,9 @@ textarea {
 .dc-manager-full-script-failed { display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; color: #5f6f82; text-align: center; }
 .dc-manager-full-script-failed strong { color: #b42318; font-size: 16px; }
 .dc-manager-full-script-failed p { margin: 0 0 6px; font-size: 12px; }
-.dc-manager-full-script-grid { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 12px; padding: 12px; overflow: hidden; }
+.dc-manager-full-script-grid { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px; overflow: hidden; }
 .dc-manager-full-script-grid > main { min-width: 0; overflow: auto; padding: 2px 5px 18px; }
-.dc-manager-full-script-grid > aside { min-width: 0; min-height: 0; max-height: 100%; overflow: auto; align-self: start; }
-.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist { margin: 0; background: #fff; }
-.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist > summary { padding: 13px; }
-.dc-manager-full-script-grid > aside .dc-manager-assistant-checklist-body li > span { font-size: 11px; }
+
 .dc-manager-full-script-goal, .dc-manager-full-script-close { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #bcd6f3; border-radius: 11px; background: #eff6ff; }
 .dc-manager-full-script-goal small, .dc-manager-full-script-close small { color: #5b7591; font-size: 10px; text-transform: uppercase; }
 .dc-manager-full-script-goal strong, .dc-manager-full-script-close strong { color: #173d68; font-size: 13px; line-height: 1.45; }
@@ -169,7 +166,7 @@ textarea {
 .dc-call-script-goal b { color: #26364d; font-weight: 680; white-space: nowrap; }
 .dc-call-script-goal span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dc-call-script-header .dc-manager-full-script-header-actions { margin-left: 0; flex: none; }
-.dc-call-script-layout { display: grid; min-width: 0; min-height: 0; width: 100%; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); background: #fff; }
+.dc-call-script-layout { display: grid; min-width: 0; min-height: 0; width: 100%; grid-template-columns: minmax(0, 1fr); background: #fff; }
 .dc-call-script-pane { position: relative; min-width: 0; border-right: 1px solid #e7edf4; overflow: hidden; }
 .dc-call-script-scroll { overflow: auto; }
 .dc-call-script-pane > .dc-call-script-scroll { position: absolute; inset: 0 0 56px; }
@@ -216,24 +213,11 @@ textarea {
 .dc-call-script-ob-extra { margin-top: 12px; color: #596a81; }
 .dc-call-script-ob-extra summary { cursor: pointer; font-size: 12px; font-weight: 700; }
 .dc-call-script-ob-extra p { margin: 8px 0 0; font-size: 13px; line-height: 1.45; }
-.dc-call-script-aside { min-width: 0; overflow: auto; background: #fff; }
-.dc-call-script-check-panel { padding: 22px 20px; }
-.dc-call-script-check-panel h2 { margin: 0; font-size: 20px; font-weight: 760; }
-.dc-call-script-check-count { margin: 5px 0 0; color: #718097; font-size: 13px; }
-.dc-call-script-check-count b { color: #1f6ef5; }
-.dc-call-script-check-list { margin-top: 16px; border-top: 1px solid #e7edf4; }
-.dc-call-script-check-list ul { margin: 0; padding: 0; list-style: none; }
-.dc-call-script-check-list li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; align-items: start; padding: 18px 0; border-bottom: 1px solid #e7edf4; }
-.dc-call-script-check-list li > button { width: 30px; height: 30px; border: 1.5px solid #b9c5d5; border-radius: 7px; color: transparent; background: #fff; font-size: 18px; font-weight: 800; cursor: pointer; }
-.dc-call-script-check-list li.done > button { border-color: #19ad5d; color: #fff; background: #19ad5d; }
-.dc-call-script-check-list li > span { min-width: 0; color: #26354c; font-size: 14px; line-height: 1.45; font-weight: 650; overflow-wrap: anywhere; }
-.dc-call-script-check-list li.done > span { color: #718097; }
-.dc-call-script-check-list p { margin: 16px 0 0; color: #718097; font-size: 13px; }
 
 @media (max-width: 1200px) {
   .dc-manager-full-script-modal.dc-call-script > header.dc-call-script-header { grid-template-columns: minmax(0, 1fr) auto; }
   .dc-call-script-goal { grid-column: 1 / -1; }
-  .dc-call-script-layout { grid-template-columns: minmax(0, 1fr) minmax(200px, 260px); }
+  .dc-call-script-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 .dc-manager-email { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); gap: 12px; overflow: hidden; padding: 6px 6px 10px; }
@@ -255,8 +239,8 @@ textarea {
   .dc-manager-full-script-layer { padding: 0; }
   .dc-manager-full-script-modal { width: 100vw; height: 100dvh; border-radius: 0; }
   .dc-manager-full-script-grid { grid-template-columns: 1fr; overflow: auto; }
-  .dc-manager-full-script-grid > main, .dc-manager-full-script-grid > aside { overflow: visible; }
-  .dc-manager-full-script-grid > aside { grid-row: 1; max-height: none; }
+  .dc-manager-full-script-grid > main{ overflow: visible; }
+
   .dc-manager-full-script-modal.dc-call-script > header.dc-call-script-header { grid-template-columns: minmax(0, 1fr) auto; height: auto; min-height: 72px; padding: 12px 16px; }
   .dc-call-script-goal { grid-column: 1 / -1; width: auto; max-width: 100%; }
   .dc-call-script-layout { display: block; overflow: auto; }
@@ -6197,7 +6181,7 @@ ul.facts.bad li:before {
 .expandable-text { display: -webkit-box; margin: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .expandable-text.expanded { display: block; overflow: visible; -webkit-line-clamp: unset; }
 .expandable-toggle { margin-top: 5px; border: 0 !important; padding: 0 !important; background: transparent !important; color: #147fdc !important; font-size: 12px !important; text-decoration: underline; }
-.control-checklist { display: grid; gap: 3px; margin-bottom: 8px; }
+
 .control-fields { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 7px; }
 .control-fields label { display: grid; gap: 3px; font-size: 12px; }
 .control-fields select,
@@ -6268,7 +6252,6 @@ ul.facts.bad li:before {
 }
 
 /* Manager screen: confirmation-gated situation, personal trainer and lazy history. */
-.dc-deal-checklist,
 .dc-rop-current-summary {
   overflow: hidden;
   margin-bottom: 14px;
@@ -6278,18 +6261,6 @@ ul.facts.bad li:before {
   box-shadow: 0 8px 22px rgba(31, 54, 86, .065);
 }
 
-.dc-deal-checklist > header {
-  display: grid;
-  min-height: 54px;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #dce5ef;
-  background: #fbfdff;
-}
-
-.dc-deal-checklist-icon,
 .dc-rop-current-summary > summary > span {
   display: grid;
   width: 34px;
@@ -6300,165 +6271,6 @@ ul.facts.bad li:before {
   background: #edf4ff;
   font-size: 13px;
   font-weight: 950;
-}
-
-.dc-deal-checklist header h3 {
-  margin: 0;
-  color: #17243b;
-  font-size: 14px;
-  line-height: 1.2;
-  font-weight: 950;
-}
-
-.dc-deal-checklist header p {
-  margin: 3px 0 0;
-  color: #71819a;
-  font-size: 9px;
-  line-height: 1.3;
-}
-
-.dc-deal-checklist header > strong {
-  padding: 6px 9px;
-  border-radius: 999px;
-  color: #1768f2;
-  background: #edf4ff;
-  font-size: 9px;
-  font-weight: 900;
-  white-space: nowrap;
-}
-
-.dc-deal-checklist-body {
-  padding: 10px 11px 11px;
-}
-
-.dc-deal-checklist-progress {
-  position: relative;
-  height: 7px;
-  margin-bottom: 10px;
-  border-radius: 999px;
-  background: #e8eef5;
-}
-
-.dc-deal-checklist-progress > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #1768f2, #55a1ff);
-  transition: width .18s ease;
-}
-
-.dc-deal-checklist-progress > b {
-  position: absolute;
-  right: 0;
-  bottom: 10px;
-  color: #5c7089;
-  font-size: 8px;
-}
-
-.dc-deal-checklist ul {
-  display: grid;
-  gap: 6px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.dc-deal-checklist li {
-  display: grid;
-  min-height: 38px;
-  grid-template-columns: 23px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border: 1px solid #dfe7f0;
-  border-radius: 9px;
-  background: #fff;
-}
-
-.dc-deal-checklist li.done {
-  border-color: #c8e7d4;
-  background: #f6fcf8;
-}
-
-.dc-deal-checklist li > button {
-  display: grid;
-  width: 23px;
-  height: 23px;
-  padding: 0;
-  place-items: center;
-  border: 1px solid #b9cce0;
-  border-radius: 7px;
-  color: #fff;
-  background: #fff;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 950;
-}
-
-.dc-deal-checklist li.done > button {
-  border-color: #12824b;
-  background: #12824b;
-}
-
-.dc-deal-checklist li > button:disabled {
-  cursor: default;
-  opacity: 1;
-}
-
-.dc-deal-checklist li > span {
-  color: #304864;
-  font-size: 10px;
-  line-height: 1.35;
-  font-weight: 800;
-}
-
-.dc-checklist-origin {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 2px 5px;
-  border-radius: 999px;
-  color: #1768f2;
-  background: #edf4ff;
-  font-size: 7px;
-  font-weight: 900;
-  vertical-align: 1px;
-}
-
-.dc-checklist-origin.carried {
-  color: #6d5b15;
-  background: #fff8d8;
-}
-
-.dc-checklist-origin.reopened {
-  color: #9b4b16;
-  background: #fff0e5;
-}
-
-.dc-deal-checklist li > em {
-  padding: 4px 7px;
-  border-radius: 999px;
-  color: #c63a3a;
-  background: #fff3f3;
-  font-size: 7.5px;
-  font-style: normal;
-  font-weight: 900;
-  white-space: nowrap;
-}
-
-.dc-deal-checklist li.done > em {
-  color: #12824b;
-  background: #edf9f2;
-}
-
-.dc-deal-checklist-empty {
-  margin: 0;
-  padding: 12px;
-  border: 1px dashed #cbd8e6;
-  border-radius: 9px;
-  color: #71819a;
-  background: #fbfdff;
-  font-size: 10px;
-  text-align: center;
 }
 
 .dc-rop-current-summary > summary {
@@ -7477,96 +7289,7 @@ ul.facts.bad li:before {
 .dc-manager-assistant-sidebar nav button span { display: grid; width: 23px; height: 23px; place-items: center; border: 1px solid #ccdae8; border-radius: 7px; background: #fff; }
 .dc-manager-assistant-sidebar nav button:hover { background: #edf4ff; }
 .dc-manager-assistant-sidebar nav button.active { border-color: #9abfff; color: #075ddc; background: #e8f1ff; }
-.dc-manager-assistant-checklist {
-  margin: 0 10px 10px;
-  overflow: hidden;
-  border: 1px solid #cbdbea;
-  border-radius: 11px;
-  background: #fff;
-}
-.dc-manager-assistant-checklist > summary {
-  display: grid;
-  grid-template-columns: 27px minmax(0, 1fr) auto 13px;
-  gap: 4px 7px;
-  align-items: center;
-  padding: 9px;
-  cursor: pointer;
-  list-style: none;
-}
-.dc-manager-assistant-checklist > summary::-webkit-details-marker { display: none; }
-.dc-manager-assistant-checklist > summary:hover { background: #f7faff; }
-.dc-manager-assistant-checklist-icon {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  place-items: center;
-  border-radius: 8px;
-  color: #1768f2;
-  background: #edf4ff;
-  font-size: 12px;
-  font-weight: 900;
-}
-.dc-manager-assistant-checklist-heading { display: grid; gap: 2px; min-width: 0; }
-.dc-manager-assistant-checklist-heading strong { color: #183454; font-size: 11.5px; }
-.dc-manager-assistant-checklist-heading small {
-  display: -webkit-box;
-  overflow: hidden;
-  color: #71839a;
-  font-size: 9px;
-  line-height: 1.3;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.dc-manager-assistant-checklist > summary > b {
-  padding: 3px 6px;
-  border-radius: 99px;
-  color: #1768f2;
-  background: #edf4ff;
-  font-size: 8px;
-  white-space: nowrap;
-}
-.dc-manager-assistant-checklist > summary > i {
-  color: #71839a;
-  font-size: 15px;
-  font-style: normal;
-  transition: transform .18s ease;
-}
-.dc-manager-assistant-checklist[open] > summary > i { transform: rotate(180deg); }
-.dc-manager-assistant-checklist[open] .dc-manager-assistant-checklist-heading small { display: none; }
-.dc-manager-assistant-checklist-progress {
-  grid-column: 2 / -1;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: #e3ebf4;
-}
-.dc-manager-assistant-checklist-progress > span { display: block; height: 100%; border-radius: inherit; background: #2877ed; }
-.dc-manager-assistant-checklist-body {
-  padding: 8px;
-  border-top: 1px solid #e0e8f0;
-}
-.dc-manager-assistant-checklist-body ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.dc-manager-assistant-checklist-body li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 7px; align-items: start; padding: 7px; border: 1px solid #e0e8f1; border-radius: 9px; background: #fbfdff; }
-.dc-manager-assistant-checklist-body li.done { background: #f4faf7; }
-.dc-manager-assistant-checklist-body li > button {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border: 1px solid #b9cde3;
-  border-radius: 7px;
-  color: #fff;
-  background: #fff;
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 900;
-}
-.dc-manager-assistant-checklist-body li.done > button { border-color: #168950; background: #168950; }
-.dc-manager-assistant-checklist-body li > button:disabled { cursor: wait; opacity: .7; }
-.dc-manager-assistant-checklist-body li > span { color: #304864; font-size: 9.5px; line-height: 1.35; font-weight: 750; }
-.dc-manager-assistant-checklist-body li.done > span { color: #71839a; text-decoration: line-through; }
-.dc-manager-assistant-checklist-body p { margin: 0; color: #71839a; font-size: 9.5px; line-height: 1.4; }
-.dc-manager-assistant-checklist-mobile { display: none; }
+
 .dc-manager-assistant-context-status { margin: auto 12px 12px; padding: 10px; border-radius: 10px; color: #137042; background: #eaf8f0; font-size: 11.5px; font-weight: 700; line-height: 1.45; }
 
 .dc-manager-assistant-main { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
@@ -7842,8 +7565,7 @@ ul.facts.bad li:before {
   .dc-manager-assistant-layer { padding: 0; }
   .dc-manager-assistant-modal { grid-template-columns: 1fr; width: 100vw; height: 100vh; border: 0; border-radius: 0; }
   .dc-manager-assistant-sidebar { display: none; }
-  .dc-manager-assistant-checklist-mobile { display: block; }
-  .dc-manager-assistant-checklist-mobile .dc-manager-assistant-checklist { margin: 0 0 10px; }
+
   .dc-manager-assistant-main > header { gap: 8px; }
   .dc-manager-assistant-main > header .dc-manager-context-chip { display: none; }
   .dc-manager-assistant-main > header .dc-manager-disc-badge { min-width: 0; max-width: 48vw; overflow: hidden; text-overflow: ellipsis; }
@@ -7861,23 +7583,6 @@ ul.facts.bad li:before {
 }
 
 @media (max-width: 480px) {
-  .dc-deal-checklist li {
-    grid-template-columns: 23px minmax(0, 1fr);
-  }
-
-  .dc-deal-checklist li > em {
-    grid-column: 2;
-    width: max-content;
-  }
-
-  .dc-deal-checklist > header {
-    grid-template-columns: 32px minmax(0, 1fr);
-  }
-
-  .dc-deal-checklist header > strong {
-    grid-column: 2;
-    width: max-content;
-  }
 
   .dc-rop-current-summary > summary {
     grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -9314,40 +9019,6 @@ ul.facts.bad li:before {
     padding-inline: 9px;
   }
   .dc-daily-event-duration { display: none; }
-}
-
-.dc-daily-checklist { display: grid; }
-.dc-daily-checklist > div {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 9px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.dc-daily-checklist > div:last-child { border-bottom: 0; }
-
-.dc-daily-checklist span {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  margin-top: 1px;
-  place-items: center;
-  border: 1px solid #aebfd4;
-  border-radius: 6px;
-}
-
-.dc-daily-checklist .done span {
-  border-color: var(--daily-green);
-  background: var(--daily-green);
-  color: #fff;
-}
-
-.dc-daily-checklist small {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .dc-daily-empty,

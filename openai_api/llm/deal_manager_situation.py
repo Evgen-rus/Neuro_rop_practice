@@ -7,12 +7,14 @@ the already projected deal, task, and situation context.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from typing import Any
 
 from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
+from openai_api.llm.validation import remove_retired_deal_fields
 
 
 MANAGER_MODEL = os.getenv("DEAL_MANAGER_MODEL", ANALYSIS_MODEL).strip() or ANALYSIS_MODEL
@@ -76,7 +78,6 @@ _PROJECTION_FIELDS = (
     "questions",
     "script",
     "script_variants",
-    "crm_checklist",
     "script_channel",
 )
 
@@ -117,7 +118,8 @@ def unwrap_analysis(value: Any) -> dict[str, Any]:
 
 def compact_analysis_projection(report_json: Any) -> dict[str, Any]:
     """Keep only analysis blocks useful to the manager screen."""
-    analysis = unwrap_analysis(report_json)
+    analysis = copy.deepcopy(unwrap_analysis(report_json))
+    remove_retired_deal_fields(analysis)
     return {
         field: _compact_value(analysis[field])
         for field in _ANALYSIS_FIELDS
@@ -249,7 +251,6 @@ def build_confirmed_manager_projection(report_json: Any) -> dict[str, Any]:
     script_variants = _text_list(brief.get("call_opening_variants"), limit=2)
     if not script_variants:
         script_variants = _text_list([item.get("text") for item in backups if isinstance(item, dict)], limit=2)
-    crm_checklist = _text_list(manager.get("manager_checklist"), limit=4)
     script_channel = _text(manager, "recommended_channel")
     return {
         "current_situation": current_situation,
@@ -262,7 +263,6 @@ def build_confirmed_manager_projection(report_json: Any) -> dict[str, Any]:
         "questions": questions,
         "script": script,
         "script_variants": script_variants,
-        "crm_checklist": crm_checklist,
         "script_channel": script_channel,
     }
 
@@ -299,11 +299,6 @@ def situation_schema() -> dict[str, Any]:
                 "items": {"type": "string", "minLength": 1, "maxLength": 800},
                 "maxItems": 2,
             },
-            "crm_checklist": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1, "maxLength": 800},
-                "maxItems": 4,
-            },
             "script_channel": {"type": "string", "minLength": 1, "maxLength": 160},
         },
     }
@@ -324,7 +319,6 @@ def validate_situation_projection(value: Any) -> dict[str, Any]:
         "unknowns": 4,
         "questions": 4,
         "script_variants": 2,
-        "crm_checklist": 4,
     }
     normalized: dict[str, Any] = {}
     for field in ("current_situation", "what_to_check_now", "rop_focus", "manager_coaching", "contact_goal", "script", "script_channel"):

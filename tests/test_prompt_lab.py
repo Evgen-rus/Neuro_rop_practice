@@ -90,7 +90,6 @@ def _save_lab_snapshot(db: Path, *, deal_id: str = "101", snapshot_hash: str = "
             "situation_projection": CONTEXT["situation_projection"],
             "current_bitrix_task": None,
             "communication_pattern_context": {},
-            "checklist": {},
             "last_contact": {},
             "objection_handling": {"items": []},
             "manager_tactics_hash": "t",
@@ -224,7 +223,6 @@ class PromptLabIsolationTests(unittest.TestCase):
                     "situation_projection": CONTEXT["situation_projection"],
                     "current_bitrix_task": None,
                     "communication_pattern_context": {},
-                    "checklist": {},
                     "last_contact": {},
                     "objection_handling": {"items": []},
                     "manager_tactics_hash": "t",
@@ -287,7 +285,6 @@ class PromptLabIsolationTests(unittest.TestCase):
                     "situation_projection": CONTEXT["situation_projection"],
                     "current_bitrix_task": None,
                     "communication_pattern_context": {},
-                    "checklist": {},
                     "last_contact": {},
                     "objection_handling": {"items": []},
                     "manager_tactics_hash": "t",
@@ -488,7 +485,6 @@ class PromptLabStorageTests(unittest.TestCase):
             "deal": {},
             "current_bitrix_task": None,
             "communication_pattern_context": {},
-            "checklist": {},
             "objection_handling": {"items": []},
         }}
         kwargs = lab._generate_kwargs(spec, snapshot, extra, prompt_template=None)

@@ -75,7 +75,7 @@ class DealIncrementalContextTests(unittest.TestCase):
         prompt = build_prompt(
             "101", "СТАРАЯ ИСТОРИЯ НЕ ДОЛЖНА ПОПАСТЬ", "", "diagnostics",
             [(Path("rules.md"), "OKF RULE")], {"stage": "current"},
-            {"source_report_id": 7}, {"business_date": "2026-08-23"}, context,
+            {"source_report_id": 7}, incremental_context=context,
         )
         self.assertIn("## PREVIOUS_ANALYSIS", prompt)
         self.assertIn("## NEW_EVENTS", prompt)
