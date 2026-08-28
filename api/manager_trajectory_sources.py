@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from api.candidates import DEAL_OWNER_TYPE_ID, LEAD_OWNER_TYPE_ID, parse_bitrix_dt
+from api.deal_task_day import stamp
 from bitrix.customer_history import activity_type, messenger_mirror_from_comment
 from bitrix.usage_trace import bitrix_trace_context
 from setup import MSK_TZ
@@ -137,6 +138,19 @@ def _iso(value: Any) -> str | None:
     if parsed is None:
         return _string(value)
     return parsed.astimezone(MSK_TZ).isoformat(timespec="seconds")
+
+
+def _deadline_log_value(field: str, value: Any) -> Any:
+    """Store new DEADLINE log values as ISO; leave non-unix formats unchanged."""
+    if str(field or "").upper() != "DEADLINE" or value in (None, ""):
+        return value
+    if isinstance(value, bool):
+        return value
+    text = str(int(value)) if isinstance(value, (int, float)) else str(value).strip()
+    if not text.isdigit():
+        return value
+    parsed = stamp(value)
+    return parsed.isoformat(timespec="seconds") if parsed is not None else value
 
 
 def _entity_ref(value: Any) -> tuple[str, str, str | None] | None:
@@ -522,8 +536,8 @@ def collect_task_history_facts(client: Any, activities: Iterable[dict[str, Any]]
                     "task_id": task_id,
                     "history_id": history_id,
                     "field": field,
-                    "from_value": item.get("FROM_VALUE"),
-                    "to_value": item.get("TO_VALUE"),
+                    "from_value": _deadline_log_value(field, item.get("FROM_VALUE")),
+                    "to_value": _deadline_log_value(field, item.get("TO_VALUE")),
                     "user_id": user_id,
                 },
             ))

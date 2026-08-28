@@ -849,6 +849,57 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(report["snapshot"]["team"]["tasks_completed"], 1)
         self.assertEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
 
+    def test_planning_keeps_reschedule_recorded_just_after_cutoff(self) -> None:
+        from storage.rop_db import get_daily_control_report, record_manager_trajectory_event
+
+        cutoff = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
+        collected = datetime(2026, 8, 18, 15, 46, tzinfo=MSK_TZ)
+        dashboard = {"deals": [_deal_row(
+            communications_today={
+                "date": "2026-08-18", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": [],
+            },
+            bitrix_tasks=[{
+                "task_id": "9", "deadline": "2026-08-19T18:00:00+03:00",
+                "time_bucket": "tomorrow", "completion_state": "open",
+            }],
+        )], "managers": [], "sync_errors": []}
+
+        def refresh_fn(**_kwargs):
+            with patch("storage.rop_db.utcish_now", return_value=collected.isoformat()):
+                record_manager_trajectory_event(
+                    self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+                    event_type="crm_task_history_observed", source="test", source_event_key="move",
+                    occurred_at="2026-08-18T15:30:00+03:00",
+                    payload={
+                        "task_id": "9", "field": "DEADLINE",
+                        "from_value": "2026-08-18T18:00:00+03:00",
+                        "to_value": "2026-08-19T18:00:00+03:00",
+                    },
+                )
+            return dashboard
+
+        report = publish_planning_daily_control_report(
+            db_path=self.db_path, now=cutoff, refresh_fn=refresh_fn, clock=lambda: collected,
+        )
+        self.assertEqual([item["deal_id"] for item in report["snapshot"]["deals"]], ["101"])
+        deal = report["snapshot"]["deals"][0]
+        self.assertIn("bitrix_task_rescheduled", deal["day_scope"]["activity_kinds"])
+        self.assertTrue(deal["task_results"][0]["reschedules"])
+        self.assertTrue(deal["task_results"][0]["was_due"])
+        self.assertTrue(deal["day_scope"]["had_day_obligation"])
+        self.assertGreaterEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
+
+        with patch("storage.rop_db.utcish_now", return_value="2026-08-18T17:00:00+03:00"):
+            record_manager_trajectory_event(
+                self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+                event_type="crm_activity_observed", source="test", source_event_key="late-call",
+                occurred_at="2026-08-18T15:40:00+03:00",
+                payload={"activity_kind": "call", "completed": True},
+            )
+        frozen = get_daily_control_report(self.db_path, report["id"])
+        self.assertEqual(frozen["snapshot"], report["snapshot"])
+        self.assertNotIn("call", frozen["snapshot"]["deals"][0]["day_scope"]["activity_kinds"])
+
     def test_source_preparation_is_frozen_and_manual_regeneration_uses_finished_batch(self) -> None:
         from storage.rop_db import create_automatic_analysis_run, finish_automatic_analysis_run
 
@@ -1050,6 +1101,37 @@ class DailySnapshotSelectionTests(unittest.TestCase):
         )]})
         self.assertEqual(report["snapshot"]["deals"], [])
         self.assertEqual(report["snapshot"]["team"]["deals_total"], 0)
+
+    def test_unix_deadline_reschedule_keeps_deal_when_crm_deadline_is_already_future(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        cutoff = datetime(2026, 8, 28, 15, 45, tzinfo=MSK_TZ)
+        with patch("storage.rop_db.utcish_now", return_value="2026-08-28T12:00:00+03:00"):
+            record_manager_trajectory_event(
+                self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+                event_type="crm_task_history_observed", source="test", source_event_key="move",
+                occurred_at="2026-08-28T12:00:00+03:00",
+                payload={
+                    "task_id": "9", "field": "DEADLINE",
+                    "from_value": "1787896800", "to_value": "1788242400",
+                },
+            )
+        report = self._publish({"deals": [_deal_row(
+            communications_today={
+                "date": "2026-08-28", "available": True, "completed": 0, "calls": 0, "messages": 0, "items": [],
+            },
+            bitrix_tasks=[{
+                "task_id": "9", "deadline": "2026-09-01T09:00:00+03:00",
+                "time_bucket": "future", "completion_state": "open",
+            }],
+        )]}, now=cutoff)
+        self.assertEqual([item["deal_id"] for item in report["snapshot"]["deals"]], ["101"])
+        deal = report["snapshot"]["deals"][0]
+        self.assertIn("bitrix_task_rescheduled", deal["day_scope"]["activity_kinds"])
+        self.assertTrue(deal["task_results"][0]["reschedules"])
+        self.assertTrue(deal["task_results"][0]["was_due"])
+        self.assertTrue(deal["day_scope"]["had_day_obligation"])
+        self.assertGreaterEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
 
     def test_unavailable_comms_keep_obligation_and_do_not_add_future_without_contact(self) -> None:
         report = self._publish({"deals": [

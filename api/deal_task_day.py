@@ -9,20 +9,50 @@ from storage.rop_db import list_manager_trajectory_events
 
 
 def stamp(value: Any) -> datetime | None:
-    if not value:
+    """Parse ISO, ДД.ММ.ГГГГ, or Bitrix Unix seconds/milliseconds into Moscow time."""
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
         return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
+        parsed = None
         for pattern in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
             try:
-                parsed = datetime.strptime(str(value), pattern)
+                parsed = datetime.strptime(text, pattern)
                 break
             except ValueError:
                 continue
-        else:
-            return None
+        if parsed is None:
+            parsed = _unix_stamp(value)
+            if parsed is None:
+                return None
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
+
+
+def _unix_stamp(value: Any) -> datetime | None:
+    """Bitrix task log DEADLINE values arrive as Unix seconds, sometimes milliseconds."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = str(value).strip()
+        if not text.isdigit():
+            return None
+        number = float(text)
+    if number >= 1_000_000_000_000:
+        number /= 1000.0
+    elif number < 1_000_000_000:
+        return None
+    try:
+        return datetime.fromtimestamp(number, tz=MSK_TZ)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def day_events(db_path: Any, cutoff: datetime) -> list[dict[str, Any]]:
@@ -49,9 +79,16 @@ def is_reschedule(payload: dict[str, Any]) -> bool:
     )
 
 
-def task_results(tasks: list[dict[str, Any]], events: list[dict[str, Any]], cutoff: datetime) -> list[dict[str, Any]]:
+def task_results(
+    tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    cutoff: datetime,
+    *,
+    recorded_through: datetime | None = None,
+) -> list[dict[str, Any]]:
     current = stamp(cutoff)
     assert current is not None
+    known_until = stamp(recorded_through) or current
     rows: dict[str, dict[str, Any]] = {}
     activity_keys: dict[str, str] = {}
     for task in tasks:
@@ -79,7 +116,7 @@ def task_results(tasks: list[dict[str, Any]], events: list[dict[str, Any]], cuto
         if not in_day(event.get("occurred_at"), current):
             continue
         recorded = stamp(event.get("recorded_at"))
-        if recorded and recorded > current:
+        if recorded and recorded > known_until:
             continue
         payload = event.get("payload") or {}
         history = event.get("event_type") == "crm_task_history_observed"

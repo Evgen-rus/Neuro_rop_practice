@@ -307,7 +307,44 @@ class ManagerTrajectorySourcesTests(unittest.TestCase):
         fact = result["facts"][0]
         self.assertEqual(fact["source_event_key"], "task_history:700:h1")
         self.assertEqual(fact["payload"]["field"], "DEADLINE")
+        self.assertEqual(fact["payload"]["from_value"], "2026-08-20")
+        self.assertEqual(fact["payload"]["to_value"], "2026-08-21")
         self.assertEqual(fact["manager_id"], "10")
+
+    def test_deadline_unix_from_to_are_normalized_to_iso(self) -> None:
+        class UnixDeadlineClient(FakeClient):
+            def safe_list_all(self, method: str, payload: dict) -> dict:
+                self.list_calls.append((method, payload))
+                if method == "task.ctasklogitem.list":
+                    return {
+                        "ok": True,
+                        "items": [{
+                            "ID": "h2",
+                            "TASK_ID": "700",
+                            "FIELD": "DEADLINE",
+                            "FROM_VALUE": "1787896800",
+                            "TO_VALUE": "1788242400",
+                            "USER_ID": "10",
+                            "CREATED_DATE": "2026-08-28T12:00:00+03:00",
+                        }],
+                    }
+                return super().safe_list_all(method, payload)
+
+        result = collect_task_history_facts(
+            UnixDeadlineClient(),
+            [{
+                "provider_id": "CRM_TASKS_TASK",
+                "associated_entity_id": "700",
+                "entity_type": "deal",
+                "entity_id": "101",
+                "responsible_id": "10",
+            }],
+            ["10"],
+        )
+        self.assertFalse(result["errors"])
+        fact = result["facts"][0]
+        self.assertEqual(fact["payload"]["from_value"], "2026-08-28T09:00:00+03:00")
+        self.assertEqual(fact["payload"]["to_value"], "2026-09-01T09:00:00+03:00")
 
     def test_stage_history_and_presence_are_read_only_facts(self) -> None:
         client = FakeClient()

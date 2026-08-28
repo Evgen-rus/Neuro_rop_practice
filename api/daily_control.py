@@ -103,7 +103,13 @@ def _at_or_before(value: Any, cutoff: datetime, *, same_day: bool = True) -> boo
     return stamp <= cutoff and (not same_day or stamp.date() == cutoff.date())
 
 
-def _daily_trajectory_events(db_path: str | Path, cutoff: datetime) -> list[dict[str, Any]]:
+def _daily_trajectory_events(
+    db_path: str | Path,
+    cutoff: datetime,
+    *,
+    recorded_through: datetime | None = None,
+) -> list[dict[str, Any]]:
+    known_until = recorded_through if recorded_through is not None else cutoff
     rows = list_manager_trajectory_events(
         db_path,
         from_at=_iso(cutoff.replace(hour=0, minute=0, second=0, microsecond=0)),
@@ -113,7 +119,7 @@ def _daily_trajectory_events(db_path: str | Path, cutoff: datetime) -> list[dict
         row for row in rows
         if row.get("entity_type") == "deal"
         and _at_or_before(row.get("occurred_at"), cutoff)
-        and _at_or_before(row.get("recorded_at"), cutoff, same_day=False)
+        and _at_or_before(row.get("recorded_at"), known_until, same_day=False)
     ]
 
 
@@ -178,9 +184,11 @@ def project_report_day_scope(
     deal: dict[str, Any], cutoff: datetime, *,
     source_deal: dict[str, Any] | None = None,
     events: list[dict[str, Any]] | None = None,
+    recorded_through: datetime | None = None,
 ) -> dict[str, Any]:
     """Freeze day membership; legacy reads use only the saved deal, never live CRM."""
     current = _aware(cutoff).astimezone(MSK_TZ)
+    known_until = _aware(recorded_through).astimezone(MSK_TZ) if recorded_through is not None else current
     activity: set[str] = set()
     bucket = str(deal.get("bitrix_task_time_bucket") or "")
     buckets = {bucket} if bucket in {"overdue", "today", "tomorrow", "future", "unscheduled"} else set()
@@ -221,7 +229,7 @@ def project_report_day_scope(
                 activity.add("message")
     for event in events or []:
         if _at_or_before(event.get("occurred_at"), current) and (
-            not event.get("recorded_at") or _at_or_before(event.get("recorded_at"), current, same_day=False)
+            not event.get("recorded_at") or _at_or_before(event.get("recorded_at"), known_until, same_day=False)
         ):
             kind = _day_activity_kind(event)
             if kind:
@@ -827,6 +835,7 @@ def build_daily_control_snapshot(
     cutoff_at: datetime | None = None,
     activity_events: list[dict[str, Any]] | None = None,
     carried_obligation_ids: set[str] | None = None,
+    recorded_through: datetime | None = None,
 ) -> dict[str, Any]:
     quality_now = cutoff_at or quality_time(dashboard.get("generated_at")) or datetime.now(MSK_TZ)
     deals = [project_deal_review_card(deal, now=quality_now) for deal in dashboard.get("deals") or [] if isinstance(deal, dict)]
@@ -842,9 +851,12 @@ def build_daily_control_snapshot(
             deal["task_results"] = task_results(
                 sources[deal["deal_id"]].get("bitrix_tasks") or [],
                 events_by_deal.get(deal["deal_id"], []), cutoff_at,
+                recorded_through=recorded_through,
             )
             deal["day_scope"] = project_report_day_scope(
-                deal, cutoff_at, source_deal=sources[deal["deal_id"]], events=events_by_deal.get(deal["deal_id"]),
+                deal, cutoff_at, source_deal=sources[deal["deal_id"]],
+                events=events_by_deal.get(deal["deal_id"]),
+                recorded_through=recorded_through,
             )
             _mark_day_membership(deal, carried=deal["deal_id"] in carried)
             if _belongs_to_daily_snapshot(deal):
@@ -937,6 +949,7 @@ def publish_daily_control_report(
     refresh_fn: Callable[..., dict[str, Any]] | None = None,
     dashboard: dict[str, Any] | None = None,
     automatic_analysis_run_id: int | None = None,
+    recorded_through: datetime | None = None,
 ) -> dict[str, Any]:
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     started = started_at if isinstance(started_at, datetime) else datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
@@ -977,13 +990,19 @@ def publish_daily_control_report(
     else:
         cutoff_dt = cutoff
     cutoff_dt = _aware(cutoff_dt).astimezone(MSK_TZ)
+    if recorded_through is not None:
+        recorded_through = _aware(recorded_through).astimezone(MSK_TZ)
+    elif refresh:
+        # CRM collect for this snapshot may finish a minute after the frozen cutoff.
+        recorded_through = datetime.now(MSK_TZ)
     carried_ids = None
     if creation_kind == "automatic_day_end":
         carried_ids = _planning_obligation_ids(db_path, _business_date(cutoff_dt))
     snapshot = build_daily_control_snapshot(
         payload, warnings=warnings, cutoff_at=cutoff_dt,
-        activity_events=_daily_trajectory_events(db_path, cutoff_dt),
+        activity_events=_daily_trajectory_events(db_path, cutoff_dt, recorded_through=recorded_through),
         carried_obligation_ids=carried_ids,
+        recorded_through=recorded_through,
     )
     snapshot["source_preparation"] = preparation
     watermark = compute_source_watermark(db_path, now=cutoff_dt)
@@ -1010,6 +1029,7 @@ def publish_planning_daily_control_report(
     db_path: str | Path = DEFAULT_DB_PATH,
     now: datetime | None = None,
     refresh_fn: Callable[..., dict[str, Any]] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
     """Publish today's planning snapshot after a read-only CRM sync, without waiting for LLM.
 
@@ -1043,6 +1063,7 @@ def publish_planning_daily_control_report(
         started_at=current,
         cutoff_at=current,
         now=current,
+        recorded_through=_aware((clock or (lambda: datetime.now(MSK_TZ)))()).astimezone(MSK_TZ),
         dashboard=dashboard,
     )
 
