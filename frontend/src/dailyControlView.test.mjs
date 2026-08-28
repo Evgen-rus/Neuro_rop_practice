@@ -237,7 +237,9 @@ function componentModule(file, dependencies = {}) {
   })
   return `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 }
-const { TaskDayResults } = await import(componentModule('./TaskDayResults.tsx'))
+const { TaskDayResults } = await import(componentModule('./TaskDayResults.tsx', {
+  './TaskReschedulePopover': componentModule('./TaskReschedulePopover.tsx'),
+}))
 
 test('collapsed production task block exposes date and contains every task with transfers', () => {
   const tasks = [
@@ -249,7 +251,43 @@ test('collapsed production task block exposes date and contains every task with 
   assert.doesNotMatch(html, /<details[^>]*\bopen\b/)
   assert.match(html, /Задача на 24 сентября, 10:25 · не сегодня/)
   assert.ok(html.indexOf('Просроченная задача') < html.indexOf('Будущая задача'))
-  assert.match(html, /Перенесена:/)
+  assert.match(html, /Перенесена · 1/)
+  assert.match(html, /popover="auto"/)
+  assert.doesNotMatch(html, /Перенесена:|<small>Задача перенесена<\/small>/)
+})
+
+test('daily control shows a separate collapsed transfer history per task without changing the snapshot', () => {
+  const tasks = [
+    { key: 'first', subject: 'Первая задача', status: 'open', deadline: '2026-08-31T11:00:00+03:00', reschedules: [
+      { from_deadline: '1787903400', to_deadline: '1787907000', occurred_at: '2026-08-28T11:00:00+03:00' },
+      { from_deadline: '1787907000', to_deadline: '1788163200', occurred_at: '2026-08-28T12:00:00+03:00' },
+    ] },
+    { key: 'second', subject: 'Вторая задача', status: 'open', deadline: '2026-09-04T18:00:00+03:00', reschedules: [
+      { from_deadline: '1787929200', to_deadline: '1788534000', occurred_at: '2026-08-28T13:00:00+03:00' },
+    ] },
+  ]
+  const before = structuredClone(tasks)
+  const html = renderToStaticMarkup(createElement(TaskDayResults, { tasks, cutoffAt: cutoff }))
+  assert.match(html, /Перенесена · 2/)
+  assert.match(html, /Перенесена · 1/)
+  assert.equal((html.match(/aria-expanded="false"/g) || []).length, 2)
+  assert.equal((html.match(/Переносы срока · МСК/g) || []).length, 2)
+  const targets = [...html.matchAll(/popovertarget="([^"]+)"/gi)].map((match) => match[1])
+  assert.equal(new Set(targets).size, 2)
+  assert.match(html, /31\.08\.2026, 11:00/)
+  assert.match(html, /04\.09\.2026, 18:00/)
+  assert.ok(html.indexOf('31.08.2026, 11:00') < html.indexOf('28.08.2026, 10:50'))
+  assert.doesNotMatch(html, /1787903400|1788534000|Перенесена:/)
+  assert.deepEqual(tasks, before)
+})
+
+test('task history keyboard interaction does not bubble to the deal selection handler', () => {
+  const block = TaskDayResults({ tasks: [], cutoffAt: cutoff })
+  for (const name of ['onClick', 'onKeyDown']) {
+    let stopped = false
+    block.props[name]({ stopPropagation() { stopped = true } })
+    assert.equal(stopped, true, name)
+  }
 })
 
 test('production task block distinguishes absent legacy details from no tasks', () => {

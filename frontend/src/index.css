@@ -8776,6 +8776,7 @@ ul.facts.bad li:before {
 .dc-daily-task-fold.empty > summary { color: #526981; }
 .dc-daily-task-fold-body { display: grid; gap: 8px; padding: 8px 10px; }
 .dc-daily-task-fold-body > div { display: grid; gap: 3px; }
+.dc-daily-task-fold-body .dc-reschedule-trigger { justify-self: start; }
 .dc-daily-task-fold-body b { font-size: 12px; }
 .dc-daily-task-fold-body b.completed { color: #00845c; }
 .dc-daily-task-fold-body b.overdue { color: #ce2940; }
