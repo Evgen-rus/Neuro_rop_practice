@@ -20,6 +20,7 @@ from api.daily_control import (
     project_deal_review_card,
     project_report_day_scope,
     publish_daily_control_report,
+    publish_day_end_daily_control_report,
     publish_planning_daily_control_report,
     report_payload,
 )
@@ -587,19 +588,103 @@ class DailyControlStorageTests(unittest.TestCase):
 
     def test_planning_report_uses_moscow_business_date_and_is_not_duplicated(self) -> None:
         _seed_deal(self.db_path)
-        due = datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
         first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
-        second = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(hour=12))
+        second = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(hour=16))
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["creation_kind"], "automatic_planning")
         self.assertEqual(first["business_date"], "2026-08-18")
-        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T07:55")
+        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T15:45")
+
+    def test_day_end_report_refreshes_crm_without_llm_and_stays_independent(self) -> None:
+        from storage.rop_db import create_automatic_analysis_run
+
+        _seed_deal(self.db_path)
+        due = datetime(2026, 8, 18, 23, 0, tzinfo=MSK_TZ)
+        with patch("storage.rop_db.utcish_now", return_value=due.replace(hour=22).isoformat()):
+            create_automatic_analysis_run(
+                self.db_path, trigger="evening_22", status="done", business_date="2026-08-18",
+            )
+        planning = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(hour=15, minute=45))
+        dashboard = {"deals": [_deal_row()], "managers": [], "sync_errors": []}
+        with patch("api.jobs.start_analyze_job") as analyze:
+            first = publish_day_end_daily_control_report(
+                db_path=self.db_path, now=due, refresh_fn=lambda **_kwargs: dashboard, clock=lambda: due,
+            )
+            second = publish_day_end_daily_control_report(
+                db_path=self.db_path, now=due, refresh_fn=lambda **_kwargs: dashboard, clock=lambda: due,
+            )
+        analyze.assert_not_called()
+        self.assertEqual(first["id"], second["id"])
+        self.assertNotEqual(first["id"], planning["id"])
+        self.assertEqual(first["creation_kind"], "automatic_day_end")
+        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T23:00")
+        self.assertEqual(len(list_daily_control_reports(self.db_path)), 2)
+
+    def test_morning_opens_previous_workday_final_report(self) -> None:
+        from storage.rop_db import create_daily_control_report
+
+        snapshot = {"deals": [], "managers": [], "team": {}}
+        final = create_daily_control_report(
+            self.db_path, business_date="2026-08-18", creation_kind="automatic_day_end",
+            started_at="2026-08-18T23:00:00+03:00", cutoff_at="2026-08-18T23:00:00+03:00",
+            snapshot=snapshot, source_watermark="final",
+        )
+        planning = create_daily_control_report(
+            self.db_path, business_date="2026-08-18", creation_kind="automatic_planning",
+            started_at="2026-08-18T15:45:00+03:00", cutoff_at="2026-08-18T15:45:00+03:00",
+            snapshot=snapshot, source_watermark="planning",
+        )
+        morning = history_payload(db_path=self.db_path, now=datetime(2026, 8, 19, 8, 10, tzinfo=MSK_TZ))
+        afternoon = history_payload(db_path=self.db_path, now=datetime(2026, 8, 18, 16, 0, tzinfo=MSK_TZ))
+        self.assertEqual(morning["default_id"], final["id"])
+        self.assertFalse(morning["missing_morning_final"])
+        self.assertEqual(afternoon["default_id"], planning["id"])
+        self.assertEqual(afternoon["latest_id"], planning["id"])
+
+    def test_reschedule_stays_in_today_and_keeps_both_task_facts(self) -> None:
+        from storage.rop_db import record_manager_trajectory_event
+
+        def event(key, payload, occurred=NOW.isoformat()):
+            with patch("storage.rop_db.utcish_now", return_value=occurred):
+                record_manager_trajectory_event(
+                    self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+                    event_type="crm_task_history_observed", source="test", source_event_key=key,
+                    occurred_at=occurred, payload=payload,
+                )
+
+        event("move", {
+            "task_id": "9", "field": "DEADLINE",
+            "from_value": "2026-08-18T18:00:00+03:00", "to_value": "2026-08-19T18:00:00+03:00",
+        }, occurred="2026-08-18T12:00:00+03:00")
+        event("done", {"task_id": "9", "field": "STATUS", "to_value": "5"})
+        dashboard = {"deals": [_deal_row(
+            bitrix_tasks=[{
+                "task_id": "9", "activity_id": "a9", "subject": "Согласовать КП",
+                "deadline": "2026-08-19T18:00:00+03:00", "completed": True,
+                "bitrix_completed_at": NOW.isoformat(), "time_bucket": "tomorrow",
+            }],
+            communications_today={},
+        )]}
+        report = publish_daily_control_report(
+            db_path=self.db_path, creation_kind="manual", started_at=NOW, now=NOW, dashboard=dashboard,
+        )
+        deal = report["snapshot"]["deals"][0]
+        self.assertIn("bitrix_task_rescheduled", deal["day_scope"]["activity_kinds"])
+        self.assertIn("bitrix_task_completed", deal["day_scope"]["activity_kinds"])
+        task = deal["task_results"][0]
+        self.assertEqual(task["status"], "completed")
+        self.assertTrue(task["completed_today"])
+        self.assertEqual(task["reschedules"][0]["from_deadline"], "2026-08-18T18:00:00+03:00")
+        self.assertEqual(task["reschedules"][0]["to_deadline"], "2026-08-19T18:00:00+03:00")
+        self.assertEqual(report["snapshot"]["team"]["tasks_completed"], 1)
+        self.assertEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
 
     def test_source_preparation_is_frozen_and_manual_regeneration_uses_finished_batch(self) -> None:
         from storage.rop_db import create_automatic_analysis_run, finish_automatic_analysis_run
 
         _seed_deal(self.db_path)
-        due = NOW.replace(hour=7, minute=55)
+        due = NOW.replace(hour=15, minute=45)
         run = create_automatic_analysis_run(self.db_path, trigger='test', business_date=due.date().isoformat())
         first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
         self.assertEqual(first['snapshot']['source_preparation']['status'], 'running')
@@ -726,7 +811,7 @@ class DailyControlStorageTests(unittest.TestCase):
 
 
 class DailyControlAccessTests(unittest.TestCase):
-    def test_manager_is_forbidden_admin_and_rop_are_allowed(self) -> None:
+    def test_manager_is_forbidden_rop_can_read_only_admin_can_generate(self) -> None:
         from api import app as api_app
 
         manager = {"id": 3, "login": "manager-3", "role": "manager", "manager_id": "10", "is_active": True}
@@ -738,13 +823,20 @@ class DailyControlAccessTests(unittest.TestCase):
                 api_app.daily_control_report_create()
             self.assertEqual(error.exception.status_code, 403)
 
-        for role in ("admin", "rop"):
-            user = {"id": 1, "login": f"{role}-1", "role": role, "manager_id": None, "is_active": True}
-            with patch.object(api_app, "auth_current_user", return_value=user), \
-                 patch.object(api_app, "daily_control_history_payload", return_value={"reports": []}), \
-                 patch.object(api_app, "start_manual_daily_control_report", return_value={"status": "running"}):
-                self.assertEqual(api_app.daily_control_reports(), {"reports": []})
-                self.assertEqual(api_app.daily_control_report_create()["status"], "running")
+        rop = {"id": 2, "login": "rop-1", "role": "rop", "manager_id": None, "is_active": True}
+        with patch.object(api_app, "auth_current_user", return_value=rop), \
+             patch.object(api_app, "daily_control_history_payload", return_value={"reports": []}):
+            self.assertEqual(api_app.daily_control_reports(), {"reports": []})
+            with self.assertRaises(HTTPException) as error:
+                api_app.daily_control_report_create()
+            self.assertEqual(error.exception.status_code, 403)
+
+        admin = {"id": 1, "login": "admin-1", "role": "admin", "manager_id": None, "is_active": True}
+        with patch.object(api_app, "auth_current_user", return_value=admin), \
+             patch.object(api_app, "daily_control_history_payload", return_value={"reports": []}), \
+             patch.object(api_app, "start_manual_daily_control_report", return_value={"status": "running"}):
+            self.assertEqual(api_app.daily_control_reports(), {"reports": []})
+            self.assertEqual(api_app.daily_control_report_create()["status"], "running")
 
 
 if __name__ == "__main__":

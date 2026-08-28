@@ -40,7 +40,9 @@ from storage.rop_db import (
 CYCLE_INTERVAL = timedelta(minutes=30)
 WORKDAY_START = time(7, 0)
 WORKDAY_END = time(18, 0)
-PLANNING_REPORT_TIME = time(7, 55)
+PLANNING_REPORT_TIME = time(15, 45)
+EVENING_CYCLE_TIME = time(22, 0)
+DAY_END_REPORT_TIME = time(23, 0)
 WEEKDAY_MONDAY = 0
 WEEKDAY_FRIDAY = 4
 FULL_STATUSES = {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}
@@ -83,21 +85,21 @@ def _is_workday(day: date) -> bool:
 
 
 def slot_times_for_day() -> list[time]:
-    """Weekday slots from 07:00 to 18:00 MSK every 30 minutes, plus 07:55 publication."""
+    """Daytime cycles, an evening cycle, and two independent report slots."""
     slots: list[time] = []
     cursor = datetime.combine(date.min, WORKDAY_START)
     last = datetime.combine(date.min, WORKDAY_END)
     while cursor <= last:
         slots.append(cursor.time())
         cursor += CYCLE_INTERVAL
-    slots.append(PLANNING_REPORT_TIME)
+    slots.extend((PLANNING_REPORT_TIME, EVENING_CYCLE_TIME, DAY_END_REPORT_TIME))
     return sorted(set(slots))
 
 
 def next_scheduled_at(now: datetime | None = None) -> datetime:
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     slots = slot_times_for_day()
-    # Friday after 18:00 must jump to Monday, so look several days ahead.
+    # Friday after the final report must jump to Monday.
     for offset in range(0, 8):
         day = current.date() + timedelta(days=offset)
         if not _is_workday(day):
@@ -134,6 +136,8 @@ def daytime_cycle_status() -> dict[str, Any]:
         "workdays": "mon-fri",
         "work_hours": "07:00-18:00",
         "planning_report_at": PLANNING_REPORT_TIME.strftime("%H:%M"),
+        "evening_cycle_at": EVENING_CYCLE_TIME.strftime("%H:%M"),
+        "day_end_report_at": DAY_END_REPORT_TIME.strftime("%H:%M"),
         "timezone": "Europe/Moscow",
         "next_at": next_at,
         "last": last,
@@ -785,7 +789,7 @@ def _start_interval_cycle(due: datetime) -> None:
 
     def run() -> None:
         try:
-            run_daytime_cycle(trigger="interval_30m", now=due)
+            run_daytime_cycle(trigger="evening_22" if due.time() == EVENING_CYCLE_TIME else "interval_30m", now=due)
         except Exception:  # noqa: BLE001 - a failed worker must not kill future ticks
             logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")
 
@@ -797,18 +801,32 @@ def _start_interval_cycle(due: datetime) -> None:
     _cycle_thread.start()
 
 
-def _planning_report_is_due(now: datetime, published_on: date | None) -> bool:
+def _planning_report_is_due(now: datetime, published_on: date | None, report_time: time = PLANNING_REPORT_TIME) -> bool:
     current = _aware(now).astimezone(MSK_TZ)
     return (
         _is_workday(current.date())
-        and current.time() >= PLANNING_REPORT_TIME
+        and current.time() >= report_time
         and current.date() != published_on
     )
 
 
+def _publish_day_end_report(due: datetime) -> dict[str, Any]:
+    from api.daily_control import publish_day_end_daily_control_report
+
+    try:
+        report = publish_day_end_daily_control_report(now=due)
+        return _store_cycle_result({"status": "success", "trigger": "day_end_report", "started_at": _iso(due),
+                                    "finished_at": utcish_now(), "daily_control_report_id": report.get("id")})
+    except Exception as error:  # noqa: BLE001 - leave the next slot alive
+        logger.exception("Не удалось опубликовать итоговый daily-control.")
+        return _store_cycle_result({"status": "error", "trigger": "day_end_report", "started_at": _iso(due),
+                                    "finished_at": utcish_now(), "errors": [str(error)]})
+
+
 def _scheduler_loop() -> None:
-    logger.info("Планировщик дневного цикла: будни 07:00–18:00 МСК каждые 30 минут и публикация отчёта в 07:55.")
+    logger.info("Планировщик: будни 07:00–18:00 каждые 30 минут, цикл в 22:00, отчёты в 15:45 и 23:00 МСК.")
     published_on: date | None = None
+    day_end_on: date | None = None
     while not _stop_event.is_set():
         current = datetime.now(MSK_TZ)
         # Catch up after a restart or delayed tick using the actual publication time.
@@ -817,6 +835,10 @@ def _scheduler_loop() -> None:
             result = _publish_planning_report(current)
             if result.get("status") == "success":
                 published_on = current.date()
+        if _planning_report_is_due(current, day_end_on, DAY_END_REPORT_TIME):
+            result = _publish_day_end_report(current)
+            if result.get("status") == "success":
+                day_end_on = current.date()
         due = next_scheduled_at()
         _set_next_at(due)
         wait_seconds = max(0.0, (due - datetime.now(MSK_TZ)).total_seconds())
@@ -824,7 +846,7 @@ def _scheduler_loop() -> None:
         if _stop_event.wait(timeout=wait_seconds):
             break
         try:
-            if due.time() != PLANNING_REPORT_TIME:
+            if due.time() not in {PLANNING_REPORT_TIME, DAY_END_REPORT_TIME}:
                 _start_interval_cycle(due)
         except Exception:  # noqa: BLE001 - a failed tick must not kill the loop
             logger.exception("Необработанная ошибка дневного цикла; следующий слот остаётся в расписании.")

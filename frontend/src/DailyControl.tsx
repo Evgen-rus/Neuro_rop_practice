@@ -17,7 +17,8 @@ import { formatMoscowDateTime, moscowDateInputValue, parseMoscowDateTime } from 
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { canFilterReport, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, hasReportDayWork, reportDayLabels, shouldOpenLatestReport, type DailyControlTimeFilter } from './dailyControlView'
+import { canFilterReport, DEFAULT_TIME_FILTER, dealMatchesTime, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, shouldOpenLatestReport, type DailyControlTimeFilter } from './dailyControlView'
+import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
 const SPLITTER_DEFAULT = 380
@@ -40,20 +41,6 @@ const TIME_FILTERS: Array<{ id: DailyControlTimeFilter; label: string; hint: str
 function formatClock(value?: string | null) {
   if (!value) return ''
   return formatMoscowDateTime(value, { hour: '2-digit', minute: '2-digit' }) || ''
-}
-
-function formatHeadline(value?: string | null) {
-  if (!value) return 'Сохранённого отчёта пока нет'
-  const datePart = formatMoscowDateTime(value, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  })
-  const timePart = formatClock(value)
-  if (!datePart || !timePart) return value
-  const pretty = `${datePart.charAt(0).toUpperCase()}${datePart.slice(1)}`
-  return `${pretty} · срез на ${timePart} МСК`
 }
 
 function managerCountLabel(count: number) {
@@ -158,8 +145,10 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
     || left.manager_name.localeCompare(right.manager_name, 'ru')
     || String(left.manager_id || '').localeCompare(String(right.manager_id || ''))
   ))
+  for (const manager of managers) Object.assign(manager, dailyTaskTotals(deals.filter((deal) => deal.manager_id === manager.manager_id)))
   return {
     team: {
+      ...dailyTaskTotals(deals),
       traffic_light: {
         red: deals.filter((deal) => deal.status === 'red').length,
         yellow: deals.filter((deal) => deal.status === 'yellow').length,
@@ -175,7 +164,9 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
   }
 }
 
-export function DailyControl({ user: _user }: { user: AuthUser }) {
+export function DailyControl({ user }: { user: AuthUser }) {
+  const [search, setSearch] = useState('')
+  const canGenerate = user.role === 'admin'
   const [history, setHistory] = useState<DailyControlHistory | null>(null)
   const [report, setReport] = useState<DailyControlReport | null>(null)
   const [loading, setLoading] = useState(true)
@@ -206,8 +197,8 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   const showTimeFilter = canFilterReport(allDeals || [])
   const activeTimeFilter: DailyControlTimeFilter = showTimeFilter ? timeFilter : 'all'
   const timeFilteredDeals = useMemo(
-    () => (allDeals || []).filter((deal) => dealMatchesTime(deal, activeTimeFilter)),
-    [activeTimeFilter, allDeals],
+    () => (allDeals || []).filter((deal) => dealMatchesTime(deal, activeTimeFilter) && matchesDailySearch(deal, search)),
+    [activeTimeFilter, allDeals, search],
   )
   const { team, managers } = useMemo(
     () => summarizeDailyControl(timeFilteredDeals),
@@ -254,7 +245,8 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
       try {
         const payload = await loadHistory()
         if (cancelled) return
-        if (payload.latest_id) await loadReport(payload.latest_id)
+        const initialId = payload.default_id || payload.latest_id
+        if (initialId) await loadReport(initialId)
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
       } finally {
@@ -282,8 +274,9 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
         const payload = await fetchDailyControlHistory()
         if (cancelled || currentReportId.current !== viewedId) return
         setHistory(payload)
-        if (shouldOpenLatestReport(viewedId, payload.latest_id, reviewStarted.current, historyPinned.current)) {
-          await loadReport(payload.latest_id!, true)
+        const defaultId = payload.default_id || payload.latest_id
+        if (shouldOpenLatestReport(viewedId, defaultId, reviewStarted.current, historyPinned.current)) {
+          await loadReport(defaultId!, true)
         } else if (payload.latest_id === viewedId) {
           // Refresh freshness only: never replace the frozen snapshot during a review.
           const meta = payload.reports.find((item) => item.id === viewedId)
@@ -344,7 +337,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
 
   useLayoutEffect(() => {
     dealScrollRef.current?.scrollTo({ top: 0 })
-  }, [filter, managerId, timeFilter])
+  }, [filter, managerId, timeFilter, search])
 
   useEffect(() => {
     if (!dragging) return
@@ -390,16 +383,6 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
     setDealId(nextId)
   }
 
-  function startReview() {
-    reviewStarted.current = true
-    setFilter('all')
-    const redManager = managers.find((item) => item.red > 0) || managers[0]
-    if (!redManager) return
-    setManagerId(String(redManager.manager_id || ''))
-    const redDeal = firstReviewDeal(timeFilteredDeals, redManager.manager_id)
-    setDealId(redDeal?.deal_id || '')
-  }
-
   async function openReport(id: number | null | undefined) {
     if (!id) return
     historyPinned.current = id !== history?.latest_id
@@ -416,7 +399,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   }
 
   async function generate() {
-    if (generating) return
+    if (generating || !canGenerate) return
     historyPinned.current = false
     setError('')
     try {
@@ -459,14 +442,13 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
   }
 
   const freshness = report?.freshness
-  const latestMeta = history?.reports.find((item) => item.id === history.latest_id)
   const newerReportAvailable = Boolean(report && history?.latest_id && history.latest_id > report.id)
-  const missingToday = Boolean(history && latestMeta?.business_date !== today)
   const preparation = snapshot?.source_preparation
   const preparationFinished = preparation?.status === 'done' && preparation.finished_at
   const historicalDay = Boolean(report && report.business_date !== today)
   const legacyDayScope = allDeals?.some((deal) => deal.day_scope?.legacy)
-  const sourceTag = report?.creation_kind === 'automatic_planning' ? 'Авто · к планёрке' : report ? 'Вручную' : ''
+  const sourceTag = report?.creation_kind === 'automatic_planning' ? 'Авто · к планёрке' : report?.creation_kind === 'automatic_day_end' ? 'Авто · итог дня' : report ? 'Вручную' : ''
+  const reportPurpose = report?.creation_kind === 'automatic_day_end' ? 'Результат всего дня' : report?.creation_kind === 'automatic_planning' ? 'Для планёрки' : 'Ручной срез'
     const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
   const managerCounts = {
     all: managerDeals.length,
@@ -483,9 +465,9 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
     <section className="dc-daily">
       <header className="dc-daily-head">
         <div className="dc-daily-head-copy">
-          <h1>Ежедневный контроль</h1>
+          <h1>Ежедневный контроль{report ? ` за ${formatMoscowDateTime(report.business_date, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''}</h1>
           <p>
-            {formatHeadline(report?.cutoff_at)}
+            <strong className="dc-daily-purpose">{report ? `${reportPurpose} · срез на ${formatClock(report.cutoff_at)} МСК` : 'Сохранённого отчёта пока нет'}</strong>
             {report && !sameMinute(report.cutoff_at, report.created_at) && formatClock(report.created_at)
               ? ` · сформирован ${formatClock(report.created_at)}`
               : ''}
@@ -494,6 +476,8 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
           </p>
         </div>
         <div className="dc-daily-head-actions">
+          <input className="dc-daily-search" type="search" aria-label="Поиск по сделке" placeholder="Найти сделку, ID или задачу" value={search}
+            onChange={(event) => { reviewStarted.current = true; setSearch(event.target.value) }} />
           <nav className="dc-daily-history" aria-label="История отчётов">
             <button type="button" disabled={!report?.previous_id} onClick={() => void openReport(report?.previous_id)} aria-label="Предыдущий отчёт">←</button>
             <span>{report?.position || 0} из {report?.total || history?.total || 0}</span>
@@ -514,19 +498,18 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
               ))}
             </select>
           ) : null}
-          <button type="button" className="dc-button primary" onClick={startReview} disabled={!snapshot}>Начать разбор</button>
-          <button type="button" className="dc-button" onClick={() => void generate()} disabled={generating}>
+          {canGenerate ? <button type="button" className="dc-button" onClick={() => void generate()} disabled={generating}>
             {generating ? <><span className="dc-spinner" />Формируем отчёт…</> : 'Сформировать отчёт'}
-          </button>
+          </button> : null}
         </div>
       </header>
 
       {error ? <div className="dc-alert error">{error}</div> : null}
-      {missingToday ? <div className="dc-daily-banner warn">Отчёт за сегодня ещё не сформирован.{report ? ' На экране сохранённый отчёт за другую дату.' : ''} Автоматическая публикация — по будням в 07:55 МСК. Можно сформировать отчёт вручную.</div> : null}
+      {history?.missing_morning_final ? <div className="dc-daily-banner warn">Итоговый отчёт за предыдущий рабочий день ещё не найден. На экране — доступный сохранённый срез. Автоматические отчёты формируются по будням в 15:45 и 23:00 МСК.</div> : null}
       {newerReportAvailable ? <div className="dc-daily-banner">Появился новый отчёт. Текущий разбор сохранён на экране. <button type="button" className="dc-button" onClick={() => void openReport(history?.latest_id)}>Открыть новый отчёт</button></div> : null}
       {legacyDayScope ? <div className="dc-daily-banner">Старый срез: отбор и подписи используют только сохранённые в нём сроки, коммуникации и отметки. История стадий, комментариев и задач из текущей базы не добавляется. Для полного сохранённого списка выберите «Все».</div> : null}
       {generating && report ? <div className="dc-daily-banner">Формируется новый отчёт. Предыдущий срез остаётся на экране до публикации.</div> : null}
-      {freshness?.state === 'stale' ? <div className="dc-daily-banner warn">После этого среза появились более свежие данные. Можно сформировать новый отчёт.</div> : null}
+      {freshness?.state === 'stale' ? <div className="dc-daily-banner">После этого среза появились более свежие данные. Сохранённый отчёт не меняется.{canGenerate ? ' Можно сформировать новый отчёт.' : ''}</div> : null}
       {preparation ? <div className={`dc-daily-banner${preparationFinished && preparation.business_date === report?.business_date ? '' : ' warn'}`}>
         {preparationFinished
           ? `На момент создания среза последний автоматический пакет завершён ${formatMoscowDateTime(preparationFinished, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} МСК.`
@@ -536,7 +519,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
       </div> : null}
       {report?.warnings?.length ? <details className="dc-sync-errors"><summary>Оговорки об актуальности и доступности данных: {report.warnings.length}</summary><ul>{report.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
-      {!report ? <div className="dc-daily-empty">Нажмите «Сформировать отчёт», чтобы сохранить первый срез. В рабочий день в 07:55 МСК появится автоматический отчёт.</div> : null}
+      {!report ? <div className="dc-daily-empty">Автоматические отчёты появляются по будням в 15:45 и 23:00 МСК.{canGenerate ? ' Нажмите «Сформировать отчёт», чтобы сохранить первый срез вручную.' : ''}</div> : null}
 
       {snapshot ? <>
         <section className="dc-daily-team" aria-label="Итог команды за день">
@@ -588,6 +571,8 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
                 <span className="dc-daily-metric-icon"><DailyIcon name="clock" /></span>
                 <span><strong>{talkTime(team.talk_seconds)}</strong><small>В разговорах</small></span>
               </div>
+              <div><span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_completed : '—'}</strong><small>Задач выполнено за день</small></span></div>
+              <div><span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_rescheduled : '—'}</strong><small>Задач перенесено за день</small></span></div>
             </div>
           </article>
         </section>
@@ -606,7 +591,7 @@ export function DailyControl({ user: _user }: { user: AuthUser }) {
                 onClick={() => selectManager(manager)}
               >
                 <strong>{manager.manager_name}</strong>
-                <span>{manager.checklist_completed} из {manager.checklist_total} задач</span>
+                <span>{manager.checklist_completed} из {manager.checklist_total} пунктов чек-листа</span>
                 <small>{manager.deals_count} сделок · {manager.calls} звонков · {manager.messages} сообщений · {talkDuration(manager.talk_seconds)}</small>
                 <em aria-label={`${manager.red} срочно, ${manager.yellow} проверить, ${manager.green} в норме`}>
                   <i className="red" aria-hidden="true" />{manager.red} срочно
@@ -709,6 +694,7 @@ function DealRow({ deal, selected, onSelect }: { deal: DailyControlDeal; selecte
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза · ${talkTime(communications.duration_seconds)} разговоров`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>
         </footer>
+        <TaskDayResults tasks={deal.task_results} />
       </div>
     </button>
   )

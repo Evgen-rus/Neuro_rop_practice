@@ -652,7 +652,23 @@ export type DealTaskGuidanceJob = {
   error?: string | null
 }
 
+export type DailyTaskResult = {
+  key: string
+  task_id?: string | null
+  activity_id?: string | null
+  subject: string
+  deadline?: string | null
+  status: 'completed' | 'open' | 'unknown'
+  completion_source?: 'bitrix' | 'local' | null
+  completed_at?: string | null
+  completed_today: boolean
+  overdue: boolean
+  was_due: boolean
+  reschedules: Array<{ from_deadline?: string | null; to_deadline?: string | null; occurred_at: string }>
+}
+
 export type DealControlBitrixTask = {
+  day_result?: DailyTaskResult
   activity_id: string
   task_id?: string
   responsible_id?: string
@@ -782,6 +798,7 @@ export type DailyControlQualityCriterion = {
 }
 
 export type DailyControlDeal = {
+  task_results?: DailyTaskResult[]
   deal_id: string
   title?: string | null
   manager_id?: string | null
@@ -847,7 +864,7 @@ export type DailyControlDeal = {
     business_date: string
     cutoff_at: string
     task_buckets: string[]
-    activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'local_task_completed' | 'checklist_completed'>
+    activity_kinds: Array<'call' | 'message' | 'stage_change' | 'comment' | 'bitrix_task_completed' | 'bitrix_task_rescheduled' | 'local_task_completed' | 'checklist_completed'>
     legacy: boolean
   }
 }
@@ -925,6 +942,7 @@ export type DealControlDashboard = {
     tasks_future: number
     tasks_overdue: number
     tasks_completed_today: number
+    tasks_rescheduled_today?: number
     tasks_missing: number
     tasks_plan_today: number
     average_probability?: number | null
@@ -934,9 +952,11 @@ export type DealControlDashboard = {
 }
 
 export type DailyControlFreshnessState = 'current' | 'stale' | 'historical' | 'missing'
-export type DailyControlCreationKind = 'manual' | 'automatic_planning'
+export type DailyControlCreationKind = 'manual' | 'automatic_planning' | 'automatic_day_end'
 
 export type DailyControlManager = {
+  tasks_completed?: number
+  tasks_rescheduled?: number
   manager_id?: string | null
   manager_name: string
   deals_count: number
@@ -952,6 +972,8 @@ export type DailyControlManager = {
 
 export type DailyControlSnapshot = {
   team: {
+    tasks_completed?: number
+    tasks_rescheduled?: number
     traffic_light: { red: number; yellow: number; green: number }
     deals_total: number
     no_movement: { count: number; total: number }
@@ -1005,6 +1027,8 @@ export type DailyControlReportMeta = {
 }
 
 export type DailyControlHistory = {
+  default_id?: number | null
+  missing_morning_final?: boolean
   reports: DailyControlReportMeta[]
   latest_id: number | null
   total: number

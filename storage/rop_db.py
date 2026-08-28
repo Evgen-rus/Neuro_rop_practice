@@ -1067,6 +1067,9 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_control_reports_planning_date
                 ON daily_control_reports(business_date)
                 WHERE creation_kind = 'automatic_planning';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_control_reports_day_end_date
+                ON daily_control_reports(business_date)
+                WHERE creation_kind = 'automatic_day_end';
             """
         )
         _ensure_column(conn, "analysis_runs", "model", "TEXT")
@@ -3023,7 +3026,7 @@ DAILY_CONTROL_METADATA_COLUMNS = (
     "id, business_date, creation_kind, started_at, cutoff_at, created_at, "
     "source_watermark, automatic_analysis_run_id, source_status, warnings_json, error"
 )
-DAILY_CONTROL_CREATION_KINDS = frozenset({"manual", "automatic_planning"})
+DAILY_CONTROL_CREATION_KINDS = frozenset({"manual", "automatic_planning", "automatic_day_end"})
 
 
 def _row_to_daily_control_report(
@@ -3060,7 +3063,7 @@ def create_daily_control_report(
     """Persist an immutable daily-control snapshot. Planning reports are unique per MSK date."""
     kind = str(creation_kind or "").strip()
     if kind not in DAILY_CONTROL_CREATION_KINDS:
-        raise ValueError("creation_kind должен быть manual или automatic_planning")
+        raise ValueError("creation_kind должен быть manual, automatic_planning или automatic_day_end")
     init_db(db_path)
     now = utcish_now()
     payload = (
@@ -3077,11 +3080,11 @@ def create_daily_control_report(
         str(error) if error else None,
     )
     with connect(db_path) as conn:
-        if kind == "automatic_planning":
+        if kind != "manual":
             existing = conn.execute(
                 f"SELECT {DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json FROM daily_control_reports "
-                "WHERE business_date = ? AND creation_kind = 'automatic_planning' LIMIT 1",
-                (str(business_date),),
+                "WHERE business_date = ? AND creation_kind = ? LIMIT 1",
+                (str(business_date), kind),
             ).fetchone()
             if existing is not None:
                 return _row_to_daily_control_report(existing, include_snapshot=True) or {}
@@ -3098,10 +3101,12 @@ def create_daily_control_report(
             )
             report_id = int(cursor.lastrowid)
         except sqlite3.IntegrityError:
+            if kind == "manual":
+                raise
             existing = conn.execute(
                 f"SELECT {DAILY_CONTROL_METADATA_COLUMNS}, snapshot_json FROM daily_control_reports "
-                "WHERE business_date = ? AND creation_kind = 'automatic_planning' LIMIT 1",
-                (str(business_date),),
+                "WHERE business_date = ? AND creation_kind = ? LIMIT 1",
+                (str(business_date), kind),
             ).fetchone()
             if existing is not None:
                 return _row_to_daily_control_report(existing, include_snapshot=True) or {}

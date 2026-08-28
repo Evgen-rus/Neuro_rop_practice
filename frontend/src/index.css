@@ -898,6 +898,10 @@ textarea {
   margin: 0;
 }
 
+.dc-kpis.tasks {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
 .dc-kpis article {
   display: flex;
   min-height: 0;
@@ -7962,8 +7966,9 @@ ul.facts.bad li:before {
 
 .dc-daily-head-copy {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   flex-wrap: wrap;
-  align-items: center;
   gap: 10px;
   min-width: 0;
   flex: 1 1 auto;
@@ -7971,7 +7976,7 @@ ul.facts.bad li:before {
 
 .dc-daily-head-actions {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   flex: 0 0 auto;
@@ -7981,9 +7986,19 @@ ul.facts.bad li:before {
   margin: 0;
   font-size: 18px;
   line-height: 22px;
+  font-weight: 700;
   letter-spacing: 0;
-  white-space: nowrap;
+  white-space: normal;
 }
+
+.dc-daily-purpose { font-size: 18px; line-height: 22px; font-weight: 700; color: var(--text); }
+.dc-daily-search { min-width: 180px; max-width: 260px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); color: inherit; }
+.dc-daily-task-results { display: grid; gap: 8px; margin-top: 12px; padding: 10px; background: #f5f8fc; border-radius: 8px; }
+.dc-daily-task-results > div { display: grid; gap: 4px; }
+.dc-daily-task-results b { font-size: 12px; }
+.dc-daily-task-results b.completed { color: #00845c; }
+.dc-daily-task-results b.overdue { color: #ce2940; }
+.dc-task-reschedules { display: grid; gap: 4px; color: #996000; overflow-wrap: anywhere; }
 
 .dc-daily-head-copy p {
   display: flex;
@@ -8217,7 +8232,7 @@ ul.facts.bad li:before {
 
 .dc-daily-metrics > div {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   min-height: 124px;
 }
 
@@ -8232,6 +8247,7 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-metrics > div > div:first-child { border-left: 0; }
+.dc-daily-metrics > div > div:nth-last-child(-n+2) { grid-template-columns: minmax(0, 1fr); }
 
 .dc-daily-metric-icon {
   display: grid;

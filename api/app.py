@@ -949,7 +949,7 @@ def daily_control_report_get(report_id: int) -> dict[str, Any]:
 
 @app.post("/api/daily-control/reports")
 def daily_control_report_create() -> dict[str, Any]:
-    _require_admin_or_rop()
+    _require_admin()
     return start_manual_daily_control_report()
 
 

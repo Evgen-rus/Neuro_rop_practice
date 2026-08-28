@@ -1167,8 +1167,12 @@ def _deal_checklist(
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
                                  sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
     from api.daily_control import project_deal_review_card
+    from api.deal_task_day import day_events, task_results
 
     current = now or datetime.now(MSK_TZ)
+    events_by_deal: dict[str, list[dict[str, Any]]] = {}
+    for event in day_events(db_path, current):
+        events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)
     deals = list_deal_control_deals(db_path)
     pipeline_names = {
         str(item.get("id") or ""): str(item.get("name") or "")
@@ -1239,6 +1243,11 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
                 else "open"
             )
             bitrix_tasks.append(projected)
+        results = task_results(bitrix_tasks, events_by_deal.get(str(deal["deal_id"]), []), current)
+        results_by_key = {item["key"]: item for item in results}
+        for task in bitrix_tasks:
+            key = f"task:{task['task_id']}" if task.get("task_id") else f"activity:{task.get('activity_id')}"
+            task["day_result"] = results_by_key.get(key)
         rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
         bitrix_tasks.sort(key=lambda item: (
             rank.get(str(item.get("time_bucket")), 5),

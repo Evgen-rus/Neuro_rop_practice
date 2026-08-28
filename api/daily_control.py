@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from api.deal_task_day import is_reschedule, stamp, task_results, task_totals
+
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
     DEFAULT_DB_PATH,
@@ -131,6 +133,8 @@ def _day_activity_kind(event: dict[str, Any]) -> str | None:
     if kind == "deal_stage_changed" and payload.get("from_stage_id") != payload.get("to_stage_id"):
         return "stage_change"
     if kind == "crm_task_history_observed":
+        if is_reschedule(payload):
+            return "bitrix_task_rescheduled"
         field = str(payload.get("field") or "").upper()
         value = str(payload.get("to_value") or "").upper()
         if (field == "STATUS" and value == "5") or (field == "COMPLETED" and value in {"Y", "1", "TRUE"}):
@@ -241,6 +245,7 @@ def compute_source_watermark(
                     "deal_id": deal_id,
                     "modified_at_crm": deal.get("modified_at_crm"),
                     "updated_at": deal.get("updated_at"),
+                    "bitrix_tasks": deal.get("bitrix_tasks"),
                     "stage_id": deal.get("stage_id"),
                     "amount": deal.get("amount"),
                     "communications": {
@@ -707,6 +712,10 @@ def build_daily_control_snapshot(
             if event.get("entity_type") == "deal":
                 events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)
         for deal in deals:
+            deal["task_results"] = task_results(
+                sources[deal["deal_id"]].get("bitrix_tasks") or [],
+                events_by_deal.get(deal["deal_id"], []), cutoff_at,
+            )
             deal["day_scope"] = project_report_day_scope(
                 deal, cutoff_at, source_deal=sources[deal["deal_id"]], events=events_by_deal.get(deal["deal_id"]),
             )
@@ -751,6 +760,8 @@ def build_daily_control_snapshot(
             bucket["talk_seconds"] += int(communications.get("duration_seconds") or 0)
         bucket[str(deal.get("status") or "yellow")] = int(bucket.get(str(deal.get("status") or "yellow")) or 0) + 1
     managers = _sort_managers(list(managers_by_id.values()))
+    for manager in managers:
+        manager.update(task_totals([deal for deal in deals if deal.get("manager_id") == manager.get("manager_id")]))
     team_calls = sum(item["calls"] for item in managers)
     team_messages = sum(item["messages"] for item in managers)
     team_talk = sum(item["talk_seconds"] for item in managers)
@@ -764,6 +775,7 @@ def build_daily_control_snapshot(
     notes.extend(sync_errors)
     return {
         "team": {
+            **task_totals(deals),
             "traffic_light": {
                 "red": sum(1 for deal in deals if deal["status"] == "red"),
                 "yellow": sum(1 for deal in deals if deal["status"] == "yellow"),
@@ -895,6 +907,50 @@ def publish_planning_daily_control_report(
     )
 
 
+def _refresh_final_sources(*, db_path: str | Path, now: datetime) -> dict[str, Any]:
+    """Read CRM and task history after the evening analysis, without launching AI."""
+    from api.candidates import make_client
+    from api.deal_control import build_deal_control_dashboard, refresh_deal_control
+    from api.manager_trajectory import collect_manager_trajectory
+
+    payload = refresh_deal_control(db_path=db_path, now=now)
+    errors = list(payload.get("sync_errors") or [])
+    try:
+        facts = collect_manager_trajectory(make_client(), db_path=db_path, to_at=datetime.now(MSK_TZ))
+        errors.extend(f"История CRM: {key}: {value}" for key, value in (facts.get("errors") or {}).items())
+    except Exception as error:  # noqa: BLE001 - preserve a transparent partial report
+        errors.append(f"История CRM недоступна: {error}")
+    return build_deal_control_dashboard(db_path=db_path, now=datetime.now(MSK_TZ), sync_errors=errors)
+
+
+def publish_day_end_daily_control_report(
+    *, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
+    refresh_fn: Callable[..., dict[str, Any]] | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    for item in list_daily_control_reports(db_path):
+        if item.get("creation_kind") == "automatic_day_end" and item.get("business_date") == current.date().isoformat():
+            return get_daily_control_report(db_path, int(item["id"]), include_snapshot=True) or {}
+    from api.deal_control import build_deal_control_dashboard
+
+    try:
+        dashboard = (refresh_fn or _refresh_final_sources)(db_path=db_path, now=current)
+    except Exception as error:  # noqa: BLE001 - publish saved state with an explicit warning
+        dashboard = build_deal_control_dashboard(db_path=db_path, now=current, sync_errors=[f"Вечернее обновление CRM не завершено: {error}"])
+    finished = _aware((clock or (lambda: datetime.now(MSK_TZ)))()).astimezone(MSK_TZ)
+    if finished.date() != current.date():
+        raise RuntimeError("Вечернее обновление пересекло полночь: нельзя выдать текущее состояние за вчерашний срез")
+    latest_run = get_latest_automatic_analysis_run(db_path)
+    run_started = stamp((latest_run or {}).get("started_at"))
+    if not run_started or not current.replace(hour=22, minute=0, second=0, microsecond=0) <= run_started <= finished:
+        dashboard.setdefault("sync_errors", []).append("Запуск дополнительного анализа в 22:00 МСК не подтверждён. Использован последний сохранённый анализ.")
+    return publish_daily_control_report(
+        db_path=db_path, creation_kind="automatic_day_end", started_at=current,
+        cutoff_at=finished, now=finished, dashboard=dashboard,
+    )
+
+
 def _run_manual_generation(db_path: str | Path, started: datetime) -> None:
     try:
         report = publish_daily_control_report(
@@ -1014,6 +1070,7 @@ def project_daily_control_snapshot(snapshot: dict[str, Any], user: dict[str, Any
     projected["deals"] = deals
     projected["managers"] = managers
     projected["team"] = {
+        **task_totals(deals),
         "traffic_light": {
             "red": sum(1 for deal in deals if deal.get("status") == "red"),
             "yellow": sum(1 for deal in deals if deal.get("status") == "yellow"),
@@ -1042,6 +1099,16 @@ def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | No
     reports = list_daily_control_reports(db_path)
     live = compute_source_watermark(db_path, now=now)
     latest_id = int(reports[0]["id"]) if reports else None
+    current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
+    default_id = latest_id
+    expected_final_date = current.date() - timedelta(days=1)
+    while expected_final_date.weekday() > 4:
+        expected_final_date -= timedelta(days=1)
+    morning = (current.hour, current.minute) < (15, 45)
+    morning_final = next((item for item in reports if item.get("creation_kind") == "automatic_day_end"
+                          and item.get("business_date") == expected_final_date.isoformat()), None)
+    if morning and morning_final:
+        default_id = int(morning_final["id"])
     items = []
     for index, report in enumerate(reports):
         items.append(
@@ -1067,6 +1134,8 @@ def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | No
     return {
         "reports": items,
         "latest_id": latest_id,
+        "default_id": default_id,
+        "missing_morning_final": morning and morning_final is None,
         "total": len(reports),
         "live_watermark": live,
         "generation": generation_status(),

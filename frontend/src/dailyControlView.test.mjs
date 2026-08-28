@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canFilterReport, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, reportDayLabels, shouldOpenLatestReport } from './dailyControlView.ts'
+import { canFilterReport, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, shouldOpenLatestReport } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
@@ -27,7 +27,7 @@ test('historical day filtering uses the frozen scope independently of the browse
 })
 
 test('future tasks with work belong to the report day and the left row explains the work', () => {
-  for (const activity of ['call', 'message', 'stage_change', 'comment', 'bitrix_task_completed', 'local_task_completed', 'checklist_completed']) {
+  for (const activity of ['call', 'message', 'stage_change', 'comment', 'bitrix_task_completed', 'bitrix_task_rescheduled', 'local_task_completed', 'checklist_completed']) {
     const deal = { ...deals[4], day_scope: { ...deals[4].day_scope, activity_kinds: [activity] } }
     assert.equal(dealMatchesTime(deal, 'today'), true, activity)
     assert.equal(dealMatchesTime(deal, 'future'), true)
@@ -44,6 +44,21 @@ test('a completed primary task cannot hide a different open task due on the repo
   const deal = { ...deals[2], day_scope: { ...deals[2].day_scope, task_buckets: ['today', 'future'] } }
   assert.equal(dealMatchesTime(deal, 'today'), true)
   assert.equal(dealMatchesTime(deal, 'future'), true)
+})
+
+test('a task moved to tomorrow still belongs to today and search looks inside the selected report', () => {
+  const deal = {
+    ...deals[3],
+    title: 'Поставка линии',
+    day_scope: { ...deals[3].day_scope, activity_kinds: ['bitrix_task_rescheduled'] },
+    task_results: [{ key: 'task:9', subject: 'Согласовать КП', completed_today: true, reschedules: [{ occurred_at: '2026-08-27T12:00:00+03:00' }] }],
+  }
+  assert.equal(dealMatchesTime(deal, 'today'), true)
+  assert.equal(dealMatchesTime(deal, 'tomorrow'), true)
+  assert.deepEqual(dailyTaskTotals([deal]), { tasks_completed: 1, tasks_rescheduled: 1 })
+  assert.equal(matchesDailySearch(deal, '101'), false)
+  assert.equal(matchesDailySearch(deal, 'поставка'), true)
+  assert.equal(matchesDailySearch(deal, 'согласовать'), true)
 })
 
 test('background refresh opens a new report only outside an active review or chosen history', () => {

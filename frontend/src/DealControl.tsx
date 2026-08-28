@@ -72,6 +72,7 @@ import {
   shouldReloadAfterAutomaticAnalysis,
 } from './automaticAnalysis'
 import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
+import { TaskReschedules } from './TaskDayResults'
 import {
   freshQuickHelpIdFromJob,
   latestQuickHelpEntryId,
@@ -698,6 +699,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         ['overdue', 'today'].includes(task.time_bucket)
         && ['local', 'bitrix'].includes(task.completion_state)
       ).length,
+      tasks_rescheduled_today: filteredDeals
+        .flatMap((deal) => deal.bitrix_tasks || [])
+        .filter((task) => Boolean(task.day_result?.reschedules.length)).length,
       tasks_missing: missing,
       tasks_plan_today: missing + overdue + today,
       average_probability: probabilities.length
@@ -1060,6 +1064,7 @@ function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDa
         ['▣', 'На сегодня', summary.tasks_today, 'blue'],
         ['▤', 'На завтра', summary.tasks_tomorrow, 'orange'],
         ['✓', 'Выполнено сегодня', `${summary.tasks_completed_today} из ${summary.tasks_plan_today}`, 'green'],
+        ['↪', 'Перенесено сегодня', summary.tasks_rescheduled_today ?? 0, 'orange'],
       ]
   return <section className={`dc-kpis ${dashboard ? 'dashboard' : 'tasks'}`}>
     {values.map(([icon, label, value, tone]) => <article key={String(label)} className={String(tone)}>
@@ -1210,7 +1215,7 @@ function ControlTimeChip({ task, bitrixTask }: {
       : bitrixTask.time_bucket === 'tomorrow'
         ? 'На завтра'
         : 'Будущее'
-  return <span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span>
+  return <><span className={`dc-status ${bitrixTaskTone(bitrixTask)}`}>{label}</span><TaskReschedules task={bitrixTask.day_result} /></>
 }
 
 function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunicationsToday | null }) {
@@ -3373,6 +3378,7 @@ function BitrixTaskCard({ deal, task, onToggleCompletion }: {
     </header>
 
     <div className="dc-bitrix-task-body">
+      <TaskReschedules task={task.day_result} />
       {hasDescription
         ? <p className={`dc-bitrix-task-description ${canCollapse && !expanded ? 'collapsed' : ''}`}>{description}</p>
         : <p className="dc-bitrix-task-description muted">Описание задачи в Bitrix не заполнено</p>}

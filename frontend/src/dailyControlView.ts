@@ -33,6 +33,7 @@ export function reportDayLabels(deal: DailyControlDeal): Array<{ kind: 'due' | '
     stage_change: 'Изменена стадия',
     comment: 'Добавлен комментарий',
     bitrix_task_completed: 'Задача завершена в CRM',
+    bitrix_task_rescheduled: 'Задача перенесена',
     local_task_completed: 'Задача отмечена выполненной в НейроРОПе',
     checklist_completed: 'Выполнены пункты чек-листа',
   }
@@ -49,4 +50,18 @@ export function shouldOpenLatestReport(currentId: number | undefined, latestId: 
 export function firstReviewDeal(deals: DailyControlDeal[], managerId: string | null | undefined) {
   const own = deals.filter((deal) => String(deal.manager_id || '') === String(managerId || ''))
   return own.find((deal) => deal.status === 'red') || own[0]
+}
+
+export function dailyTaskTotals(deals: DailyControlDeal[]) {
+  const tasks = deals.flatMap((deal) => deal.task_results || [])
+  return {
+    tasks_completed: new Set(tasks.filter((task) => task.completed_today).map((task) => task.key)).size,
+    tasks_rescheduled: new Set(tasks.filter((task) => task.reschedules.length).map((task) => task.key)).size,
+  }
+}
+
+export function matchesDailySearch(deal: DailyControlDeal, search: string) {
+  const needle = search.trim().toLocaleLowerCase('ru')
+  return !needle || [deal.deal_id, deal.title, ...(deal.task_results || []).map((task) => task.subject)]
+    .some((value) => String(value || '').toLocaleLowerCase('ru').includes(needle))
 }

@@ -53,40 +53,52 @@ def _scope(db_path: Path) -> None:
 
 
 class DaytimeCycleScheduleTests(unittest.TestCase):
-    def test_slots_cover_weekday_hours_and_planning_prep_once(self) -> None:
+    def test_slots_cover_weekday_hours_evening_cycle_and_two_reports(self) -> None:
         pairs = [(item.hour, item.minute) for item in slot_times_for_day()]
         self.assertEqual(pairs[0], (7, 0))
-        self.assertEqual(pairs[-1], (18, 0))
+        self.assertEqual(pairs[-1], (23, 0))
         self.assertIn((7, 0), pairs)
         self.assertIn((7, 30), pairs)
         self.assertIn((8, 0), pairs)
         self.assertIn((8, 30), pairs)
         self.assertIn((15, 30), pairs)
-        self.assertIn((7, 55), pairs)
-        self.assertNotIn((15, 45), pairs)
+        self.assertIn((15, 45), pairs)
         self.assertIn((16, 0), pairs)
         self.assertIn((18, 0), pairs)
+        self.assertIn((22, 0), pairs)
+        self.assertIn((23, 0), pairs)
+        self.assertNotIn((7, 55), pairs)
         self.assertNotIn((6, 30), pairs)
         self.assertNotIn((0, 0), pairs)
         self.assertNotIn((15, 50), pairs)
         self.assertNotIn((18, 30), pairs)
-        self.assertEqual(pairs.count((7, 55)), 1)
+        self.assertEqual(pairs.count((15, 45)), 1)
+        self.assertEqual(pairs.count((22, 0)), 1)
+        self.assertEqual(pairs.count((23, 0)), 1)
 
-    def test_next_slot_uses_0755_for_planning_report(self) -> None:
+    def test_next_slot_uses_1545_2200_and_2300(self) -> None:
         self.assertEqual(
-            next_scheduled_at(datetime(2026, 8, 18, 7, 40, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ),
+            next_scheduled_at(datetime(2026, 8, 18, 15, 30, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ),
         )
         self.assertEqual(
-            next_scheduled_at(datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 18, 8, 0, tzinfo=MSK_TZ),
+            next_scheduled_at(datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 16, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
-            next_scheduled_at(datetime(2026, 8, 18, 7, 30, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ),
+            next_scheduled_at(datetime(2026, 8, 18, 18, 0, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 22, 0, tzinfo=MSK_TZ),
+        )
+        self.assertEqual(
+            next_scheduled_at(datetime(2026, 8, 18, 22, 0, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 18, 23, 0, tzinfo=MSK_TZ),
+        )
+        self.assertEqual(
+            next_scheduled_at(datetime(2026, 8, 18, 23, 0, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 19, 7, 0, tzinfo=MSK_TZ),
         )
 
-    def test_next_slot_stays_on_weekdays_between_seven_and_eighteen(self) -> None:
+    def test_next_slot_stays_on_weekdays_and_keeps_evening_slots(self) -> None:
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 18, 6, 50, tzinfo=MSK_TZ)),
             datetime(2026, 8, 18, 7, 0, tzinfo=MSK_TZ),
@@ -97,14 +109,14 @@ class DaytimeCycleScheduleTests(unittest.TestCase):
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 18, 7, 50, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ),
-        )
-        self.assertEqual(
-            next_scheduled_at(datetime(2026, 8, 18, 18, 0, tzinfo=MSK_TZ)),
-            datetime(2026, 8, 19, 7, 0, tzinfo=MSK_TZ),
+            datetime(2026, 8, 18, 8, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
             next_scheduled_at(datetime(2026, 8, 21, 18, 0, tzinfo=MSK_TZ)),
+            datetime(2026, 8, 21, 22, 0, tzinfo=MSK_TZ),
+        )
+        self.assertEqual(
+            next_scheduled_at(datetime(2026, 8, 21, 23, 0, tzinfo=MSK_TZ)),
             datetime(2026, 8, 24, 7, 0, tzinfo=MSK_TZ),
         )
         self.assertEqual(
@@ -116,31 +128,51 @@ class DaytimeCycleScheduleTests(unittest.TestCase):
             datetime(2026, 8, 24, 7, 0, tzinfo=MSK_TZ),
         )
 
-
     def test_publication_due_uses_moscow_day_and_catches_up_only_once(self) -> None:
-        from api.daytime_cycle import _planning_report_is_due
+        from api.daytime_cycle import DAY_END_REPORT_TIME, _planning_report_is_due
 
-        due = datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
         self.assertFalse(_planning_report_is_due(due - timedelta(seconds=1), None))
         self.assertTrue(_planning_report_is_due(due, None))
         self.assertTrue(_planning_report_is_due(due.astimezone(timezone.utc), None))
-        self.assertTrue(_planning_report_is_due(due.replace(hour=12), None))
+        self.assertTrue(_planning_report_is_due(due.replace(hour=16), None))
         self.assertFalse(_planning_report_is_due(due, due.date()))
         self.assertFalse(_planning_report_is_due(due.replace(day=22), None))
+        self.assertFalse(_planning_report_is_due(due.replace(hour=22), None, DAY_END_REPORT_TIME))
+        self.assertTrue(_planning_report_is_due(due.replace(hour=23), None, DAY_END_REPORT_TIME))
 
-    def test_scheduler_catches_up_after_restart_without_starting_crm(self) -> None:
+    def test_scheduler_does_not_publish_planning_before_1545(self) -> None:
         from api.daytime_cycle import _scheduler_loop
 
         now = datetime(2026, 8, 18, 8, 13, tzinfo=MSK_TZ)
         with patch('api.daytime_cycle.datetime', wraps=datetime) as clock, \
              patch('api.daytime_cycle._stop_event') as stop, \
-             patch('api.daytime_cycle._publish_planning_report', return_value={'status': 'success'}) as publish, \
+             patch('api.daytime_cycle._publish_planning_report', return_value={'status': 'success'}) as planning, \
+             patch('api.daytime_cycle._publish_day_end_report', return_value={'status': 'success'}) as day_end, \
              patch('api.daytime_cycle._start_interval_cycle') as cycle:
             clock.now.return_value = now
             stop.is_set.return_value = False
             stop.wait.return_value = True
             _scheduler_loop()
-        publish.assert_called_once_with(now)
+        planning.assert_not_called()
+        day_end.assert_not_called()
+        cycle.assert_not_called()
+
+    def test_scheduler_catches_up_reports_after_restart_without_starting_crm(self) -> None:
+        from api.daytime_cycle import _scheduler_loop
+
+        now = datetime(2026, 8, 18, 23, 10, tzinfo=MSK_TZ)
+        with patch('api.daytime_cycle.datetime', wraps=datetime) as clock, \
+             patch('api.daytime_cycle._stop_event') as stop, \
+             patch('api.daytime_cycle._publish_planning_report', return_value={'status': 'success'}) as planning, \
+             patch('api.daytime_cycle._publish_day_end_report', return_value={'status': 'success'}) as day_end, \
+             patch('api.daytime_cycle._start_interval_cycle') as cycle:
+            clock.now.return_value = now
+            stop.is_set.return_value = False
+            stop.wait.return_value = True
+            _scheduler_loop()
+        planning.assert_called_once_with(now)
+        day_end.assert_called_once_with(now)
         cycle.assert_not_called()
 
     def test_slow_cycle_does_not_block_publication_or_spawn_another_worker(self) -> None:
@@ -161,7 +193,7 @@ class DaytimeCycleScheduleTests(unittest.TestCase):
                 daytime_cycle._start_interval_cycle(due)
                 self.assertTrue(entered.wait(timeout=2))
                 daytime_cycle._start_interval_cycle(due)
-                daytime_cycle._publish_planning_report(due.replace(minute=55))
+                daytime_cycle._publish_planning_report(due.replace(hour=15, minute=45))
                 cycle.assert_called_once()
                 publish.assert_called_once()
             finally:
@@ -516,11 +548,11 @@ class PlanningReportSlotTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_0755_slot_publishes_planning_report_without_analysis(self) -> None:
+    def test_1545_slot_publishes_planning_report_without_analysis(self) -> None:
         from api.daily_control import publish_planning_daily_control_report
         from storage.rop_db import list_daily_control_reports
 
-        due = datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
         with patch("api.deal_control.refresh_deal_control") as refresh, \
              patch("api.jobs.start_analyze_job") as analyze:
             first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
@@ -535,7 +567,7 @@ class PlanningReportSlotTests(unittest.TestCase):
     def test_scheduler_helper_does_not_start_the_30m_cycle(self) -> None:
         from api.daytime_cycle import _publish_planning_report
 
-        due = datetime(2026, 8, 18, 7, 55, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
         with patch(
             "api.daily_control.publish_planning_daily_control_report",
             return_value={"id": 9, "creation_kind": "automatic_planning", "cutoff_at": due.isoformat(), "source_status": "ok", "warnings": []},
@@ -544,6 +576,32 @@ class PlanningReportSlotTests(unittest.TestCase):
         cycle.assert_not_called()
         self.assertEqual(payload["trigger"], "planning_report")
         self.assertEqual(payload["daily_control_report_id"], 9)
+
+    def test_evening_cycle_uses_the_same_worker_without_forcing_llm(self) -> None:
+        from api import daytime_cycle
+
+        due = datetime(2026, 8, 18, 22, 0, tzinfo=MSK_TZ)
+        with patch.object(daytime_cycle, "_cycle_thread", None), \
+             patch.object(daytime_cycle, "run_daytime_cycle") as cycle:
+            daytime_cycle._start_interval_cycle(due)
+            if daytime_cycle._cycle_thread:
+                daytime_cycle._cycle_thread.join(timeout=2)
+        cycle.assert_called_once()
+        self.assertEqual(cycle.call_args.kwargs["trigger"], "evening_22")
+        self.assertEqual(cycle.call_args.kwargs["now"], due)
+
+    def test_day_end_helper_does_not_start_analysis(self) -> None:
+        from api.daytime_cycle import _publish_day_end_report
+
+        due = datetime(2026, 8, 18, 23, 0, tzinfo=MSK_TZ)
+        with patch(
+            "api.daily_control.publish_day_end_daily_control_report",
+            return_value={"id": 11, "creation_kind": "automatic_day_end", "cutoff_at": due.isoformat()},
+        ), patch("api.daytime_cycle.run_daytime_cycle") as cycle:
+            payload = _publish_day_end_report(due)
+        cycle.assert_not_called()
+        self.assertEqual(payload["trigger"], "day_end_report")
+        self.assertEqual(payload["daily_control_report_id"], 11)
 
 
 class JobWaitTests(unittest.TestCase):
