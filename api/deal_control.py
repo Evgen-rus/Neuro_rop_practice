@@ -29,6 +29,14 @@ from bitrix.customer_history import (
 )
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.deals.communication_history import source_lead_id
+from bitrix.workspace import (
+    DEFAULT_AUDIO_MANIFEST_DIR,
+    DEFAULT_LEAD_AUDIO_MANIFEST_DIR,
+    DEFAULT_LEAD_WORKSPACE_ROOT,
+    deal_workspace_dir,
+    entity_workspace_dir,
+)
+from openai_api.audio.short_call import load_recording_durations
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 from openai_api.llm.deal_daily_quality import is_quality_candidate, quality_event_signature
 from progress_events import compact_decision_status
@@ -366,6 +374,19 @@ def _fetch_deal_timeline_comments(
     return result
 
 
+def _local_recording_durations(entity_type: str, entity_id: str) -> dict[str, float]:
+    if not entity_id:
+        return {}
+    if entity_type == "deal":
+        manifest_dir = DEFAULT_AUDIO_MANIFEST_DIR
+        workspace = deal_workspace_dir(entity_id)
+    else:
+        manifest_dir = DEFAULT_LEAD_AUDIO_MANIFEST_DIR
+        workspace = entity_workspace_dir(entity_id, entity_type="lead", workspace_root=DEFAULT_LEAD_WORKSPACE_ROOT)
+    filename = f"{entity_type}_{entity_id}_call_audio_manifest.json"
+    return load_recording_durations([manifest_dir / filename, workspace / "audio" / filename])
+
+
 def _today_communications(
     activities: list[dict[str, Any]],
     now: datetime,
@@ -431,6 +452,8 @@ def _today_communications(
         "contacts": _contacts_bundle_from_names(client_names or set()),
     })
     today_events: list[dict[str, Any]] = []
+    recording_durations: dict[str, float] | None = None
+    lead_recording_durations: dict[str, float] | None = None
     for event in events:
         channel = str(event.get("channel") or "unknown")
         if channel in INTERNAL_CHANNELS:
@@ -469,7 +492,18 @@ def _today_communications(
                 )
             )
             has_transcript = bool(transcript)
-            classified = classify_call_outcome(raw, has_transcript=has_transcript)
+            if recording_durations is None:
+                recording_durations = _local_recording_durations("deal", entity_id)
+            recording_duration = recording_durations.get(source_id)
+            if recording_duration is None and source_id in lead_activity_ids:
+                if lead_recording_durations is None:
+                    lead_recording_durations = _local_recording_durations("lead", lead_id)
+                recording_duration = lead_recording_durations.get(source_id)
+            classified = classify_call_outcome(
+                raw,
+                has_transcript=has_transcript,
+                recording_duration_seconds=recording_duration,
+            )
             item["call_outcome"] = classified["call_outcome"]
             item["talk_duration_seconds"] = classified["talk_duration_seconds"]
             item["status_label"] = classified["status_label"]

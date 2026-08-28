@@ -7,6 +7,8 @@ Calls shorter than SHORT_CALL_MAX_SECONDS are treated as non-meaningful contact
 
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,48 @@ from openai_api.audio.transcribe_core import get_audio_duration_seconds
 
 
 SHORT_CALL_MAX_SECONDS = 20.0
+
+
+def load_recording_durations(manifest_paths: list[Path]) -> dict[str, float]:
+    """Read measured recording lengths by activity, without probing or writing.
+
+    Paths are in priority order (download manifest before workspace copy).
+    Never use call-level CRM timing or expected_call_duration_seconds. Multiple
+    recordings of one activity count once, using the longest measured file.
+    """
+    durations: dict[str, float] = {}
+    seen: set[str] = set()
+    for path in manifest_paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        calls = manifest.get("calls") if isinstance(manifest, dict) else None
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict) or call.get("audio_kind") == "max_voice":
+                continue
+            activity_id = str(call.get("activity_id") or "").strip()
+            if not activity_id or activity_id in seen:
+                continue
+            seen.add(activity_id)
+            downloads = call.get("downloads")
+            values = [
+                item.get("duration_seconds")
+                for item in downloads if isinstance(item, dict) and item.get("ok")
+            ] if isinstance(downloads, list) else []
+            transcription = call.get("transcription")
+            if isinstance(transcription, dict) and transcription.get("status") == "transcribed_and_purged":
+                values.append(transcription.get("source_duration_seconds"))
+            measured = [
+                float(value) for value in values
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value >= 0
+            ]
+            if measured:
+                durations[activity_id] = max(measured)
+    return durations
 
 
 def classify_call_duration(duration_seconds: float | None) -> dict[str, Any]:

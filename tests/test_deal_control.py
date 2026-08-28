@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -486,6 +487,83 @@ class DealControlTests(unittest.TestCase):
         self.assertIsNone(result["conversation_duration_seconds"])
         self.assertEqual(result["last_activity"]["kind"], "dial_attempt")
         self.assertIsNone(result["last_confirmed_contact"])
+
+    def test_today_communications_uses_local_recording_duration_not_crm_interval(self):
+        activity = {
+            "ID": "audio-test-1", "OWNER_ID": "101", "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL",
+            "DIRECTION": "2", "COMPLETED": "Y", "FILES": [{"ID": "11"}],
+            "START_TIME": "2026-07-20T12:00:00+03:00", "END_TIME": "2026-07-20T12:05:00+03:00",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "deal_101_call_audio_manifest.json"
+            with (
+                patch("api.deal_control.DEFAULT_AUDIO_MANIFEST_DIR", root),
+                patch("api.deal_control.deal_workspace_dir", return_value=root / "workspace"),
+                patch("api.deal_control.find_call_transcript", return_value=None),
+            ):
+                for duration, files, transcript, expected, connected, attempts in (
+                    (70, [{"ID": "11"}], False, 70, 1, 0),
+                    (None, [{"ID": "11"}], False, None, 1, 0),
+                    (None, [], True, None, 1, 0),
+                    (70, [], True, 70, 1, 0),
+                    (70, [], False, None, 0, 1),
+                    (8, [{"ID": "11"}], False, None, 0, 1),
+                ):
+                    with self.subTest(duration=duration, files=bool(files), transcript=transcript):
+                        manifest_path.write_text(json.dumps({"calls": [{
+                            "activity_id": "audio-test-1",
+                            "downloads": [{"ok": True, "duration_seconds": duration}],
+                        }]}, ensure_ascii=False), encoding="utf-8")
+                        with patch("api.deal_control.find_call_transcript", return_value={"text": "Тест"} if transcript else None):
+                            result = _today_communications(
+                                [{**activity, "FILES": files}], datetime(2026, 7, 20, 16, tzinfo=MSK), deal_id="101",
+                            )
+                        self.assertEqual(result["duration_seconds"], 300)
+                        self.assertEqual(result["conversation_duration_seconds"], expected)
+                        self.assertEqual(result["calls_connected"], connected)
+                        self.assertEqual(result["calls_no_answer"], attempts)
+                        self.assertEqual(result["items"][0]["content_available"], transcript and bool(connected))
+
+    def test_today_communications_sums_recordings_and_explicit_source_lead_once(self):
+        def call(activity_id):
+            return {
+                "ID": activity_id, "TYPE_ID": "2", "PROVIDER_ID": "CRM_CALL", "DIRECTION": "2",
+                "COMPLETED": "Y", "FILES": [{"ID": "11"}],
+                "START_TIME": "2026-07-20T12:00:00+03:00", "END_TIME": "2026-07-20T12:05:00+03:00",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "deal_101_call_audio_manifest.json").write_text(json.dumps({"calls": [{
+                "activity_id": "audio-test-1", "downloads": [{"ok": True, "duration_seconds": 70}],
+            }]}, ensure_ascii=False), encoding="utf-8")
+            lead_workspace = root / "lead_202"
+            (lead_workspace / "audio").mkdir(parents=True)
+            (lead_workspace / "audio" / "lead_202_call_audio_manifest.json").write_text(json.dumps({"calls": [{
+                "activity_id": "audio-test-2", "downloads": [],
+                "transcription": {"status": "transcribed_and_purged", "source_duration_seconds": 40},
+            }, {
+                "activity_id": "unrelated-call", "downloads": [{"ok": True, "duration_seconds": 900}],
+            }]}, ensure_ascii=False), encoding="utf-8")
+            with (
+                patch("api.deal_control.DEFAULT_AUDIO_MANIFEST_DIR", root),
+                patch("api.deal_control.DEFAULT_LEAD_AUDIO_MANIFEST_DIR", root),
+                patch("api.deal_control.DEFAULT_LEAD_WORKSPACE_ROOT", root),
+                patch("api.deal_control.deal_workspace_dir", return_value=root / "workspace"),
+                patch("api.deal_control.find_call_transcript", return_value=None),
+            ):
+                result = _today_communications(
+                    [call("audio-test-1"), call("audio-test-2"), call("audio-test-3")],
+                    datetime(2026, 7, 20, 16, tzinfo=MSK), deal_id="101",
+                    lead_id="202", lead_activities=[call("audio-test-2")],
+                )
+        self.assertEqual(result["calls_total"], 3)
+        self.assertEqual(result["calls_connected"], 3)
+        self.assertEqual(result["calls_no_answer"], 0)
+        self.assertEqual(result["conversation_duration_seconds"], 110)
+        self.assertEqual(result["duration_seconds"], 900)
+        self.assertEqual([item["talk_duration_seconds"] for item in result["items"]], [70, 40, None])
 
     def test_last_activity_skips_missed_incoming_and_keeps_moscow_day(self):
         result = _today_communications(

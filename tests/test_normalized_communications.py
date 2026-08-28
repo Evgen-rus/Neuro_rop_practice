@@ -142,6 +142,18 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         )
         self.assertEqual(connected["call_outcome"], "connected")
         self.assertIsNone(connected["talk_duration_seconds"])
+        measured = classify_call_outcome(
+            {"DIRECTION": "2", "FILES": [{"ID": "8"}]},
+            recording_duration_seconds=70,
+        )
+        self.assertEqual(measured["call_outcome"], "connected")
+        self.assertEqual(measured["talk_duration_seconds"], 70)
+        duration_alone = classify_call_outcome(
+            {"DIRECTION": "2", "COMPLETED": "Y"},
+            recording_duration_seconds=70,
+        )
+        self.assertEqual(duration_alone["call_outcome"], "no_answer")
+        self.assertEqual(duration_alone["talk_duration_seconds"], 0)
         no_answer = classify_call_outcome(
             {"DIRECTION": "2", "COMPLETED": "Y", "SUBJECT": "Исходящий звонок"},
         )
