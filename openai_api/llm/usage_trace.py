@@ -118,6 +118,10 @@ def build_usage_trace_event(
         "reasoning_effort": metadata.get("reasoning_effort"),
         "semantic_attempt_number": metadata.get("attempt_number"),
         "semantic_correction_retry": metadata.get("semantic_correction_retry"),
+        "analysis_attempt_id": metadata.get("analysis_attempt_id"),
+        "attempt_phase": metadata.get("attempt_phase"),
+        "repair": metadata.get("repair"),
+        "final_attempt": metadata.get("final_attempt"),
         "validation_status": (
             "passed" if metadata.get("validation_passed") is True
             else "failed" if metadata.get("validation_passed") is False
@@ -127,6 +131,7 @@ def build_usage_trace_event(
         "validation_diagnostic_ref": metadata.get("validation_diagnostic_ref"),
         "validation_diagnostic_status": metadata.get("validation_diagnostic_status"),
         "transport_retry": metadata.get("transport_retry"),
+        "transport_error": metadata.get("transport_error"),
         "transport_attempt_count": metadata.get("transport_attempt_count"),
         "transport_retry_count": metadata.get("transport_retry_count"),
         "cache_mode": cache.get("mode"),

@@ -29,8 +29,11 @@ OPENAI_REQUEST_TIMEOUT_SECONDS = max(
     float(os.getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "600") or "600"),
 )
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
-ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
+ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 ANALYSIS_REASONING_EFFORT = os.getenv("ANALYSIS_REASONING_EFFORT", "low").strip() or "low"
+ANALYSIS_REPAIR_MODEL = os.getenv("ANALYSIS_REPAIR_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+ANALYSIS_REPAIR_REASONING_EFFORT = os.getenv("ANALYSIS_REPAIR_REASONING_EFFORT", "xhigh").strip() or "xhigh"
+ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS", "8000") or "8000")
 ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500") or "3500")
 # Compact attention_delta is an isolated shadow artifact. The cap includes
 # both visible JSON and reasoning tokens, so it leaves quality headroom while

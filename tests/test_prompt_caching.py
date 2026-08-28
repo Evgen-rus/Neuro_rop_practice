@@ -31,6 +31,18 @@ class PromptCachingRequestTests(unittest.TestCase):
         trace_patch.start()
         self.addCleanup(trace_patch.stop)
 
+    def test_analysis_reasoning_override_and_default_are_independent(self) -> None:
+        with patch("openai_api.llm.llm_client.client.responses.create", return_value=response()) as create, \
+             patch("openai_api.llm.llm_client.ANALYSIS_REASONING_EFFORT", "low"):
+            _, repair = call_analysis_json("repair", model="gpt-5.6-luna", reasoning_effort="xhigh",
+                                           max_output_tokens=8000, preview_prompt=False)
+            self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "xhigh"})
+            self.assertEqual(create.call_args.kwargs["max_output_tokens"], 8000)
+            self.assertEqual(repair["reasoning_effort"], "xhigh")
+            _, primary = call_analysis_json("primary", model="gpt-5.6-terra", preview_prompt=False)
+            self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "low"})
+            self.assertEqual(primary["reasoning_effort"], "low")
+
     def test_multiple_explicit_breakpoints_preserve_exact_prompt_text(self) -> None:
         prompt = "GLOBAL\nDEAL\nOLD CALLS\nLATEST\nDYNAMIC"
         prefixes = ["GLOBAL\n", "GLOBAL\nDEAL\nOLD CALLS\n", "GLOBAL\nDEAL\nOLD CALLS\nLATEST\n"]

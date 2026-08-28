@@ -7,27 +7,32 @@ from __future__ import annotations
 import json
 import re
 import hashlib
+import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Callable
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from openai_api.config import (
     ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
     ANALYSIS_REASONING_EFFORT,
+    ANALYSIS_REPAIR_MODEL,
+    ANALYSIS_REPAIR_REASONING_EFFORT,
+    ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
     OPENAI_API_KEY,
     OPENAI_REQUEST_TIMEOUT_SECONDS,
     USD_RUB_RATE,
     logger,
 )
 from openai_api.logging_utils import log_model_text_payload
+from openai_api.llm.full_analysis_repair import SectionRepairError, SectionRepairPlan
 from openai_api.llm.usage_trace import append_usage_trace
 from openai_api.llm.validation_diagnostics import save_validation_diagnostic
-from openai_api.pricing import estimate_analysis_cost
+from openai_api.pricing import aggregate_analysis_cost, estimate_analysis_cost
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry
 
 
@@ -54,7 +59,7 @@ class ModelResponseIncompleteError(ValueError):
 
 
 class ValidatedAnalysisFailure(ValueError):
-    """Raised after both semantic attempts fail parsing or validation."""
+    """Raised after all permitted semantic attempts fail parsing or validation."""
 
     def __init__(
         self,
@@ -244,6 +249,8 @@ def call_analysis_json(
     prompt: str,
     *,
     model: str = ANALYSIS_MODEL,
+    reasoning_effort: str | None = None,
+    max_output_tokens: int | None = None,
     retry_callback: RetryCallback | None = None,
     call_type: str = "full_analysis",
     prompt_cache_key: str | None = None,
@@ -255,6 +262,7 @@ def call_analysis_json(
     preview_prompt: bool = True,
     preview_response_errors: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
     request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
     request_input, cache_options, cache_metadata = _cache_request(
         prompt,
@@ -273,7 +281,7 @@ def call_analysis_json(
             metadata={
                 "api": "responses.create",
                 "response_format": "json_object",
-                "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+                "reasoning_effort": effective_reasoning_effort,
                 "call_type": call_type,
                 "prompt_cache": cache_metadata,
             },
@@ -297,8 +305,8 @@ def call_analysis_json(
             lambda: client.responses.create(
                 model=model,
                 input=request_input,
-                max_output_tokens=ANALYSIS_MAX_OUTPUT_TOKENS,
-                reasoning={"effort": ANALYSIS_REASONING_EFFORT},
+                max_output_tokens=max_output_tokens if max_output_tokens is not None else ANALYSIS_MAX_OUTPUT_TOKENS,
+                reasoning={"effort": effective_reasoning_effort},
                 text={"format": {"type": "json_object"}},
                 store=False,
                 **cache_options,
@@ -308,24 +316,21 @@ def call_analysis_json(
             on_event=transport_callback,
         )
     except Exception as error:
-        append_usage_trace(
-            {
-                "model": model,
-                "call_type": call_type,
-                "requested_at": requested_at,
-                "latency_seconds": round(perf_counter() - started_at, 4),
-                "prompt_cache": cache_metadata,
-                "request_fingerprint": request_fingerprint,
-                "reasoning_effort": ANALYSIS_REASONING_EFFORT,
-                "transport_attempt_count": sum(1 for event in transport_events if event.get("status") == "attempt"),
-                "transport_retry_count": sum(1 for event in transport_events if event.get("status") == "retry_wait"),
-                "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
-            },
-            status="error",
-            entity_type=trace_entity_type,
-            entity_id=trace_entity_id,
-            error_type=type(error).__name__,
-        )
+        error_metadata = {
+            "model": model, "call_type": call_type, "requested_at": requested_at,
+            "latency_seconds": round(perf_counter() - started_at, 4),
+            "prompt_cache": cache_metadata, "request_fingerprint": request_fingerprint,
+            "reasoning_effort": effective_reasoning_effort,
+            "transport_attempt_count": sum(1 for event in transport_events if event.get("status") == "attempt"),
+            "transport_retry_count": sum(1 for event in transport_events if event.get("status") == "retry_wait"),
+            "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
+            "transport_error": True,
+        }
+        if defer_usage_trace and isinstance(error, (OpenAIError, TimeoutError, ConnectionError)):
+            error.analysis_metadata = error_metadata
+        else:
+            append_usage_trace(error_metadata, status="error", entity_type=trace_entity_type,
+                               entity_id=trace_entity_id, error_type=type(error).__name__)
         raise
     latency_seconds = round(perf_counter() - started_at, 4)
 
@@ -353,7 +358,7 @@ def call_analysis_json(
         "latency_seconds": latency_seconds,
         "prompt_cache": cache_metadata,
         "request_fingerprint": request_fingerprint,
-        "reasoning_effort": ANALYSIS_REASONING_EFFORT,
+        "reasoning_effort": effective_reasoning_effort,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
@@ -404,25 +409,28 @@ def _correction_prompt(original_prompt: str, error: str, raw_output_text: str) -
 
 def _aggregate_attempt_metadata(attempts: list[dict[str, Any]], final_metadata: dict[str, Any]) -> dict[str, Any]:
     result = dict(final_metadata)
-    def attempt_cost(item: dict[str, Any], key: str) -> float:
-        if item.get(key) is not None:
-            return float(item.get(key) or 0)
-        nested = item.get("estimated_cost") if isinstance(item.get("estimated_cost"), dict) else {}
-        return float(nested.get(key) or 0)
-
-    total_usd = sum(attempt_cost(item, "estimated_cost_usd") for item in attempts)
-    total_rub = sum(attempt_cost(item, "estimated_cost_rub") for item in attempts)
+    for key in ("attempt_phase", "repair", "final_attempt"):
+        result.pop(key, None)
+    result["final_phase"] = attempts[-1].get("attempt_phase") if attempts else None
+    estimated_cost = aggregate_analysis_cost(attempts, USD_RUB_RATE)
     result["semantic_attempt_count"] = len(attempts)
     result["semantic_attempts"] = [
         {key: value for key, value in item.items() if key != "raw_output_text"}
         for item in attempts
     ]
-    result["estimated_cost_usd"] = round(total_usd, 6)
-    result["estimated_cost_rub"] = round(total_rub, 2)
-    estimated_cost = dict(result.get("estimated_cost") or {})
-    estimated_cost["estimated_cost_usd"] = result["estimated_cost_usd"]
-    estimated_cost["estimated_cost_rub"] = result["estimated_cost_rub"]
+    result["estimated_cost_usd"] = estimated_cost["estimated_cost_usd"]
+    result["estimated_cost_rub"] = estimated_cost["estimated_cost_rub"]
     result["estimated_cost"] = estimated_cost
+    result["analysis_attempt_id"] = attempts[0].get("analysis_attempt_id") if attempts else None
+    result["primary_validation_failed"] = bool(attempts and attempts[0].get("validation_passed") is False)
+    result["repair_invoked"] = any(item.get("repair") for item in attempts)
+    result["repair_succeeded"] = any(item.get("repair") and item.get("validation_passed") for item in attempts)
+    result["fallback_invoked"] = any(item.get("attempt_phase") == "fallback" for item in attempts)
+    result["final_validation_passed"] = bool(attempts and attempts[-1].get("validation_passed"))
+    result["cost_by_phase"] = {
+        phase: aggregate_analysis_cost([item for item in attempts if item.get("attempt_phase") == phase], USD_RUB_RATE)
+        for phase in ("primary", "repair", "fallback")
+    }
     result["latency_seconds"] = round(
         sum(float(item.get("latency_seconds") or 0) for item in attempts),
         4,
@@ -451,11 +459,6 @@ def _aggregate_attempt_metadata(attempts: list[dict[str, Any]], final_metadata: 
                 "reasoning_tokens": sum(int(row.get("reasoning_tokens") or 0) for row in output_details_rows),
             },
         }
-        aggregate_cost = estimate_analysis_cost(str(result.get("model") or ""), result["usage"], USD_RUB_RATE)
-        for key, value in aggregate_cost.items():
-            if key not in {"estimated_cost_usd", "estimated_cost_rub"}:
-                estimated_cost[key] = value
-        result["estimated_cost"] = estimated_cost
     return result
 
 
@@ -471,7 +474,7 @@ def _semantic_attempt_metadata(
     metadata: dict[str, Any],
     *,
     attempt_number: int,
-    validation_passed: bool,
+    validation_passed: bool | None,
     validation_error: str | None,
 ) -> dict[str, Any]:
     result = dict(metadata)
@@ -513,6 +516,10 @@ def call_validated_analysis_json(
     normalizer: Callable[[dict[str, Any]], list[Any]],
     validation_error_types: tuple[type[BaseException], ...],
     model: str = ANALYSIS_MODEL,
+    reasoning_effort: str | None = None,
+    targeted_repair_builder: Callable[[dict[str, Any], BaseException], SectionRepairPlan | None] | None = None,
+    repair_model: str = ANALYSIS_REPAIR_MODEL,
+    repair_reasoning_effort: str = ANALYSIS_REPAIR_REASONING_EFFORT,
     retry_callback: RetryCallback | None = None,
     semantic_callback: RetryCallback | None = None,
     analysis_caller: Callable[..., tuple[dict[str, Any], dict[str, Any]]] = call_analysis_json,
@@ -532,34 +539,50 @@ def call_validated_analysis_json(
     final_analysis: dict[str, Any] | None = None
     final_error = ""
 
-    for semantic_attempt in (1, 2):
+    phases = ["primary", "fallback"]
+    max_attempts = 3 if targeted_repair_builder is not None else 2
+    analysis_attempt_id = uuid.uuid4().hex
+    repair_plan: SectionRepairPlan | None = None
+    primary_metadata: dict[str, Any] = {}
+    fallback_prompt = ""
+
+    for semantic_attempt, phase in enumerate(phases, 1):
         if semantic_callback is not None:
             semantic_callback(
                 {
                     "status": "attempt",
                     "attempt": semantic_attempt,
-                    "max_attempts": 2,
+                    "max_attempts": max_attempts,
                     "operation": "openai:validated_analysis",
                 }
             )
         deferred_trace = analysis_caller is call_analysis_json
         attempt_error: BaseException | None = None
         original_analysis: dict[str, Any] | None = None
+        metadata: dict[str, Any] = {}
+        final_analysis = None
+        final_raw = ""
         try:
             if prompt_cache_marker is not None and prompt_cache_markers is not None:
                 raise ValueError("prompt_cache_marker and prompt_cache_markers are mutually exclusive")
-            markers = prompt_cache_markers or ([prompt_cache_marker] if prompt_cache_marker else [])
+            markers = [] if phase == "repair" else (prompt_cache_markers or ([prompt_cache_marker] if prompt_cache_marker else []))
             cache_prefixes = [prompt_prefix_before(current_prompt, marker) for marker in markers]
             cache_prefixes = sorted(set(cache_prefixes), key=len)
             caller_options = {
-                "model": model,
+                "model": repair_model if phase == "repair" else model,
                 "retry_callback": retry_callback,
-                "call_type": call_type,
-                "prompt_cache_key": prompt_cache_key,
+                "call_type": f"{call_type}_repair" if phase == "repair" else call_type,
+                "prompt_cache_key": None if phase == "repair" else prompt_cache_key,
                 "cache_prefixes": cache_prefixes or None,
                 "trace_entity_type": trace_entity_type,
                 "trace_entity_id": trace_entity_id,
             }
+            if reasoning_effort is not None:
+                caller_options["reasoning_effort"] = reasoning_effort
+            if phase == "repair":
+                caller_options.update(reasoning_effort=repair_reasoning_effort,
+                                      max_output_tokens=ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
+                                      preview_prompt=False, preview_response_errors=False)
             if deferred_trace:
                 caller_options["defer_usage_trace"] = True
             if not preview_prompt:
@@ -573,21 +596,50 @@ def call_validated_analysis_json(
             final_raw = str(metadata.get("raw_output_text") or "")
             final_analysis = analysis
             original_analysis = deepcopy(analysis)
+            if phase == "repair":
+                assert repair_plan is not None
+                analysis = repair_plan.merge(analysis)
+                final_analysis = analysis
             normalization_changes = normalizer(analysis)
             if normalization_changes:
                 metadata["normalization_changes"] = normalization_changes
                 logger.warning("Normalized analysis before validation: %s", normalization_changes)
+            if phase == "repair" and repair_plan is not None:
+                if any(analysis.get(key) != value for key, value in repair_plan.primary.items()
+                       if key not in repair_plan.sections):
+                    raise SectionRepairError("normalization changed a section outside repair scope")
             validator(analysis)
+        except (OpenAIError, TimeoutError, ConnectionError) as error:
+            metadata = dict(getattr(error, "analysis_metadata", {}))
+            metadata.setdefault("model", caller_options["model"])
+            metadata.setdefault("reasoning_effort", caller_options.get("reasoning_effort", ANALYSIS_REASONING_EFFORT))
+            metadata.update(attempt_phase=phase, repair=phase == "repair", transport_error=True,
+                            analysis_attempt_id=analysis_attempt_id, final_attempt=phase != "repair")
+            attempt_metadata = _semantic_attempt_metadata(metadata, attempt_number=semantic_attempt,
+                                                         validation_passed=None, validation_error=None)
+            attempts.append(attempt_metadata)
+            if deferred_trace:
+                append_usage_trace(attempt_metadata, status="error", entity_type=trace_entity_type,
+                                   entity_id=trace_entity_id, error_type=type(error).__name__)
+            if phase != "repair":
+                # Preserve the existing API/transport exception contract. Primary
+                # network failures never enter semantic repair.
+                error.analysis_metadata = _aggregate_attempt_metadata(attempts, metadata)
+                raise
+            current_prompt = fallback_prompt
+            continue
         except ModelJsonParseError as error:
             metadata = dict(error.metadata)
             final_raw = error.raw_output_text
             final_analysis = None
             final_error = str(error)
             attempt_error = error
-        except validation_error_types as error:
+        except (SectionRepairError, *validation_error_types) as error:
             final_error = str(error)
             attempt_error = error
         else:
+            metadata.update(attempt_phase=phase, repair=phase == "repair",
+                            analysis_attempt_id=analysis_attempt_id, final_attempt=True)
             attempt_metadata = _semantic_attempt_metadata(
                 metadata,
                 attempt_number=semantic_attempt,
@@ -606,12 +658,21 @@ def call_validated_analysis_json(
                     {
                         "status": "success",
                         "attempt": semantic_attempt,
-                        "max_attempts": 2,
+                        "max_attempts": max_attempts,
                         "operation": "openai:validated_analysis",
                     }
                 )
-            return analysis, _aggregate_attempt_metadata(attempts, metadata)
+            if phase == "repair":
+                # The result is the primary analysis with a section overlay, not
+                # a fresh Luna analysis. Keep primary provenance/raw output.
+                result_metadata = dict(primary_metadata)
+                result_metadata["repaired_sections"] = list(repair_plan.sections)
+            else:
+                result_metadata = metadata
+            return analysis, _aggregate_attempt_metadata(attempts, result_metadata)
 
+        metadata.update(attempt_phase=phase, repair=phase == "repair",
+                        analysis_attempt_id=analysis_attempt_id, final_attempt=phase == "fallback")
         safe_attempt_error = _safe_validation_error(attempt_error or ValueError(final_error))
         diagnostic_ref = save_validation_diagnostic(
             error=final_error, analysis=final_analysis, original_analysis=original_analysis,
@@ -634,20 +695,30 @@ def call_validated_analysis_json(
                 entity_id=trace_entity_id,
                 error_type=type(attempt_error).__name__ if attempt_error is not None else "ValidationError",
             )
-        if semantic_attempt == 1:
+        if phase != "fallback":
             if semantic_callback is not None:
                 semantic_callback(
                     {
                         "status": "retry_wait",
                         "attempt": semantic_attempt,
-                        "max_attempts": 2,
+                        "max_attempts": max_attempts,
                         "operation": "openai:validated_analysis",
                         "error": final_error,
                         "delay_seconds": 0,
                     }
                 )
-            builder = correction_prompt_builder or _correction_prompt
-            current_prompt = builder(prompt, final_error, final_raw)
+            if phase == "primary":
+                primary_metadata = dict(metadata)
+                # Successful repair metadata must not inherit a failed-attempt diagnostic.
+                primary_metadata.pop("validation_diagnostic_ref", None)
+                primary_metadata.pop("validation_diagnostic_status", None)
+                builder = correction_prompt_builder or _correction_prompt
+                fallback_prompt = builder(prompt, final_error, final_raw)
+                if final_analysis is not None and targeted_repair_builder is not None:
+                    repair_plan = targeted_repair_builder(deepcopy(final_analysis), attempt_error)
+                if repair_plan is not None:
+                    phases.insert(1, "repair")
+            current_prompt = repair_plan.prompt if phase == "primary" and repair_plan is not None else fallback_prompt
             continue
 
         failed_metadata = _aggregate_attempt_metadata(attempts, metadata)
@@ -657,7 +728,7 @@ def call_validated_analysis_json(
                 {
                     "status": "failed",
                     "attempt": semantic_attempt,
-                    "max_attempts": 2,
+                    "max_attempts": max_attempts,
                     "operation": "openai:validated_analysis",
                     "error": final_error,
                 }

@@ -20,6 +20,7 @@ from openai_api.llm.deal_semantic_state import (
     semantic_changed_domains,
     validate_semantic_state_v1,
 )
+from openai_api.llm.section_repair import _preserve_missing_object_keys, merge_sections
 from openai_api.llm.llm_client import call_analysis_json, call_validated_analysis_json
 from openai_api.llm.validation import (
     DEAL_CONTROL_BRIEF_LIST_LIMITS,
@@ -193,30 +194,6 @@ def _identity_normalizer(_value: dict[str, Any]) -> list[str]:
     return []
 
 
-def _preserve_missing_object_keys(
-    current: Any,
-    previous: Any,
-    *,
-    path: str,
-    changes: list[dict[str, Any]],
-) -> None:
-    """Backfill omitted object keys without replacing model-provided values or list items."""
-    if not isinstance(current, dict) or not isinstance(previous, dict):
-        return
-    for key, previous_value in previous.items():
-        child_path = f"{path}.{key}" if path else key
-        if key not in current:
-            current[key] = copy.deepcopy(previous_value)
-            changes.append({"path": child_path, "action": "preserved_missing_object_key"})
-            continue
-        _preserve_missing_object_keys(
-            current[key],
-            previous_value,
-            path=child_path,
-            changes=changes,
-        )
-
-
 def _materialization_normalizer(
     expected: set[str], previous_analysis: dict[str, Any]
 ):
@@ -235,8 +212,7 @@ def _materialization_normalizer(
                 changes=changes,
             )
 
-        candidate = copy.deepcopy(previous_analysis)
-        candidate.update(sections)
+        candidate = merge_sections(previous_analysis, sections)
         changes.extend(normalize_analysis_for_validation(candidate, truncate_lists=False))
         for section in expected:
             if section in sections and section in candidate:
@@ -304,8 +280,7 @@ def _materialization_validator(expected: set[str], previous_analysis: dict[str, 
             )
         if any(not isinstance(sections[key], (dict, list)) for key in expected):
             raise AnalysisValidationError("each materialized section must preserve its object/list shape")
-        candidate = copy.deepcopy(previous_analysis)
-        candidate.update(sections)
+        candidate = merge_sections(previous_analysis, sections)
         normalize_analysis_for_validation(candidate, truncate_lists=False)
         validate_deal_analysis(candidate)
     return validate

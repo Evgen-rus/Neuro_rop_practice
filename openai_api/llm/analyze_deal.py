@@ -23,6 +23,7 @@ from openai_api.audio.build_deal_transcript_context import build_all_deal_transc
 from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
+from openai_api.llm.full_analysis_repair import build_full_repair_builder
 from openai_api.llm.deal_call_projection import project_transcript_for_deal_prompt
 from openai_api.llm.deal_evidence import (
     inbound_evidence_ids_present_in_prompt,
@@ -1794,6 +1795,9 @@ def main() -> None:
             normalizer=normalize_analysis_for_validation,
             validation_error_types=(AnalysisValidationError,),
             model=args.model,
+            targeted_repair_builder=(
+                build_full_repair_builder("deal", prompt) if incremental_context is None else None
+            ),
             retry_callback=retry_progress_callback(
                 "deal", str(args.deal_id), "llm_analysis", detail="Запрос OpenAI"
             ),

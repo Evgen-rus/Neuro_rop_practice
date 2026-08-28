@@ -20,6 +20,7 @@ from bitrix.context_diagnostics import ensure_context_diagnostics
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_lead_transcript_context import build_all_lead_transcript_context
 from openai_api.config import ANALYSIS_MODEL, logger
+from openai_api.llm.full_analysis_repair import build_full_repair_builder
 from openai_api.llm.analyze_deal import knowledge_files, read_text
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
@@ -893,6 +894,7 @@ def main() -> None:
             normalizer=normalize_analysis_for_validation,
             validation_error_types=(AnalysisValidationError,),
             model=args.model,
+            targeted_repair_builder=build_full_repair_builder("lead", prompt),
             retry_callback=retry_progress_callback(
                 "lead", str(args.lead_id), "llm_analysis", detail="Запрос OpenAI"
             ),

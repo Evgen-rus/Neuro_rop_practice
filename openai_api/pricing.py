@@ -118,10 +118,40 @@ def estimate_analysis_cost(
             "cached_input_usd_per_1m": prices["cached_input"],
             "cache_write_usd_per_1m": cache_write_rate,
             "output_usd_per_1m": prices["output"],
-            "estimated_cost_usd": round(cost_usd, 4),
+            "estimated_cost_usd": round(cost_usd, 6),
             "estimated_cost_rub": rub_from_usd(cost_usd, usd_rub_rate),
         }
     )
+    return result
+
+
+def aggregate_analysis_cost(attempts: list[dict[str, Any]], usd_rub_rate: float) -> dict[str, Any]:
+    """Sum per-request prices; never price a mixed-model token aggregate."""
+    rows = []
+    for attempt in attempts:
+        row = estimate_analysis_cost(str(attempt.get("model") or ""), attempt.get("usage") or {}, usd_rub_rate)
+        row.update(attempt.get("estimated_cost") or {})
+        for key in ("estimated_cost_usd", "estimated_cost_rub"):
+            if key in attempt:
+                row[key] = attempt[key]
+        rows.append(row)
+    models = list(dict.fromkeys(str(item.get("model") or "unknown") for item in attempts))
+    result = dict(rows[-1]) if rows else {}
+    if len(models) > 1:
+        for key in list(result):
+            if key.endswith("_usd_per_1m"):
+                result.pop(key)
+    result.update(model=" + ".join(models), models=models, pricing_source="sum_of_attempts")
+    for key in ("input_tokens", "cached_input_tokens", "cache_write_tokens", "billable_input_tokens", "output_tokens"):
+        result[key] = sum(int(row.get(key) or 0) for row in rows)
+    for key, precision in (("estimated_cost_usd", 6), ("estimated_cost_rub", 2)):
+        result[key] = (
+            round(sum(float(row[key]) for row in rows), precision)
+            if all(row.get(key) is not None for row in rows) else None
+        )
+    inputs = result["input_tokens"]
+    result["cache_hit_ratio"] = round(result["cached_input_tokens"] / inputs, 4) if inputs else 0.0
+    result["cache_write_ratio"] = round(result["cache_write_tokens"] / inputs, 4) if inputs else 0.0
     return result
 
 

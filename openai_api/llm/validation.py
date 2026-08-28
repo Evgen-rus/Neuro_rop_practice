@@ -15,6 +15,12 @@ from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
 class AnalysisValidationError(ValueError):
     """Raised when the model output is valid JSON but not valid analysis data."""
 
+    def __init__(self, message: str, *, errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        # Preserve individual messages without splitting model-provided values
+        # on semicolons. Existing exception text and callers remain unchanged.
+        self.errors = tuple(errors or ())
+
 
 FORBIDDEN_CLIENT_TEXT_MARKERS = (
     "ДОБАВИТЬ",
@@ -2185,7 +2191,7 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
     _validate_deal_management_shapes(analysis, errors)
     _validate_common_shapes(analysis, errors)
     if errors:
-        raise AnalysisValidationError("Invalid deal analysis: " + "; ".join(errors))
+        raise AnalysisValidationError("Invalid deal analysis: " + "; ".join(errors), errors=errors)
 
 
 def _requires_missing_crm_return_task(analysis: dict[str, Any]) -> bool:
@@ -2433,4 +2439,4 @@ def validate_lead_analysis(analysis: dict[str, Any]) -> None:
     if missing_crm_return_task and isinstance(rop_action, dict) and rop_action.get("required") is not True:
         errors.append("missing CRM return task must require rop_action")
     if errors:
-        raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors))
+        raise AnalysisValidationError("Invalid lead analysis: " + "; ".join(errors), errors=errors)
