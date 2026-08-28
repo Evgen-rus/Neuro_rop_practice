@@ -72,6 +72,7 @@ from openai_api.change_detection.snapshot import (
     load_json,
     save_json,
 )
+from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.change_detection.provenance import analysis_run_provenance
 from progress_events import compact_decision_status, emit_progress
 from setup import BASE_DIR, get_logger

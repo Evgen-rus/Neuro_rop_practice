@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -837,6 +838,81 @@ class DuplicateRoutingTests(unittest.TestCase):
             )
         self.assertEqual(mini.status, MINI_RECOMMENDATION_NO_LLM)
         self.assertEqual(skip.status, SKIPPED_NO_CHANGES)
+
+
+class V2StagePolicyImportTests(unittest.TestCase):
+    def test_v2_on_reaches_stage_policy_without_nameerror(self) -> None:
+        from openai_api.change_detection.decision_engine import INCREMENTAL_LLM_ANALYSIS, ProcessingDecision
+        from openai_api.llm import analyze_deal_if_changed
+
+        self.assertTrue(callable(analyze_deal_if_changed.build_deal_stage_policy))
+        args = SimpleNamespace(
+            deal_id="7", deal_root="unused", db_path="unused.sqlite",
+            transcript="none", model=None, force_llm=False, dry_run_decision=False,
+        )
+        decision = ProcessingDecision(
+            status=INCREMENTAL_LLM_ANALYSIS,
+            reasons=["new evidence"], triggers=[],
+            diff={"changes": ["transcript_changed"], "details": {}},
+        )
+        v2_result = IncrementalV2Result(
+            analysis={}, semantic_state={"evidence_coverage": {}},
+            changed_domains=[], affected_sections=[], metadata={},
+        )
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(analyze_deal_if_changed, "parse_args", return_value=args))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "load_dotenv"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "init_db"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "raw_bundle_path", return_value=Path("raw.json")))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "resolve_transcript_for_snapshot", return_value=(None, "none")))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "load_json", return_value={}))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "build_deal_snapshot", return_value={"deal": {}}))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "fingerprint_snapshot", return_value="fp"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "get_entity_state", return_value={"snapshot": {}, "last_analysis": {}}))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "compare_snapshots", return_value=decision.diff))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "get_entity_memory", return_value=None))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "decide_deal_processing", return_value=decision))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "save_json"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "DEAL_INCREMENTAL_V2_MODE", "on"))
+            stack.enter_context(patch.object(
+                analyze_deal_if_changed, "_trusted_v2_checkpoint",
+                return_value={
+                    "semantic_state": {"evidence_coverage": {}},
+                    "source_analysis_run_id": 1,
+                    "baseline_snapshot": {"deal": {"id": "7"}},
+                },
+            ))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "collect_deal_evidence", return_value=[]))
+            stack.enter_context(patch.object(
+                analyze_deal_if_changed, "evidence_delta",
+                return_value=([{"evidence_id": "call:1"}], {"call:1": {}}),
+            ))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "previous_business_analysis", return_value={}))
+            stage_policy = stack.enter_context(patch.object(
+                analyze_deal_if_changed, "build_deal_stage_policy", return_value={"stage_id": "NEW"},
+            ))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "get_latest_neuro_rop_recommendation_projection", return_value=None))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "get_deal_daily_checklist_analysis_projection", return_value=None))
+            stack.enter_context(patch.object(
+                analyze_deal_if_changed, "load_context_diagnostics_for_analysis",
+                return_value=("", {}, []),
+            ))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "build_v2_compact_policy", return_value={}))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "render_v2_compact_diagnostics", return_value=""))
+            run_v2 = stack.enter_context(patch.object(
+                analyze_deal_if_changed, "run_incremental_v2", return_value=v2_result,
+            ))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "_write_v2_candidate", return_value={"analysis": {}}))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "save_deal_incremental_v2_run"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "persist_successful_llm_run", return_value=9))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "save_deal_semantic_checkpoint"))
+            stack.enter_context(patch.object(analyze_deal_if_changed, "emit_deal_publish_ready"))
+            analyzer = stack.enter_context(patch.object(analyze_deal_if_changed, "run_existing_analyzer"))
+            analyze_deal_if_changed.main()
+        stage_policy.assert_called_once()
+        run_v2.assert_called_once()
+        analyzer.assert_not_called()
+        self.assertEqual(run_v2.call_args.kwargs["stage_policy"], {"stage_id": "NEW"})
 
 
 if __name__ == "__main__":
