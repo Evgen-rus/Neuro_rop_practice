@@ -28,6 +28,7 @@ ERROR = "ERROR"
 HARD_CHANGE_TYPES = {
     "commercial_refs_changed",
     "transcript_changed",
+    "daily_quality_evidence_changed",
 }
 
 LEAD_HARD_CHANGE_TYPES = {
@@ -350,13 +351,13 @@ def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str,
 def deal_incremental_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
     """Return meaningful changes that can use a proven previous-analysis baseline."""
     hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard & {"transcript_changed", "new_inbound_customer_message"})
+    return sorted(hard & {"transcript_changed", "new_inbound_customer_message", "daily_quality_evidence_changed"})
 
 
 def deal_direct_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
     """Return hard changes that remain unsafe for the V1 incremental path."""
     hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard - {"transcript_changed", "new_inbound_customer_message"})
+    return sorted(hard - {"transcript_changed", "new_inbound_customer_message", "daily_quality_evidence_changed"})
 
 
 def lead_soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:

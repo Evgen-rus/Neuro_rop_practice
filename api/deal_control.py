@@ -24,11 +24,13 @@ from bitrix.customer_history import (
     activity_type,
     build_normalized_communications,
     classify_call_outcome,
+    clean_text,
     communication_activity_kind,
 )
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.deals.communication_history import source_lead_id
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
+from openai_api.llm.deal_daily_quality import is_quality_candidate, quality_event_signature
 from progress_events import compact_decision_status
 from setup import MSK_TZ
 from storage.rop_db import (
@@ -327,6 +329,7 @@ def _fetch_deal_timeline_comments(
     day_start: datetime,
     *,
     entity_type: str = "deal",
+    unavailable_ids: set[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {deal_id: [] for deal_id in deal_ids}
     if not deal_ids:
@@ -348,11 +351,15 @@ def _fetch_deal_timeline_comments(
     ]
     try:
         responses = _list_many(client, requests)
-    except Exception:  # noqa: BLE001 - comments are additive; activity query remains the availability gate
+    except Exception:  # noqa: BLE001 - counters remain usable, quality cannot infer no work
+        if unavailable_ids is not None:
+            unavailable_ids.update(deal_ids)
         return result
     for deal_id in deal_ids:
         response = responses.get(deal_id) if isinstance(responses, dict) else None
         if not isinstance(response, dict) or not response.get("ok"):
+            if unavailable_ids is not None:
+                unavailable_ids.add(deal_id)
             continue
         items = response.get("items") or []
         result[deal_id] = [item for item in items if isinstance(item, dict)]
@@ -432,7 +439,7 @@ def _today_communications(
         if occurred is None:
             continue
         localized = (occurred if occurred.tzinfo else occurred.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
-        if localized.date() != current_date:
+        if localized.date() != current_date or localized > current:
             continue
         source_id = _source_activity_id(event)
         raw = activities_by_id.get(source_id, {})
@@ -443,7 +450,7 @@ def _today_communications(
             "occurred_at": localized.isoformat(timespec="seconds"),
             "subject": str(event.get("subject") or ""),
             # Persist for explicit lazy loading only; daily-control API sanitizes this field.
-            "content": str(event.get("content") or ""),
+            "content": clean_text(raw.get("DESCRIPTION")) if channel in {"email", "message"} and raw.get("DESCRIPTION") else str(event.get("content") or ""),
             "duration_seconds": event.get("duration_seconds"),
             "contact_class": str(event.get("contact_class") or "attempt"),
             "participant_name": _communication_contact_label(event, raw),
@@ -455,12 +462,13 @@ def _today_communications(
         if channel == "call":
             if source_id in lead_activity_ids:
                 item["source_lead_id"] = lead_id
-            has_transcript = bool(
+            transcript = (
                 entity_id and source_id and (
                     find_call_transcript("deal", entity_id, source_id)
                     or (source_id in lead_activity_ids and find_call_transcript("lead", lead_id, source_id))
                 )
             )
+            has_transcript = bool(transcript)
             classified = classify_call_outcome(raw, has_transcript=has_transcript)
             item["call_outcome"] = classified["call_outcome"]
             item["talk_duration_seconds"] = classified["talk_duration_seconds"]
@@ -470,6 +478,8 @@ def _today_communications(
             item["talk_duration_seconds"] = None
             item["status_label"] = None
             item["content_available"] = bool(str(item.get("content") or "").strip())
+        item["quality_candidate"] = is_quality_candidate(item)
+        item["quality_source_signature"] = quality_event_signature(item)
         today_events.append(item)
     today_events.sort(key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")))
     call_events = [item for item in today_events if item["channel"] == "call"]
@@ -771,9 +781,13 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
             communication_entities,
             additional_filter={"COMPLETED": "Y", ">LAST_UPDATED": day_start.isoformat(timespec="seconds")},
         )
-        today_comments = _fetch_deal_timeline_comments(crm, sync_deal_ids, day_start)
+        unavailable_deal_comments: set[str] = set()
+        unavailable_lead_comments: set[str] = set()
+        today_comments = _fetch_deal_timeline_comments(
+            crm, sync_deal_ids, day_start, unavailable_ids=unavailable_deal_comments,
+        )
         lead_comments = _fetch_deal_timeline_comments(
-            crm, source_lead_ids, day_start, entity_type="lead",
+            crm, source_lead_ids, day_start, entity_type="lead", unavailable_ids=unavailable_lead_comments,
         )
         deals_by_id = {str(item["deal_id"]): item for item in deals}
         sync_tasks = list_deal_control_tasks(db_path, deal_ids=sync_deal_ids) if sync_deal_ids else []
@@ -821,7 +835,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         save_deal_control_communications_today(
             db_path,
             deal_id=deal_id,
-            summary=_today_communications(
+            summary={**_today_communications(
                 completed_items,
                 current,
                 comments=comments,
@@ -830,7 +844,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
                 lead_id=lead_id,
                 lead_activities=lead_items,
                 lead_comments=lead_comments.get(lead_id, []),
-            ),
+            ), "quality_sources_available": deal_id not in unavailable_deal_comments and lead_id not in unavailable_lead_comments},
         )
     reported_task_activity_errors: set[str] = set()
     for task in sync_tasks:
@@ -1143,7 +1157,7 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             db_path,
             deal_id=str(deal["deal_id"]),
         )
-        deal["review"] = project_deal_review_card(deal)
+        deal["review"] = project_deal_review_card(deal, now=current)
         items.append(deal)
     items = [
         deal for _, deal in sorted(

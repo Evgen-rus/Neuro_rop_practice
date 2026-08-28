@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from functools import partial
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +29,7 @@ from api.daily_control import (
 )
 from openai_api.llm.validation import _validate_deal_management_shapes
 from setup import MSK_TZ
+from openai_api.llm.deal_daily_quality import quality_event_signature
 from storage.rop_db import (
     connect,
     get_daily_control_report,
@@ -40,6 +43,14 @@ from storage.rop_db import (
 
 
 NOW = datetime(2026, 8, 18, 16, 0, tzinfo=MSK_TZ)
+classify_deal_status = partial(classify_deal_status, now=NOW)
+project_deal_review_card = partial(project_deal_review_card, now=NOW)
+
+
+def _quality_event(**overrides):
+    return {"event_id": "crm_activity:1", "channel": "email", "direction": "outgoing",
+            "occurred_at": "2026-08-18T10:15:00+03:00", "content": "Отправляю условия поставки до пятницы.",
+            "content_available": True, **overrides}
 
 
 def _deal_row(**overrides):
@@ -63,7 +74,7 @@ def _deal_row(**overrides):
             "calls": 1,
             "messages": 0,
             "duration_seconds": 90,
-            "items": [],
+            "items": [_quality_event()],
         },
         "coaching": {"report_id": 1, "communication_quality_audit": None},
     }
@@ -86,6 +97,8 @@ def _audit(*, next_action=1, value=1, data=1, status="assessed"):
         "zero_reasons": reasons if status == "assessed" else [],
         "summary_for_rop": "Клиент ждёт условия." if status == "assessed" else None,
         "insufficient_reason": None if status == "assessed" else "Нет содержательной коммуникации.",
+        "daily_scope": {"version": 1, "business_date": "2026-08-18", "evaluated_through": NOW.isoformat(),
+                        "event_signatures": {"crm_activity:1": quality_event_signature(_quality_event())}},
     }
 
 
@@ -155,7 +168,7 @@ class ClassifierTests(unittest.TestCase):
     def test_legacy_open_checklist_cannot_turn_healthy_deal_yellow(self) -> None:
         deal = _deal_row(
             coaching={"report_id": 1, "communication_quality_audit": _audit()},
-            communications_today={"available": True, "completed": 0},
+            communications_today={"date": "2026-08-18", "available": True, "completed": 0, "items": []},
         )
         baseline = classify_deal_status(deal)
         deal["checklist"] = {"completed": 0, "total": 5, "items": [{"text": "legacy marker"}]}
@@ -193,6 +206,107 @@ class ClassifierTests(unittest.TestCase):
         ))
         self.assertEqual(status, "green")
         self.assertEqual(label, "В норме")
+
+
+class DailyQualityTests(unittest.TestCase):
+    def setUp(self):
+        self.deal = _deal_row(
+            primary_bitrix_task={"deadline": "2026-08-18T18:00:00+03:00", "completion_state": "open", "time_bucket": "today"},
+            coaching={"report_id": 1, "communication_quality_audit": _audit()},
+        )
+
+    def quality(self, *, now=NOW):
+        return project_deal_review_card(self.deal, now=now)["quality"]
+
+    def empty_day(self):
+        self.deal["communications_today"].update(items=[], completed=0, calls=0, messages=0)
+
+    def test_due_today_without_work_has_system_zeros_without_analysis(self):
+        self.empty_day()
+        for coaching in (self.deal["coaching"], {}):
+            with self.subTest(has_analysis=bool(coaching)):
+                self.deal["coaching"] = coaching
+                result = self.quality()
+                self.assertEqual(result["status"], "no_work")
+                self.assertEqual([v["score"] for v in result["criteria"].values()], [0, 0, 0])
+                self.assertEqual(result["source"], "system")
+                self.assertEqual(classify_deal_status(self.deal)[0], "red")
+
+    def test_attempts_and_internal_actions_do_not_earn_points(self):
+        self.deal["communications_today"]["items"] = [
+            _quality_event(event_id=str(i), channel="call", call_outcome="no_answer") for i in range(3)
+        ] + [_quality_event(channel=channel) for channel in ("task", "internal_comment", "stage_change")]
+        self.deal["communications_today"]["calls_no_answer"] = 3
+        card = project_deal_review_card(self.deal)
+        self.assertEqual(card["quality"]["status"], "no_work")
+        self.assertEqual(card["communications_today"]["calls_no_answer"], 3)
+
+    def test_no_task_or_moved_task_does_not_require_work(self):
+        self.empty_day()
+        for task in (None, {"deadline": "2026-08-19T10:00:00+03:00", "time_bucket": "today"}):
+            self.deal["primary_bitrix_task"] = task
+            self.deal["day_scope"] = {"had_day_obligation": True, "task_buckets": ["today"]}
+            result = self.quality()
+            self.assertEqual(result["status"], "not_required")
+            self.assertIsNone(result["confirmed_count"])
+
+    def test_overdue_secondary_task_and_local_control_point_are_required(self):
+        self.empty_day()
+        self.deal["primary_bitrix_task"] = {"deadline": "2026-08-19T10:00:00+03:00"}
+        self.deal["bitrix_tasks"] = [self.deal["primary_bitrix_task"], {"deadline": "2026-08-17T10:00:00+03:00"}]
+        self.assertEqual(self.quality()["status"], "no_work")
+        self.deal["bitrix_tasks"] = []
+        self.deal["current_task"] = {"due_at": "2026-08-18T10:00:00+03:00", "local_status": "active"}
+        self.assertEqual(self.quality()["status"], "no_work")
+
+    def test_closing_crm_task_today_does_not_prove_work(self):
+        self.empty_day()
+        self.deal["primary_bitrix_task"].update(completed=True, bitrix_completed_at="2026-08-18T11:00:00+03:00")
+        self.assertEqual(self.quality()["status"], "no_work")
+        self.deal["primary_bitrix_task"]["bitrix_completed_at"] = "2026-08-17T11:00:00+03:00"
+        self.assertEqual(self.quality()["status"], "not_required")
+
+    def test_current_ai_audit_is_used_but_new_or_revised_event_waits(self):
+        self.assertEqual(self.quality()["confirmed_count"], 3)
+        self.assertEqual(self.quality()["source"], "ai")
+        event = self.deal["communications_today"]["items"][0]
+        for overrides in ({"event_id": "crm_activity:2"}, {"content": "Сроки изменились, свяжемся завтра."}):
+            self.deal["communications_today"]["items"] = [{**event, **overrides}]
+            self.assertEqual(self.quality()["status"], "pending_analysis")
+
+    def test_publishing_old_or_legacy_analysis_today_cannot_make_it_current(self):
+        audit = self.deal["coaching"]["communication_quality_audit"]
+        self.deal["coaching"]["analysis_created_at"] = NOW.isoformat()
+        audit["daily_scope"]["business_date"] = "2026-08-17"
+        self.assertEqual(self.quality()["status"], "pending_analysis")
+        audit.pop("daily_scope")
+        self.assertEqual(self.quality()["status"], "pending_analysis")
+
+    def test_business_day_rollover_uses_moscow_not_machine_timezone(self):
+        self.empty_day()
+        self.deal["communications_today"]["date"] = "2026-08-19"
+        # 21:01 UTC is the next Moscow business day; yesterday's 3/3 is gone.
+        result = self.quality(now=datetime.fromisoformat("2026-08-18T21:01:00+00:00"))
+        self.assertEqual(result["business_date"], "2026-08-19")
+        self.assertEqual(result["status"], "no_work")
+
+    def test_unavailable_or_previous_day_sources_never_mean_zero_work(self):
+        self.empty_day()
+        for overrides in ({"available": False}, {"date": "2026-08-17"}, {"quality_sources_available": False}):
+            baseline = deepcopy(self.deal["communications_today"])
+            self.deal["communications_today"].update(overrides)
+            self.assertEqual(self.quality()["status"], "missing")
+            self.assertIsNone(self.quality()["confirmed_count"])
+            self.deal["communications_today"] = baseline
+
+    def test_new_call_waits_for_transcription_and_ai(self):
+        self.deal["communications_today"]["items"] = [_quality_event(channel="call", call_outcome="connected", content_available=False)]
+        self.assertEqual(self.quality()["status"], "pending_analysis")
+
+    def test_snapshot_does_not_use_events_or_analysis_after_cutoff(self):
+        self.deal["communications_today"]["items"] = [_quality_event(occurred_at="2026-08-18T17:00:00+03:00")]
+        snapshot = build_daily_control_snapshot({"deals": [self.deal]}, cutoff_at=NOW)
+        self.assertEqual(snapshot["deals"][0]["quality"]["status"], "no_work")
 
 
 class DirectQuestionTests(unittest.TestCase):
@@ -411,10 +525,10 @@ class SnapshotBuilderTests(unittest.TestCase):
 
     def test_missing_analysis_fields_are_empty_not_invented(self) -> None:
         card = project_deal_review_card(_deal_row(coaching={"report_id": None}))
-        self.assertEqual(card["attention_reason"], "Нет данных")
+        self.assertIn("Ожидает AI-оценки", card["attention_reason"])
         self.assertIsNone(card["summary_for_rop"])
-        self.assertEqual(card["quality"]["insufficient_reason"], "Нет данных")
-        self.assertEqual(card["quality"]["criteria"]["next_action"]["verdict"], "Нет данных")
+        self.assertEqual(card["quality"]["status"], "pending_analysis")
+        self.assertIsNone(card["quality"]["criteria"]["next_action"]["score"])
         self.assertFalse(card["ai_context"]["current_situation"])
         self.assertFalse(card["script"])
 
@@ -603,7 +717,7 @@ class DailyControlStorageTests(unittest.TestCase):
         )
         viewed = report_payload(saved['id'], {'role': 'admin'}, db_path=self.db_path, now=NOW.replace(day=19))
         scope = viewed['snapshot']['deals'][0]['day_scope']
-        self.assertEqual(scope['activity_kinds'], ['call'])
+        self.assertEqual(scope['activity_kinds'], ['message'])
         self.assertTrue(scope['legacy'])
         self.assertEqual(scope['business_date'], '2026-08-18')
         stored = get_daily_control_report(self.db_path, saved['id'])

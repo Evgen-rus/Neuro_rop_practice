@@ -363,7 +363,10 @@ def transcript_change_type(previous: dict[str, Any], current: dict[str, Any]) ->
     return "transcript_changed" if has_new_meaningful_item else "transcript_changed_non_meaningful"
 
 
-def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None = None) -> dict[str, Any]:
+def build_deal_snapshot(
+    raw_bundle: dict[str, Any], transcript_path: Path | None = None,
+    *, daily_quality_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     deal = raw_bundle.get("deal", {}).get("item", {}) or {}
     activities = normalize_activities(
         raw_bundle,
@@ -434,6 +437,11 @@ def build_deal_snapshot(raw_bundle: dict[str, Any], transcript_path: Path | None
         "tasks": sum(1 for item in activities if item["kind"] == "task"),
         "timeline_comments": len(comments),
     }
+    if daily_quality_context is not None:
+        snapshot["daily_quality_events"] = {
+            str(item["event_id"]): item.get("evidence_signature") or item["source_signature"]
+            for item in daily_quality_context.get("events") or [] if item.get("text")
+        }
     return snapshot
 
 
@@ -517,6 +525,13 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
 
     changes: list[str] = []
     details: dict[str, Any] = {}
+    old_quality = previous.get("daily_quality_events") or {}
+    new_quality = current.get("daily_quality_events") or {}
+    changed_quality_ids = sorted(key for key, value in new_quality.items() if old_quality.get(key) != value)
+    # Empty new-day evidence never triggers an LLM just to reset the daily score.
+    if changed_quality_ids:
+        changes.append("daily_quality_evidence_changed")
+        details["daily_quality_event_ids"] = changed_quality_ids
 
     previous_deal = previous.get("deal", {}) or {}
     current_deal = current.get("deal", {}) or {}

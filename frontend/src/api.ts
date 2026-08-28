@@ -793,7 +793,10 @@ export type DailyControlDeal = {
   status_label: string
   attention_reason: string
   quality: {
-    status: 'assessed' | 'insufficient_evidence' | 'missing'
+    status: 'assessed' | 'insufficient_evidence' | 'missing' | 'no_work' | 'pending_analysis' | 'not_required'
+    business_date?: string
+    cutoff_at?: string
+    source?: 'system' | 'ai'
     criteria: {
       next_action: DailyControlQualityCriterion
       value_development: DailyControlQualityCriterion

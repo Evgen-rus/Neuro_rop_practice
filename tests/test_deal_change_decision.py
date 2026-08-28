@@ -30,6 +30,22 @@ def decision(diff: dict, current: dict):
 
 
 class DealChangeDecisionTests(unittest.TestCase):
+    def test_today_quality_evidence_triggers_analysis_but_new_day_does_not(self):
+        from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
+        raw = {"deal": {"item": {"ID": "7", "CLOSED": "N"}}}
+        empty = build_deal_snapshot(raw, daily_quality_context={"events": []})
+        for event_id in ("crm_activity:9", "timeline_comment:10"):
+            with self.subTest(event_id=event_id):
+                current = build_deal_snapshot(raw, daily_quality_context={"events": [
+                    {"event_id": event_id, "source_signature": "new-body", "text": "Согласуем сроки поставки завтра."},
+                ]})
+                diff = compare_snapshots(empty, current)
+                self.assertEqual(decision(diff, current).status, INCREMENTAL_LLM_ANALYSIS)
+                self.assertNotIn("daily_quality_evidence_changed", compare_snapshots(current, current)["changes"])
+                self.assertNotIn("daily_quality_evidence_changed", compare_snapshots(current, empty)["changes"])
+                revised = {**current, "daily_quality_events": {event_id: "revised-body"}}
+                self.assertIn("daily_quality_evidence_changed", compare_snapshots(current, revised)["changes"])
+
     def test_disabling_structured_commercial_sources_does_not_signal_a_deal_change(self):
         from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
         legacy = {"deal": {"item": {"ID": "7", "CLOSED": "N"}},

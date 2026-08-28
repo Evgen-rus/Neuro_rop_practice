@@ -5,6 +5,16 @@ export type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
 export const DEFAULT_TIME_FILTER: DailyControlTimeFilter = 'all'
 const CLIENT_CONTACT_KINDS = new Set(['call', 'message'])
 
+export function dailyQualityCaption(quality: DailyControlDeal['quality']) {
+  if (quality.status === 'pending_analysis') return 'Ожидает AI-оценки'
+  if (quality.status === 'not_required') return 'Сегодня не требуется'
+  if (quality.status === 'no_work') return '0 из 3 · работа не подтверждена'
+  if (quality.status === 'assessed' && quality.confirmed_count != null) {
+    return `${quality.confirmed_count} из ${quality.total} · AI-оценка`
+  }
+  return 'Нет данных'
+}
+
 export function dealMatchesTime(deal: DailyControlDeal, filter: DailyControlTimeFilter) {
   if (filter === 'all') return true
   const scope = deal.day_scope

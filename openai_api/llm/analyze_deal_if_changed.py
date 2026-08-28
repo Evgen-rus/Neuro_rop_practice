@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
+from openai_api.llm.deal_daily_quality import load_daily_quality_context
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.audio.transcript_context import AGGREGATE_STEM
 from openai_api.change_detection.decision_engine import (
@@ -581,7 +582,8 @@ def main() -> None:
         raw_path = raw_bundle_path(args)
         transcript_path, analyzer_transcript_arg = resolve_transcript_for_snapshot(args.transcript, current_deal_dir)
         raw_bundle = load_json(raw_path)
-        snapshot = build_deal_snapshot(raw_bundle, transcript_path)
+        daily_quality_context = load_daily_quality_context(current_deal_dir, str(args.deal_id))
+        snapshot = build_deal_snapshot(raw_bundle, transcript_path, daily_quality_context=daily_quality_context)
         fingerprint = fingerprint_snapshot(snapshot)
         previous_state = get_entity_state(db_path, "deal", str(args.deal_id))
         previous_snapshot = (previous_state or {}).get("snapshot")
@@ -659,6 +661,7 @@ def main() -> None:
                     current_situation_context=load_deal_current_situation_context(
                         current_deal_dir, str(args.deal_id)
                     ),
+                    daily_quality_context=daily_quality_context,
                 )
                 payload = _write_v2_candidate(
                     paths=paths,

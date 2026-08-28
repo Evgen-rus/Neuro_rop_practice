@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommunicationsToday } from './api'
 import { CommunicationContent } from './CommunicationContent'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
+import { dailyQualityCaption } from './dailyControlView'
 
 const QUALITY_LABELS = {
   next_action: 'Следующий шаг',
@@ -164,109 +165,135 @@ function summaryView(communications: DealControlCommunicationsToday) {
   }
 }
 
-export function DealQualityAndFocus(props: {
+function QualityArgumentation({ quality }: { quality: DailyControlDeal['quality'] }) {
+  return (
+    <div className="dc-daily-argument-body">
+      {quality.status === 'assessed' && quality.confirmed_count === 3 ? (
+        <p className="dc-daily-argument-ok">
+          <span className="dc-daily-argument-ok-mark" aria-hidden="true">✓</span>
+          AI подтвердил 3/3 за указанный день.
+        </p>
+      ) : null}
+      <div className="dc-daily-argument-scope">
+        <span className="dc-daily-argument-label">Основание анализа</span>
+        <p>{humanQualityText(quality.scope_summary) || NO_DATA}</p>
+      </div>
+      {quality.insufficient_reason && quality.insufficient_reason !== quality.scope_summary ? <p>{humanQualityText(quality.insufficient_reason)}</p> : null}
+      {quality.zero_reasons.length ? (
+        <div className="dc-daily-argument-reasons">
+          {quality.zero_reasons.map((reason, index) => (
+            <div className="dc-daily-argument-reason" key={`${reason.criterion}-${index}`}>
+              <strong>{qualityLabel(reason.criterion)}</strong>
+              <p>{humanQualityText(reason.explanation)}</p>
+              {reason.quote ? <blockquote>{reason.quote}</blockquote> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function DealQualityBlock({ deal }: { deal: DailyControlDeal }) {
+  const quality = deal.quality
+  const qualityCaption = dailyQualityCaption(quality)
+  const tipId = useId()
+  // Аргументация больше не отдельный блок: один и тот же текст всплывает на любой карточке.
+  return (
+    <article className="dc-daily-block dc-daily-quality-block">
+      <header className="dc-daily-block-title">
+        <span className="dc-daily-title-with-icon">
+          <span className="dc-daily-ico"><DailyIcon name="audit" /></span>
+          <h3>Контроль качества ведения сделки</h3>
+        </span>
+        <small>{qualityCaption}</small>
+      </header>
+      <div className="dc-daily-quality-body">
+        {quality.business_date ? (
+          <p className="dc-daily-meta">
+            За {quality.business_date.split('-').reverse().join('.')} · {quality.source === 'ai' ? 'AI-оценка' : 'Программный контроль'}
+            {quality.cutoff_at ? ` · на ${formatClock(quality.cutoff_at)} МСК` : ''}
+          </p>
+        ) : null}
+        {quality.status !== 'assessed' ? <p>{humanQualityText(quality.scope_summary) || qualityCaption}</p> : null}
+        <ul className={`dc-daily-criteria${['assessed', 'no_work'].includes(quality.status) ? '' : ' compact'}`}>
+          {(Object.keys(QUALITY_LABELS) as Array<keyof typeof QUALITY_LABELS>).map((key) => {
+            const item = quality.criteria[key]
+            const tone = item.score === 1 ? 'good' : item.score === 0 ? 'bad' : 'neutral'
+            const describedBy = `${tipId}-${key}`
+            return (
+              <li key={key} className={`dc-daily-criterion ${tone}`} tabIndex={0} aria-describedby={describedBy}>
+                <span className="dc-daily-criterion-icon" aria-hidden="true">{item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}</span>
+                <span className="dc-daily-criterion-name">
+                  {QUALITY_LABELS[key]}
+                  <span className="dc-daily-criterion-hint" aria-hidden="true">i</span>
+                </span>
+                <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
+                {item.score != null ? (
+                  <span className="dc-daily-criterion-state">{humanQualityText(item.verdict)}</span>
+                ) : null}
+                <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
+                  <QualityArgumentation quality={quality} />
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </article>
+  )
+}
+
+function DealFocusBlock(props: {
   deal: DailyControlDeal
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
 }) {
   const deal = props.deal
-  const quality = deal.quality
-  const qualityCaption = quality.status === 'assessed' && quality.confirmed_count != null
-    ? `${quality.confirmed_count} из ${quality.total} подтверждены`
-    : quality.status === 'insufficient_evidence'
-      ? INSUFFICIENT_QUALITY_LABEL
-      : NO_DATA
+  return (
+    <article className="dc-daily-block">
+      <header className="dc-daily-block-title">
+        <span className="dc-daily-title-with-icon">
+          <span className="dc-daily-ico"><DailyIcon name="target" /></span>
+          <h3>Фокус разбора</h3>
+        </span>
+      </header>
+      <div className="dc-daily-focus">
+        <div className={`dc-daily-focus-step risk ${deal.status}`}>
+          <span className="dc-daily-focus-icon" aria-hidden="true">!</span>
+          <div>
+            <small>Вывод для РОПа</small>
+            <p>{humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason) || NO_DATA}</p>
+          </div>
+        </div>
+        <div className="dc-daily-focus-step question">
+          <span className="dc-daily-focus-icon" aria-hidden="true">?</span>
+          <div className="dc-daily-questions">
+            <small>Спросить менеджера</small>
+            <label className={props.asked[0] ? 'done' : ''}>
+              <input type="checkbox" checked={props.asked[0]} onChange={() => props.onToggleAsked(0)} />
+              <span>{deal.generic_question}</span>
+            </label>
+            <label className={props.asked[1] ? 'done' : ''}>
+              <input type="checkbox" checked={props.asked[1]} onChange={() => props.onToggleAsked(1)} />
+              <span>{deal.direct_question}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+export function DealQualityAndFocus(props: {
+  deal: DailyControlDeal
+  asked: [boolean, boolean]
+  onToggleAsked: (index: 0 | 1) => void
+}) {
   return (
     <>
-      <article className="dc-daily-block">
-        <header className="dc-daily-block-title">
-          <span className="dc-daily-title-with-icon">
-            <span className="dc-daily-ico"><DailyIcon name="audit" /></span>
-            <h3>Контроль качества ведения сделки</h3>
-          </span>
-          <small>{qualityCaption}</small>
-        </header>
-        <div className="dc-daily-quality-body">
-          <ul className={`dc-daily-criteria${quality.status === 'assessed' ? '' : ' compact'}`}>
-            {(Object.keys(QUALITY_LABELS) as Array<keyof typeof QUALITY_LABELS>).map((key) => {
-              const item = quality.criteria[key]
-              const tone = item.score === 1 ? 'good' : item.score === 0 ? 'bad' : 'neutral'
-              return (
-                <li key={key} className={`dc-daily-criterion ${tone}`}>
-                  <span className="dc-daily-criterion-icon" aria-hidden="true">{item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}</span>
-                  <span className="dc-daily-criterion-name">{QUALITY_LABELS[key]}</span>
-                  <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
-                  {item.score != null ? (
-                    <span className="dc-daily-criterion-state">{humanQualityText(item.verdict)}</span>
-                  ) : null}
-                </li>
-              )
-            })}
-          </ul>
-          <details className="dc-daily-argument">
-            <summary>
-              <span className="dc-daily-argument-icon" aria-hidden="true">i</span>
-              Аргументация
-            </summary>
-            <div className="dc-daily-argument-body">
-              {quality.status === 'assessed' && quality.confirmed_count === 3 ? (
-                <p className="dc-daily-argument-ok">
-                  <span className="dc-daily-argument-ok-mark" aria-hidden="true">✓</span>
-                  Оценки 3/3 подтверждены.
-                </p>
-              ) : null}
-              <div className="dc-daily-argument-scope">
-                <span className="dc-daily-argument-label">Основание анализа</span>
-                <p>{humanQualityText(quality.scope_summary) || NO_DATA}</p>
-              </div>
-              {quality.insufficient_reason ? <p>{humanQualityText(quality.insufficient_reason)}</p> : null}
-              {quality.zero_reasons.length ? (
-                <div className="dc-daily-argument-reasons">
-                  {quality.zero_reasons.map((reason, index) => (
-                    <div className="dc-daily-argument-reason" key={`${reason.criterion}-${index}`}>
-                      <strong>{qualityLabel(reason.criterion)}</strong>
-                      <p>{humanQualityText(reason.explanation)}</p>
-                      {reason.quote ? <blockquote>{reason.quote}</blockquote> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </details>
-        </div>
-      </article>
-
-      <article className="dc-daily-block">
-        <header className="dc-daily-block-title">
-          <span className="dc-daily-title-with-icon">
-            <span className="dc-daily-ico"><DailyIcon name="target" /></span>
-            <h3>Фокус разбора</h3>
-          </span>
-        </header>
-        <div className="dc-daily-focus">
-          <div className={`dc-daily-focus-step risk ${deal.status}`}>
-            <span className="dc-daily-focus-icon" aria-hidden="true">!</span>
-            <div>
-              <small>Вывод для РОПа</small>
-              <p>{humanQualityText(deal.summary_for_rop || quality.insufficient_reason) || NO_DATA}</p>
-            </div>
-          </div>
-          <div className="dc-daily-focus-step question">
-            <span className="dc-daily-focus-icon" aria-hidden="true">?</span>
-            <div className="dc-daily-questions">
-              <small>Спросить менеджера</small>
-              <label className={props.asked[0] ? 'done' : ''}>
-                <input type="checkbox" checked={props.asked[0]} onChange={() => props.onToggleAsked(0)} />
-                <span>{deal.generic_question}</span>
-              </label>
-              <label className={props.asked[1] ? 'done' : ''}>
-                <input type="checkbox" checked={props.asked[1]} onChange={() => props.onToggleAsked(1)} />
-                <span>{deal.direct_question}</span>
-              </label>
-            </div>
-          </div>
-        </div>
-      </article>
+      <DealQualityBlock deal={props.deal} />
+      <DealFocusBlock deal={props.deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
     </>
   )
 }
@@ -307,41 +334,7 @@ export function DealReviewCard(props: {
         </header>
       ) : null}
 
-      <DealQualityAndFocus deal={deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
-
-      <div className="dc-daily-tiles">
-        <details className="dc-daily-tile tone-ai">
-          <summary>
-            <span className="dc-daily-tile-icon" aria-hidden="true">AI</span>
-            <span>
-              <b>Контекст и вывод AI</b>
-              <small>Почему сделка требует внимания</small>
-            </span>
-          </summary>
-          <div className="dc-daily-tile-body">
-            <p><b>Ситуация.</b> {deal.ai_context.current_situation || NO_DATA}</p>
-            {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {deal.ai_context.rop_focus}</p> : null}
-            {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {deal.ai_context.what_to_check_now}</p> : null}
-            {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {deal.ai_context.manager_coaching}</p> : null}
-            {deal.ai_context.known.length ? <ul>{deal.ai_context.known.map((item) => <li key={item}>{item}</li>)}</ul> : null}
-            {deal.ai_context.unknowns.length ? <p><b>Неизвестно:</b> {deal.ai_context.unknowns.join('; ')}</p> : null}
-          </div>
-        </details>
-        <details className="dc-daily-tile tone-script">
-          <summary>
-            <span className="dc-daily-tile-icon" aria-hidden="true"><DailyIcon name="script" /></span>
-            <span>
-              <b>Готовый сценарий разговора</b>
-              <small>{scriptHint}</small>
-            </span>
-          </summary>
-          <div className="dc-daily-tile-body">
-            {script ? <pre>{script}</pre> : <p>{NO_DATA}</p>}
-            {script ? <button type="button" className="dc-button" onClick={props.onCopyScript}>Скопировать сценарий</button> : null}
-            {props.copyNotice ? <small>{props.copyNotice}</small> : null}
-          </div>
-        </details>
-      </div>
+      <DealQualityBlock deal={deal} />
 
       <article className="dc-daily-block">
         <header className="dc-daily-block-title">
@@ -455,6 +448,42 @@ export function DealReviewCard(props: {
           </>
         )}
       </article>
+
+      <DealFocusBlock deal={deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
+
+      <div className="dc-daily-tiles">
+        <details className="dc-daily-tile tone-ai">
+          <summary>
+            <span className="dc-daily-tile-icon" aria-hidden="true">AI</span>
+            <span>
+              <b>Контекст и вывод AI</b>
+              <small>Почему сделка требует внимания</small>
+            </span>
+          </summary>
+          <div className="dc-daily-tile-body">
+            <p><b>Ситуация.</b> {deal.ai_context.current_situation || NO_DATA}</p>
+            {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {deal.ai_context.rop_focus}</p> : null}
+            {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {deal.ai_context.what_to_check_now}</p> : null}
+            {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {deal.ai_context.manager_coaching}</p> : null}
+            {deal.ai_context.known.length ? <ul>{deal.ai_context.known.map((item) => <li key={item}>{item}</li>)}</ul> : null}
+            {deal.ai_context.unknowns.length ? <p><b>Неизвестно:</b> {deal.ai_context.unknowns.join('; ')}</p> : null}
+          </div>
+        </details>
+        <details className="dc-daily-tile tone-script">
+          <summary>
+            <span className="dc-daily-tile-icon" aria-hidden="true"><DailyIcon name="script" /></span>
+            <span>
+              <b>Готовый сценарий разговора</b>
+              <small>{scriptHint}</small>
+            </span>
+          </summary>
+          <div className="dc-daily-tile-body">
+            {script ? <pre>{script}</pre> : <p>{NO_DATA}</p>}
+            {script ? <button type="button" className="dc-button" onClick={props.onCopyScript}>Скопировать сценарий</button> : null}
+            {props.copyNotice ? <small>{props.copyNotice}</small> : null}
+          </div>
+        </details>
+      </div>
 
     </section>
   )

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from openai_api.llm.deal_daily_quality import (
+    DAILY_QUALITY_MARKER, DAILY_QUALITY_RULE, render_daily_quality_context, stamp_daily_quality_scope,
+)
+
 import copy
 import json
 from dataclasses import dataclass
@@ -370,6 +374,8 @@ def build_materialization_contract(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     previous_analysis = copy.deepcopy(previous_analysis)
     remove_retired_deal_fields(previous_analysis)
+    if isinstance(previous_analysis.get("communication_quality_audit"), dict):
+        previous_analysis["communication_quality_audit"].pop("daily_scope", None)
     compact_sections = set(ALWAYS_RECOMPUTE_ON_NEW_CLIENT_EVIDENCE)
     structural = {
         section: _compact_shape(previous_analysis.get(section), section)
@@ -413,6 +419,7 @@ def build_materialization_contract(
         from openai_api.llm.analyze_deal import COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE
 
         constraints["communication_quality_audit"] = {
+            "daily_scope_rule": DAILY_QUALITY_RULE,
             "assessed": (
                 "all three criteria scores are integer 0 or 1; zero_reasons contains "
                 "one {criterion, explanation, quote} object for every and only score=0 criterion; "
@@ -488,6 +495,7 @@ def build_materialization_prompt(
     compact_policy_text: str,
     compact_diagnostics_text: str = "",
     current_situation_context: dict[str, Any] | None = None,
+    daily_quality_context: dict[str, Any] | None = None,
 ) -> str:
     structural_templates, continuity_content, constraints = build_materialization_contract(
         previous_analysis, affected_sections
@@ -510,6 +518,8 @@ def build_materialization_prompt(
         if situation_context_text
         else ""
     )
+    if "communication_quality_audit" in affected_sections:
+        situation_section += f"\n{DAILY_QUALITY_MARKER}\n{render_daily_quality_context(daily_quality_context)}\n"
     return f"""Ты частично пересобираешь полный validated deal analysis NeuroROP.
 Верни строго JSON {{"sections": {{...}}}} и ровно перечисленные AFFECTED_SECTIONS. Не возвращай остальные поля.
 Пиши компактный JSON без отступов и пояснений.
@@ -606,6 +616,7 @@ def run_incremental_v2(
     compact_policy_text: str = "", compact_policy: dict[str, Any] | None = None,
     compact_diagnostics_text: str = "",
     current_situation_context: dict[str, Any] | None = None,
+    daily_quality_context: dict[str, Any] | None = None,
 ) -> IncrementalV2Result:
     previous_analysis = copy.deepcopy(previous_analysis)
     remove_retired_deal_fields(previous_analysis)
@@ -667,6 +678,7 @@ def run_incremental_v2(
         compact_policy_text=materialization_policy_text,
         compact_diagnostics_text=compact_diagnostics_text,
         current_situation_context=current_situation_context,
+        daily_quality_context=daily_quality_context,
     )
     structural_templates, continuity_content, constraints = build_materialization_contract(
         previous_analysis, affected_sections
@@ -706,6 +718,7 @@ def run_incremental_v2(
     )
     candidate = copy.deepcopy(previous_analysis)
     candidate.update(materialized["sections"])
+    stamp_daily_quality_scope(candidate, daily_quality_context)
     normalize_analysis_for_validation(candidate, truncate_lists=False)
     validate_deal_analysis(candidate)
     metadata_rows = [semantic_metadata, materialization_metadata]

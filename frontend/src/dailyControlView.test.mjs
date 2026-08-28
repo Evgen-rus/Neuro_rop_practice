@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
+import { dailyQualityCaption } from './dailyControlView.ts'
 import { canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
@@ -259,7 +260,7 @@ test('production task block distinguishes absent legacy details from no tasks', 
   assert.match(empty, /Открытых задач нет/)
 })
 
-const { DealReviewCard } = await import(componentModule('./DealReviewCard.tsx', {
+const { DealReviewCard, DealQualityAndFocus } = await import(componentModule('./DealReviewCard.tsx', {
   './CommunicationContent': componentModule('./CommunicationContent.tsx'),
 }))
 
@@ -284,5 +285,67 @@ test('communication rows omit unknown direction without hiding channel, delivery
   assert.ok(rows.some((row) => row.includes('Max · входящий')))
   assert.ok(rows.some((row) => row.includes('Max · исходящий')))
   assert.ok(rows.every((row) => !row.includes('Нет данных') && !row.includes('Max · </span>')))
-  assert.match(html, /Нет данных для оценки/) // Other, meaningful missing-data notices remain.
+  assert.match(html, /Нет данных/) // Other, meaningful missing-data notices remain.
+})
+
+test('daily quality renders system zeros, pending, unavailable and not-required separately', () => {
+  for (const [status, score, caption] of [
+    ['no_work', 0, '0 из 3 · работа не подтверждена'],
+    ['pending_analysis', null, 'Ожидает AI-оценки'],
+    ['missing', null, 'Нет данных'],
+    ['not_required', null, 'Сегодня не требуется'],
+    ['assessed', 1, '3 из 3 · AI-оценка'],
+  ]) {
+    const quality = {
+      status, business_date: '2026-08-18', source: status === 'assessed' ? 'ai' : 'system',
+      confirmed_count: score === null ? null : score * 3, total: 3, zero_reasons: [],
+      scope_summary: 'Основание оценки за день', criteria: Object.fromEntries(
+        ['next_action', 'value_development', 'data_collection'].map((key) => [key, { score, verdict: 'За сегодня' }]),
+      ),
+    }
+    assert.equal(dailyQualityCaption(quality), caption)
+    const html = renderToStaticMarkup(createElement(DealQualityAndFocus, {
+      deal: { quality, ai_context: {} }, asked: [false, false], onToggleAsked() {},
+    }))
+    assert.ok(html.includes(caption), status)
+    assert.match(html, /За 18.08.2026/)
+    assert.equal((html.match(/dc-daily-criterion good/g) || []).length, status === 'assessed' ? 3 : 0)
+    assert.equal((html.match(/dc-daily-criterion bad/g) || []).length, status === 'no_work' ? 3 : 0)
+    assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
+    assert.match(html, /dc-daily-criterion-tip/)
+    assert.match(html, /Основание оценки за день/)
+  }
+})
+
+test('review card shows quality, then today communications, then focus, with shared hover argumentation', () => {
+  const deal = {
+    ...communicationDeal([]),
+    title: 'Тестовая сделка',
+    generic_question: 'Вопрос 1',
+    direct_question: 'Вопрос 2',
+    ai_context: { known: [], unknowns: [] },
+    quality: {
+      status: 'assessed',
+      confirmed_count: 3,
+      total: 3,
+      scope_summary: 'Общая аргументация за день',
+      zero_reasons: [],
+      criteria: {
+        next_action: { score: 1, verdict: 'Следующий шаг зафиксирован' },
+        value_development: { score: 1, verdict: 'Касания дали ценность' },
+        data_collection: { score: 1, verdict: 'Ключевые данные собраны' },
+      },
+    },
+  }
+  const html = renderToStaticMarkup(createElement(DealReviewCard, {
+    deal, asked: [false, false], onToggleAsked() {}, onCopyScript() {}, copyNotice: '', openEventId: '', onToggleEvent() {},
+  }))
+  const qualityAt = html.indexOf('Контроль качества ведения сделки')
+  const communicationsAt = html.indexOf('Коммуникации за сегодня')
+  const focusAt = html.indexOf('Фокус разбора')
+  assert.ok(qualityAt >= 0 && communicationsAt > qualityAt && focusAt > communicationsAt)
+  assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
+  assert.doesNotMatch(html, />Аргументация</)
+  assert.equal((html.match(/dc-daily-criterion-tip/g) || []).length, 3)
+  assert.equal((html.match(/Общая аргументация за день/g) || []).length, 3)
 })

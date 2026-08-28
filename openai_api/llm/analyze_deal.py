@@ -18,6 +18,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
+from openai_api.llm.deal_daily_quality import (
+    DAILY_QUALITY_MARKER, DAILY_QUALITY_RULE, load_daily_quality_context,
+    render_daily_quality_context, stamp_daily_quality_scope,
+)
 from bitrix.context_diagnostics import ensure_context_diagnostics
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
@@ -241,6 +245,7 @@ def build_prompt(
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
     incremental_context: dict[str, Any] | None = None,
     current_situation_context: dict[str, Any] | None = None,
+    daily_quality_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -262,6 +267,8 @@ def build_prompt(
     if incremental_context is not None:
         previous_analysis = copy.deepcopy(incremental_context.get("previous_analysis") or {})
         remove_retired_deal_fields(previous_analysis)
+        if isinstance(previous_analysis.get("communication_quality_audit"), dict):
+            previous_analysis["communication_quality_audit"].pop("daily_scope", None)
         previous_analysis_text = json.dumps(previous_analysis, ensure_ascii=False, indent=2)
         new_events_text = json.dumps(incremental_context.get("new_events"), ensure_ascii=False, indent=2)
         crm_delta_text = json.dumps(incremental_context.get("crm_delta"), ensure_ascii=False, indent=2)
@@ -294,10 +301,9 @@ CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в акту�
 {situation_context_text}"""
     communication_audit_rules = f"""
 <communication_quality_audit_rules>
-Сформируй один текущий аудит качества ведения сделки для РОПа по всей доступной клиентской коммуникации, а не отдельный отчёт на каждый звонок или сообщение.
-- Учитывай историю сделки и все доступные новые касания на момент анализа: содержательные звонки с транскриптом, письма и клиентскую переписку.
+{DAILY_QUALITY_RULE}
 - Недозвон, короткий звонок без содержательной расшифровки и пустая CRM-активность — только попытка связи. Не выдавай их за разговор, договорённость или слова клиента.
-- CRM-задачи, комментарии менеджера и внутренние чаты не являются клиентской коммуникацией и не могут быть цитатой-доказательством.
+- CRM-задачи, внутренние комментарии менеджера и внутренние чаты не являются клиентской коммуникацией и не могут быть цитатой-доказательством. Распознанные зеркала клиентской переписки в комментариях учитывай как сообщения.
 - История нужна, чтобы понять, какие договорённости и данные менеджер должен был актуализировать. Оценки и цитаты подтверждай только фактической клиентской коммуникацией.
 - status="assessed" ставь, если есть хотя бы одно содержательное касание. Тогда каждый criterion.score — строго JSON number 0 или 1, НЕ строка "0"/"1".
 - {COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE}
@@ -309,6 +315,8 @@ CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в акту�
 - scope_summary кратко перечисляет, какие виды коммуникаций реально учтены, без выдуманных количеств и дат.
 </communication_quality_audit_rules>
 """ if COMMUNICATION_QUALITY_AUDIT_ENABLED else ""
+    if COMMUNICATION_QUALITY_AUDIT_ENABLED:
+        evidence_sections += f"\n\n{DAILY_QUALITY_MARKER}\n\n{render_daily_quality_context(daily_quality_context)}"
     communication_audit_shape = """
   "communication_quality_audit": {
     "status": "assessed|insufficient_evidence",
@@ -1722,6 +1730,7 @@ def main() -> None:
 
     history_text = read_text(history_path) if incremental_context is None else ""
     current_situation_context = load_deal_current_situation_context(deal_dir, str(args.deal_id))
+    daily_quality_context = load_daily_quality_context(deal_dir, str(args.deal_id))
     prompt = build_prompt(
         args.deal_id,
         history_text,
@@ -1732,6 +1741,7 @@ def main() -> None:
         prior_neuro_rop_recommendation,
         incremental_context,
         current_situation_context,
+        daily_quality_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -1824,6 +1834,7 @@ def main() -> None:
     write_prompt_budget(prompt_budget_path, attach_response_metadata(prompt_budget, metadata))
     emit_progress("deal", str(args.deal_id), "validation", status="done", detail="Ответ прошёл проверку")
 
+    stamp_daily_quality_scope(analysis, daily_quality_context)
     output_payload = {
         "generated_at": generated_at,
         "deal_id": str(args.deal_id),

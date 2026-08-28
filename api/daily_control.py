@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from api.deal_task_day import is_reschedule, stamp, task_results, task_totals
+from openai_api.llm.deal_daily_quality import CLIENT_CHANNELS, is_quality_candidate, quality_event_signature, quality_time
 
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
@@ -388,20 +389,18 @@ def compute_source_watermark(
     return digest
 
 
-def classify_deal_status(deal: dict[str, Any]) -> tuple[str, str]:
+def classify_deal_status(
+    deal: dict[str, Any], *, now: datetime | None = None, quality: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     """Server-side red/yellow/green from existing structured deal-control facts."""
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
-    audit = (
-        coaching.get("communication_quality_audit")
-        if isinstance(coaching.get("communication_quality_audit"), dict)
-        else {}
-    )
+    audit = quality if quality is not None else _daily_quality_block(deal, now or datetime.now(MSK_TZ))
     bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
     scores = _audit_scores(audit)
     zero_count = sum(1 for score in scores.values() if score == 0)
     next_action_zero = scores.get("next_action") == 0
-    assessed = audit.get("status") == "assessed"
-    insufficient = audit.get("status") == "insufficient_evidence"
+    assessed = audit.get("status") in {"assessed", "no_work"}
+    insufficient = audit.get("status") in {"insufficient_evidence", "missing", "pending_analysis"}
     overdue_bitrix = (
         str(bitrix_task.get("time_bucket") or "") == "overdue"
         and str(bitrix_task.get("completion_state") or "open") == "open"
@@ -515,6 +514,86 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
         "content_available": False,
     }
     return payload
+
+
+def _has_current_quality_obligation(deal: dict[str, Any], current: datetime) -> bool:
+    # Current deadlines win over a historical "was_due" / planning membership.
+    tasks = list(deal.get("bitrix_tasks") or [])
+    if not tasks and isinstance(deal.get("primary_bitrix_task"), dict):
+        tasks.append(deal["primary_bitrix_task"])
+    if isinstance(deal.get("current_task"), dict):
+        tasks.append(deal["current_task"])
+    for task in tasks:
+        if task.get("local_status") in {"cancelled", "canceled"}:
+            continue
+        deadline = quality_time(task.get("deadline") or task.get("due_at"))
+        due = deadline.date() <= current.date() if deadline else task.get("time_bucket") in DAY_OBLIGATION_BUCKETS
+        if not due:
+            continue
+        completed = bool(task.get("completed") or task.get("local_completed") or task.get("completion_state") in {"bitrix", "local"}
+                         or task.get("local_status") == "completed")
+        completed_at = quality_time(task.get("bitrix_completed_at") or task.get("local_completed_at") or task.get("completed_at"))
+        if not completed or (completed_at and completed_at.date() == current.date()):
+            return True
+    return False
+
+
+def _daily_quality_block(deal: dict[str, Any], now: datetime) -> dict[str, Any]:
+    current = _aware(now).astimezone(MSK_TZ)
+    day = current.date().isoformat()
+    coaching = deal.get("coaching") or {}
+    communications = deal.get("communications_today") or {}
+
+    def state(status: str, reason: str, *, zero: bool = False) -> dict[str, Any]:
+        return {
+            "status": status, "business_date": day, "cutoff_at": _iso(current),
+            "source": "system", "criteria": {
+                name: {"score": 0 if zero else None, "verdict": "Сегодня не подтверждено" if zero else reason}
+                for name in ("next_action", "value_development", "data_collection")
+            }, "confirmed_count": 0 if zero else None, "total": 3,
+            "scope_summary": reason, "zero_reasons": [], "summary_for_rop": None,
+            "insufficient_reason": reason,
+        }
+
+    if communications.get("date") != day or not communications.get("available") or communications.get("quality_sources_available") is False:
+        return state("missing", "Нет данных: сегодняшние клиентские коммуникации получены не полностью.")
+    items = [item for item in communications.get("items") or [] if isinstance(item, dict)
+             and item.get("channel") in CLIENT_CHANNELS and _at_or_before(item.get("occurred_at"), current)]
+    if not communications.get("items") and int(communications.get("completed") or 0) > 0:
+        return state("missing", "Нет данных: есть счётчики коммуникаций, но нет событий для проверки качества.")
+    candidates = [item for item in items if item.get("quality_candidate", is_quality_candidate(item))]
+    if not candidates and any(item.get("channel") == "call" and item.get("call_outcome") not in {"connected", "no_answer"} for item in items):
+        return state("missing", "Нет данных: результат сегодняшнего звонка ещё не подтверждён.")
+    obligation = _has_current_quality_obligation(deal, current)
+    if not candidates:
+        if obligation:
+            return state("no_work", "Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.", zero=True)
+        return state("not_required", "На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.")
+
+    audit = coaching.get("communication_quality_audit") or {}
+    scope = audit.get("daily_scope") or {}
+    through = quality_time(scope.get("evaluated_through"))
+    signatures = scope.get("event_signatures") or {}
+    covered = (
+        scope.get("version") == 1 and scope.get("business_date") == day
+        and through is not None and through.date() == current.date() and through <= current
+        and all(
+            quality_time(item.get("occurred_at")) <= through
+            and signatures.get(str(item.get("event_id"))) == (item.get("quality_source_signature") or quality_event_signature(item))
+            for item in candidates
+        )
+    )
+    if not covered:
+        return state("pending_analysis", "Сегодня есть клиентская коммуникация. Ожидает AI-оценки; прежние оценки не используются.")
+    if audit.get("status") == "insufficient_evidence":
+        if obligation:
+            return state("no_work", "AI не подтвердил содержательную работу в сегодняшних коммуникациях.", zero=True)
+        return state("not_required", "На сегодня нет актуальной задачи; AI не подтвердил содержательную коммуникацию.")
+    if audit.get("status") != "assessed" or any(value not in {0, 1} for value in _audit_scores(audit).values()):
+        return state("pending_analysis", "Ожидает корректной AI-оценки сегодняшней работы.")
+    result = _quality_block(coaching)
+    result.update(business_date=day, cutoff_at=_iso(current), source="ai")
+    return result
 
 
 def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
@@ -641,6 +720,8 @@ def build_direct_manager_question(deal: dict[str, Any]) -> str:
 
 
 def _attention_reason(deal: dict[str, Any], quality: dict[str, Any]) -> str:
+    if quality.get("status") in {"no_work", "missing", "pending_analysis", "not_required"}:
+        return str(quality.get("scope_summary") or "Нет данных")
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
     for value in (
         coaching.get("main_risk_description"),
@@ -657,15 +738,15 @@ def _attention_reason(deal: dict[str, Any], quality: dict[str, Any]) -> str:
     return "Нет данных"
 
 
-def project_deal_review_card(deal: dict[str, Any]) -> dict[str, Any]:
+def project_deal_review_card(deal: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     """Project a live deal-control deal into the shared ROP review card.
 
     Used by the immutable daily snapshot and the live ROP card. Does not call
     LLM or Bitrix.
     """
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
-    quality = _quality_block(coaching)
-    status, status_label = classify_deal_status(deal)
+    quality = _daily_quality_block(deal, now or datetime.now(MSK_TZ))
+    status, status_label = classify_deal_status(deal, quality=quality)
     communications = _sanitize_communications(deal.get("communications_today"))
     script = str(coaching.get("manager_coaching") or "").strip()
     variants = [
@@ -747,7 +828,8 @@ def build_daily_control_snapshot(
     activity_events: list[dict[str, Any]] | None = None,
     carried_obligation_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    deals = [project_deal_review_card(deal) for deal in dashboard.get("deals") or [] if isinstance(deal, dict)]
+    quality_now = cutoff_at or quality_time(dashboard.get("generated_at")) or datetime.now(MSK_TZ)
+    deals = [project_deal_review_card(deal, now=quality_now) for deal in dashboard.get("deals") or [] if isinstance(deal, dict)]
     if cutoff_at is not None:
         sources = {str(deal.get("deal_id")): deal for deal in dashboard.get("deals") or [] if isinstance(deal, dict)}
         events_by_deal: dict[str, list[dict[str, Any]]] = {}
