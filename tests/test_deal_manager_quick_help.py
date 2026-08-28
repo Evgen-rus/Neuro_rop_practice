@@ -13,6 +13,7 @@ from openai_api.llm.deal_manager_quick_help import (
     project_locked_move,
     project_quick_help_for_material,
     quick_help_schema,
+    quick_help_static_prompt,
     validate_quick_help,
 )
 from openai_api.llm.llm_client import ModelJsonParseError, ModelResponseIncompleteError
@@ -497,6 +498,23 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertIn("MT-OBJECTION-001", prompt)
         self.assertIn("MT-TRUST-001", prompt)
         self.assertNotIn("мягкий режим восстановления контакта", prompt)
+        for rule in (
+            "факты можно использовать наравне с CONTEXT, если они прямо ему не противоречат",
+            "Если менеджер явно задал рычаг — используй его",
+            "Сохраняй текущую ближайшую micro-conversion при добавлении нового аргумента или рычага",
+            "CTA должен вести к подписанию, а не к скану договора, дате аванса",
+            "Переводи выбранный рычаг в конкретную ценность для клиента",
+            "alternative — другая логика аргументации той же ценности",
+            "pattern_break — другая уместная техника закрытия той же micro-conversion",
+            "Он не обязан быть жёстче",
+            "Все три ведут к одной micro-conversion и отличаются стратегией",
+            "Не делай все профили одинаково жёсткими только из-за режима push",
+            "Но не считай факт недостаточно подтверждённым только потому, что его явно сообщил менеджер",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, prompt)
+        self.assertNotIn("Опирайся только на переданные CONTEXT.", prompt)
+        self.assertNotIn("Это PUSH-режим: уверенный, экспертный, предметный, коммерческий.", prompt)
         self.assertEqual(validate_quick_help(PUSH_ANSWER, expected_mode="push"), PUSH_ANSWER)
         with self.assertRaisesRegex(ValueError, "mode не соответствует"):
             validate_quick_help(PUSH_ANSWER, expected_mode="reanimator")
@@ -517,6 +535,34 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         prefixes = call.call_args.kwargs["cache_prefixes"]
         self.assertIn("MANAGER_TACTICS", prefixes[0])
         self.assertNotIn("MANAGER_QUESTION", prefixes[1])
+
+    def test_push_template_generation_keeps_current_manager_facts_and_goal(self) -> None:
+        question = (
+            "Обычный срок 75 рабочих дней. Если согласуем до 31 августа, попадём в закупку "
+            "1 сентября и сможем сделать за 60 рабочих дней. Клиенту важен срок. "
+            "Хочу использовать это и закрыть на подписание."
+        )
+        kwargs = {
+            "question": question,
+            "analysis_projection": CONTEXT["analysis_projection"],
+            "deal": DEAL,
+            "current_bitrix_task": CONTEXT["current_bitrix_task"],
+            "situation_projection": CONTEXT["situation_projection"],
+            "communication_pattern_context": COMMUNICATION_CONTEXT,
+            "mode": "push",
+        }
+        prompt = build_quick_help_prompt(**kwargs)
+        template = quick_help_static_prompt("push")
+        self.assertTrue(prompt.startswith(template))
+        self.assertIn(question, prompt.split("MANAGER_QUESTION:\n", 1)[1])
+        self.assertNotIn(question, template)
+        self.assertIn("Этот запрос независим: не используй и не запрашивай историю прошлых ответов", template)
+        with patch(
+            "openai_api.llm.deal_manager_quick_help.call_structured_output_json",
+            return_value=(PUSH_ANSWER, {}),
+        ) as call:
+            generate_deal_manager_quick_help(**kwargs, prompt_template=template)
+        self.assertEqual(call.call_args.args[0], prompt)
 
     def test_ensure_reuses_only_requested_mode_and_does_not_call_llm(self) -> None:
         calls: list[str] = []
