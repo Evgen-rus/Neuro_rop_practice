@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from openai_api.llm.deal_current_situation import render_deal_current_situation_context
 from openai_api.llm.deal_semantic_dependencies import (
     ALWAYS_RECOMPUTE_ON_NEW_CLIENT_EVIDENCE,
     resolve_affected_sections,
@@ -486,9 +487,28 @@ def build_materialization_prompt(
     affected_sections: list[str], stage_policy: dict[str, Any], prior_recommendation: dict[str, Any] | None,
     compact_policy_text: str,
     compact_diagnostics_text: str = "",
+    current_situation_context: dict[str, Any] | None = None,
 ) -> str:
     structural_templates, continuity_content, constraints = build_materialization_contract(
         previous_analysis, affected_sections
+    )
+    situation_context_text = ""
+    situation_rule = ""
+    if "deal_control_brief" in affected_sections:
+        situation_context_text = render_deal_current_situation_context(current_situation_context)
+        situation_rule = (
+            "deal_control_brief.current_situation строй только от CURRENT_SITUATION_CONTEXT: "
+            "якорь — last_substantive_client_contact, затем действия менеджера после него. "
+            "4–6 коротких предложений. Если has_newer_client_response=false, прямо напиши, "
+            "что нового подтверждённого ответа клиента нет. Попытка, исходящее сообщение, "
+            "email, задача или комментарий менеджера не являются новой позицией клиента. "
+            "Простые «ок/спасибо/получил» без нового бизнес-факта якорь не заменяют. "
+            "Не выдумывай количества, если в контексте null.\n"
+        )
+    situation_section = (
+        f"\n## CURRENT_SITUATION_CONTEXT\n{situation_context_text}\n"
+        if situation_context_text
+        else ""
     )
     return f"""Ты частично пересобираешь полный validated deal analysis NeuroROP.
 Верни строго JSON {{"sections": {{...}}}} и ровно перечисленные AFFECTED_SECTIONS. Не возвращай остальные поля.
@@ -496,7 +516,7 @@ def build_materialization_prompt(
 Для каждого поля соблюдай COMPACT_STRUCTURAL_TEMPLATES и VALIDATION_CONSTRAINTS, но обнови содержание по NEW_SEMANTIC_STATE и NEW_OR_REVISED_EVIDENCE.
 CRM stage/task сами по себе не доказывают клиентский контакт. Recommendation feedback подтверждается только evidence после соответствующей materialized recommendation.
 Transient-поля описывают только текущий запуск. Не переноси их механически.
-COMPACT_STRUCTURAL_TEMPLATES является обязательным структурным контрактом:
+{situation_rule}COMPACT_STRUCTURAL_TEMPLATES является обязательным структурным контрактом:
 - каждый ключ object-template обязателен в результате; не сокращай вложенные объекты;
 - во всех элементах deal_context сохраняй обязательный непустой массив evidence из template, пока новое evidence явно не заменяет его;
 - category critical fact использует только deadline|budget|need|authority|technical|delivery|payment|competitor|commitment|other;
@@ -531,7 +551,7 @@ COMPACT_STRUCTURAL_TEMPLATES является обязательным стру�
 
 ## PRIOR_NEURO_ROP_RECOMMENDATION
 {_json_compact(prior_recommendation)}
-"""
+{situation_section}"""
 
 
 def _materialization_repair_prompt_builder(
@@ -585,6 +605,7 @@ def run_incremental_v2(
     source_fingerprint: str, model: str,
     compact_policy_text: str = "", compact_policy: dict[str, Any] | None = None,
     compact_diagnostics_text: str = "",
+    current_situation_context: dict[str, Any] | None = None,
 ) -> IncrementalV2Result:
     previous_analysis = copy.deepcopy(previous_analysis)
     remove_retired_deal_fields(previous_analysis)
@@ -645,6 +666,7 @@ def run_incremental_v2(
         prior_recommendation=prior_recommendation,
         compact_policy_text=materialization_policy_text,
         compact_diagnostics_text=compact_diagnostics_text,
+        current_situation_context=current_situation_context,
     )
     structural_templates, continuity_content, constraints = build_materialization_contract(
         previous_analysis, affected_sections
@@ -660,6 +682,7 @@ def run_incremental_v2(
         structural_templates=structural_templates,
         validation_constraints=constraints,
         previous_continuity_content=continuity_content,
+        current_situation_context=current_situation_context or {},
     )
     materialized, materialization_metadata = call_validated_analysis_json(
         materialization_prompt,
@@ -669,7 +692,7 @@ def run_incremental_v2(
         model=model,
         analysis_caller=call_analysis_json,
         call_type="deal_incremental_v2_materialization",
-        prompt_cache_key="neuro-rop:deal-incremental-v2:materialization:v1",
+        prompt_cache_key="neuro-rop:deal-incremental-v2:materialization:v2",
         trace_entity_type="deal",
         trace_entity_id=deal_id,
         preview_prompt=False,

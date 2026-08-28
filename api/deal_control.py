@@ -18,10 +18,13 @@ from api.jobs import unwrap_analysis_payload
 from api.deal_call_transcript import find_call_transcript
 from api.deal_manager_quick_help import load_local_communication_bundle
 from bitrix.customer_history import (
+    INTERNAL_CHANNELS,
+    MESSENGER_CHANNELS,
     _bundle_client_names,
     activity_type,
     build_normalized_communications,
     classify_call_outcome,
+    communication_activity_kind,
 )
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.deals.communication_history import source_lead_id
@@ -77,8 +80,6 @@ MANAGER_SITUATION_REFINED_FIELDS = frozenset({
     "script_channel",
 })
 DAILY_COMMUNICATION_TARGET = 3
-MESSENGER_CHANNELS = frozenset({"message", "whatsapp", "telegram", "max"})
-INTERNAL_CHANNELS = frozenset({"internal_chat", "internal_comment"})
 LAST_ACTIVITY_LABELS = {
     "dial_attempt": "попытка дозвона",
     "conversation": "разговор",
@@ -262,34 +263,7 @@ def _communication_contact_label(event: dict[str, Any], raw: dict[str, Any]) -> 
 
 
 def _last_activity_kind(event: dict[str, Any]) -> str | None:
-    channel = str(event.get("channel") or "")
-    direction = str(event.get("direction") or "")
-    content = str(event.get("content") or "").strip()
-    contact_class = str(event.get("contact_class") or "")
-    if channel == "call":
-        outcome = str(event.get("call_outcome") or "")
-        if direction == "outgoing":
-            return "conversation" if outcome == "connected" else "dial_attempt"
-        if direction == "incoming" and outcome == "connected":
-            return "conversation"
-        return None
-    if channel == "email":
-        if direction == "outgoing":
-            return "email"
-        if direction == "incoming" and content:
-            return "client_reply"
-        return None
-    if channel not in MESSENGER_CHANNELS:
-        return None
-    if contact_class == "internal_information":
-        return None
-    if contact_class == "confirmed_contact" and content:
-        return "client_reply"
-    if direction == "outgoing" or (contact_class == "attempt" and content):
-        return "message"
-    if direction == "incoming" and content:
-        return "client_reply"
-    return None
+    return communication_activity_kind(event)
 
 
 def _communication_ref(event: dict[str, Any], kind: str) -> dict[str, Any]:

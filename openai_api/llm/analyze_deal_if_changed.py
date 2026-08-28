@@ -48,6 +48,7 @@ from openai_api.config import (
 )
 from openai_api.llm.deal_incremental import IncrementalContextError, build_incremental_context
 from openai_api.llm.deal_incremental import previous_business_analysis
+from openai_api.llm.deal_current_situation import load_deal_current_situation_context
 from openai_api.llm.deal_evidence import (
     collect_deal_evidence,
     coverage_from_evidence,
@@ -61,6 +62,8 @@ from openai_api.llm.deal_incremental_v2 import (
     run_incremental_v2,
 )
 from openai_api.llm.analyze_deal import (
+    DEAL_INCREMENTAL_PROMPT_CACHE_KEY,
+    DEAL_PROMPT_CACHE_KEY,
     load_context_diagnostics_for_analysis,
     render_report,
 )
@@ -421,9 +424,9 @@ def persist_successful_llm_run(
             prompt_version=(
                 prompt_version
                 or (
-                    "neuro-rop:incremental-deal:v1"
+                    DEAL_INCREMENTAL_PROMPT_CACHE_KEY
                     if decision_status == INCREMENTAL_LLM_ANALYSIS
-                    else "neuro-rop:full-deal:v2"
+                    else DEAL_PROMPT_CACHE_KEY
                 )
             ),
             model_override=args.model,
@@ -499,7 +502,7 @@ def persist_skip(
             {},
             fingerprint=fingerprint,
             decision_reason=decision_reason,
-            prompt_version="neuro-rop:full-deal:v2",
+            prompt_version=DEAL_PROMPT_CACHE_KEY,
             model_override=args.model,
         ),
     )
@@ -653,6 +656,9 @@ def main() -> None:
                     model=str(args.model or ANALYSIS_MODEL),
                     compact_policy=compact_policy,
                     compact_diagnostics_text=compact_diagnostics_text,
+                    current_situation_context=load_deal_current_situation_context(
+                        current_deal_dir, str(args.deal_id)
+                    ),
                 )
                 payload = _write_v2_candidate(
                     paths=paths,
@@ -942,7 +948,7 @@ def main() -> None:
                 entity_id=str(args.deal_id),
                 status=ERROR,
                 model=args.model,
-                prompt_version="neuro-rop:full-deal:v2",
+                prompt_version=DEAL_PROMPT_CACHE_KEY,
                 logic_version="change-aware-v1",
                 provenance={"trigger": ERROR},
                 error=str(error),

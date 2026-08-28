@@ -352,6 +352,9 @@ def build_situation_prompt(
             "PREVIOUS_MANAGER_PROJECTION и NEW_MANAGER_CONTEXT.\n"
             "- Не выдумывай факты, слова клиента, договорённости, даты, суммы или результат звонка.\n"
             "- Bitrix-задача показывает рабочее поручение и не доказывает контакт с клиентом.\n"
+            "- current_situation начинай от последнего подтверждённого содержательного контакта клиента из анализа. "
+            "NEW_MANAGER_CONTEXT может добавлять внутренние факты и действия менеджера после этого контакта, "
+            "но не должен превращать слова менеджера в подтверждённую новую позицию клиента без client evidence.\n"
             "- Если контекст менеджера расходится с анализом, явно отрази неопределённость и вынеси вопрос в facts_to_clarify.\n"
             "- Не объявляй звонок контактом и не утверждай, что сделка продвинулась без подтверждённого клиентского факта.\n"
             "- client_communication_profile используй только когда status tentative или supported: адаптируй тон и структуру, но не меняй факты, цель контакта или следующий шаг. При insufficient_evidence не угадывай DISC.\n"
@@ -392,7 +395,7 @@ def generate_deal_manager_situation(
         max_output_tokens=MAX_SITUATION_OUTPUT_TOKENS,
         log_title="deal manager situation prompt",
         call_type="deal_manager_situation",
-        prompt_cache_key="neuro-rop:deal-manager-situation:v2",
+        prompt_cache_key="neuro-rop:deal-manager-situation:v3",
         stable_prefix=prompt_prefix_before(prompt, "PREVIOUS_MANAGER_PROJECTION:"),
         trace_entity_type="deal",
         trace_entity_id=deal_trace_id(deal),

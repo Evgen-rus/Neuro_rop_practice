@@ -128,6 +128,7 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertIn("CURRENT_BITRIX_TASK", prompt)
         self.assertIn("PREVIOUS_MANAGER_PROJECTION", prompt)
         self.assertIn("NEW_MANAGER_CONTEXT", prompt)
+        self.assertIn("не должен превращать слова менеджера в подтверждённую новую позицию клиента", prompt)
         self.assertIn("Менеджер уточнил", prompt)
         self.assertIn("КП отправлено", prompt)
         self.assertIn("client_communication_profile", prompt)
@@ -167,7 +168,7 @@ class DealManagerSituationTests(unittest.TestCase):
         prefix = call.call_args.kwargs["stable_prefix"]
         self.assertIn("CURRENT_BITRIX_TASK", prefix)
         self.assertNotIn("PREVIOUS_MANAGER_PROJECTION:\n", prefix)
-        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v2")
+        self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v3")
 
     def test_confirm_uses_canonical_storage_and_never_calls_llm(self) -> None:
         calls = []

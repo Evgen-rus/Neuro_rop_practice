@@ -110,7 +110,7 @@ class DealClientCommunicationProfileTests(unittest.TestCase):
         self.assertIn("Сначала отдели реплики и сообщения клиента", first_prefix)
         self.assertNotIn("История первой сделки", first_prefix)
         self.assertNotIn("Транскрипт первой сделки", first_prefix)
-        self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v2")
+        self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v3")
 
     def test_markdown_renders_disc_section_before_cost(self) -> None:
         supported = render_client_communication_profile_section(supported_profile())

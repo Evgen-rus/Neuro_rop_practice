@@ -314,7 +314,7 @@ class NextActionRubricTests(unittest.TestCase):
                 self.assertIn(phrase, prompt)
 
     def test_cache_keys_and_other_audit_criteria_stay_unchanged(self) -> None:
-        self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v2")
+        self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v3")
         self.assertEqual(DEAL_INCREMENTAL_PROMPT_CACHE_KEY, "neuro-rop:incremental-deal:v1")
         with patch("openai_api.llm.analyze_deal.COMMUNICATION_QUALITY_AUDIT_ENABLED", True):
             prompt = build_prompt("7", "История", "Транскрипт", "Диагностика", [], {})

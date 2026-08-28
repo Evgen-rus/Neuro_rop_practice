@@ -226,6 +226,10 @@ def _communication_channel_from_comment(text: str) -> str | None:
     return None
 
 
+MESSENGER_CHANNELS = frozenset({"message", "whatsapp", "telegram", "max"})
+INTERNAL_CHANNELS = frozenset({"internal_chat", "internal_comment"})
+
+
 def messenger_mirror_from_comment(text: str) -> dict[str, Any] | None:
     """Return channel, speaker and content if the CRM comment is a Wazzup messenger mirror."""
     cleaned = str(text or "").strip()
@@ -240,6 +244,42 @@ def messenger_mirror_from_comment(text: str) -> dict[str, Any] | None:
         "speaker": speaker,
         "content": content or cleaned,
     }
+
+
+def communication_activity_kind(event: dict[str, Any]) -> str | None:
+    """Map a normalized communication to deal-control activity kind.
+
+    The same mapping is used by daily communications and current-situation
+    context so call/email/message classification stays in one place.
+    """
+    channel = str(event.get("channel") or "")
+    direction = str(event.get("direction") or "")
+    content = str(event.get("content") or "").strip()
+    contact_class = str(event.get("contact_class") or "")
+    if channel == "call":
+        outcome = str(event.get("call_outcome") or "")
+        if direction == "outgoing":
+            return "conversation" if outcome == "connected" else "dial_attempt"
+        if direction == "incoming" and outcome == "connected":
+            return "conversation"
+        return None
+    if channel == "email":
+        if direction == "outgoing":
+            return "email"
+        if direction == "incoming" and content:
+            return "client_reply"
+        return None
+    if channel not in MESSENGER_CHANNELS:
+        return None
+    if contact_class == "internal_information":
+        return None
+    if contact_class == "confirmed_contact" and content:
+        return "client_reply"
+    if direction == "outgoing" or (contact_class == "attempt" and content):
+        return "message"
+    if direction == "incoming" and content:
+        return "client_reply"
+    return None
 
 
 def _parse_mirrored_message(text: str) -> tuple[str | None, str]:

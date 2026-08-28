@@ -26,6 +26,11 @@ from openai_api.change_detection.stage_policy import build_deal_stage_policy
 from openai_api.config import ANALYSIS_MODEL, COMMUNICATION_QUALITY_AUDIT_ENABLED, logger
 from openai_api.llm.full_analysis_repair import build_full_repair_builder
 from openai_api.llm.deal_call_projection import project_transcript_for_deal_prompt
+from openai_api.llm.deal_current_situation import (
+    CURRENT_SITUATION_CONTEXT_MARKER,
+    load_deal_current_situation_context,
+    render_deal_current_situation_context,
+)
 from openai_api.llm.deal_evidence import (
     inbound_evidence_ids_present_in_prompt,
     transcript_evidence_ids_for_input,
@@ -45,7 +50,7 @@ from storage.rop_db import (
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
-DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v2"
+DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v3"
 DEAL_INCREMENTAL_PROMPT_CACHE_KEY = "neuro-rop:incremental-deal:v1"
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
@@ -235,6 +240,7 @@ def build_prompt(
     stage_policy: dict[str, Any],
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
     incremental_context: dict[str, Any] | None = None,
+    current_situation_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -280,6 +286,12 @@ CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в акту�
 ## CRM_DELTA
 
 {crm_delta_text}"""
+    situation_context_text = render_deal_current_situation_context(current_situation_context)
+    evidence_sections = f"""{evidence_sections}
+
+{CURRENT_SITUATION_CONTEXT_MARKER}
+
+{situation_context_text}"""
     communication_audit_rules = f"""
 <communication_quality_audit_rules>
 Сформируй один текущий аудит качества ведения сделки для РОПа по всей доступной клиентской коммуникации, а не отдельный отчёт на каждый звонок или сообщение.
@@ -478,13 +490,26 @@ competitor_defense_checklist внутри deal_context: они уже счита
 <management_blocks_rules>
 Правила единого действия менеджера:
 - deal_control_brief — компактная проекция именно для рабочих экранов контроля сделки. Не повторяй общий отчёт:
-  - current_situation: что сейчас происходит со сделкой и почему она требует именно такого контроля;
+  - current_situation: 4–6 коротких предложений по формуле CURRENT_SITUATION_CONTEXT. РОП должен прочитать блок примерно за 10 секунд;
   - strengths/weaknesses: только подтверждённые сильные стороны и риски обработки;
   - rop_focus/what_to_check_now: что РОП контролирует и проверяет перед разговором с менеджером;
   - manager_coaching: одно готовое сообщение РОПа менеджеру на «ты», которое можно скопировать без редактирования. Пиши живо, ёмко и энергично, без канцелярита и мата. Если есть подтверждённое сильное действие, начни с конкретного признания в духе «Красавчик, что…», «Круто, что…» или «Сильный ход — …». Не придумывай похвалу: если подтверждённого действия нет, сразу переходи к тому, как дожать сделку. Затем укажи одно действие на сегодня, ожидаемый результат и что зафиксировать в B24. Действие, срок и результат не должны расходиться с rop_manager_message_block.message_to_manager;
   - known_facts/missing_facts: отделяй подтверждённые факты от того, что ещё нужно выяснить;
   - contact_goal/contact_questions/call_script/call_opening_variants: практический модуль менеджера перед ближайшим контактом;
   - direct_manager_question: один пункт из двух-трёх коротких прямых вопросов РОПа менеджеру на «ты». Проверяй наблюдаемое действие или результат («ты отправил?», «клиент подтвердил?», «когда решение?»). Неизвестный факт только спрашивай, не утверждай. Это вопрос менеджеру, не клиенту.
+- current_situation строй только от CURRENT_SITUATION_CONTEXT:
+  1. начни смысл с last_substantive_client_contact — последнего подтверждённого содержательного контакта именно со стороны клиента;
+  2. укажи дату/период контакта, если occurred_at известен;
+  3. коротко зафиксируй, что клиент сказал или что изменилось;
+  4. отдельно опиши действия менеджера после этого контакта;
+  5. если has_newer_client_response=false — прямо напиши, что нового подтверждённого ответа клиента нет;
+  6. заверши фактическим состоянием сейчас и главным неизвестным, которое нужно установить.
+- CURRENT_SITUATION_CONTEXT собран по всей доступной истории сделки до сжатия LLM-контекста. Не теряй якорь только потому, что в Markdown-истории остались последние 30 касаний.
+- Подтверждённым клиентским контактом может быть только direct client evidence: содержательный звонок с transcript/записью, входящее сообщение или email клиента, зеркало WhatsApp/Telegram/Max от клиента. Не считай новой позицией клиента комментарий менеджера, фразу «клиент сказал...» без прямого evidence, CRM-задачу, дедлайн, внутренний чат, системное событие, закрытую активность, исходящее сообщение/email без ответа, недозвон или звонок COMPLETED=Y без разговора.
+- Простые входящие «ок», «спасибо», «получил», «понял» без нового бизнес-факта не заменяют предыдущий содержательный якорь. Они могут быть в later_non_substantive_client_replies: это подтверждение получения, а не новая позиция. «Получил КП, посмотрю завтра» или новая позиция/критерий/срок — уже новый содержательный контакт.
+- Более новый подтверждённый содержательный ответ клиента становится новым якорем. Старые клиентские факты используй только как дополнительный контекст.
+- Если call_attempts_after_contact / outgoing_messages_after_contact / outgoing_emails_after_contact известны, называй их раздельно: попытки дозвона, сообщения и email. Не объединяй в абстрактные «касания» и не выдумывай количество, если в контексте null.
+- Попытка, задача или комментарий менеджера не могут заменить клиентскую позицию. Неизвестные факты не выдумывай.
 - В deal_control_brief не выдавай CRM-задачу, комментарий менеджера или закрытую активность за содержательный контакт с клиентом. Если клиентского подтверждения нет, прямо пиши об этом в missing_facts.
 - call_script должен быть готовым естественным текстом разговора с клиентом, без инструкций менеджеру и без служебных плейсхолдеров.
 - Если ближайшее касание — звонок, call_script содержит один основной короткий сценарий, а call_opening_variants — ровно два альтернативных начала того же разговора. Во всех трёх вариантах сохраняй одну цель и те же ключевые факты; меняй только подачу. Альтернативные начала не должны повторять основной сценарий целиком.
@@ -602,7 +627,7 @@ next_action_at — ISO datetime с часовым поясом, например
     "client": "клиент/контакт, если есть"
   }},
   "deal_control_brief": {{
-    "current_situation": "2-3 коротких предложения о фактическом состоянии сделки",
+    "current_situation": "4-6 коротких предложений: последний содержательный контакт клиента, его содержание, действия менеджера после него, есть ли новый ответ, состояние сейчас и главное неизвестное",
     "strengths": ["до 5 подтверждённых сильных сторон сделки или работы менеджера"],
     "weaknesses": ["до 5 рисков, пробелов или слабых мест"],
     "rop_focus": "один управленческий фокус РОПа по сделке",
@@ -1696,6 +1721,7 @@ def main() -> None:
         okf_sections.append((path, read_text(path)))
 
     history_text = read_text(history_path) if incremental_context is None else ""
+    current_situation_context = load_deal_current_situation_context(deal_dir, str(args.deal_id))
     prompt = build_prompt(
         args.deal_id,
         history_text,
@@ -1705,6 +1731,7 @@ def main() -> None:
         stage_policy,
         prior_neuro_rop_recommendation,
         incremental_context,
+        current_situation_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
