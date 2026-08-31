@@ -7466,7 +7466,9 @@ ul.facts.bad li:before {
 .dc-deal-context-section.warning p, .dc-deal-context-section.warning small { margin: 0; font-size: 10.5px; }
 .dc-deal-context-markdown { display: grid; gap: 7px; padding-top: 4px; }
 .dc-markdown-report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.dc-deal-context-markdown > pre { max-height: 520px; padding: 12px; border: 1px solid #d6e1eb; border-radius: 9px; color: #344d69; background: #fbfdff; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.dc-deal-context-markdown > pre { max-height: 520px; padding: 12px; border: 1px solid #d6e1eb; border-radius: 9px; color: #344d69; background: #fbfdff; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: auto; }
+.dc-analysis-trace-note { color: #6d8096; font-size: 10.5px; line-height: 1.45; }
+.dc-analysis-trace-text { white-space: pre-wrap; }
 .dc-manager-followups { display: grid; gap: 12px; }
 .dc-manager-followups > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .dc-manager-followups > header h3, .dc-manager-followups > header p { margin: 0; }

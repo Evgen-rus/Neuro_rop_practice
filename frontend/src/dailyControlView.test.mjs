@@ -193,7 +193,7 @@ test('communication labels honor frozen Moscow cutoff including legacy report me
 
 test('task summaries expose due dates relative to snapshot, never browser today', () => {
   for (const [task, expected] of [
-    [{ status: 'open', deadline: '2026-09-24T10:25:00+03:00' }, 'Задача на 24 сентября, 10:25 · не в этот день'],
+    [{ status: 'open', deadline: '2026-09-24T10:25:00+03:00' }, 'Задача на 24 сентября, 10:25'],
     [{ status: 'open', deadline: '2026-08-28T13:00:00Z' }, 'Задача на 28 августа, 16:00'],
     [{ status: 'open', deadline: '2026-08-29T01:00:00+07:00' }, 'Задача на 28 августа, 21:00'],
     [{ status: 'open', overdue: true, deadline: '2026-08-28T10:00:00+03:00' }, 'Задача просрочена · срок 28 августа, 10:00'],
@@ -227,7 +227,7 @@ test('multiple tasks retain every row and prioritize overdue/open over completed
 
 test('rescheduled future task retains current deadline without hiding the transfer or day obligation', () => {
   const task = { status: 'open', deadline: '2026-09-24T10:25:00+03:00', reschedules: [{ from_deadline: cutoff, to_deadline: '2026-09-24T10:25:00+03:00', occurred_at: cutoff }] }
-  assert.equal(taskDeadlineLabel(task, cutoff).text, 'Задача на 24 сентября, 10:25 · не в этот день')
+  assert.deepEqual(taskDeadlineLabel(task, cutoff), { kind: 'rescheduled', text: 'Задача перенесена на 24 сентября, 10:25' })
   assert.equal(taskStripStatus(task).kind, 'rescheduled')
   const deal = communicationDeal([])
   deal.day_scope.had_day_obligation = true
@@ -261,7 +261,7 @@ test('collapsed production task block exposes date and contains every task with 
   const html = renderToStaticMarkup(createElement(TaskDayResults, { tasks, cutoffAt: cutoff }))
   assert.match(html, /<summary><span>Задач: 2 · Задача просрочена · срок 27 августа, 15:00<\/span><\/summary>/)
   assert.doesNotMatch(html, /<details[^>]*\bopen\b/)
-  assert.match(html, /Задача на 24 сентября, 10:25 · не в этот день/)
+  assert.match(html, /Задача перенесена на 24 сентября, 10:25/)
   assert.ok(html.indexOf('Просроченная задача') < html.indexOf('Будущая задача'))
   assert.match(html, /Перенесена · 1/)
   assert.match(html, /popover="auto"/)

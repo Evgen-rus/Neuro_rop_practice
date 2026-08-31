@@ -187,9 +187,10 @@ export function taskDeadlineLabel(task: TaskStripTask, cutoffAt?: string): { kin
   if (task.overdue) return { kind: 'overdue', text: `Задача просрочена${date ? ` · срок ${date}` : ''}` }
   if (!task.deadline) return { kind: 'waiting', text: 'Задача без срока' }
   if (!date) return { kind: 'unknown', text: 'Задача: срок не определён' }
-  const cutoff = validStamp(cutoffAt)
-  const future = cutoff !== null && moscowDateInputValue(task.deadline) > moscowDateInputValue(cutoff)
-  return { kind: 'waiting', text: `Задача на ${date}${future ? ' · не в этот день' : ''}` }
+  if (task.reschedules?.length) {
+    return { kind: 'rescheduled', text: `Задача перенесена на ${date}` }
+  }
+  return { kind: 'waiting', text: `Задача на ${date}` }
 }
 
 export function sortDayTasks<T extends TaskStripTask>(tasks: T[]): T[] {

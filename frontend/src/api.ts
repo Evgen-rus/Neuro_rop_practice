@@ -2254,6 +2254,20 @@ export function fetchReportMarkdown(reportId: number) {
   return api<{ report_id: number; markdown: string }>(`/api/reports/${reportId}/markdown`)
 }
 
+export type ReportAnalysisTrace = {
+  report_id: number
+  entity_type: string
+  entity_id: string
+  request_prompt_available: boolean
+  raw_output_available: boolean
+  request_prompt: string | null
+  raw_output: string | null
+}
+
+export function fetchReportAnalysisTrace(reportId: number) {
+  return api<ReportAnalysisTrace>(`/api/reports/${reportId}/analysis-trace`)
+}
+
 export function saveDecision(reportId: number, decision: string, comment?: string) {
   return api<{ ok: boolean; decisions: Array<Record<string, unknown>>; candidate_review?: Record<string, unknown> | null }>(
     `/api/reports/${reportId}/rop-decision`,

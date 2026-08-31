@@ -57,6 +57,7 @@ from api.jobs import (
     AnalyzeOptions,
     build_lead_report_meta,
     extract_summary_fields,
+    analysis_paths,
     get_job,
     list_jobs,
     parse_ids,
@@ -2195,6 +2196,30 @@ def _candidate_review_values(report: dict[str, Any]) -> dict[str, str | None]:
     }
 
 
+def _analysis_trace_payload(report: dict[str, Any]) -> dict[str, Any]:
+    """Latest FULL analysis prompt/output on disk for this entity. Does not launch LLM."""
+    entity_type = str(report.get("entity_type") or "")
+    entity_id = str(report.get("entity_id") or "")
+    paths = analysis_paths(entity_type, entity_id)
+
+    def _read(path: Path) -> tuple[bool, str | None]:
+        if not path.is_file():
+            return False, None
+        return True, path.read_text(encoding="utf-8")
+
+    prompt_ok, prompt = _read(paths["request_prompt"])
+    raw_ok, raw = _read(paths["raw_output"])
+    return {
+        "report_id": report.get("id"),
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "request_prompt_available": prompt_ok,
+        "raw_output_available": raw_ok,
+        "request_prompt": prompt,
+        "raw_output": raw,
+    }
+
+
 def _report_markdown_path(report: dict[str, Any]) -> Path:
     configured_value = str(report.get("report_path") or "").strip()
     configured = Path(configured_value) if configured_value else Path("__missing_report__.md")
@@ -2540,6 +2565,17 @@ def report_markdown(report_id: int) -> dict[str, Any]:
         "path": str(md_path),
         "markdown": md_path.read_text(encoding="utf-8"),
     }
+
+
+@app.get("/api/reports/{report_id}/analysis-trace")
+def report_analysis_trace(report_id: int) -> dict[str, Any]:
+    """Admin-only raw FULL-analysis prompt and model output. Does not call OpenAI."""
+    _require_admin()
+    report = require_report(report_id)
+    payload = _analysis_trace_payload(report)
+    if not payload["request_prompt_available"] and not payload["raw_output_available"]:
+        raise HTTPException(status_code=404, detail="Сырой запрос и ответ анализа не найдены")
+    return payload
 
 
 @app.post("/api/reports/{report_id}/rop-decision")

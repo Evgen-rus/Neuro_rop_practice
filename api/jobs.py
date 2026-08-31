@@ -276,6 +276,7 @@ def analysis_paths(entity_type: str, entity_id: str) -> dict[str, Path]:
         "analysis_json": analysis_dir / f"{entity_type}_{entity_id}_analysis.json",
         "report_md": analysis_dir / f"{entity_type}_{entity_id}_rop_report.md",
         "raw_output": analysis_dir / f"{entity_type}_{entity_id}_raw_model_output.txt",
+        "request_prompt": analysis_dir / f"{entity_type}_{entity_id}_request_prompt.txt",
         "error_json": analysis_dir / f"{entity_type}_{entity_id}_analysis_error.json",
     }
 

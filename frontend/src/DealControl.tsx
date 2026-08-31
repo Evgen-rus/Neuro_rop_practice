@@ -15,6 +15,7 @@ import {
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
   fetchReportMarkdown,
+  fetchReportAnalysisTrace,
   fetchJob,
   recordManagerCommunicationCompleted,
   recordQuickHelpOpened,
@@ -60,6 +61,7 @@ import {
   type ManagerDiscProfile,
   type ManagerSituationJob,
   type ManagerSituationState,
+  type ReportAnalysisTrace,
   isCallScriptContent,
   isNeuroRopTask,
 } from './api'
@@ -2671,13 +2673,25 @@ function DealMarkdownReport(props: {
   const [loading, setLoading] = useState(false)
   const [copying, setCopying] = useState(false)
   const [error, setError] = useState('')
+  const [trace, setTrace] = useState<ReportAnalysisTrace | null>(null)
+  const [openPrompt, setOpenPrompt] = useState(false)
+  const [openRaw, setOpenRaw] = useState(false)
+  const [tracePending, setTracePending] = useState<'prompt' | 'raw' | null>(null)
+  const [traceError, setTraceError] = useState('')
+  const [copyingKey, setCopyingKey] = useState<'prompt' | 'raw' | null>(null)
   const reportId = props.reportId || null
   const canOpen = Boolean(reportId) && props.markdownAvailable !== false
+  const canOpenTrace = Boolean(reportId)
 
   useEffect(() => {
     setMarkdown(null)
     setOpen(false)
     setError('')
+    setTrace(null)
+    setOpenPrompt(false)
+    setOpenRaw(false)
+    setTraceError('')
+    setTracePending(null)
   }, [reportId])
 
   async function toggle() {
@@ -2716,10 +2730,63 @@ function DealMarkdownReport(props: {
     }
   }
 
+  async function loadTrace() {
+    if (trace) return trace
+    if (!reportId) return null
+    setTraceError('')
+    const result = await fetchReportAnalysisTrace(reportId)
+    setTrace(result)
+    return result
+  }
+
+  async function toggleTrace(kind: 'prompt' | 'raw') {
+    const isOpen = kind === 'prompt' ? openPrompt : openRaw
+    const setOpenKind = kind === 'prompt' ? setOpenPrompt : setOpenRaw
+    if (isOpen) {
+      setOpenKind(false)
+      return
+    }
+    setTracePending(kind)
+    try {
+      const loaded = await loadTrace()
+      if (!loaded) return
+      const available = kind === 'prompt' ? loaded.request_prompt_available : loaded.raw_output_available
+      if (!available) {
+        setTraceError(kind === 'prompt' ? 'Сырой запрос последнего анализа не найден' : 'Сырой ответ последнего анализа не найден')
+        return
+      }
+      setOpenKind(true)
+    } catch (reason) {
+      setTraceError(reason instanceof Error ? reason.message : 'Не удалось открыть сырой анализ')
+    } finally {
+      setTracePending(null)
+    }
+  }
+
+  async function copyTrace(kind: 'prompt' | 'raw') {
+    const text = kind === 'prompt' ? trace?.request_prompt : trace?.raw_output
+    if (!text) return
+    setCopyingKey(kind)
+    setTraceError('')
+    try {
+      await props.onCopy(text, kind === 'prompt' ? 'Сырой запрос анализа' : 'Сырой ответ анализа')
+    } catch (reason) {
+      setTraceError(reason instanceof Error ? reason.message : 'Не удалось скопировать текст')
+    } finally {
+      setCopyingKey(null)
+    }
+  }
+
   if (props.userRole !== 'admin') return null
+
+  const promptText = openPrompt && trace?.request_prompt ? trace.request_prompt : ''
+  const rawText = openRaw && trace?.raw_output ? trace.raw_output : ''
 
   return (
     <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown">
+      <small className="dc-analysis-trace-note">
+        Сырой запрос и ответ — от последнего полного анализа этой сделки. Они могут не совпадать с открытым Markdown, если анализ запускали ещё раз.
+      </small>
       <div className="dc-markdown-report-actions">
         <button
           type="button"
@@ -2737,6 +2804,39 @@ function DealMarkdownReport(props: {
       </div>
       {error ? <small className="dc-manager-error">{error}</small> : null}
       {open && markdown ? <pre>{markdown}</pre> : null}
+      <div className="dc-markdown-report-actions">
+        <button
+          type="button"
+          className="dc-analysis-material-link"
+          disabled={Boolean(tracePending) || !canOpenTrace}
+          onClick={() => void toggleTrace('prompt')}
+        >
+          {tracePending === 'prompt' ? 'Открываем сырой запрос…' : openPrompt ? 'Скрыть сырой запрос' : 'Открыть сырой запрос'}
+        </button>
+        {promptText ? (
+          <button type="button" className="dc-button" disabled={copyingKey === 'prompt'} onClick={() => void copyTrace('prompt')}>
+            {copyingKey === 'prompt' ? 'Копируем…' : 'Скопировать'}
+          </button>
+        ) : null}
+      </div>
+      {promptText ? <pre className="dc-analysis-trace-text">{promptText}</pre> : null}
+      <div className="dc-markdown-report-actions">
+        <button
+          type="button"
+          className="dc-analysis-material-link"
+          disabled={Boolean(tracePending) || !canOpenTrace}
+          onClick={() => void toggleTrace('raw')}
+        >
+          {tracePending === 'raw' ? 'Открываем сырой ответ…' : openRaw ? 'Скрыть сырой ответ' : 'Открыть сырой ответ'}
+        </button>
+        {rawText ? (
+          <button type="button" className="dc-button" disabled={copyingKey === 'raw'} onClick={() => void copyTrace('raw')}>
+            {copyingKey === 'raw' ? 'Копируем…' : 'Скопировать'}
+          </button>
+        ) : null}
+      </div>
+      {traceError ? <small className="dc-manager-error">{traceError}</small> : null}
+      {rawText ? <pre className="dc-analysis-trace-text">{rawText}</pre> : null}
     </section>
   )
 }
