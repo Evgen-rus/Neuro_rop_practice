@@ -72,6 +72,7 @@ from api.deal_control import confirm_task_crm_match as confirm_deal_control_task
 from api.deal_control import record_task_outcome as record_deal_control_task_outcome
 from api.deal_control import record_task_event as record_deal_control_task_event
 from api.deal_control import (
+    load_deal_comments,
     refresh_deal_control,
     save_bitrix_task_completion,
     save_deal_fields,
@@ -921,6 +922,12 @@ def manager_trajectory_event_get(
 def deal_control_dashboard() -> dict[str, Any]:
     user = auth_current_user()
     return scoped_dashboard(build_deal_control_dashboard(db_path=DEFAULT_DB_PATH), user)
+
+
+@app.get("/api/deal-control/deals/{deal_id}/comments")
+def deal_control_comments_get(deal_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    return load_deal_comments(deal_id=deal_id)
 
 
 @app.get("/api/daily-control/reports")

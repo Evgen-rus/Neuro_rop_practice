@@ -685,6 +685,45 @@ export type DealControlBitrixTask = {
   provider_id: string
 }
 
+export type DealManagerCommentPreviewItem = {
+  id: string
+  created_at?: string | null
+  author_id?: string | null
+  text: string
+}
+
+export type DealManagerCommentsPreview = {
+  available: boolean
+  count: number | null
+  items: DealManagerCommentPreviewItem[]
+  synced_at?: string | null
+}
+
+export type DealCommentFile = {
+  id: string
+  comment_id?: string | null
+  name: string
+  size_bytes: number
+  type?: string | null
+  is_image: boolean
+  preview_url?: string | null
+  open_url?: string | null
+  download_url?: string | null
+  edit_url?: string | null
+}
+
+export type DealTimelineComment = DealManagerCommentPreviewItem & {
+  files: DealCommentFile[]
+}
+
+export type DealCommentsPayload = {
+  deal_id: string
+  available: boolean
+  comments: DealTimelineComment[]
+  files: DealCommentFile[]
+  archive_url?: string | null
+}
+
 export type DealControlCommunicationItem = {
   event_id: string
   channel: 'call' | 'email' | 'message' | 'whatsapp' | 'telegram' | 'max' | string
@@ -895,6 +934,7 @@ export type DealControlDeal = {
   next_control_at?: string | null
   bitrix_tasks: DealControlBitrixTask[]
   communications_today: DealControlCommunicationsToday
+  manager_comments_preview?: DealManagerCommentsPreview
   primary_bitrix_task?: DealControlBitrixTask | null
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
@@ -1539,6 +1579,11 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
       can_run_paid_ai: deal.can_run_paid_ai === true,
       bitrix_tasks: foreignProjection ? [] : (Array.isArray(deal.bitrix_tasks) ? deal.bitrix_tasks : []),
       communications_today: foreignProjection ? emptyCommunications : (deal.communications_today || emptyCommunications),
+      manager_comments_preview: foreignProjection ? undefined : (deal.manager_comments_preview || {
+        available: false,
+        count: null,
+        items: [],
+      }),
       tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
       current_task: foreignProjection ? null : (deal.current_task || null),
       manager_situation: foreignProjection ? null : (deal.manager_situation || null),
@@ -1604,6 +1649,10 @@ export function previewAnalysisProfile(
 
 export function fetchDealControl() {
   return api<DealControlDashboard>('/api/deal-control', { cache: 'no-store' }).then(normalizeDealControlDashboard)
+}
+
+export function fetchDealComments(dealId: string) {
+  return api<DealCommentsPayload>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/comments`, { cache: 'no-store' })
 }
 
 export function fetchDealCallTranscript(dealId: string, eventId: string) {

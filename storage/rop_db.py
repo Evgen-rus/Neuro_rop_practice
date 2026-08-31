@@ -544,6 +544,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 next_control_at TEXT,
                 bitrix_tasks_json TEXT NOT NULL DEFAULT '[]',
                 communications_today_json TEXT NOT NULL DEFAULT '{}',
+                manager_comments_preview_json TEXT NOT NULL DEFAULT '{}',
                 last_crm_sync_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -1054,6 +1055,7 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "lead_workflow_state", "manager_full_review_text", "TEXT")
         _ensure_column(conn, "deal_control_deals", "bitrix_tasks_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "deal_control_deals", "communications_today_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "deal_control_deals", "manager_comments_preview_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "deal_control_tasks", "crm_match_candidate_completed", "INTEGER")
         _ensure_column(conn, "deal_control_tasks", "crm_match_confirmed", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "deal_control_tasks", "guidance_revision", "INTEGER NOT NULL DEFAULT 1")
@@ -5803,6 +5805,8 @@ def _row_to_deal_control_deal(row: sqlite3.Row | None) -> dict[str, Any] | None:
     )
     communications_today = loads_json(value.pop("communications_today_json", None), {})
     value["communications_today"] = communications_today if isinstance(communications_today, dict) else {}
+    comments_preview = loads_json(value.pop("manager_comments_preview_json", None), {})
+    value["manager_comments_preview"] = comments_preview if isinstance(comments_preview, dict) else {}
     # Existing databases may retain this retired column; never expose its data.
     value.pop("checklist_state_json", None)
     return value
@@ -5953,6 +5957,26 @@ def save_deal_control_communications_today(
         conn.execute(
             "UPDATE deal_control_deals SET communications_today_json = ?, updated_at = ? WHERE deal_id = ?",
             (dumps_json(summary), utcish_now(), str(deal_id)),
+        )
+        row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
+    result = _row_to_deal_control_deal(row)
+    assert result is not None
+    return result
+
+
+def save_deal_control_manager_comments_preview(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    preview: dict[str, Any],
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        if conn.execute("SELECT 1 FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone() is None:
+            raise ValueError("Сделка ещё не добавлена в контур контроля")
+        conn.execute(
+            "UPDATE deal_control_deals SET manager_comments_preview_json = ?, updated_at = ? WHERE deal_id = ?",
+            (dumps_json(preview), utcish_now(), str(deal_id)),
         )
         row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
     result = _row_to_deal_control_deal(row)

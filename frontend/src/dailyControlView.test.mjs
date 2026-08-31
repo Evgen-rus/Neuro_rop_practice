@@ -365,11 +365,11 @@ test('daily quality renders system zeros, pending, unavailable and not-required 
     assert.equal((html.match(/dc-daily-criterion bad/g) || []).length, status === 'no_work' ? 3 : 0)
     assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
     assert.match(html, /dc-daily-criterion-tip/)
-    assert.match(html, /Основание оценки за день/)
+    assert.equal((html.match(/<p>За сегодня<\/p>/g) || []).length, 3)
   }
 })
 
-test('review card shows quality, then today communications, then focus, with shared hover argumentation', () => {
+test('review card shows quality, then today communications, then focus, with per-criterion argumentation', () => {
   const deal = {
     ...communicationDeal([]),
     title: 'Тестовая сделка',
@@ -399,7 +399,10 @@ test('review card shows quality, then today communications, then focus, with sha
   assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
   assert.doesNotMatch(html, />Аргументация</)
   assert.equal((html.match(/dc-daily-criterion-tip/g) || []).length, 3)
-  assert.equal((html.match(/Общая аргументация за день/g) || []).length, 3)
+  assert.equal((html.match(/Общая аргументация за день/g) || []).length, 0)
+  assert.equal((html.match(/Следующий шаг зафиксирован/g) || []).length, 2)
+  assert.equal((html.match(/Касания дали ценность/g) || []).length, 2)
+  assert.equal((html.match(/Ключевые данные собраны/g) || []).length, 2)
 })
 
 test('read-only situation uses live or frozen snapshot heading and hides empty values', () => {

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 
 import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommunicationsToday } from './api'
 import { useCommunicationDialog } from './communicationDialogContext'
@@ -86,13 +86,6 @@ function humanQualityText(value?: string | null, snapshotDay = false) {
     .replace(/insufficient evidence/gi, INSUFFICIENT_QUALITY_LABEL)
     .replace(/\bevidence\b/gi, 'доказательств')
   return snapshotDay ? snapshotDayText(cleaned) : cleaned
-}
-
-function qualityLabel(criterion?: string | null) {
-  if (criterion && criterion in QUALITY_LABELS) {
-    return QUALITY_LABELS[criterion as keyof typeof QUALITY_LABELS]
-  }
-  return criterion || 'Критерий'
 }
 
 function meetingScript(deal: DailyControlDeal) {
@@ -195,31 +188,23 @@ function summaryView(communications: DealControlCommunicationsToday) {
   }
 }
 
-function QualityArgumentation({ quality, snapshotDay = false }: { quality: DailyControlDeal['quality']; snapshotDay?: boolean }) {
+function QualityArgumentation({
+  quality,
+  criterion,
+  snapshotDay = false,
+}: {
+  quality: DailyControlDeal['quality']
+  criterion: keyof typeof QUALITY_LABELS
+  snapshotDay?: boolean
+}) {
+  const reason = quality.zero_reasons.find((item) => item.criterion === criterion)
+  const item = quality.criteria[criterion]
+  const explanation = reason?.explanation || item.verdict || quality.insufficient_reason || quality.scope_summary
   return (
     <div className="dc-daily-argument-body">
-      {quality.status === 'assessed' && quality.confirmed_count === 3 ? (
-        <p className="dc-daily-argument-ok">
-          <span className="dc-daily-argument-ok-mark" aria-hidden="true">✓</span>
-          AI подтвердил 3/3 за указанный день.
-        </p>
-      ) : null}
-      <div className="dc-daily-argument-scope">
-        <span className="dc-daily-argument-label">Основание анализа</span>
-        <p>{humanQualityText(quality.scope_summary, snapshotDay) || NO_DATA}</p>
-      </div>
-      {quality.insufficient_reason && quality.insufficient_reason !== quality.scope_summary ? <p>{humanQualityText(quality.insufficient_reason, snapshotDay)}</p> : null}
-      {quality.zero_reasons.length ? (
-        <div className="dc-daily-argument-reasons">
-          {quality.zero_reasons.map((reason, index) => (
-            <div className="dc-daily-argument-reason" key={`${reason.criterion}-${index}`}>
-              <strong>{qualityLabel(reason.criterion)}</strong>
-              <p>{humanQualityText(reason.explanation, snapshotDay)}</p>
-              {reason.quote ? <blockquote>{reason.quote}</blockquote> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <strong>{QUALITY_LABELS[criterion]}</strong>
+      <p>{humanQualityText(explanation, snapshotDay) || NO_DATA}</p>
+      {reason?.quote ? <blockquote>{reason.quote}</blockquote> : null}
     </div>
   )
 }
@@ -228,9 +213,18 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
   const quality = deal.quality
   const qualityCaption = dailyQualityCaption(quality, snapshotDay)
   const tipId = useId()
-  // Аргументация больше не отдельный блок: один и тот же текст всплывает на любой карточке.
+  const [pinned, setPinned] = useState<keyof typeof QUALITY_LABELS | null>(null)
+  const blockRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!pinned) return
+    const close = (event: PointerEvent) => {
+      if (!blockRef.current?.contains(event.target as Node)) setPinned(null)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [pinned])
   return (
-    <article className="dc-daily-block dc-daily-quality-block">
+    <article className="dc-daily-block dc-daily-quality-block" ref={blockRef}>
       <header className="dc-daily-block-title">
         <span className="dc-daily-title-with-icon">
           <span className="dc-daily-ico"><DailyIcon name="audit" /></span>
@@ -252,7 +246,13 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
             const tone = item.score === 1 ? 'good' : item.score === 0 ? 'bad' : 'neutral'
             const describedBy = `${tipId}-${key}`
             return (
-              <li key={key} className={`dc-daily-criterion ${tone}`} tabIndex={0} aria-describedby={describedBy}>
+              <li
+                key={key}
+                className={`dc-daily-criterion ${tone}${pinned === key ? ' pinned' : ''}`}
+                tabIndex={0}
+                aria-describedby={describedBy}
+                onClick={() => setPinned((current) => current === key ? null : key)}
+              >
                 <span className="dc-daily-criterion-icon" aria-hidden="true">{item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}</span>
                 <span className="dc-daily-criterion-name">
                   {QUALITY_LABELS[key]}
@@ -263,7 +263,7 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
                   <span className="dc-daily-criterion-state">{humanQualityText(item.verdict, snapshotDay)}</span>
                 ) : null}
                 <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
-                  <QualityArgumentation quality={quality} snapshotDay={snapshotDay} />
+                  <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
                 </div>
               </li>
             )

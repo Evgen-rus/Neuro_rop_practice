@@ -24,6 +24,15 @@ def index_sql(db_path: Path) -> str | None:
 
 
 class StorageMigrationTests(unittest.TestCase):
+    def test_deal_control_comments_preview_column_is_created_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            init_db(db_path)
+            init_db(db_path)
+            with connect(db_path) as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(deal_control_deals)")}
+            self.assertIn("manager_comments_preview_json", columns)
+
     def test_daily_checklist_tables_are_not_created_and_legacy_data_is_preserved(self) -> None:
         tables = ("deal_daily_checklists", "deal_daily_checklist_items", "deal_daily_checklist_events")
         with tempfile.TemporaryDirectory() as directory:

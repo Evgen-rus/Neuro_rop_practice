@@ -163,6 +163,16 @@ class DealAuthorizationTests(unittest.TestCase):
                 app_api._require_analyze_scope("lead", ["501"], paid=True)
         self.assertEqual(error.exception.status_code, 403)
 
+    def test_deal_comments_route_uses_existing_deal_access_guard(self) -> None:
+        payload = {"deal_id": "7243", "available": True, "comments": [], "files": [], "archive_url": None}
+        with patch.object(app_api, "require_deal") as require, patch.object(
+            app_api, "load_deal_comments", return_value=payload,
+        ) as load:
+            result = app_api.deal_control_comments_get("7243")
+        self.assertEqual(result, payload)
+        require.assert_called_once_with("7243", action="open")
+        load.assert_called_once_with(deal_id="7243")
+
     def test_job_visibility_follows_deal_scope(self) -> None:
         admin = _user("admin")
         rop = _user("rop", user_id=2)

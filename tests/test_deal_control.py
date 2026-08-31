@@ -13,6 +13,7 @@ from api.deal_control import (
     _analysis_coaching,
     _today_communications,
     build_deal_control_dashboard,
+    load_deal_comments,
     refresh_deal_control,
 )
 from storage.rop_db import (
@@ -120,6 +121,69 @@ def deal(
 
 
 class DealControlTests(unittest.TestCase):
+    def test_load_deal_comments_keeps_only_actual_bitrix_file_actions(self):
+        client = FakeBitrixClient(comments={
+            "7243": [
+                {
+                    "ID": "2",
+                    "CREATED": "2026-08-28T12:00:00+03:00",
+                    "AUTHOR_ID": "10",
+                    "COMMENT": "<b>Новый</b> комментарий",
+                    "FILES": {
+                        "930": {
+                            "id": 930,
+                            "name": "Фото.png",
+                            "size": 2048,
+                            "type": "image",
+                            "image": {"width": 100, "height": 80},
+                            "urlPreview": "https://example.test/preview/930",
+                            "urlShow": "https://example.test/show/930",
+                            "urlDownload": "https://example.test/download/930",
+                        }
+                    },
+                },
+                {
+                    "ID": "1",
+                    "CREATED": "2026-08-27T10:00:00+03:00",
+                    "AUTHOR_ID": "10",
+                    "COMMENT": "Старый комментарий",
+                    "FILES": {},
+                },
+            ],
+        })
+
+        result = load_deal_comments(deal_id="7243", client=client)
+
+        self.assertTrue(result["available"])
+        self.assertEqual([item["id"] for item in result["comments"]], ["2", "1"])
+        self.assertEqual(result["comments"][0]["text"], "Новый комментарий")
+        self.assertEqual(result["files"][0]["preview_url"], "https://example.test/preview/930")
+        self.assertEqual(result["files"][0]["open_url"], "https://example.test/show/930")
+        self.assertEqual(result["files"][0]["download_url"], "https://example.test/download/930")
+        self.assertIsNone(result["files"][0]["edit_url"])
+        self.assertIsNone(result["archive_url"])
+
+    def test_sync_persists_manager_comment_preview_without_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["7243"], manager_ids=[], pipeline_id="15")
+            client = FakeBitrixClient(
+                initial={"7243": deal("7243", manager_id="10")},
+                comments={"7243": [
+                    {"ID": "1", "CREATED": "2026-08-27T10:00:00+03:00", "COMMENT": "Первый"},
+                    {"ID": "2", "CREATED": "2026-08-28T10:00:00+03:00", "COMMENT": "Второй", "FILES": {"9": {"id": 9}}},
+                    {"ID": "3", "CREATED": "2026-08-29T10:00:00+03:00", "COMMENT": "Третий"},
+                ]},
+            )
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}):
+                result = refresh_deal_control(db_path=db_path, client=client, now=datetime(2026, 8, 29, 12, tzinfo=MSK))
+
+            preview = result["deals"][0]["manager_comments_preview"]
+            self.assertTrue(preview["available"])
+            self.assertEqual(preview["count"], 3)
+            self.assertEqual([item["id"] for item in preview["items"]], ["3", "2"])
+            self.assertNotIn("files", preview["items"][0])
+
     def test_init_db_migrates_legacy_deal_tasks_before_creating_neuro_index(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "legacy.sqlite"

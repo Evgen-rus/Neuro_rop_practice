@@ -284,6 +284,7 @@ class BitrixReadOnlyClient:
             raw_results = container.get("result") if isinstance(container.get("result"), dict) else {}
             raw_errors = container.get("result_error") if isinstance(container.get("result_error"), dict) else {}
             raw_next = container.get("result_next") if isinstance(container.get("result_next"), dict) else {}
+            raw_total = container.get("result_total") if isinstance(container.get("result_total"), dict) else {}
             for key, method, payload in chunk:
                 batch_key = batch_keys[key]
                 if batch_key in raw_errors:
@@ -315,6 +316,7 @@ class BitrixReadOnlyClient:
                     "payload": payload,
                     "response": {"result": raw_results.get(batch_key)},
                     "next": raw_next.get(batch_key),
+                    "total": raw_total.get(batch_key),
                 }
         return results
 

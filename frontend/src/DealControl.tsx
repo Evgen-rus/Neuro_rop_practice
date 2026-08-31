@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ApiError,
   confirmManagerSituation,
   fetchAutomaticAnalysisLatest,
+  fetchDealComments,
   fetchDealControl,
   fetchManagerAssistantWorkspace,
   fetchManagerFullScript,
@@ -33,6 +34,8 @@ import {
   updateDealControlBitrixTaskCompletion,
   updateDealContextLeverPriority,
   type DealControlDashboard,
+  type DealCommentFile,
+  type DealCommentsPayload,
   type DealControlBitrixTask,
   type AutomaticAnalysisLatest,
   type DealControlCommunicationsToday,
@@ -506,6 +509,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
   const [analyzingDealId, setAnalyzingDealId] = useState('')
   const [analysisConfirmDeal, setAnalysisConfirmDeal] = useState<DealControlDeal | null>(null)
+  const [commentsDealId, setCommentsDealId] = useState('')
   const canOpenRopView = user.role === 'admin' || user.role === 'rop'
   const canOpenManagerView = user.role === 'admin' || user.role === 'manager'
 
@@ -741,7 +745,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setNotice('')
     const statusTimers = [
       window.setTimeout(() => setSyncStatus('Получаем сделки и задачи…'), 2500),
-      window.setTimeout(() => setSyncStatus('Bitrix отвечает медленно — ожидайте…'), 8000),
+      window.setTimeout(() => setSyncStatus('Ожидайте…'), 8000),
     ]
     try {
       const response = await syncDealControl()
@@ -1001,7 +1005,13 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           </div>
           {view === 'dashboard'
             ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={selectDealExplicitly} onSaveFields={saveFields} />
-            : <TaskTable view={view} deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={selectDealExplicitly} />
+            : <TaskTable
+              view={view}
+              deals={visibleDeals}
+              selectedId={selected?.deal_id || ''}
+              onSelect={selectDealExplicitly}
+              onOpenComments={setCommentsDealId}
+            />
           }
         </section>
 
@@ -1032,6 +1042,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <div><button className="dc-button" onClick={() => setAnalysisConfirmDeal(null)}>Отмена</button><button className="dc-button primary" onClick={() => { const deal = analysisConfirmDeal; setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true) }}>Проверить и обновить</button></div>
       </section>
     </div> : null}
+
+    {commentsDealId ? <DealCommentsModal
+      deal={data?.deals.find((item) => item.deal_id === commentsDealId) || null}
+      onClose={() => setCommentsDealId('')}
+      onCopy={copy}
+    /> : null}
 
     {notice ? <NoticeToast message={notice} onClose={() => setNotice('')} /> : null}
   </main>
@@ -1154,8 +1170,57 @@ function DealTable(props: {
   </div>
 }
 
-function TaskTable({ view, deals, selectedId, onSelect }: { view: DealControlView; deals: DealControlDeal[]; selectedId: string; onSelect: (id: string) => void }) {
-  return <div className="dc-table-wrap task-table">
+const DEFAULT_PLAN_COLUMNS = [21, 22, 18, 25, 14]
+const MIN_PLAN_COLUMNS = [15, 12, 13, 16, 9]
+const dealCommentsCache = new Map<string, DealCommentsPayload>()
+
+function TaskTable({
+  view,
+  deals,
+  selectedId,
+  onSelect,
+  onOpenComments,
+}: {
+  view: DealControlView
+  deals: DealControlDeal[]
+  selectedId: string
+  onSelect: (id: string) => void
+  onOpenComments: (id: string) => void
+}) {
+  const [columns, setColumns] = useState(DEFAULT_PLAN_COLUMNS)
+  const tableRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ index: number; startX: number; widths: number[] } | null>(null)
+  const gridTemplateColumns = `42px ${columns.map((value) => `${value}fr`).join(' ')}`
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const drag = dragRef.current
+      const rect = tableRef.current?.getBoundingClientRect()
+      if (!drag || !rect) return
+      const available = Math.max(1, rect.width - 42)
+      const delta = ((event.clientX - drag.startX) / available) * 100
+      const left = Math.max(MIN_PLAN_COLUMNS[drag.index], drag.widths[drag.index] + delta)
+      const usedDelta = left - drag.widths[drag.index]
+      const right = Math.max(MIN_PLAN_COLUMNS[drag.index + 1], drag.widths[drag.index + 1] - usedDelta)
+      const correctedLeft = drag.widths[drag.index] + (drag.widths[drag.index + 1] - right)
+      setColumns(drag.widths.map((value, index) => index === drag.index ? correctedLeft : index === drag.index + 1 ? right : value))
+    }
+    const stop = () => { dragRef.current = null }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+    }
+  }, [])
+
+  const startResize = (event: ReactPointerEvent, index: number) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragRef.current = { index, startX: event.clientX, widths: [...columns] }
+  }
+
+  if (view !== 'rop') return <div className="dc-table-wrap task-table">
     <div className="dc-table-scroll">
       <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
@@ -1165,24 +1230,237 @@ function TaskTable({ view, deals, selectedId, onSelect }: { view: DealControlVie
         const deadline = dateTimeParts(bitrixTask?.deadline)
         return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
           <span className={`dc-check ${completed ? 'checked' : ''}`}>{completed ? '✓' : ''}</span>
-          <div>
-            {view === 'rop' && deal.review ? (
-              <div className="dc-rop-deal-title">
-                <DealStatusIndicator status={deal.review.status} label={deal.review.status_label} />
-                <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
-              </div>
-            ) : <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>}
-            <BitrixDealIdLink dealId={deal.deal_id} />
-          </div>
-          <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span>{view === 'rop' ? <small>♟ {deal.manager_name}</small> : null}</div>
+          <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
+          <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
           <div className="dc-task-deadline-cell"><time className="dc-task-deadline">{deadline ? <><strong>{deadline.date}</strong>{deadline.time ? <span>{deadline.time}</span> : null}</> : <span>Не назначен</span>}</time></div>
-          <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} />{view === 'rop' ? <TaskCommunicationProgress summary={deal.communications_today} /> : null}{bitrixTask?.completion_state === 'local' ? <small>В B24 ещё открыта</small> : bitrixTask?.completion_state === 'bitrix' ? <small>Подтверждено в B24</small> : null}</div>
+          <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} /></div>
         </article>
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
     </div>
   </div>
+
+  return <div className="dc-table-wrap task-table dc-rop-plan" ref={tableRef}>
+    <div className="dc-table-scroll">
+      <div className="dc-task-columns dc-rop-columns" style={{ gridTemplateColumns }}>
+        <span />
+        {['Сделка', 'Комментарии менеджера', 'Воронка / этап', 'Задача / срок', 'Выполнение'].map((label, index) => (
+          <span key={label}>{label}{index < 4 ? <i className="dc-col-resizer" onPointerDown={(event) => startResize(event, index)} /> : null}</span>
+        ))}
+      </div>
+      {deals.map((deal) => {
+        const bitrixTask = primaryBitrixTaskOf(deal)
+        const completed = bitrixTask?.completion_state === 'local' || bitrixTask?.completion_state === 'bitrix'
+        const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
+        const deadline = dateTimeParts(bitrixTask?.deadline)
+        const preview = deal.manager_comments_preview
+        return <article
+          className={`dc-task-row dc-rop-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`}
+          style={{ gridTemplateColumns }}
+          key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`}
+          onClick={() => onSelect(deal.deal_id)}
+        >
+          <div className="dc-plan-signal-cell">
+            {deal.review ? <DealStatusIndicator status={deal.review.status} label={deal.review.status_label} /> : <span className="dc-deal-status-indicator neutral">–</span>}
+            <span className={`dc-check ${completed ? 'checked' : ''}`}>{completed ? '✓' : ''}</span>
+          </div>
+          <div className="dc-plan-deal-cell">
+            <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
+            <small>♟ {deal.manager_name || 'Ответственный не указан'}</small>
+            <BitrixDealIdLink dealId={deal.deal_id} />
+          </div>
+          <div className="dc-manager-comments-cell">
+            <div className={`dc-comment-preview ${preview?.items?.length ? 'has-comments' : ''}`}>
+              {preview?.available === false ? <span className="dc-comment-preview-empty">Комментарии недоступны</span> : preview?.items?.length ? <>
+                <div className="dc-comment-preview-text">{preview.items.map((item) => <p key={item.id}><b>{dateOnly(item.created_at)}</b> {item.text}</p>)}</div>
+                <div className="dc-comment-preview-footer">
+                  <span>{preview.count == null ? '—' : `${preview.count} записей`}</span>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); onOpenComments(deal.deal_id) }}>Показать полностью</button>
+                </div>
+              </> : <span className="dc-comment-preview-empty">Комментариев нет</span>}
+            </div>
+          </div>
+          <div className="dc-stage-compact">
+            <div className="dc-stage-line funnel"><strong>{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</strong></div>
+            <div className="dc-stage-line stage"><strong>{deal.stage_name || deal.stage_id || '—'}</strong></div>
+          </div>
+          <div className={`dc-task-compact ${bitrixTask ? '' : 'missing'}`}>
+            <div className="dc-task-compact-title">{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</div>
+            <div className="dc-task-compact-meta">
+              <span className="dc-task-compact-meta-label">СРОК</span>
+              {deadline ? <time><span className="dc-task-deadline-date">{deadline.date}</span>{deadline.time ? <strong className="dc-task-deadline-time">{deadline.time}</strong> : null}</time> : <span className="dc-task-deadline-date">Не назначен</span>}
+            </div>
+          </div>
+          <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} />{view === 'rop' ? <TaskCommunicationProgress summary={deal.communications_today} /> : null}</div>
+        </article>
+      })}
+      {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
+    </div>
+  </div>
+}
+
+function fileSize(value: number) {
+  if (!value) return '—'
+  if (value < 1024) return `${value} Б`
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} КБ`
+  return `${(value / (1024 * 1024)).toFixed(1)} МБ`
+}
+
+function fileKind(file: DealCommentFile) {
+  if (file.is_image) return 'IMG'
+  const extension = file.name.split('.').pop()?.toUpperCase()
+  return extension && extension.length <= 4 ? extension : 'FILE'
+}
+
+function DealCommentsModal({
+  deal,
+  onClose,
+  onCopy,
+}: {
+  deal: DealControlDeal | null
+  onClose: () => void
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  const dealId = deal?.deal_id || ''
+  const [payload, setPayload] = useState<DealCommentsPayload | null>(() => dealCommentsCache.get(dealId) || null)
+  const [loading, setLoading] = useState(!dealCommentsCache.has(dealId))
+  const [error, setError] = useState('')
+  const [leftPercent, setLeftPercent] = useState(50)
+  const [resizing, setResizing] = useState(false)
+  const [previewFile, setPreviewFile] = useState<DealCommentFile | null>(null)
+  const [asked, setAsked] = useState<[boolean, boolean]>([false, false])
+  const [copyNotice, setCopyNotice] = useState('')
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!dealId) return
+    const cached = dealCommentsCache.get(dealId)
+    if (cached) {
+      setPayload(cached)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    void fetchDealComments(dealId)
+      .then((result) => {
+        if (cancelled) return
+        dealCommentsCache.set(dealId, result)
+        setPayload(result)
+      })
+      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [dealId])
+
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (previewFile) setPreviewFile(null)
+      else onClose()
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [onClose, previewFile])
+
+  useEffect(() => {
+    if (!resizing) return
+    const move = (event: PointerEvent) => {
+      const rect = bodyRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setLeftPercent(Math.min(68, Math.max(32, ((event.clientX - rect.left) / rect.width) * 100)))
+    }
+    const stop = () => setResizing(false)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+    }
+  }, [resizing])
+
+  const commentGroups = useMemo(() => {
+    const groups: Array<{ label: string; comments: DealCommentsPayload['comments'] }> = []
+    for (const comment of payload?.comments || []) {
+      const label = comment.created_at
+        ? (formatMoscowDateTime(comment.created_at, { month: 'long', year: 'numeric' }) || 'БЕЗ ДАТЫ').toLocaleUpperCase('ru')
+        : 'БЕЗ ДАТЫ'
+      const last = groups.at(-1)
+      if (last?.label === label) last.comments.push(comment)
+      else groups.push({ label, comments: [comment] })
+    }
+    return groups
+  }, [payload])
+
+  if (!deal) return null
+  const copyScript = async () => {
+    const text = String(deal.review?.ai_context.manager_coaching || '').trim()
+    await onCopy(text, 'Сценарий разговора')
+    setCopyNotice(text ? 'Сценарий скопирован' : '')
+    window.setTimeout(() => setCopyNotice(''), 2500)
+  }
+  return createPortal(
+    <div className="dc-comments-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="dc-comments-dialog" role="dialog" aria-modal="true" aria-label={`Комментарии и контроль сделки #${deal.deal_id}`}>
+        <header className="dc-comments-modal-head">
+          <div className="dc-comments-modal-title"><strong>Комментарии и контроль · #{deal.deal_id}</strong><small>{deal.title || `Сделка #${deal.deal_id}`} · {deal.manager_name || 'Ответственный не указан'}</small></div>
+          <button type="button" className="dc-comments-close" aria-label="Закрыть" onClick={onClose}>×</button>
+        </header>
+        <div className={`dc-comments-modal-body ${resizing ? 'resizing' : ''}`} ref={bodyRef} style={{ '--comments-left': `${leftPercent}%` } as CSSProperties}>
+          <aside className="dc-comments-pane">
+            <section className="dc-attachments-block">
+              <header><strong>Прикреплённые файлы</strong><span>{payload?.files.length || 0} файла</span></header>
+              {loading ? <p className="dc-comments-state">Загружаем комментарии и файлы…</p> : error ? <p className="dc-comments-state error">{error}</p> : payload?.available === false ? <p className="dc-comments-state">История комментариев сейчас недоступна.</p> : payload?.files.length ? <div className="dc-attachments-list">
+                {payload.files.map((file) => <div className="dc-attachment-item" key={file.id || file.name}>
+                  <span className="dc-attachment-type">{fileKind(file)}</span>
+                  <span className="dc-attachment-name"><strong>{file.name}</strong><small>{fileSize(file.size_bytes)}{file.type ? ` · ${file.type.toUpperCase()}` : ''}</small></span>
+                  <span className="dc-attachment-actions">
+                    {file.is_image && file.preview_url ? <button type="button" onClick={() => setPreviewFile(file)}>Открыть</button> : file.open_url ? <a href={file.open_url} target="_blank" rel="noreferrer">Открыть</a> : null}
+                    {file.download_url ? <a href={file.download_url} target="_blank" rel="noreferrer">Скачать</a> : null}
+                    {(file.edit_url || file.open_url) ? <details><summary aria-label="Дополнительные действия">⋯</summary><div>{file.edit_url ? <a href={file.edit_url} target="_blank" rel="noreferrer">Редактировать</a> : null}{file.open_url ? <a href={file.open_url} target="_blank" rel="noreferrer">Открыть в Bitrix24</a> : null}</div></details> : null}
+                  </span>
+                </div>)}
+              </div> : <p className="dc-comments-state">Прикреплённых файлов нет.</p>}
+              {payload?.archive_url ? <a className="dc-attachments-archive" href={payload.archive_url} target="_blank" rel="noreferrer">Скачать все файлы одним архивом</a> : null}
+            </section>
+            <header className="dc-comments-pane-head"><h3>Комментарии менеджера</h3><p>История комментариев из Bitrix</p></header>
+            <div className="dc-comments-list">
+              <div className="dc-comments-table-head"><span>Дата</span><span>Комментарий</span></div>
+              {!loading && !error && payload?.available !== false && !commentGroups.length ? <p className="dc-comments-state">Комментариев по сделке нет.</p> : null}
+              {commentGroups.map((group) => <section key={group.label}>
+                <h4 className="dc-comment-month">{group.label}</h4>
+                {group.comments.map((comment) => <div className="dc-comment-table-row" key={comment.id}>
+                  <time>{comment.created_at ? formatMoscowDateTime(comment.created_at, { day: '2-digit', month: '2-digit' }) : '—'}</time>
+                  <div className="dc-comment-table-text">{comment.text || '—'}</div>
+                </div>)}
+              </section>)}
+            </div>
+          </aside>
+          <div className="dc-comments-splitter" onPointerDown={(event) => { event.preventDefault(); setResizing(true) }} title="Потяните, чтобы изменить ширину">⋮</div>
+          <section className="dc-comments-review">
+            <div className="dc-comments-deal-head"><div><strong>Сделка</strong><p>{deal.title || `Сделка #${deal.deal_id}`}</p></div>{deal.review ? <span className={`dc-daily-pill ${deal.review.status}`}>{deal.review.status_label}</span> : null}</div>
+            <div className={`dc-analysis-ready ${deal.review ? '' : 'dc-analysis-missing'}`}><div><span>{deal.review ? '✓' : '✦'}</span><div><strong>{deal.review ? 'AI-анализ сделки доступен' : 'AI-анализ не проведён'}</strong>{deal.review ? <small>Разбор актуален для текущего среза</small> : null}</div></div></div>
+            <DealReviewCard
+              deal={deal.review || null}
+              asked={asked}
+              onToggleAsked={(index) => setAsked((current) => index === 0 ? [!current[0], current[1]] : [current[0], !current[1]])}
+              onCopyScript={() => void copyScript()}
+              copyNotice={copyNotice}
+              showHeader={false}
+              emptyText="Разбор сделки пока недоступен."
+              scriptHint="Для разговора с менеджером"
+            />
+          </section>
+        </div>
+        {previewFile?.preview_url ? <div className="dc-image-preview" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreviewFile(null) }}>
+          <figure><button type="button" aria-label="Закрыть изображение" onClick={() => setPreviewFile(null)}>×</button><img src={previewFile.preview_url} alt={previewFile.name} /><figcaption>{previewFile.name}</figcaption></figure>
+        </div> : null}
+      </section>
+    </div>,
+    document.body,
+  )
 }
 
 function StatusChip({ task }: { task: DealControlTask | null }) {

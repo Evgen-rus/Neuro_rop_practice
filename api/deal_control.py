@@ -59,6 +59,7 @@ from storage.rop_db import (
     save_deal_control_scope,
     save_deal_control_bitrix_tasks,
     save_deal_control_communications_today,
+    save_deal_control_manager_comments_preview,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -372,6 +373,166 @@ def _fetch_deal_timeline_comments(
         items = response.get("items") or []
         result[deal_id] = [item for item in items if isinstance(item, dict)]
     return result
+
+
+COMMENT_SELECT = ["ID", "CREATED", "ENTITY_ID", "ENTITY_TYPE", "AUTHOR_ID", "COMMENT", "FILES"]
+
+
+def _comment_preview_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(item.get("ID") or item.get("id") or ""),
+        "created_at": str(item.get("CREATED") or item.get("created") or "") or None,
+        "author_id": str(item.get("AUTHOR_ID") or item.get("authorId") or "") or None,
+        "text": clean_text(item.get("COMMENT") or item.get("comment") or ""),
+    }
+
+
+def _fetch_manager_comment_previews(
+    client: Any,
+    deal_ids: list[str],
+    *,
+    synced_at: datetime,
+) -> dict[str, dict[str, Any]]:
+    empty = {
+        deal_id: {"available": False, "count": None, "items": [], "synced_at": synced_at.isoformat(timespec="seconds")}
+        for deal_id in deal_ids
+    }
+    if not deal_ids:
+        return empty
+    requests = [
+        (
+            deal_id,
+            "crm.timeline.comment.list",
+            {
+                "order": {"CREATED": "DESC", "ID": "DESC"},
+                "filter": {"ENTITY_TYPE": "deal", "ENTITY_ID": deal_id},
+                "select": COMMENT_SELECT[:-1],
+                "start": 0,
+            },
+        )
+        for deal_id in deal_ids
+    ]
+    batch = getattr(client, "safe_batch_call", None)
+    if callable(batch):
+        try:
+            responses = batch(requests)
+        except Exception:  # noqa: BLE001 - preview failure must not break CRM sync
+            return empty
+        for deal_id, _method, _payload in requests:
+            response = responses.get(deal_id) if isinstance(responses, dict) else None
+            if not isinstance(response, dict) or not response.get("ok"):
+                continue
+            raw = (response.get("response") or {}).get("result")
+            items = raw if isinstance(raw, list) else list(raw.values()) if isinstance(raw, dict) else []
+            normalized = [_comment_preview_item(item) for item in items if isinstance(item, dict)]
+            normalized.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+            total = response.get("total")
+            empty[deal_id] = {
+                "available": True,
+                "count": int(total) if str(total or "").isdigit() else len(normalized),
+                "items": normalized[:2],
+                "synced_at": synced_at.isoformat(timespec="seconds"),
+            }
+        return empty
+
+    for deal_id, method, payload in requests:
+        try:
+            response = client.safe_list_all(method, payload)
+        except Exception:  # noqa: BLE001 - preview failure must not break CRM sync
+            continue
+        if not isinstance(response, dict) or not response.get("ok"):
+            continue
+        normalized = [_comment_preview_item(item) for item in response.get("items") or [] if isinstance(item, dict)]
+        normalized.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+        empty[deal_id] = {
+            "available": True,
+            "count": len(normalized),
+            "items": normalized[:2],
+            "synced_at": synced_at.isoformat(timespec="seconds"),
+        }
+    return empty
+
+
+def _comment_files(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        rows = list(value.values())
+    elif isinstance(value, list):
+        rows = value
+    else:
+        rows = []
+    result: list[dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        file_id = str(raw.get("id") or raw.get("ID") or "")
+        name = str(raw.get("name") or raw.get("NAME") or "").strip()
+        if not file_id and not name:
+            continue
+        file_type = str(raw.get("type") or raw.get("TYPE") or "").lower()
+        preview_url = str(raw.get("urlPreview") or raw.get("PREVIEW_URL") or "").strip() or None
+        open_url = str(raw.get("urlShow") or raw.get("DETAIL_URL") or "").strip() or None
+        download_url = str(raw.get("urlDownload") or raw.get("DOWNLOAD_URL") or "").strip() or None
+        edit_url = str(raw.get("urlEdit") or raw.get("EDIT_URL") or "").strip() or None
+        result.append({
+            "id": file_id,
+            "name": name or f"Файл {file_id}",
+            "size_bytes": int(raw.get("size") or raw.get("SIZE") or 0),
+            "type": file_type or None,
+            "is_image": file_type == "image" or bool(raw.get("image")),
+            "preview_url": preview_url,
+            "open_url": open_url,
+            "download_url": download_url,
+            "edit_url": edit_url,
+        })
+    return result
+
+
+def load_deal_comments(
+    *,
+    deal_id: str,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    crm = client or make_client()
+    payload = {
+        "order": {"CREATED": "DESC", "ID": "DESC"},
+        "filter": {"ENTITY_TYPE": "deal", "ENTITY_ID": str(deal_id)},
+        "select": COMMENT_SELECT,
+    }
+    with bitrix_trace_context(component="deal_control_comments"):
+        try:
+            response = crm.safe_list_all("crm.timeline.comment.list", payload)
+        except Exception:  # noqa: BLE001 - return an explicit unavailable projection
+            response = {"ok": False, "items": []}
+    if not isinstance(response, dict) or not response.get("ok"):
+        return {
+            "deal_id": str(deal_id),
+            "available": False,
+            "comments": [],
+            "files": [],
+            "archive_url": None,
+        }
+    comments: list[dict[str, Any]] = []
+    files_by_id: dict[str, dict[str, Any]] = {}
+    for raw in response.get("items") or []:
+        if not isinstance(raw, dict):
+            continue
+        files = _comment_files(raw.get("FILES"))
+        comment_id = str(raw.get("ID") or "")
+        for item in files:
+            key = str(item.get("id") or f"{comment_id}:{item.get('name') or ''}")
+            files_by_id.setdefault(key, {**item, "comment_id": comment_id})
+        comments.append({
+            **_comment_preview_item(raw),
+            "files": files,
+        })
+    comments.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+    return {
+        "deal_id": str(deal_id),
+        "available": True,
+        "comments": comments,
+        "files": list(files_by_id.values()),
+        "archive_url": None,
+    }
 
 
 def _local_recording_durations(entity_type: str, entity_id: str) -> dict[str, float]:
@@ -823,6 +984,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         today_comments = _fetch_deal_timeline_comments(
             crm, sync_deal_ids, day_start, unavailable_ids=unavailable_deal_comments,
         )
+        comment_previews = _fetch_manager_comment_previews(crm, sync_deal_ids, synced_at=current)
         lead_comments = _fetch_deal_timeline_comments(
             crm, source_lead_ids, day_start, entity_type="lead", unavailable_ids=unavailable_lead_comments,
         )
@@ -835,6 +997,16 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
         )
     for deal_item in deals:
         deal_id = str(deal_item["deal_id"])
+        save_deal_control_manager_comments_preview(
+            db_path,
+            deal_id=deal_id,
+            preview=comment_previews.get(deal_id) or {
+                "available": False,
+                "count": None,
+                "items": [],
+                "synced_at": current.isoformat(timespec="seconds"),
+            },
+        )
         open_items, open_error = open_task_activities.get(("deal", deal_id), ([], "open tasks unavailable"))
         completed_items, completed_error = completed_today_activities.get(
             ("deal", deal_id),
