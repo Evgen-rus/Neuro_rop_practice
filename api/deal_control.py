@@ -376,6 +376,19 @@ def _fetch_deal_timeline_comments(
 
 
 COMMENT_SELECT = ["ID", "CREATED", "ENTITY_ID", "ENTITY_TYPE", "AUTHOR_ID", "COMMENT", "FILES"]
+COMMENT_IMAGE_BBCODE_RE = re.compile(r"\[img(?:=[^\]]*)?\].*?\[/img\]", re.IGNORECASE | re.DOTALL)
+COMMENT_BBCODE_TAG_RE = re.compile(
+    r"\[/?(?:b|i|u|s|url|color|size|font|quote|left|center|right)(?:=[^\]]*)?\]",
+    re.IGNORECASE,
+)
+
+
+def _clean_comment_text(value: Any) -> str:
+    text = str(value or "")
+    text = COMMENT_IMAGE_BBCODE_RE.sub(" ", text)
+    text = re.sub(r"\[br\s*/?\]", "\n", text, flags=re.IGNORECASE)
+    text = COMMENT_BBCODE_TAG_RE.sub(" ", text)
+    return clean_text(text)
 
 
 def _comment_preview_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -383,7 +396,7 @@ def _comment_preview_item(item: dict[str, Any]) -> dict[str, Any]:
         "id": str(item.get("ID") or item.get("id") or ""),
         "created_at": str(item.get("CREATED") or item.get("created") or "") or None,
         "author_id": str(item.get("AUTHOR_ID") or item.get("authorId") or "") or None,
-        "text": clean_text(item.get("COMMENT") or item.get("comment") or ""),
+        "text": _clean_comment_text(item.get("COMMENT") or item.get("comment") or ""),
     }
 
 

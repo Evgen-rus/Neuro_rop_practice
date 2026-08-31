@@ -128,7 +128,7 @@ class DealControlTests(unittest.TestCase):
                     "ID": "2",
                     "CREATED": "2026-08-28T12:00:00+03:00",
                     "AUTHOR_ID": "10",
-                    "COMMENT": "<b>Новый</b> комментарий",
+                    "COMMENT": "[img]https://static.example.test/max.png[/img] <b>Новый</b> комментарий",
                     "FILES": {
                         "930": {
                             "id": 930,

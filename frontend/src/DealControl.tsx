@@ -257,6 +257,14 @@ function dateOnly(value?: string | null) {
   }) || value
 }
 
+function shortDateOnly(value?: string | null) {
+  if (!value) return '—'
+  return formatMoscowDateTime(value, {
+    day: '2-digit',
+    month: '2-digit',
+  }) || value
+}
+
 function taskStatus(task?: DealControlTask | null) {
   if (!task) return 'Нет поручения'
   if (task.local_status === 'completed') return 'Выполнено'
@@ -1273,7 +1281,7 @@ function TaskTable({
           <div className="dc-manager-comments-cell">
             <div className={`dc-comment-preview ${preview?.items?.length ? 'has-comments' : ''}`}>
               {preview?.available === false ? <span className="dc-comment-preview-empty">Комментарии недоступны</span> : preview?.items?.length ? <>
-                <div className="dc-comment-preview-text">{preview.items.map((item) => <p key={item.id}><b>{dateOnly(item.created_at)}</b> {item.text}</p>)}</div>
+                <div className="dc-comment-preview-text">{preview.items.map((item) => <p key={item.id}><b>{shortDateOnly(item.created_at)}</b> {item.text}</p>)}</div>
                 <div className="dc-comment-preview-footer">
                   <span>{preview.count == null ? '—' : `${preview.count} записей`}</span>
                   <button type="button" onClick={(event) => { event.stopPropagation(); onOpenComments(deal.deal_id) }}>Показать полностью</button>
@@ -1323,9 +1331,11 @@ function DealCommentsModal({
   onCopy: (text: string, label: string) => Promise<void>
 }) {
   const dealId = deal?.deal_id || ''
-  const [payload, setPayload] = useState<DealCommentsPayload | null>(() => dealCommentsCache.get(dealId) || null)
-  const [loading, setLoading] = useState(!dealCommentsCache.has(dealId))
+  const initialPayload = dealCommentsCache.get(dealId)
+  const [payload, setPayload] = useState<DealCommentsPayload | null>(() => initialPayload?.available ? initialPayload : null)
+  const [loading, setLoading] = useState(!initialPayload?.available)
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [leftPercent, setLeftPercent] = useState(50)
   const [resizing, setResizing] = useState(false)
   const [previewFile, setPreviewFile] = useState<DealCommentFile | null>(null)
@@ -1336,7 +1346,7 @@ function DealCommentsModal({
   useEffect(() => {
     if (!dealId) return
     const cached = dealCommentsCache.get(dealId)
-    if (cached) {
+    if (cached?.available) {
       setPayload(cached)
       setLoading(false)
       return
@@ -1347,13 +1357,20 @@ function DealCommentsModal({
     void fetchDealComments(dealId)
       .then((result) => {
         if (cancelled) return
-        dealCommentsCache.set(dealId, result)
+        if (result.available) dealCommentsCache.set(dealId, result)
+        else dealCommentsCache.delete(dealId)
         setPayload(result)
       })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [dealId])
+  }, [dealId, reloadKey])
+
+  const retryComments = () => {
+    dealCommentsCache.delete(dealId)
+    setPayload(null)
+    setReloadKey((value) => value + 1)
+  }
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -1412,7 +1429,7 @@ function DealCommentsModal({
           <aside className="dc-comments-pane">
             <section className="dc-attachments-block">
               <header><strong>Прикреплённые файлы</strong><span>{payload?.files.length || 0} файла</span></header>
-              {loading ? <p className="dc-comments-state">Загружаем комментарии и файлы…</p> : error ? <p className="dc-comments-state error">{error}</p> : payload?.available === false ? <p className="dc-comments-state">История комментариев сейчас недоступна.</p> : payload?.files.length ? <div className="dc-attachments-list">
+              {loading ? <p className="dc-comments-state">Загружаем комментарии и файлы…</p> : error ? <div className="dc-comments-state error"><p>{error}</p><button type="button" onClick={retryComments}>Повторить</button></div> : payload?.available === false ? <div className="dc-comments-state"><p>История комментариев сейчас недоступна.</p><button type="button" onClick={retryComments}>Повторить</button></div> : payload?.files.length ? <div className="dc-attachments-list">
                 {payload.files.map((file) => <div className="dc-attachment-item" key={file.id || file.name}>
                   <span className="dc-attachment-type">{fileKind(file)}</span>
                   <span className="dc-attachment-name"><strong>{file.name}</strong><small>{fileSize(file.size_bytes)}{file.type ? ` · ${file.type.toUpperCase()}` : ''}</small></span>
