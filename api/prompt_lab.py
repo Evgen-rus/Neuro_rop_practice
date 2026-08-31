@@ -11,6 +11,7 @@ import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from time import time
 from typing import Any
 
 from api.deal_manager_companion import find_last_contact
@@ -64,8 +65,10 @@ class PromptLabJob:
 
 
 _JOBS: dict[str, PromptLabJob] = {}
+_RAW_EXCHANGES: dict[str, tuple[float, dict[str, Any]]] = {}
 _LOCK = threading.Lock()
 _SNAPSHOT_LOCK = threading.Lock()
+_RAW_EXCHANGE_TTL_SECONDS = 15 * 60
 
 
 def _now() -> str:
@@ -82,6 +85,56 @@ def get_lab_job(job_id: str) -> dict[str, Any] | None:
     with _LOCK:
         job = _JOBS.get(str(job_id))
         return asdict(job) if job else None
+
+
+def _cleanup_raw_exchanges_locked(now: float | None = None) -> None:
+    current = time() if now is None else now
+    expired = [job_id for job_id, (expires_at, _) in _RAW_EXCHANGES.items() if expires_at <= current]
+    for job_id in expired:
+        _RAW_EXCHANGES.pop(job_id, None)
+
+
+def _discard_branch_raw_exchanges(*, deal_id: str, module_key: str, branch: str) -> None:
+    with _LOCK:
+        _cleanup_raw_exchanges_locked()
+        stale = [
+            job_id
+            for job_id, (_, bundle) in _RAW_EXCHANGES.items()
+            if bundle.get("deal_id") == deal_id
+            and bundle.get("module_key") == module_key
+            and bundle.get("branch") == branch
+        ]
+        for job_id in stale:
+            _RAW_EXCHANGES.pop(job_id, None)
+
+
+def consume_lab_raw_exchange(job_id: str) -> dict[str, Any] | None:
+    """Return a raw Lab exchange once, then remove the server-side in-memory copy."""
+    with _LOCK:
+        _cleanup_raw_exchanges_locked()
+        stored = _RAW_EXCHANGES.pop(str(job_id), None)
+        return stored[1] if stored else None
+
+
+def _store_raw_exchange_locked(job: PromptLabJob, attempts: list[dict[str, Any]]) -> None:
+    if not attempts:
+        return
+    _cleanup_raw_exchanges_locked()
+    _RAW_EXCHANGES[job.job_id] = (
+        time() + _RAW_EXCHANGE_TTL_SECONDS,
+        {
+            "format": "prompt_lab_raw_exchange_v1",
+            "job_id": job.job_id,
+            "run_id": job.run_id,
+            "deal_id": job.deal_id,
+            "module_key": job.module_key,
+            "branch": job.branch,
+            "status": job.status,
+            "created_at": job.created_at,
+            "completed_at": _now(),
+            "attempts": attempts,
+        },
+    )
 
 
 def _gate_state(context: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
@@ -715,6 +768,7 @@ def _run_lab_job(
     previous_message: str,
     quick_help_mode: str | None = None,
 ) -> None:
+    raw_attempts: list[dict[str, Any]] = []
     with _LOCK:
         job = _JOBS[job_id]
         job.status = "running"
@@ -752,6 +806,7 @@ def _run_lab_job(
             extra["quick_help"] = upstream.get("result") or {}
         template = prompt_template or production_prompt_template(module_key, manager_note=manager_note)
         kwargs = _generate_kwargs(spec, snapshot, extra, prompt_template=template)
+        kwargs["raw_exchange_callback"] = raw_attempts.append
         effective = _effective_prompt(spec, template, snapshot, extra)
         fingerprints = {
             "prompt_hash": sha256_text(template),
@@ -821,12 +876,14 @@ def _run_lab_job(
             job.run_id = int(saved["id"])
             job.status = "done" if status == "success" else "error"
             job.error = error_text
+            _store_raw_exchange_locked(job, raw_attempts)
         _touch(job, job.status, "Готово" if status == "success" else (error_text or "Ошибка"), 100)
     except Exception as error:
         logger.exception("Prompt Lab job failed")
         with _LOCK:
             job.status = "error"
             job.error = _public_error(error)
+            _store_raw_exchange_locked(job, raw_attempts)
         _touch(job, "error", job.error or "Ошибка Prompt Lab", 100)
 
 
@@ -854,6 +911,7 @@ def start_lab_run(
 ) -> dict[str, Any]:
     if branch not in BRANCHES:
         raise ValueError("branch должен быть current или experiment")
+    _discard_branch_raw_exchanges(deal_id=str(deal_id), module_key=module_key, branch=branch)
     spec = get_module(module_key)
     runtime = resolved_runtime_config()
     model_id, effort = validate_model_reasoning(model or runtime["model"], reasoning or runtime["reasoning"])

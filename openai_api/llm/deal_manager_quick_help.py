@@ -489,6 +489,7 @@ def generate_deal_manager_quick_help(
     reasoning_effort: str = MANAGER_REASONING_EFFORT,
     prompt_template: str | None = None,
     call_type: str | None = None,
+    raw_exchange_callback: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if mode not in ASSISTANT_MODES:
         raise ValueError("mode должен быть push или reanimator")
@@ -538,5 +539,6 @@ def generate_deal_manager_quick_help(
         cache_prefixes=[knowledge_prefix, deal_prefix],
         trace_entity_type="deal",
         trace_entity_id=deal_trace_id(deal),
+        raw_exchange_callback=raw_exchange_callback,
     )
     return validate_quick_help(result, allowed_tactic_ids=tactic_ids, expected_mode=mode), metadata

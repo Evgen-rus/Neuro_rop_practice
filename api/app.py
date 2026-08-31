@@ -103,6 +103,7 @@ from api.deal_manager_followups import get_followups_job, get_followups_workspac
 from api.deal_manager_companion import get_companion_job, get_companion_workspace, start_companion_job
 from api.prompt_lab import (
     bootstrap_prompt_lab,
+    consume_lab_raw_exchange,
     create_snapshot,
     export_payload,
     get_lab_job,
@@ -1425,6 +1426,20 @@ def prompt_lab_job_get(job_id: str) -> dict[str, Any]:
     if job.get("run_id"):
         job["run"] = prompt_lab_storage.get_run(DEFAULT_PROMPT_LAB_DB_PATH, int(job["run_id"]))
     return job
+
+
+@app.get("/api/prompt-lab/jobs/{job_id}/raw-exchange")
+def prompt_lab_job_raw_exchange_get(job_id: str) -> dict[str, Any]:
+    """Admin-only, one-time raw request/response bundle kept only in process memory."""
+    _require_admin()
+    job = get_lab_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание Prompt Lab не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    bundle = consume_lab_raw_exchange(job_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="Сырой обмен недоступен или уже был получен")
+    return bundle
 
 
 @app.get("/api/prompt-lab/runs")

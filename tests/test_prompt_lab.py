@@ -171,6 +171,11 @@ def _manager():
 
 
 class PromptLabIsolationTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        with lab._LOCK:
+            lab._JOBS.clear()
+            lab._RAW_EXCHANGES.clear()
+
     def test_source_does_not_call_production_write_helpers(self) -> None:
         source = inspect.getsource(lab)
         for name in FORBIDDEN_PRODUCTION_WRITES:
@@ -181,6 +186,44 @@ class PromptLabIsolationTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 api_app.prompt_lab_bootstrap_get(deal_id="101")
         self.assertEqual(raised.exception.status_code, 403)
+
+    def test_raw_exchange_is_admin_only_and_consumed_once(self) -> None:
+        job_id = "raw-job"
+        bundle = {
+            "format": "prompt_lab_raw_exchange_v1",
+            "job_id": job_id,
+            "run_id": 7,
+            "deal_id": "101",
+            "module_key": "quick_help.push",
+            "branch": "experiment",
+            "status": "done",
+            "created_at": "2026-08-31T10:00:00+03:00",
+            "completed_at": "2026-08-31T10:00:01+03:00",
+            "attempts": [{"attempt": 1, "request": {"input": "raw"}, "response": {"output": []}}],
+        }
+        with lab._LOCK:
+            lab._JOBS[job_id] = lab.PromptLabJob(
+                job_id=job_id,
+                deal_id="101",
+                module_key="quick_help.push",
+                branch="experiment",
+                status="done",
+            )
+            lab._RAW_EXCHANGES[job_id] = (lab.time() + 60, bundle)
+
+        with patch.object(api_app, "auth_current_user", return_value=_manager()):
+            with self.assertRaises(HTTPException) as forbidden:
+                api_app.prompt_lab_job_raw_exchange_get(job_id)
+        self.assertEqual(forbidden.exception.status_code, 403)
+
+        with patch.object(api_app, "auth_current_user", return_value=_admin()), patch.object(
+            api_app, "require_deal"
+        ):
+            received = api_app.prompt_lab_job_raw_exchange_get(job_id)
+            self.assertEqual(received, bundle)
+            with self.assertRaises(HTTPException) as consumed:
+                api_app.prompt_lab_job_raw_exchange_get(job_id)
+        self.assertEqual(consumed.exception.status_code, 404)
 
     def test_bootstrap_does_not_start_production_jobs_or_opened_events(self) -> None:
         with patch.object(api_app, "auth_current_user", return_value=_admin()), patch.object(
@@ -234,6 +277,22 @@ class PromptLabIsolationTests(unittest.TestCase):
                 saved_runs.append(kwargs)
                 return {"id": 7, **kwargs}
 
+            def fake_generate(**kwargs):
+                kwargs["raw_exchange_callback"]({
+                    "attempt": 1,
+                    "requested_at": "2026-08-31T10:00:00.000+00:00",
+                    "latency_seconds": 0.2,
+                    "request": {"input": "точный запрос"},
+                    "response": {"output": []},
+                    "raw_output_text": '{"mode":"push"}',
+                    "error": None,
+                })
+                return {"mode": "push"}, {
+                    "call_type": "prompt_lab_quick_help",
+                    "usage": {},
+                    "latency_seconds": 0.2,
+                }
+
             with patch.object(lab, "create_snapshot", return_value=snapshot), patch.object(
                 lab_db, "latest_snapshot", return_value=snapshot
             ), patch.object(lab_db, "get_snapshot", return_value=snapshot), patch.object(
@@ -241,7 +300,7 @@ class PromptLabIsolationTests(unittest.TestCase):
             ), patch.object(lab_db, "create_session", return_value={"id": 1}), patch.object(
                 lab_db, "create_turn", return_value={"id": 1}
             ), patch.object(lab_db, "save_run", side_effect=fake_save_run), patch.object(
-                lab, "generate_deal_manager_quick_help", return_value=({"mode": "push"}, {"call_type": "prompt_lab_quick_help", "usage": {}, "latency_seconds": 0.2})
+                lab, "generate_deal_manager_quick_help", side_effect=fake_generate
             ) as generate, patch.object(
                 lab, "_storage_call"
             ) as storage_call:
@@ -267,6 +326,10 @@ class PromptLabIsolationTests(unittest.TestCase):
             self.assertFalse(storage_call.called)
             self.assertEqual(saved_runs[0]["status"], "success")
             self.assertEqual(saved_runs[0]["call_type"], "prompt_lab_quick_help")
+            self.assertNotIn("raw_exchange", saved_runs[0])
+            raw = lab.consume_lab_raw_exchange(job_id)
+            self.assertEqual(raw["attempts"][0]["request"]["input"], "точный запрос")
+            self.assertIsNone(lab.consume_lab_raw_exchange(job_id))
 
     def test_error_run_is_saved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

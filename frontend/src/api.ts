@@ -2523,6 +2523,29 @@ export type PromptLabJob = {
   run?: PromptLabRun | null
 }
 
+export type PromptLabRawExchangeAttempt = {
+  attempt: number
+  requested_at: string
+  latency_seconds: number
+  request: Record<string, unknown>
+  response: unknown
+  raw_output_text: string | null
+  error: { type: string; message: string } | null
+}
+
+export type PromptLabRawExchange = {
+  format: 'prompt_lab_raw_exchange_v1'
+  job_id: string
+  run_id: number | null
+  deal_id: string
+  module_key: string
+  branch: PromptLabBranch
+  status: string
+  created_at: string
+  completed_at: string
+  attempts: PromptLabRawExchangeAttempt[]
+}
+
 export type PromptLabBootstrap = {
   module: string
   modules: Array<{ key: PromptLabModuleKey | string; label: string; family: string; requires_confirmed_situation: boolean; requires_upstream_quick_help: boolean; schema_version: string }>
@@ -2589,6 +2612,10 @@ export function startPromptLabRun(body: {
 
 export function fetchPromptLabJob(jobId: string) {
   return api<PromptLabJob>(`/api/prompt-lab/jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function fetchPromptLabRawExchange(jobId: string) {
+  return api<PromptLabRawExchange>(`/api/prompt-lab/jobs/${encodeURIComponent(jobId)}/raw-exchange`)
 }
 
 export function fetchPromptLabRuns(params: { deal_id?: string; module_key?: string; snapshot_id?: number; prompt_version_id?: number }) {

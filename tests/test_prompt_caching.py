@@ -105,6 +105,49 @@ class PromptCachingRequestTests(unittest.TestCase):
         self.assertNotIn("prompt_cache_key", kwargs)
         self.assertEqual(kwargs["extra_body"]["prompt_cache_options"]["mode"], "explicit")
 
+    def test_structured_output_raw_callback_captures_every_transport_attempt(self) -> None:
+        attempts: list[dict] = []
+        create_results = [TimeoutError("first failed"), response({"answer": "сырой ответ"})]
+
+        def create(**_kwargs):
+            value = create_results.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        def retry_runner(operation, **_kwargs):
+            try:
+                operation()
+            except TimeoutError:
+                pass
+            return operation()
+
+        with (
+            patch("openai_api.llm.llm_client.run_with_retry", side_effect=retry_runner),
+            patch("openai_api.llm.llm_client.client.responses.create", side_effect=create),
+        ):
+            parsed, _ = call_structured_output_json(
+                "полный prompt",
+                schema={"type": "object", "properties": {}, "additionalProperties": False},
+                schema_name="prompt_lab_test",
+                model="gpt-5.6-terra",
+                reasoning_effort="high",
+                max_output_tokens=321,
+                raw_exchange_callback=attempts.append,
+            )
+
+        self.assertEqual(parsed, {"answer": "сырой ответ"})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["attempt"], 1)
+        self.assertEqual(attempts[0]["request"]["input"], "полный prompt")
+        self.assertEqual(attempts[0]["request"]["reasoning"], {"effort": "high"})
+        self.assertEqual(attempts[0]["request"]["max_output_tokens"], 321)
+        self.assertEqual(attempts[0]["error"]["type"], "TimeoutError")
+        self.assertIsNone(attempts[0]["response"])
+        self.assertEqual(attempts[1]["attempt"], 2)
+        self.assertIn("сырой ответ", attempts[1]["raw_output_text"])
+        self.assertIsNone(attempts[1]["error"])
+
     def test_pre_56_model_keeps_legacy_request_shape(self) -> None:
         prompt = "STATIC\nDYNAMIC"
         with patch("openai_api.llm.llm_client.client.responses.create", return_value=response()) as create:

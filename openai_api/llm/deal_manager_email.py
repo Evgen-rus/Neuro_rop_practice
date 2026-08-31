@@ -106,6 +106,7 @@ def build_email_prompt(**kwargs: Any) -> str:
 
 
 def generate_deal_manager_email(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_exchange_callback = kwargs.pop("raw_exchange_callback", None)
     selected_strategy = str(kwargs["selected_strategy"])
     prompt_template = kwargs.pop("prompt_template", None)
     model = kwargs.pop("model", None) or MANAGER_MODEL
@@ -120,5 +121,6 @@ def generate_deal_manager_email(**kwargs: Any) -> tuple[dict[str, Any], dict[str
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
         trace_entity_type="deal",
         trace_entity_id=deal_trace_id(kwargs.get("deal")),
+        raw_exchange_callback=raw_exchange_callback,
     )
     return validate_email(result, selected_strategy=selected_strategy), metadata

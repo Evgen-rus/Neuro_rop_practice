@@ -5,6 +5,7 @@ import {
   fetchPromptLabBootstrap,
   fetchPromptLabExport,
   fetchPromptLabJob,
+  fetchPromptLabRawExchange,
   fetchPromptLabRun,
   fetchPromptLabRuns,
   patchPromptLabVersion,
@@ -21,6 +22,7 @@ import {
   type PromptLabBranch,
   type PromptLabJob,
   type PromptLabModuleKey,
+  type PromptLabRawExchange,
   type PromptLabRun,
   type PromptLabVersion,
 } from './api'
@@ -95,6 +97,7 @@ export function PromptLabWorkspace({
   const [experimentRun, setExperimentRun] = useState<PromptLabRun | null>(null)
   const [currentJob, setCurrentJob] = useState<PromptLabJob | null>(null)
   const [experimentJob, setExperimentJob] = useState<PromptLabJob | null>(null)
+  const [rawExchange, setRawExchange] = useState<Record<PromptLabBranch, PromptLabRawExchange | null>>({ current: null, experiment: null })
   const [strategy, setStrategy] = useState<ManagerQuickHelpStrategy>('primary')
   const [advanced, setAdvanced] = useState<'current' | 'experiment' | null>(null)
   const [error, setError] = useState('')
@@ -233,6 +236,7 @@ export function PromptLabWorkspace({
     setExperimentRun(null)
     setCurrentJob(null)
     setExperimentJob(null)
+    setRawExchange({ current: null, experiment: null })
     setExistingJob(null)
     setError('')
     setHistory([])
@@ -308,6 +312,16 @@ export function PromptLabWorkspace({
           }
         }
         if (next.status === 'done' || next.status === 'error' || next.status === 'exists') {
+          if ((next.status === 'done' || next.status === 'error') && !next.reused) {
+            try {
+              const bundle = await fetchPromptLabRawExchange(next.job_id)
+              if (moduleKeyRef.current === activeModule) {
+                setRawExchange((value) => ({ ...value, [branch]: bundle }))
+              }
+            } catch {
+              // A run can fail before reaching OpenAI, or the one-time bundle may already be consumed.
+            }
+          }
           const runs = await fetchPromptLabRuns({ deal_id: dealId, module_key: moduleKeyRef.current })
           if (moduleKeyRef.current !== activeModule) return
           setHistory(runs.runs)
@@ -361,6 +375,7 @@ export function PromptLabWorkspace({
       return
     }
     setError('')
+    setRawExchange((value) => ({ ...value, [branch]: null }))
     const isCurrent = branch === 'current'
     const snapshotId = options.snapshotId ?? bootstrap?.snapshot.id ?? null
     const body = {
@@ -468,6 +483,18 @@ export function PromptLabWorkspace({
     URL.revokeObjectURL(url)
   }
 
+  function downloadRawExchange(branch: PromptLabBranch, bundle: PromptLabRawExchange) {
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `prompt-lab-${moduleKey.replaceAll('.', '-')}-${branch}-run-${bundle.run_id || bundle.job_id}-raw.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
   async function exportVersions(mode: 'current' | 'candidates_module' | 'candidates_all') {
     if (mode === 'current') {
       if (unsaved) {
@@ -555,6 +582,8 @@ export function PromptLabWorkspace({
         sourceRun={qhSource.current}
         advanced={advanced === 'current'}
         onToggleAdvanced={() => setAdvanced((value) => value === 'current' ? null : 'current')}
+        rawExchange={rawExchange.current}
+        onDownloadRaw={(bundle) => downloadRawExchange('current', bundle)}
       /> : null}
       {layout !== 'current' ? <BranchPanel
         title="EXPERIMENT"
@@ -579,6 +608,8 @@ export function PromptLabWorkspace({
         sourceRun={qhSource.experiment}
         advanced={advanced === 'experiment'}
         onToggleAdvanced={() => setAdvanced((value) => value === 'experiment' ? null : 'experiment')}
+        rawExchange={rawExchange.experiment}
+        onDownloadRaw={(bundle) => downloadRawExchange('experiment', bundle)}
         extraActions={<>
           <button type="button" className="dc-link-button" onClick={() => { setExperimentPrompt(currentPrompt); setExperimentModel(currentModel); setExperimentReasoning(currentReasoning) }}>Копировать CURRENT → EXPERIMENT</button>
           <button type="button" className="dc-link-button" onClick={() => { setExperimentPrompt(bootstrap?.production_current.prompt_template || currentPrompt); setSavedExperiment(bootstrap?.production_current.prompt_template || currentPrompt) }}>Сбросить к CURRENT</button>
@@ -699,6 +730,8 @@ function BranchPanel(props: {
   sourceRun: PromptLabRun | null
   advanced: boolean
   onToggleAdvanced: () => void
+  rawExchange: PromptLabRawExchange | null
+  onDownloadRaw: (bundle: PromptLabRawExchange) => void
   extraActions?: React.ReactNode
 }) {
   const mode = props.moduleKey.startsWith('quick_help.')
@@ -739,6 +772,7 @@ function BranchPanel(props: {
     </div>
     {props.extraActions}
     <LabResult run={visibleRun} moduleKey={props.moduleKey} mode={mode} strategy={props.strategy} onStrategy={props.onStrategy} onCopy={props.onCopy} />
+    {props.rawExchange ? <button type="button" className="dc-link-button" onClick={() => props.onDownloadRaw(props.rawExchange as PromptLabRawExchange)}>Скачать сырой обмен</button> : null}
     <button type="button" className="dc-link-button" onClick={props.onToggleAdvanced}>{props.advanced ? 'Скрыть Advanced' : 'Advanced'}</button>
     {props.advanced && visibleRun ? <pre className="dc-prompt-lab-advanced">{JSON.stringify({
       effective_prompt: visibleRun.effective_prompt,

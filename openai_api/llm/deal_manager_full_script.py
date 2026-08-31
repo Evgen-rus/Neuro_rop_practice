@@ -260,6 +260,7 @@ def assemble_full_script_prompt(*, prompt_template: str, **kwargs: Any) -> str:
 
 
 def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_exchange_callback = kwargs.pop("raw_exchange_callback", None)
     selected_strategy = str(kwargs["selected_strategy"])
     script_mode = str(kwargs.get("script_mode") or "message")
     if script_mode not in SCRIPT_MODES:
@@ -288,6 +289,7 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
         trace_entity_type="deal",
         trace_entity_id=deal_trace_id(kwargs.get("deal")),
+        raw_exchange_callback=raw_exchange_callback,
     )
     return validate_full_script(
         result, selected_strategy=selected_strategy, script_mode=script_mode,

@@ -38,6 +38,37 @@ from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_r
 
 client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS)
 PROMPT_CACHE_TTL = "30m"
+RawExchangeCallback = Callable[[dict[str, Any]], None]
+
+
+def _jsonable_sdk_value(value: Any) -> Any:
+    """Return a JSON-compatible snapshot of an SDK request/response value."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _jsonable_sdk_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_sdk_value(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _jsonable_sdk_value(value.model_dump(mode="json"))
+        except TypeError:
+            return _jsonable_sdk_value(value.model_dump())
+    if hasattr(value, "to_dict"):
+        return _jsonable_sdk_value(value.to_dict())
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _emit_raw_exchange(callback: RawExchangeCallback | None, payload: dict[str, Any]) -> None:
+    if callback is None:
+        return
+    try:
+        callback(_jsonable_sdk_value(payload))
+    except Exception:
+        logger.exception("Raw model exchange callback failed")
 
 
 class ModelJsonParseError(ValueError):
@@ -760,6 +791,7 @@ def call_structured_output_json(
     disable_implicit_cache: bool = False,
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
+    raw_exchange_callback: RawExchangeCallback | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call Responses structured outputs without changing the legacy JSON client."""
     effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
@@ -789,17 +821,50 @@ def call_structured_output_json(
     )
     requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started_at = perf_counter()
+    request_payload = {
+        "model": model,
+        "input": request_input,
+        "max_output_tokens": max_output_tokens,
+        "reasoning": {"effort": effective_reasoning_effort},
+        "text": {"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
+        "store": False,
+        **cache_options,
+    }
+    transport_attempt = 0
+
+    def request_once() -> Any:
+        nonlocal transport_attempt
+        transport_attempt += 1
+        attempt_started_at = perf_counter()
+        attempt_requested_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        try:
+            raw_response = client.responses.create(**request_payload)
+        except Exception as error:
+            _emit_raw_exchange(raw_exchange_callback, {
+                "attempt": transport_attempt,
+                "requested_at": attempt_requested_at,
+                "latency_seconds": round(perf_counter() - attempt_started_at, 4),
+                "request": request_payload,
+                "response": None,
+                "raw_output_text": None,
+                "error": {"type": type(error).__name__, "message": str(error)},
+            })
+            raise
+        raw_output_text = response_output_text(raw_response)
+        _emit_raw_exchange(raw_exchange_callback, {
+            "attempt": transport_attempt,
+            "requested_at": attempt_requested_at,
+            "latency_seconds": round(perf_counter() - attempt_started_at, 4),
+            "request": request_payload,
+            "response": raw_response,
+            "raw_output_text": raw_output_text,
+            "error": None,
+        })
+        return raw_response
+
     try:
         response = run_with_retry(
-            lambda: client.responses.create(
-                model=model,
-                input=request_input,
-                max_output_tokens=max_output_tokens,
-                reasoning={"effort": effective_reasoning_effort},
-                text={"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
-                store=False,
-                **cache_options,
-            ),
+            request_once,
             operation_name=f"openai:responses.create:{schema_name}",
             policy=DEFAULT_TRANSPORT_RETRY,
             on_event=retry_callback,

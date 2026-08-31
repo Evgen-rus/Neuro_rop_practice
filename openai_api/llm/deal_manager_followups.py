@@ -111,6 +111,7 @@ def build_followups_prompt(**kwargs: Any) -> str:
 
 
 def generate_deal_manager_followups(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_exchange_callback = kwargs.pop("raw_exchange_callback", None)
     prompt_template = kwargs.pop("prompt_template", None)
     model = kwargs.pop("model", None) or MANAGER_MODEL
     reasoning_effort = kwargs.pop("reasoning_effort", None) or MANAGER_REASONING_EFFORT
@@ -124,5 +125,6 @@ def generate_deal_manager_followups(**kwargs: Any) -> tuple[dict[str, Any], dict
         stable_prefix=prompt_prefix_before(prompt, "COMMUNICATION_PATTERN_CONTEXT:"),
         trace_entity_type="deal",
         trace_entity_id=deal_trace_id(kwargs.get("deal")),
+        raw_exchange_callback=raw_exchange_callback,
     )
     return validate_followups(result), metadata
