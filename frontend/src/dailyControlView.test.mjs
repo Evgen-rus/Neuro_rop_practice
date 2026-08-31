@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
-import { dailyQualityCaption } from './dailyControlView.ts'
+import { dailyQualityCaption, snapshotDayText } from './dailyControlView.ts'
 import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
@@ -164,7 +164,7 @@ test('messages distinguish sent, received, reciprocal and unknown directions', (
 })
 
 test('communication availability and legacy counters do not invent results', () => {
-  assert.deepEqual(communicationDayLabels(communicationDeal([])), ['Сегодня коммуникаций нет'])
+  assert.deepEqual(communicationDayLabels(communicationDeal([])), ['В этот день коммуникаций нет'])
   assert.deepEqual(communicationDayLabels(communicationDeal([], { available: false })), ['Данные о коммуникациях недоступны'])
   assert.deepEqual(communicationDayLabels(communicationDeal([], { date: '2026-08-27', calls: 2 })), ['Данные о коммуникациях недоступны'])
   assert.deepEqual(communicationDayLabels(communicationDeal([], { calls: 1, calls_no_answer: 1, messages: 1 })), ['Был звонок · результат не определён', 'Было сообщение'])
@@ -174,7 +174,7 @@ test('communication availability and legacy counters do not invent results', () 
 test('no communication is a warning badge while unavailable data is neutral, without changing deal status', () => {
   const noContact = communicationDeal([])
   const before = structuredClone(noContact)
-  assert.deepEqual(reportDayLabels(noContact), [{ kind: 'no-contact', text: 'Сегодня коммуникаций нет' }])
+  assert.deepEqual(reportDayLabels(noContact), [{ kind: 'no-contact', text: 'В этот день коммуникаций нет' }])
   assert.deepEqual(noContact, before)
   assert.deepEqual(reportDayLabels(communicationDeal([], { available: false })), [{ kind: 'unavailable', text: 'Данные о коммуникациях недоступны' }])
 })
@@ -188,17 +188,17 @@ test('communication labels honor frozen Moscow cutoff including legacy report me
   ], { calls: 4 })
   assert.deepEqual(communicationDayLabels(deal), ['Была попытка связи'])
   assert.deepEqual(communicationDayLabels({ ...deal, day_scope: undefined }, cutoff), ['Была попытка связи'])
-  assert.deepEqual(communicationDayLabels(deal, '2026-08-28T09:00:00+03:00'), ['Сегодня коммуникаций нет'])
+  assert.deepEqual(communicationDayLabels(deal, '2026-08-28T09:00:00+03:00'), ['В этот день коммуникаций нет'])
 })
 
 test('task summaries expose due dates relative to snapshot, never browser today', () => {
   for (const [task, expected] of [
-    [{ status: 'open', deadline: '2026-09-24T10:25:00+03:00' }, 'Задача на 24 сентября, 10:25 · не сегодня'],
-    [{ status: 'open', deadline: '2026-08-28T13:00:00Z' }, 'Задача на сегодня, 16:00'],
-    [{ status: 'open', deadline: '2026-08-29T01:00:00+07:00' }, 'Задача на сегодня, 21:00'],
-    [{ status: 'open', overdue: true, deadline: '2026-08-28T10:00:00+03:00' }, 'Задача просрочена · срок сегодня, 10:00'],
+    [{ status: 'open', deadline: '2026-09-24T10:25:00+03:00' }, 'Задача на 24 сентября, 10:25 · не в этот день'],
+    [{ status: 'open', deadline: '2026-08-28T13:00:00Z' }, 'Задача на 28 августа, 16:00'],
+    [{ status: 'open', deadline: '2026-08-29T01:00:00+07:00' }, 'Задача на 28 августа, 21:00'],
+    [{ status: 'open', overdue: true, deadline: '2026-08-28T10:00:00+03:00' }, 'Задача просрочена · срок 28 августа, 10:00'],
     [{ status: 'open', overdue: true, deadline: '2026-08-27T15:00:00+03:00' }, 'Задача просрочена · срок 27 августа, 15:00'],
-    [{ status: 'completed', overdue: true, completed_at: '2026-08-28T11:20:00+03:00' }, 'Задача выполнена сегодня, 11:20'],
+    [{ status: 'completed', overdue: true, completed_at: '2026-08-28T11:20:00+03:00' }, 'Задача выполнена 28 августа, 11:20'],
     [{ status: 'completed' }, 'Задача выполнена · время не сохранено'],
     [{ status: 'open' }, 'Задача без срока'],
     [{ status: 'open', deadline: 'bad-date' }, 'Задача: срок не определён'],
@@ -221,21 +221,21 @@ test('multiple tasks retain every row and prioritize overdue/open over completed
   const before = structuredClone(tasks)
   assert.deepEqual(sortDayTasks(tasks).map((task) => task.key), ['overdue', 'today', 'future', 'closed'])
   assert.equal(tasksStripSummary(tasks, cutoff).text, 'Задач: 4 · Задача просрочена · срок 27 августа, 15:00')
-  assert.equal(tasksStripSummary(tasks.slice(0, 3), cutoff).text, 'Задач: 3 · Задача на сегодня, 16:00')
+  assert.equal(tasksStripSummary(tasks.slice(0, 3), cutoff).text, 'Задач: 3 · Задача на 28 августа, 16:00')
   assert.deepEqual(tasks, before)
 })
 
 test('rescheduled future task retains current deadline without hiding the transfer or day obligation', () => {
   const task = { status: 'open', deadline: '2026-09-24T10:25:00+03:00', reschedules: [{ from_deadline: cutoff, to_deadline: '2026-09-24T10:25:00+03:00', occurred_at: cutoff }] }
-  assert.equal(taskDeadlineLabel(task, cutoff).text, 'Задача на 24 сентября, 10:25 · не сегодня')
+  assert.equal(taskDeadlineLabel(task, cutoff).text, 'Задача на 24 сентября, 10:25 · не в этот день')
   assert.equal(taskStripStatus(task).kind, 'rescheduled')
   const deal = communicationDeal([])
   deal.day_scope.had_day_obligation = true
   deal.day_scope.activity_kinds = ['bitrix_task_rescheduled']
-  const labels = reportDayLabels(deal).map((item) => item.text)
-  assert.ok(labels.includes('Задача на этот день'))
-  assert.ok(labels.includes('Задача перенесена'))
-  assert.ok(labels.includes('Сегодня коммуникаций нет'))
+  const labels = reportDayLabels(deal)
+  assert.ok(labels.some((item) => item.text === 'Задача на этот день'))
+  assert.deepEqual(labels.find((item) => item.text === 'Задача перенесена'), { kind: 'rescheduled', text: 'Задача перенесена' })
+  assert.ok(labels.some((item) => item.text === 'В этот день коммуникаций нет'))
 })
 
 // Render production components without a browser or API, as in automaticAnalysis.test.mjs.
@@ -261,7 +261,7 @@ test('collapsed production task block exposes date and contains every task with 
   const html = renderToStaticMarkup(createElement(TaskDayResults, { tasks, cutoffAt: cutoff }))
   assert.match(html, /<summary><span>Задач: 2 · Задача просрочена · срок 27 августа, 15:00<\/span><\/summary>/)
   assert.doesNotMatch(html, /<details[^>]*\bopen\b/)
-  assert.match(html, /Задача на 24 сентября, 10:25 · не сегодня/)
+  assert.match(html, /Задача на 24 сентября, 10:25 · не в этот день/)
   assert.ok(html.indexOf('Просроченная задача') < html.indexOf('Будущая задача'))
   assert.match(html, /Перенесена · 1/)
   assert.match(html, /popover="auto"/)
@@ -398,4 +398,45 @@ test('review card shows quality, then today communications, then focus, with sha
   assert.doesNotMatch(html, />Аргументация</)
   assert.equal((html.match(/dc-daily-criterion-tip/g) || []).length, 3)
   assert.equal((html.match(/Общая аргументация за день/g) || []).length, 3)
+})
+
+test('snapshot wording names the report day instead of calendar today', () => {
+  assert.equal(snapshotDayText('Сегодня не подтверждено'), 'В этот день не подтверждено')
+  assert.equal(
+    snapshotDayText('Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.'),
+    'В этот день по актуальной задаче не было содержательной клиентской коммуникации. Попытки дозвона не дают единицы.',
+  )
+  assert.equal(
+    snapshotDayText('Коммуникации за сегодня недоступны для 2 сделок — это не нулевая активность.'),
+    'Коммуникации за этот день недоступны для 2 сделок — это не нулевая активность.',
+  )
+  assert.equal(dailyQualityCaption({ status: 'not_required' }, true), 'В этот день не требуется')
+  assert.equal(dailyQualityCaption({ status: 'not_required' }, false), 'Сегодня не требуется')
+  const html = renderToStaticMarkup(createElement(DealReviewCard, {
+    deal: {
+      ...communicationDeal([]),
+      title: 'Тестовая сделка',
+      status: 'red',
+      summary_for_rop: 'Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.',
+      ai_context: { known: [], unknowns: [] },
+      quality: {
+        status: 'no_work',
+        scope_summary: 'Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.',
+        insufficient_reason: 'Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.',
+        zero_reasons: [],
+        criteria: {
+          next_action: { score: 0, verdict: 'Сегодня не подтверждено' },
+          value_development: { score: 0, verdict: 'Сегодня не подтверждено' },
+          data_collection: { score: 0, verdict: 'Сегодня не подтверждено' },
+        },
+      },
+    },
+    asked: [false, false], onToggleAsked() {}, onCopyScript() {}, copyNotice: '', openEventId: '', onToggleEvent() {},
+    snapshotDay: true,
+  }))
+  assert.match(html, /Коммуникации за этот день/)
+  assert.doesNotMatch(html, /Коммуникации за сегодня/)
+  assert.match(html, /В этот день не подтверждено/)
+  assert.match(html, /В этот день по актуальной задаче не было содержательной клиентской коммуникации/)
+  assert.doesNotMatch(html, /Сегодня не подтверждено|ещё нет содержательной/)
 })

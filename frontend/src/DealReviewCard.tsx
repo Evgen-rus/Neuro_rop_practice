@@ -4,7 +4,7 @@ import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommuni
 import { CommunicationContent } from './CommunicationContent'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
-import { dailyQualityCaption } from './dailyControlView'
+import { dailyQualityCaption, snapshotDayText } from './dailyControlView'
 
 const QUALITY_LABELS = {
   next_action: 'Следующий шаг',
@@ -80,12 +80,13 @@ function directionLabel(direction: string) {
 
 const INSUFFICIENT_QUALITY_LABEL = 'Нет данных для оценки'
 
-function humanQualityText(value?: string | null) {
+function humanQualityText(value?: string | null, snapshotDay = false) {
   if (!value) return value
-  return value
+  const cleaned = value
     .replace(/недостаточно evidence/gi, INSUFFICIENT_QUALITY_LABEL)
     .replace(/insufficient evidence/gi, INSUFFICIENT_QUALITY_LABEL)
     .replace(/\bevidence\b/gi, 'доказательств')
+  return snapshotDay ? snapshotDayText(cleaned) : cleaned
 }
 
 function qualityLabel(criterion?: string | null) {
@@ -165,7 +166,7 @@ function summaryView(communications: DealControlCommunicationsToday) {
   }
 }
 
-function QualityArgumentation({ quality }: { quality: DailyControlDeal['quality'] }) {
+function QualityArgumentation({ quality, snapshotDay = false }: { quality: DailyControlDeal['quality']; snapshotDay?: boolean }) {
   return (
     <div className="dc-daily-argument-body">
       {quality.status === 'assessed' && quality.confirmed_count === 3 ? (
@@ -176,15 +177,15 @@ function QualityArgumentation({ quality }: { quality: DailyControlDeal['quality'
       ) : null}
       <div className="dc-daily-argument-scope">
         <span className="dc-daily-argument-label">Основание анализа</span>
-        <p>{humanQualityText(quality.scope_summary) || NO_DATA}</p>
+        <p>{humanQualityText(quality.scope_summary, snapshotDay) || NO_DATA}</p>
       </div>
-      {quality.insufficient_reason && quality.insufficient_reason !== quality.scope_summary ? <p>{humanQualityText(quality.insufficient_reason)}</p> : null}
+      {quality.insufficient_reason && quality.insufficient_reason !== quality.scope_summary ? <p>{humanQualityText(quality.insufficient_reason, snapshotDay)}</p> : null}
       {quality.zero_reasons.length ? (
         <div className="dc-daily-argument-reasons">
           {quality.zero_reasons.map((reason, index) => (
             <div className="dc-daily-argument-reason" key={`${reason.criterion}-${index}`}>
               <strong>{qualityLabel(reason.criterion)}</strong>
-              <p>{humanQualityText(reason.explanation)}</p>
+              <p>{humanQualityText(reason.explanation, snapshotDay)}</p>
               {reason.quote ? <blockquote>{reason.quote}</blockquote> : null}
             </div>
           ))}
@@ -194,9 +195,9 @@ function QualityArgumentation({ quality }: { quality: DailyControlDeal['quality'
   )
 }
 
-function DealQualityBlock({ deal }: { deal: DailyControlDeal }) {
+function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
   const quality = deal.quality
-  const qualityCaption = dailyQualityCaption(quality)
+  const qualityCaption = dailyQualityCaption(quality, snapshotDay)
   const tipId = useId()
   // Аргументация больше не отдельный блок: один и тот же текст всплывает на любой карточке.
   return (
@@ -215,7 +216,7 @@ function DealQualityBlock({ deal }: { deal: DailyControlDeal }) {
             {quality.cutoff_at ? ` · на ${formatClock(quality.cutoff_at)} МСК` : ''}
           </p>
         ) : null}
-        {quality.status !== 'assessed' ? <p>{humanQualityText(quality.scope_summary) || qualityCaption}</p> : null}
+        {quality.status !== 'assessed' ? <p>{humanQualityText(quality.scope_summary, snapshotDay) || qualityCaption}</p> : null}
         <ul className={`dc-daily-criteria${['assessed', 'no_work'].includes(quality.status) ? '' : ' compact'}`}>
           {(Object.keys(QUALITY_LABELS) as Array<keyof typeof QUALITY_LABELS>).map((key) => {
             const item = quality.criteria[key]
@@ -230,10 +231,10 @@ function DealQualityBlock({ deal }: { deal: DailyControlDeal }) {
                 </span>
                 <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
                 {item.score != null ? (
-                  <span className="dc-daily-criterion-state">{humanQualityText(item.verdict)}</span>
+                  <span className="dc-daily-criterion-state">{humanQualityText(item.verdict, snapshotDay)}</span>
                 ) : null}
                 <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
-                  <QualityArgumentation quality={quality} />
+                  <QualityArgumentation quality={quality} snapshotDay={snapshotDay} />
                 </div>
               </li>
             )
@@ -248,6 +249,7 @@ function DealFocusBlock(props: {
   deal: DailyControlDeal
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
+  snapshotDay?: boolean
 }) {
   const deal = props.deal
   return (
@@ -263,7 +265,7 @@ function DealFocusBlock(props: {
           <span className="dc-daily-focus-icon" aria-hidden="true">!</span>
           <div>
             <small>Вывод для РОПа</small>
-            <p>{humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason) || NO_DATA}</p>
+            <p>{humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason, props.snapshotDay) || NO_DATA}</p>
           </div>
         </div>
         <div className="dc-daily-focus-step question">
@@ -289,11 +291,12 @@ export function DealQualityAndFocus(props: {
   deal: DailyControlDeal
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
+  snapshotDay?: boolean
 }) {
   return (
     <>
-      <DealQualityBlock deal={props.deal} />
-      <DealFocusBlock deal={props.deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
+      <DealQualityBlock deal={props.deal} snapshotDay={props.snapshotDay} />
+      <DealFocusBlock deal={props.deal} asked={props.asked} onToggleAsked={props.onToggleAsked} snapshotDay={props.snapshotDay} />
     </>
   )
 }
@@ -310,6 +313,7 @@ export function DealReviewCard(props: {
   emptyText?: string
   contentNote?: string
   scriptHint?: string
+  snapshotDay?: boolean
 }) {
   const [eventsOpen, setEventsOpen] = useState(false)
   const deal = props.deal
@@ -334,13 +338,13 @@ export function DealReviewCard(props: {
         </header>
       ) : null}
 
-      <DealQualityBlock deal={deal} />
+      <DealQualityBlock deal={deal} snapshotDay={props.snapshotDay} />
 
       <article className="dc-daily-block">
         <header className="dc-daily-block-title">
           <span className="dc-daily-title-with-icon">
             <span className="dc-daily-ico"><DailyIcon name="phone" /></span>
-            <h3>Коммуникации за сегодня</h3>
+            <h3>{props.snapshotDay ? 'Коммуникации за этот день' : 'Коммуникации за сегодня'}</h3>
           </span>
           <small>Сделка #{deal.deal_id} · {deal.title || NO_DATA}</small>
         </header>
@@ -449,7 +453,7 @@ export function DealReviewCard(props: {
         )}
       </article>
 
-      <DealFocusBlock deal={deal} asked={props.asked} onToggleAsked={props.onToggleAsked} />
+      <DealFocusBlock deal={deal} asked={props.asked} onToggleAsked={props.onToggleAsked} snapshotDay={props.snapshotDay} />
 
       <div className="dc-daily-tiles">
         <details className="dc-daily-tile tone-ai">

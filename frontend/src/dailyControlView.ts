@@ -5,9 +5,51 @@ export type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
 export const DEFAULT_TIME_FILTER: DailyControlTimeFilter = 'all'
 const CLIENT_CONTACT_KINDS = new Set(['call', 'message'])
 
-export function dailyQualityCaption(quality: DailyControlDeal['quality']) {
+const NO_DAY_CONTACT_LABEL = 'В этот день коммуникаций нет'
+
+// Слепок хранит «сегодня» как день отчёта. На экране это календарный «сегодня» понедельника.
+const SNAPSHOT_DAY_PHRASES: Array<[string, string]> = [
+  [
+    'Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации',
+    'В этот день по актуальной задаче не было содержательной клиентской коммуникации',
+  ],
+  [
+    'Нет данных: сегодняшние клиентские коммуникации получены не полностью.',
+    'Нет данных: клиентские коммуникации этого дня получены не полностью.',
+  ],
+  [
+    'Нет данных: результат сегодняшнего звонка ещё не подтверждён.',
+    'Нет данных: результат звонка этого дня не подтверждён.',
+  ],
+  [
+    'На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.',
+    'На этот день нет актуальной задачи или контрольной точки; содержательной коммуникации не было.',
+  ],
+  [
+    'AI не подтвердил содержательную работу в сегодняшних коммуникациях.',
+    'AI не подтвердил содержательную работу в коммуникациях этого дня.',
+  ],
+  ['Ожидает корректной AI-оценки сегодняшней работы.', 'Ожидает корректной AI-оценки работы этого дня.'],
+  ['На сегодня нет актуальной задачи', 'На этот день нет актуальной задачи'],
+  ['Сегодня есть клиентская коммуникация', 'В этот день есть клиентская коммуникация'],
+  ['Сегодня не подтверждено', 'В этот день не подтверждено'],
+  ['Сегодня не требуется', 'В этот день не требуется'],
+  ['Сегодня коммуникаций нет', NO_DAY_CONTACT_LABEL],
+  ['Коммуникации за сегодня', 'Коммуникации за этот день'],
+]
+
+export function snapshotDayText(value?: string | null): string {
+  if (!value) return value || ''
+  let text = value
+  for (const [from, to] of SNAPSHOT_DAY_PHRASES) {
+    if (text.includes(from)) text = text.split(from).join(to)
+  }
+  return text
+}
+
+export function dailyQualityCaption(quality: DailyControlDeal['quality'], snapshotDay = false) {
   if (quality.status === 'pending_analysis') return 'Ожидает AI-оценки'
-  if (quality.status === 'not_required') return 'Сегодня не требуется'
+  if (quality.status === 'not_required') return snapshotDay ? 'В этот день не требуется' : 'Сегодня не требуется'
   if (quality.status === 'no_work') return '0 из 3 · работа не подтверждена'
   if (quality.status === 'assessed' && quality.confirmed_count != null) {
     return `${quality.confirmed_count} из ${quality.total} · AI-оценка`
@@ -85,10 +127,10 @@ export function communicationDayLabels(deal: DailyControlDeal, cutoffAt?: string
     else if (incoming) labels.push(messageCount === 1 ? 'Получено сообщение клиента' : 'Получены сообщения клиента')
     else labels.push(messageCount === 1 ? 'Отправлено сообщение' : 'Отправлены сообщения')
   }
-  return labels.length ? labels : ['Сегодня коммуникаций нет']
+  return labels.length ? labels : [NO_DAY_CONTACT_LABEL]
 }
 
-type DayLabel = { kind: 'due' | 'work' | 'no-contact' | 'unavailable'; text: string }
+type DayLabel = { kind: 'due' | 'work' | 'rescheduled' | 'no-contact' | 'unavailable'; text: string }
 
 export function reportDayLabels(deal: DailyControlDeal, cutoffAt?: string): DayLabel[] {
   const scope = deal.day_scope
@@ -98,16 +140,16 @@ export function reportDayLabels(deal: DailyControlDeal, cutoffAt?: string): DayL
   }
   if (scope?.task_buckets.includes('overdue')) labels.push({ kind: 'due', text: 'Просрочена к срезу' })
   labels.push(...communicationDayLabels(deal, cutoffAt).map((text): DayLabel => ({
-    kind: text === 'Сегодня коммуникаций нет' ? 'no-contact'
+    kind: text === NO_DAY_CONTACT_LABEL ? 'no-contact'
       : text === 'Данные о коммуникациях недоступны' ? 'unavailable' : 'work',
     text,
   })))
-  const workLabels: Record<string, string> = {
-    bitrix_task_completed: 'Задача завершена в CRM',
-    bitrix_task_rescheduled: 'Задача перенесена',
+  const activityLabels: Record<string, DayLabel> = {
+    bitrix_task_completed: { kind: 'work', text: 'Задача завершена в CRM' },
+    bitrix_task_rescheduled: { kind: 'rescheduled', text: 'Задача перенесена' },
   }
   for (const kind of scope?.activity_kinds || []) {
-    if (workLabels[kind]) labels.push({ kind: 'work', text: workLabels[kind] })
+    if (activityLabels[kind]) labels.push(activityLabels[kind])
   }
   return labels
 }
@@ -128,11 +170,10 @@ function taskDate(value?: string | null, cutoffAt?: string): string | null {
   const stamp = validStamp(value)
   if (stamp === null) return null
   const cutoff = validStamp(cutoffAt)
-  const sameDay = cutoff !== null && moscowDateInputValue(stamp) === moscowDateInputValue(cutoff)
   const time = formatMoscowDateTime(stamp, { hour: '2-digit', minute: '2-digit' })
-  if (sameDay) return `сегодня, ${time}`
   const otherYear = cutoff === null || moscowDateInputValue(stamp).slice(0, 4) !== moscowDateInputValue(cutoff).slice(0, 4)
   const date = formatMoscowDateTime(stamp, { day: 'numeric', month: 'long', ...(otherYear ? { year: 'numeric' as const } : {}) })
+  if (!date || !time) return null
   return `${date}, ${time}`
 }
 
@@ -148,7 +189,7 @@ export function taskDeadlineLabel(task: TaskStripTask, cutoffAt?: string): { kin
   if (!date) return { kind: 'unknown', text: 'Задача: срок не определён' }
   const cutoff = validStamp(cutoffAt)
   const future = cutoff !== null && moscowDateInputValue(task.deadline) > moscowDateInputValue(cutoff)
-  return { kind: 'waiting', text: `Задача на ${date}${future ? ' · не сегодня' : ''}` }
+  return { kind: 'waiting', text: `Задача на ${date}${future ? ' · не в этот день' : ''}` }
 }
 
 export function sortDayTasks<T extends TaskStripTask>(tasks: T[]): T[] {

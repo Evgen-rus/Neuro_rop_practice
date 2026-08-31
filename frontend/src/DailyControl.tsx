@@ -17,7 +17,7 @@ import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { businessReportWarnings, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport } from './dailyControlView'
+import { businessReportWarnings, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
@@ -428,7 +428,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }
 
   const newerReportAvailable = Boolean(report && history?.latest_id && history.latest_id > report.id)
-  const visibleWarnings = businessReportWarnings(report?.warnings)
+  const visibleWarnings = businessReportWarnings(report?.warnings).map(snapshotDayText)
   const heading = report ? reportHeading(report) : 'Ежедневный контроль'
   const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
   const managerCounts = {
@@ -632,6 +632,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               copyNotice={copyNotice}
               openEventId={openEventId}
               onToggleEvent={(eventId) => setOpenEventId((current) => current === eventId ? '' : eventId)}
+              snapshotDay
             />
           </div>
         </div>
@@ -669,7 +670,7 @@ function DealRow({ deal, cutoffAt, selected, onSelect }: { deal: DailyControlDea
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        <p className={selected ? 'full' : 'clamp'}>{deal.attention_reason}</p>
+        <p className={selected ? 'full' : 'clamp'}>{snapshotDayText(deal.attention_reason)}</p>
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>
