@@ -605,7 +605,7 @@ class DailyControlStorageTests(unittest.TestCase):
         snapshot["deals"][0]["checklist"] = {"completed": 1, "total": 2, "items": []}
         snapshot["managers"][0].update(checklist_completed=1, checklist_total=2)
         saved = create_daily_control_report(
-            self.db_path, business_date=NOW.date().isoformat(), creation_kind="manual",
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
             started_at=NOW.isoformat(), cutoff_at=NOW.isoformat(), snapshot=snapshot,
             source_watermark="legacy", source_status="ok",
         )
@@ -635,28 +635,32 @@ class DailyControlStorageTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_manual_report_is_immutable_and_history_is_ordered(self) -> None:
-        _seed_deal(self.db_path, audit=_audit(next_action=0))
-        first = publish_daily_control_report(
-            db_path=self.db_path,
-            creation_kind="manual",
-            started_at=NOW,
-            cutoff_at=NOW,
-            now=NOW,
-            refresh=False,
+        from storage.rop_db import create_daily_control_report
+
+        snapshot = build_daily_control_snapshot({"deals": [_deal_row()], "managers": []})
+        first = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T16:00:00+03:00", cutoff_at="2026-08-31T16:00:00+03:00",
+            snapshot=snapshot, source_watermark="first",
         )
-        second = publish_daily_control_report(
-            db_path=self.db_path,
-            creation_kind="manual",
-            started_at=NOW.replace(hour=17),
-            cutoff_at=NOW.replace(hour=17),
-            now=NOW.replace(hour=17),
-            refresh=False,
+        second = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T17:00:00+03:00", cutoff_at="2026-08-31T17:00:00+03:00",
+            snapshot=snapshot, source_watermark="second",
         )
         history = list_daily_control_reports(self.db_path)
         self.assertEqual([item["id"] for item in history], [second["id"], first["id"]])
-        payload = history_payload(db_path=self.db_path, now=NOW.replace(hour=17))
+        payload = history_payload(
+            db_path=self.db_path,
+            now=datetime(2026, 8, 31, 17, 0, tzinfo=MSK_TZ),
+        )
         self.assertEqual(payload["latest_id"], second["id"])
-        detail = report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=NOW)
+        detail = report_payload(
+            int(first["id"]),
+            {"role": "admin"},
+            db_path=self.db_path,
+            now=datetime(2026, 8, 31, 17, 0, tzinfo=MSK_TZ),
+        )
         self.assertNotIn("freshness", detail)
         self.assertEqual(detail["next_id"], second["id"])
         self.assertIsNone(detail["previous_id"])
@@ -665,6 +669,73 @@ class DailyControlStorageTests(unittest.TestCase):
         stored["snapshot"]["deals"][0]["title"] = "изменено в памяти"
         reloaded = get_daily_control_report(self.db_path, int(first["id"]))
         self.assertEqual(reloaded["snapshot"]["deals"][0]["title"], "Сделка 101")
+
+    def test_user_history_starts_on_august_31_without_rewriting_old_reports(self) -> None:
+        from storage.rop_db import create_daily_control_report
+
+        old_snapshot = {"team": {"marker": "old"}, "managers": [], "deals": []}
+        old = create_daily_control_report(
+            self.db_path, business_date="2026-08-30", creation_kind="manual",
+            started_at="2026-08-30T17:00:00+03:00", cutoff_at="2026-08-30T17:00:00+03:00",
+            snapshot=old_snapshot, source_watermark="old",
+        )
+        first = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T16:00:00+03:00", cutoff_at="2026-08-31T16:00:00+03:00",
+            snapshot={"team": {}, "managers": [], "deals": []}, source_watermark="first",
+        )
+        now = datetime(2026, 8, 31, 16, 0, tzinfo=MSK_TZ)
+
+        initial_history = history_payload(db_path=self.db_path, now=now)
+        self.assertEqual([item["id"] for item in initial_history["reports"]], [first["id"]])
+        self.assertEqual(initial_history["reports"][0]["position"], 1)
+        self.assertEqual(initial_history["reports"][0]["total"], 1)
+        self.assertEqual(initial_history["latest_id"], first["id"])
+        self.assertEqual(initial_history["default_id"], first["id"])
+        self.assertIsNone(report_payload(old["id"], {"role": "admin"}, db_path=self.db_path, now=now))
+
+        second = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T17:00:00+03:00", cutoff_at="2026-08-31T17:00:00+03:00",
+            snapshot={"team": {}, "managers": [], "deals": []}, source_watermark="second",
+        )
+        history = history_payload(db_path=self.db_path, now=now.replace(hour=17))
+        self.assertEqual([item["id"] for item in history["reports"]], [second["id"], first["id"]])
+        self.assertEqual([item["position"] for item in history["reports"]], [2, 1])
+        self.assertEqual(history["total"], 2)
+        self.assertEqual(history["latest_id"], second["id"])
+        self.assertEqual(history["default_id"], second["id"])
+
+        first_detail = report_payload(first["id"], {"role": "admin"}, db_path=self.db_path, now=now)
+        second_detail = report_payload(second["id"], {"role": "admin"}, db_path=self.db_path, now=now)
+        self.assertEqual(
+            (first_detail["position"], first_detail["total"], first_detail["previous_id"], first_detail["next_id"]),
+            (1, 2, None, second["id"]),
+        )
+        self.assertEqual(
+            (second_detail["position"], second_detail["total"], second_detail["previous_id"], second_detail["next_id"]),
+            (2, 2, first["id"], None),
+        )
+
+        stored = list_daily_control_reports(self.db_path)
+        self.assertEqual([item["id"] for item in stored], [second["id"], first["id"], old["id"]])
+        self.assertEqual(get_daily_control_report(self.db_path, old["id"])["snapshot"], old_snapshot)
+
+    def test_hidden_automatic_report_still_prevents_duplicate_publication(self) -> None:
+        from storage.rop_db import create_daily_control_report
+
+        due = datetime(2026, 8, 30, 15, 45, tzinfo=MSK_TZ)
+        old = create_daily_control_report(
+            self.db_path, business_date="2026-08-30", creation_kind="automatic_planning",
+            started_at=due.isoformat(), cutoff_at=due.isoformat(),
+            snapshot={"team": {}, "managers": [], "deals": []}, source_watermark="old-auto",
+        )
+
+        existing = publish_planning_daily_control_report(db_path=self.db_path, now=due)
+
+        self.assertEqual(existing["id"], old["id"])
+        self.assertEqual(len(list_daily_control_reports(self.db_path)), 1)
+        self.crm_refresh.assert_not_called()
 
     def test_snapshot_freezes_existing_day_events_and_ignores_plans_and_late_evidence(self) -> None:
         from storage.rop_db import record_manager_trajectory_event
@@ -696,7 +767,7 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertNotIn('stage_change', rows['101']['day_scope']['activity_kinds'])
         self.assertEqual(first['snapshot']['team']['no_movement'], {'count': 0, 'total': 1})
         event('later-call', 'crm_activity_observed', {'activity_kind': 'call', 'completed': True}, entity_id='102')
-        old = report_payload(first['id'], {'role': 'admin'}, db_path=self.db_path, now=NOW.replace(day=19))
+        old = get_daily_control_report(self.db_path, first['id'])
         old_ids = [item['deal_id'] for item in old['snapshot']['deals']]
         self.assertEqual(old_ids, ['101'])
         self.assertEqual(get_daily_control_report(self.db_path, first['id'])['snapshot'], first['snapshot'])
@@ -706,7 +777,7 @@ class DailyControlStorageTests(unittest.TestCase):
 
         snapshot = build_daily_control_snapshot({'deals': [_deal_row()]})
         saved = create_daily_control_report(
-            self.db_path, business_date='2026-08-18', creation_kind='manual',
+            self.db_path, business_date='2026-08-31', creation_kind='manual',
             started_at=NOW.isoformat(), cutoff_at=NOW.isoformat(), snapshot=snapshot, source_watermark='old',
         )
         record_manager_trajectory_event(
@@ -740,20 +811,20 @@ class DailyControlStorageTests(unittest.TestCase):
 
     def test_planning_report_uses_moscow_business_date_and_is_not_duplicated(self) -> None:
         _seed_deal(self.db_path)
-        due = datetime(2026, 8, 18, 15, 45, tzinfo=MSK_TZ)
+        due = datetime(2026, 8, 31, 15, 45, tzinfo=MSK_TZ)
         first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
         second = publish_planning_daily_control_report(db_path=self.db_path, now=due.replace(hour=16))
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["creation_kind"], "automatic_planning")
-        self.assertEqual(first["business_date"], "2026-08-18")
-        self.assertEqual(first["cutoff_at"][:16], "2026-08-18T15:45")
+        self.assertEqual(first["business_date"], "2026-08-31")
+        self.assertEqual(first["cutoff_at"][:16], "2026-08-31T15:45")
         self.assertEqual(
             report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
-            "Состояние команды на вторник, 18 августа 2026 — срез на 15:45 МСК",
+            "Состояние команды на понедельник, 31 августа 2026 — срез на 15:45 МСК",
         )
         self.assertEqual(
             report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=due)["heading"],
-            "Состояние команды на вторник, 18 августа 2026 — срез на 15:45 МСК",
+            "Состояние команды на понедельник, 31 августа 2026 — срез на 15:45 МСК",
         )
         self.crm_refresh.assert_called()
 
@@ -791,17 +862,17 @@ class DailyControlStorageTests(unittest.TestCase):
 
         snapshot = {"deals": [], "managers": [], "team": {}}
         final = create_daily_control_report(
-            self.db_path, business_date="2026-08-18", creation_kind="automatic_day_end",
-            started_at="2026-08-18T23:00:00+03:00", cutoff_at="2026-08-18T23:00:00+03:00",
+            self.db_path, business_date="2026-08-31", creation_kind="automatic_day_end",
+            started_at="2026-08-31T23:00:00+03:00", cutoff_at="2026-08-31T23:00:00+03:00",
             snapshot=snapshot, source_watermark="final",
         )
         planning = create_daily_control_report(
-            self.db_path, business_date="2026-08-18", creation_kind="automatic_planning",
-            started_at="2026-08-18T15:45:00+03:00", cutoff_at="2026-08-18T15:45:00+03:00",
+            self.db_path, business_date="2026-08-31", creation_kind="automatic_planning",
+            started_at="2026-08-31T15:45:00+03:00", cutoff_at="2026-08-31T15:45:00+03:00",
             snapshot=snapshot, source_watermark="planning",
         )
-        morning = history_payload(db_path=self.db_path, now=datetime(2026, 8, 19, 8, 10, tzinfo=MSK_TZ))
-        afternoon = history_payload(db_path=self.db_path, now=datetime(2026, 8, 18, 16, 0, tzinfo=MSK_TZ))
+        morning = history_payload(db_path=self.db_path, now=datetime(2026, 9, 1, 8, 10, tzinfo=MSK_TZ))
+        afternoon = history_payload(db_path=self.db_path, now=datetime(2026, 8, 31, 16, 0, tzinfo=MSK_TZ))
         self.assertEqual(morning["default_id"], final["id"])
         self.assertFalse(morning["missing_morning_final"])
         self.assertEqual(afternoon["default_id"], planning["id"])
@@ -902,7 +973,7 @@ class DailyControlStorageTests(unittest.TestCase):
         from storage.rop_db import create_automatic_analysis_run, finish_automatic_analysis_run
 
         _seed_deal(self.db_path)
-        due = NOW.replace(hour=15, minute=45)
+        due = datetime(2026, 8, 31, 15, 45, tzinfo=MSK_TZ)
         run = create_automatic_analysis_run(self.db_path, trigger='test', business_date=due.date().isoformat())
         first = publish_planning_daily_control_report(db_path=self.db_path, now=due)
         self.assertEqual(first['snapshot']['source_preparation']['status'], 'running')
@@ -940,17 +1011,18 @@ class DailyControlStorageTests(unittest.TestCase):
 
     def test_reading_report_does_not_recompute_current_sources(self) -> None:
         _seed_deal(self.db_path)
+        visible_now = datetime(2026, 8, 31, 16, 0, tzinfo=MSK_TZ)
         report = publish_daily_control_report(
             db_path=self.db_path,
             creation_kind="manual",
-            started_at=NOW,
-            cutoff_at=NOW,
-            now=NOW,
+            started_at=visible_now,
+            cutoff_at=visible_now,
+            now=visible_now,
             refresh=False,
         )
         with patch("api.daily_control.compute_source_watermark", side_effect=AssertionError("read path must stay frozen")):
-            history = history_payload(db_path=self.db_path, now=NOW)
-            detail = report_payload(report["id"], {"role": "admin"}, db_path=self.db_path, now=NOW)
+            history = history_payload(db_path=self.db_path, now=visible_now)
+            detail = report_payload(report["id"], {"role": "admin"}, db_path=self.db_path, now=visible_now)
         self.assertEqual(history["latest_id"], report["id"])
         self.assertEqual(detail["snapshot"], report["snapshot"])
         self.assertNotIn("live_watermark", history)

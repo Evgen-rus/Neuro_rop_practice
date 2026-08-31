@@ -77,6 +77,8 @@ logger = get_logger(__file__)
 _generation_lock = threading.Lock()
 _generation_state: dict[str, Any] | None = None
 
+DAILY_CONTROL_VISIBLE_FROM = "2026-08-31"
+
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=MSK_TZ)
@@ -1237,8 +1239,17 @@ def project_daily_control_snapshot(snapshot: dict[str, Any], user: dict[str, Any
     return projected
 
 
+def _visible_history_reports(db_path: str | Path) -> list[dict[str, Any]]:
+    """User-facing history only; automation keeps using the complete storage list."""
+    return [
+        report
+        for report in list_daily_control_reports(db_path)
+        if str(report.get("business_date") or "") >= DAILY_CONTROL_VISIBLE_FROM
+    ]
+
+
 def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None) -> dict[str, Any]:
-    reports = list_daily_control_reports(db_path)
+    reports = _visible_history_reports(db_path)
     latest_id = int(reports[0]["id"]) if reports else None
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     default_id = latest_id
@@ -1293,6 +1304,9 @@ def report_payload(
     db_path: str | Path = DEFAULT_DB_PATH,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
+    metadata = get_daily_control_report(db_path, report_id, include_snapshot=False)
+    if metadata is None or str(metadata.get("business_date") or "") < DAILY_CONTROL_VISIBLE_FROM:
+        return None
     report = get_daily_control_report(db_path, report_id, include_snapshot=True)
     if report is None:
         return None
@@ -1309,7 +1323,7 @@ def report_payload(
         **snapshot,
         "deals": deals,
     }
-    history = list_daily_control_reports(db_path)
+    history = _visible_history_reports(db_path)
     ids = [int(item["id"]) for item in history]
     index = ids.index(int(report["id"])) if int(report["id"]) in ids else None
     position_from_oldest = (len(ids) - index) if index is not None else None
