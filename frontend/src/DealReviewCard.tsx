@@ -100,6 +100,36 @@ function meetingScript(deal: DailyControlDeal) {
   return String(deal.ai_context.manager_coaching || '').trim()
 }
 
+export function DealSituation(props: {
+  situation?: string | null
+  mode: 'live' | 'snapshot'
+  cutoffAt?: string | null
+}) {
+  const situation = String(props.situation || '').trim()
+  if (!situation) return null
+  const date = props.cutoffAt
+    ? formatMoscowDateTime(props.cutoffAt, { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : null
+  const time = props.cutoffAt
+    ? formatMoscowDateTime(props.cutoffAt, { hour: '2-digit', minute: '2-digit' })
+    : null
+  const cutoffLabel = date && time ? `${date} · ${time} МСК` : null
+  return (
+    <article className="dc-daily-block dc-deal-situation">
+      <header className="dc-daily-block-title">
+        <span className="dc-daily-title-with-icon">
+          <span className="dc-daily-ico"><DailyIcon name={props.mode === 'snapshot' ? 'clock' : 'target'} /></span>
+          <span className="dc-deal-situation-heading">
+            <h3>{props.mode === 'snapshot' ? 'Ситуация на момент' : 'Текущая ситуация'}</h3>
+            {props.mode === 'snapshot' && cutoffLabel ? <small>{cutoffLabel}</small> : null}
+          </span>
+        </span>
+      </header>
+      <p className="dc-deal-situation-text">{situation}</p>
+    </article>
+  )
+}
+
 function channelIcon(channel: string) {
   if (channel === 'call') return 'phone'
   if (channel === 'email') return 'mail'
@@ -314,6 +344,7 @@ export function DealReviewCard(props: {
   contentNote?: string
   scriptHint?: string
   snapshotDay?: boolean
+  snapshotCutoffAt?: string | null
 }) {
   const [eventsOpen, setEventsOpen] = useState(false)
   const deal = props.deal
@@ -337,6 +368,12 @@ export function DealReviewCard(props: {
           <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
         </header>
       ) : null}
+
+      <DealSituation
+        situation={deal.ai_context.current_situation}
+        mode={props.snapshotDay ? 'snapshot' : 'live'}
+        cutoffAt={props.snapshotCutoffAt || deal.day_scope?.cutoff_at}
+      />
 
       <DealQualityBlock deal={deal} snapshotDay={props.snapshotDay} />
 
@@ -465,7 +502,6 @@ export function DealReviewCard(props: {
             </span>
           </summary>
           <div className="dc-daily-tile-body">
-            <p><b>Ситуация.</b> {deal.ai_context.current_situation || NO_DATA}</p>
             {deal.ai_context.rop_focus ? <p><b>Фокус РОПа.</b> {deal.ai_context.rop_focus}</p> : null}
             {deal.ai_context.what_to_check_now ? <p><b>Проверить сейчас.</b> {deal.ai_context.what_to_check_now}</p> : null}
             {deal.ai_context.manager_coaching ? <p><b>Сообщение менеджеру.</b> {deal.ai_context.manager_coaching}</p> : null}

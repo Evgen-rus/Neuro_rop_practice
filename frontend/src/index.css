@@ -8297,6 +8297,29 @@ ul.facts.bad li:before {
 
 .dc-daily-block:first-of-type { margin-top: 0; }
 
+.dc-deal-situation {
+  border-color: #cbd9ea;
+}
+
+.dc-deal-situation-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.dc-deal-situation-heading small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.dc-deal-situation-text {
+  margin: 0;
+  padding: 11px 12px;
+  color: #38516d;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .dc-daily-block-title {
   display: flex;
   align-items: center;

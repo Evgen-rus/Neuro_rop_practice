@@ -813,7 +813,7 @@ export type DailyControlDeal = {
   direct_question: string
   generic_question: string
   ai_context: {
-    current_situation: string
+    current_situation?: string | null
     rop_focus: string
     what_to_check_now: string
     manager_coaching: string

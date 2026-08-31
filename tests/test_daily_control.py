@@ -670,6 +670,45 @@ class DailyControlStorageTests(unittest.TestCase):
         reloaded = get_daily_control_report(self.db_path, int(first["id"]))
         self.assertEqual(reloaded["snapshot"]["deals"][0]["title"], "Сделка 101")
 
+    def test_history_keeps_each_snapshot_situation_after_live_change(self) -> None:
+        from storage.rop_db import create_daily_control_report
+
+        first_snapshot = build_daily_control_snapshot({
+            "deals": [_deal_row(coaching={
+                "report_id": 1,
+                "current_situation": "Клиент ждёт КП, финальное решение ещё не принял.",
+                "communication_quality_audit": _audit(),
+            })],
+        })
+        first = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T15:45:00+03:00", cutoff_at="2026-08-31T15:45:00+03:00",
+            snapshot=first_snapshot, source_watermark="first-situation",
+        )
+        second_snapshot = build_daily_control_snapshot({
+            "deals": [_deal_row(coaching={
+                "report_id": 2,
+                "current_situation": "КП согласовано, ждём договор.",
+                "communication_quality_audit": _audit(),
+            })],
+        })
+        second = create_daily_control_report(
+            self.db_path, business_date="2026-08-31", creation_kind="manual",
+            started_at="2026-08-31T18:00:00+03:00", cutoff_at="2026-08-31T18:00:00+03:00",
+            snapshot=second_snapshot, source_watermark="second-situation",
+        )
+
+        first_view = report_payload(first["id"], {"role": "admin"}, db_path=self.db_path, now=NOW)
+        second_view = report_payload(second["id"], {"role": "admin"}, db_path=self.db_path, now=NOW)
+        self.assertEqual(
+            first_view["snapshot"]["deals"][0]["ai_context"]["current_situation"],
+            "Клиент ждёт КП, финальное решение ещё не принял.",
+        )
+        self.assertEqual(
+            second_view["snapshot"]["deals"][0]["ai_context"]["current_situation"],
+            "КП согласовано, ждём договор.",
+        )
+
     def test_user_history_starts_on_august_31_without_rewriting_old_reports(self) -> None:
         from storage.rop_db import create_daily_control_report
 

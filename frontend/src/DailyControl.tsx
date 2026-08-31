@@ -633,6 +633,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               openEventId={openEventId}
               onToggleEvent={(eventId) => setOpenEventId((current) => current === eventId ? '' : eventId)}
               snapshotDay
+              snapshotCutoffAt={report.cutoff_at}
             />
           </div>
         </div>

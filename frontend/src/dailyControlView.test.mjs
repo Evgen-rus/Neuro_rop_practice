@@ -400,6 +400,55 @@ test('review card shows quality, then today communications, then focus, with sha
   assert.equal((html.match(/Общая аргументация за день/g) || []).length, 3)
 })
 
+test('read-only situation uses live or frozen snapshot heading and hides empty values', () => {
+  const deal = {
+    ...communicationDeal([]),
+    title: 'Тестовая сделка',
+    generic_question: 'Вопрос 1',
+    direct_question: 'Вопрос 2',
+    ai_context: {
+      current_situation: 'Клиент ждёт КП, финальное решение ещё не принял.',
+      known: [],
+      unknowns: [],
+    },
+    quality: {
+      status: 'missing',
+      confirmed_count: null,
+      total: 3,
+      zero_reasons: [],
+      criteria: {
+        next_action: { score: null },
+        value_development: { score: null },
+        data_collection: { score: null },
+      },
+    },
+  }
+  const commonProps = {
+    deal, asked: [false, false], onToggleAsked() {}, onCopyScript() {},
+    copyNotice: '', openEventId: '', onToggleEvent() {},
+  }
+  const live = renderToStaticMarkup(createElement(DealReviewCard, commonProps))
+  assert.match(live, /Текущая ситуация/)
+  assert.match(live, /Клиент ждёт КП/)
+  assert.doesNotMatch(live, /Ситуация на момент|Требует подтверждения|Добавить контекст/)
+
+  const snapshot = renderToStaticMarkup(createElement(DealReviewCard, {
+    ...commonProps,
+    snapshotDay: true,
+    snapshotCutoffAt: '2026-08-31T15:45:00+03:00',
+  }))
+  assert.match(snapshot, /Ситуация на момент/)
+  assert.match(snapshot, /31\.08\.2026 · 15:45 МСК/)
+  assert.match(snapshot, /Клиент ждёт КП/)
+  assert.doesNotMatch(snapshot, /Текущая ситуация/)
+
+  const empty = renderToStaticMarkup(createElement(DealReviewCard, {
+    ...commonProps,
+    deal: { ...deal, ai_context: { ...deal.ai_context, current_situation: '' } },
+  }))
+  assert.doesNotMatch(empty, /dc-deal-situation/)
+})
+
 test('snapshot wording names the report day instead of calendar today', () => {
   assert.equal(snapshotDayText('Сегодня не подтверждено'), 'В этот день не подтверждено')
   assert.equal(
