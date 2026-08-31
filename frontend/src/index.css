@@ -9075,6 +9075,134 @@ ul.facts.bad li:before {
   line-height: 1.55;
 }
 
+.dc-communication-open {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid #c9d9eb;
+  border-radius: 8px;
+  color: #174f91;
+  background: #f7fbff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.dc-communication-open:hover { background: #edf6ff; }
+.dc-communication-open:focus-visible {
+  outline: 2px solid #5ba2f3;
+  outline-offset: 2px;
+}
+
+.dc-communication-dialog-layer { z-index: 2200; }
+.dc-modal.dc-communication-dialog {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dc-communication-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #d9e4f0;
+}
+
+.dc-communication-dialog > header small { color: #697a95; font-size: 10px; }
+.dc-communication-dialog > header button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  color: #425a78;
+  background: #edf3f9;
+  cursor: pointer;
+  font-size: 22px;
+}
+
+.dc-modal > .dc-communication-dialog-body {
+  display: block;
+  max-height: calc(88vh - 78px);
+  margin: 0;
+  padding: 18px 20px 22px;
+  overflow: auto;
+}
+
+.dc-communication-loading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  color: #52677f;
+}
+
+.dc-communication-loading i {
+  grid-column: 1 / -1;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #edf3f8, #f8fbfd, #edf3f8);
+}
+
+.dc-communication-transcript {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid #d9e4f0;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dc-communication-thread-meta { margin: 0 0 12px; }
+.dc-communication-thread {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dc-communication-thread > li {
+  width: min(84%, 620px);
+  padding: 10px 12px;
+  border: 1px solid #d6e4f1;
+  border-radius: 12px 12px 12px 3px;
+  background: #f6faff;
+}
+
+.dc-communication-thread > li.is-outgoing {
+  justify-self: end;
+  border-radius: 12px 12px 3px;
+  border-color: #cfe4d6;
+  background: #f1fbf4;
+}
+
+.dc-communication-thread > li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #52677f;
+  font-size: 10px;
+}
+
+.dc-communication-thread > li p {
+  margin: 7px 0 0;
+  color: #172a43;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dc-communication-thread > li small {
+  display: block;
+  margin-top: 6px;
+  color: #697a95;
+  font-size: 9px;
+}
+
 @media (max-width: 760px) {
   .dc-daily-comm-summary { grid-template-columns: repeat(3, 1fr); padding: 0 10px; }
   .dc-daily-stat { padding: 9px 10px; }

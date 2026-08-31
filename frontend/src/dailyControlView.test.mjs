@@ -311,7 +311,7 @@ test('production task block distinguishes absent legacy details from no tasks', 
 })
 
 const { DealReviewCard, DealQualityAndFocus } = await import(componentModule('./DealReviewCard.tsx', {
-  './CommunicationContent': componentModule('./CommunicationContent.tsx'),
+  './communicationDialogContext': componentModule('./communicationDialogContext.ts'),
 }))
 
 test('communication rows omit unknown direction without hiding channel, delivery or known directions', () => {
@@ -328,6 +328,8 @@ test('communication rows omit unknown direction without hiding channel, delivery
   const html = renderToStaticMarkup(createElement(DealReviewCard, {
     deal, asked: [false, false], onToggleAsked() {}, onCopyScript() {}, copyNotice: '', openEventId: '', onToggleEvent() {},
   }))
+  assert.equal((html.match(/aria-haspopup="dialog"/g) || []).length, 4)
+  assert.doesNotMatch(html, /dc-call-transcript/)
   const rows = [...html.matchAll(/<span class="dc-daily-event-main">(.*?)<\/span><\/span>/g)].map((match) => match[1])
   assert.equal(rows.length, 4)
   assert.equal(rows.filter((row) => row.startsWith('<span>Max</span>')).length, 2)

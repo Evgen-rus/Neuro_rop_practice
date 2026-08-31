@@ -3,7 +3,12 @@ from __future__ import annotations
 import copy
 import unittest
 
-from bitrix.customer_history import build_normalized_communications, classify_call_outcome, messenger_mirror_from_comment
+from bitrix.customer_history import (
+    build_normalized_communications,
+    classify_call_outcome,
+    is_confirmed_client_reply,
+    messenger_mirror_from_comment,
+)
 
 
 def response(item: dict) -> dict:
@@ -87,6 +92,42 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         self.assertEqual(events[0]["participant_role"], "client")
         self.assertEqual(events[0]["contact_class"], "confirmed_contact")
         self.assertEqual(events[0]["source_ids"], ["100", "101"])
+        self.assertTrue(is_confirmed_client_reply(events[0]))
+
+    def test_one_word_wazzup_reply_is_canonical_client_evidence(self) -> None:
+        when = "2026-08-31T09:47:15+03:00"
+        text = "[img]https://static.wazzup24.com/images/bitrix/whatsapp.png[/img] Иван Петров:\nДа"
+        bundle = {
+            "root_entity": {"type": "deal", "id": "9"},
+            "contacts": {"7": response({"ID": "7", "NAME": "Иван", "LAST_NAME": "Петров"})},
+            "client_touchpoints": [{
+                "when": when,
+                "event_type": "message",
+                "entity_type": "deal",
+                "entity_id": "9",
+                "entity_key": "deal:9",
+                "id": "300",
+                "text": "Да",
+                "direction": "1",
+                "raw": {"ID": "300", "DIRECTION": "1", "DESCRIPTION": "Да"},
+            }],
+            "internal_context": [{
+                "when": when,
+                "category": "timeline_comment",
+                "entity_type": "deal",
+                "entity_id": "9",
+                "entity_key": "deal:9",
+                "id": "301",
+                "text": text,
+            }],
+        }
+        events = build_normalized_communications(bundle)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["channel"], "whatsapp")
+        self.assertEqual(events[0]["content"], "Да")
+        self.assertEqual(events[0]["source_ids"], ["300", "301"])
+        self.assertEqual(events[0]["conversation_scope"], "contact")
+        self.assertTrue(is_confirmed_client_reply(events[0]))
 
     def test_unmatched_mirrored_message_is_uncertain_attempt_and_internal_chat_stays_internal(self) -> None:
         bundle = {
@@ -122,6 +163,7 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         self.assertEqual(events[0]["direction"], "unknown")
         self.assertEqual(events[0]["participant_role"], "unknown")
         self.assertEqual(events[0]["contact_class"], "attempt")
+        self.assertFalse(is_confirmed_client_reply(events[0]))
         self.assertEqual(events[1]["channel"], "internal_chat")
         self.assertEqual(events[1]["contact_class"], "internal_information")
         self.assertEqual(events[1]["evidence_level"], "reported")

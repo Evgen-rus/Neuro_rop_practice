@@ -34,9 +34,9 @@ def _source_id(event: dict[str, Any]) -> str:
 
 def _normalized_events(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     values = bundle.get("normalized_communications")
-    if not isinstance(values, list):
+    if bundle.get("client_touchpoints") is not None or bundle.get("internal_context") is not None:
         values = build_normalized_communications(bundle)
-    return [item for item in values if isinstance(item, dict)]
+    return [item for item in values if isinstance(item, dict)] if isinstance(values, list) else []
 
 
 def _raw_activity_text(bundle: dict[str, Any], source_id: str) -> str:
@@ -87,6 +87,42 @@ def _stored_daily_event(
     )
 
 
+def communication_event_text(
+    bundle: dict[str, Any],
+    event: dict[str, Any],
+) -> tuple[str, bool]:
+    """Return the best locally saved body and whether it is only an excerpt."""
+    text = ""
+    source_ids = [
+        str(value).strip()
+        for value in event.get("source_ids") or []
+        if str(value).strip()
+    ]
+    if not source_ids:
+        source_id = _source_id(event)
+        source_ids = [source_id] if source_id else []
+    if bundle and source_ids:
+        if str(event.get("source_type") or "") == "crm_timeline_comment":
+            for source_id in source_ids:
+                text = _raw_mirrored_message_text(bundle, source_id)
+                if text:
+                    break
+            if not text:
+                for source_id in source_ids:
+                    text = _raw_activity_text(bundle, source_id)
+                    if text:
+                        break
+        else:
+            for source_id in source_ids:
+                text = _raw_activity_text(bundle, source_id)
+                if text:
+                    break
+    is_excerpt = not bool(text)
+    if not text:
+        text = str(event.get("content") or event.get("preview") or "").strip()
+    return text, is_excerpt
+
+
 def get_deal_communication_content(
     deal_id: str,
     event_id: str,
@@ -113,17 +149,7 @@ def get_deal_communication_content(
             "Письмо или сообщение не найдено в истории этой сделки"
         )
 
-    source_id = _source_id(event)
-    text = ""
-    is_excerpt = True
-    if bundle and source_id:
-        if str(event.get("source_type") or "") == "crm_timeline_comment":
-            text = _raw_mirrored_message_text(bundle, source_id)
-        else:
-            text = _raw_activity_text(bundle, source_id)
-        is_excerpt = not bool(text)
-    if not text:
-        text = str(event.get("content") or event.get("preview") or "").strip()
+    text, is_excerpt = communication_event_text(bundle, event)
     if not text:
         raise DealCommunicationContentNotFound(
             "Текст этого письма или сообщения пока недоступен"

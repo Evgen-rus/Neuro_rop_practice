@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import copy
 import html
+import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -228,6 +229,18 @@ def _communication_channel_from_comment(text: str) -> str | None:
 
 MESSENGER_CHANNELS = frozenset({"message", "whatsapp", "telegram", "max"})
 INTERNAL_CHANNELS = frozenset({"internal_chat", "internal_comment"})
+EXTERNAL_TEXT_CHANNELS = frozenset({"email", *MESSENGER_CHANNELS})
+
+
+def is_confirmed_client_reply(event: dict[str, Any]) -> bool:
+    """Return true only for explicit incoming text from a confirmed client."""
+    return (
+        str(event.get("channel") or "").lower() in EXTERNAL_TEXT_CHANNELS
+        and str(event.get("direction") or "").lower() == "incoming"
+        and str(event.get("participant_role") or "").lower() == "client"
+        and str(event.get("contact_class") or "").lower() == "confirmed_contact"
+        and bool(str(event.get("content") or "").strip())
+    )
 
 
 def messenger_mirror_from_comment(text: str) -> dict[str, Any] | None:
@@ -263,23 +276,145 @@ def communication_activity_kind(event: dict[str, Any]) -> str | None:
         if direction == "incoming" and outcome == "connected":
             return "conversation"
         return None
+    if is_confirmed_client_reply(event):
+        return "client_reply"
     if channel == "email":
         if direction == "outgoing":
             return "email"
-        if direction == "incoming" and content:
-            return "client_reply"
         return None
     if channel not in MESSENGER_CHANNELS:
         return None
     if contact_class == "internal_information":
         return None
-    if contact_class == "confirmed_contact" and content:
-        return "client_reply"
     if direction == "outgoing" or (contact_class == "attempt" and content):
         return "message"
-    if direction == "incoming" and content:
-        return "client_reply"
     return None
+
+
+def _provider_dialog_id(raw: dict[str, Any]) -> str:
+    """Read only explicit provider conversation fields; message origin IDs are not dialogs."""
+    wanted = {
+        "dialog_id",
+        "dialogid",
+        "chat_id",
+        "chatid",
+        "external_chat_id",
+        "externalchatid",
+        "conversation_id",
+        "conversationid",
+    }
+
+    def visit(value: Any) -> str:
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("{") or text.startswith("["):
+                try:
+                    return visit(json.loads(text))
+                except (TypeError, ValueError):
+                    return ""
+            return ""
+        if isinstance(value, list):
+            for child in value:
+                found = visit(child)
+                if found:
+                    return found
+            return ""
+        if not isinstance(value, dict):
+            return ""
+        for key, child in value.items():
+            normalized_key = re.sub(r"[^a-z0-9_]", "", str(key).lower())
+            if normalized_key in wanted and str(child or "").strip():
+                return str(child).strip()
+        for child in value.values():
+            found = visit(child)
+            if found:
+                return found
+        return ""
+
+    for key in ("SETTINGS", "PROVIDER_PARAMS", "PROVIDER_DATA"):
+        found = visit(raw.get(key))
+        if found:
+            return found
+    return ""
+
+
+def _bundle_client_identity_map(bundle: dict[str, Any]) -> tuple[dict[str, str], set[str]]:
+    identities: dict[str, str] = {}
+    contact_ids: set[str] = set()
+
+    def add(item: dict[str, Any], identity: str) -> None:
+        for variant in (
+            " ".join(str(item.get(key) or "").strip() for key in ("NAME", "SECOND_NAME", "LAST_NAME")).strip(),
+            " ".join(str(item.get(key) or "").strip() for key in ("NAME", "LAST_NAME")).strip(),
+        ):
+            normalized = _normalized_person_name(variant)
+            if normalized:
+                identities[normalized] = identity
+
+    lead = result_item(bundle.get("lead"))
+    if lead:
+        add(lead, f"lead:{lead.get('ID') or ''}")
+    for contact_id, container in (bundle.get("contacts") or {}).items():
+        item = result_item(container if isinstance(container, dict) else None)
+        if not item:
+            continue
+        normalized_id = str(item.get("ID") or contact_id or "").strip()
+        if normalized_id:
+            contact_ids.add(normalized_id)
+            add(item, f"contact:{normalized_id}")
+    return identities, contact_ids
+
+
+def _activity_contact_identity(raw: dict[str, Any]) -> str:
+    values: list[str] = []
+    for item in raw.get("COMMUNICATIONS") or []:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("ENTITY_ID") or item.get("entityId") or "").strip()
+        entity_type = str(item.get("ENTITY_TYPE") or item.get("entityType") or "contact").strip().lower()
+        if entity_id:
+            values.append(f"{entity_type}:{entity_id}")
+            continue
+        value = normalize_email(item.get("VALUE") or item.get("value"))
+        if value:
+            values.append(f"value:{value}")
+    return sorted(set(values))[0] if values else ""
+
+
+def _conversation_owner_id(bundle: dict[str, Any]) -> str:
+    root = bundle.get("root_entity") if isinstance(bundle.get("root_entity"), dict) else {}
+    if root.get("id"):
+        return str(root["id"])
+    deal_container = bundle.get("deal")
+    deal = (
+        result_item(deal_container)
+        if isinstance(deal_container, dict) and "response" not in deal_container
+        else (deal_container or {}).get("item", {})
+        if isinstance(deal_container, dict)
+        else {}
+    )
+    return str(deal.get("ID") or bundle.get("deal_id") or bundle.get("lead_id") or "")
+
+
+def communication_conversation_key(
+    event: dict[str, Any],
+    *,
+    owner_id: str,
+    provider_dialog_id: str = "",
+    contact_identity: str = "",
+) -> tuple[str, str]:
+    """Build an opaque stable key without exposing contact identity."""
+    channel = str(event.get("channel") or "unknown").lower()
+    if provider_dialog_id:
+        scope, identity = "provider", provider_dialog_id
+    elif contact_identity:
+        scope, identity = "contact", contact_identity
+    else:
+        scope, identity = "channel", channel
+    digest = hashlib.sha256(
+        f"v1|{scope}|{owner_id}|{channel}|{identity}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"conversation:v1:{digest}", scope
 
 
 def _parse_mirrored_message(text: str) -> tuple[str | None, str]:
@@ -300,6 +435,8 @@ def _communication_event_id(prefix: str, occurred_at: Any, identity: str) -> str
 def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     """Return an additive, source-aware communication ledger for leads and deals."""
     client_names = _bundle_client_names(bundle)
+    client_identities, contact_ids = _bundle_client_identity_map(bundle)
+    owner_id = _conversation_owner_id(bundle)
     events: list[dict[str, Any]] = []
 
     for item in bundle.get("client_touchpoints") or []:
@@ -317,19 +454,22 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
         participant_role = "client" if direction == "incoming" else "employee" if direction == "outgoing" else "unknown"
         if channel in {"email", "message"} and direction == "incoming" and content:
             contact_class = "confirmed_contact"
+        contact_identity = _activity_contact_identity(raw)
+        if not contact_identity and len(contact_ids) == 1:
+            contact_identity = f"contact:{next(iter(contact_ids))}"
         event_id = f"crm_activity:{source_id}" if source_id else _communication_event_id(
             "crm_activity",
             item.get("when"),
             f"{channel}|{direction}|{item.get('subject')}|{content}",
         )
-        events.append(
-            {
+        event = {
                 "event_id": event_id,
                 "source_ids": [source_id] if source_id else [],
                 "occurred_at": item.get("when"),
                 "entity_type": item.get("entity_type"),
                 "entity_id": item.get("entity_id"),
                 "entity_key": item.get("entity_key"),
+                "entity_keys": [str(item.get("entity_key"))] if item.get("entity_key") else [],
                 "channel": channel,
                 "direction": direction,
                 "participant_role": participant_role,
@@ -353,7 +493,15 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
                     else "Исходящая коммуникация зафиксирована как попытка связи."
                 ),
             }
+        conversation_key, conversation_scope = communication_conversation_key(
+            event,
+            owner_id=owner_id,
+            provider_dialog_id=_provider_dialog_id(raw),
+            contact_identity=contact_identity,
         )
+        event["conversation_key"] = conversation_key
+        event["conversation_scope"] = conversation_scope
+        events.append(event)
 
     for item in bundle.get("internal_context") or []:
         if not isinstance(item, dict):
@@ -373,14 +521,17 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
             source_label = f"CRM/{'WhatsApp' if channel == 'whatsapp' else 'Max' if channel == 'max' else 'Telegram'}"
             identity = f"{channel}|{direction}|{speaker}|{content}"
             event_id = _communication_event_id("crm_mirror", item.get("when"), identity)
-            events.append(
-                {
+            contact_identity = client_identities.get(normalized_speaker, "")
+            if not contact_identity and len(contact_ids) == 1:
+                contact_identity = f"contact:{next(iter(contact_ids))}"
+            event = {
                     "event_id": event_id,
                     "source_ids": [source_id] if source_id else [],
                     "occurred_at": item.get("when"),
                     "entity_type": item.get("entity_type"),
                     "entity_id": item.get("entity_id"),
                     "entity_key": item.get("entity_key"),
+                    "entity_keys": [str(item.get("entity_key"))] if item.get("entity_key") else [],
                     "channel": channel,
                     "direction": direction,
                     "participant_role": participant_role,
@@ -404,7 +555,14 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
                         else "Автор зеркального сообщения не определён."
                     ),
                 }
+            conversation_key, conversation_scope = communication_conversation_key(
+                event,
+                owner_id=owner_id,
+                contact_identity=contact_identity,
             )
+            event["conversation_key"] = conversation_key
+            event["conversation_scope"] = conversation_scope
+            events.append(event)
             continue
 
         source_type = "internal_im_chat" if category == "internal_im_chat" else "crm_timeline_comment"
@@ -452,11 +610,53 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
         )
         if not existing.get("entity_key") and event.get("entity_key"):
             existing["entity_key"] = event.get("entity_key")
+        existing["entity_keys"] = sorted({
+            str(value)
+            for value in [*(existing.get("entity_keys") or []), *(event.get("entity_keys") or [])]
+            if value
+        })
 
-    return sorted(
+    canonical: list[dict[str, Any]] = []
+    duplicate_indexes: dict[tuple[str, str], int] = {}
+    mirror_channels = {"whatsapp", "telegram", "max"}
+    for event in sorted(
         deduplicated.values(),
         key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")),
-    )
+    ):
+        content_key = " ".join(str(event.get("content") or "").casefold().split())
+        duplicate_key = (str(event.get("occurred_at") or ""), content_key)
+        existing_index = duplicate_indexes.get(duplicate_key) if content_key else None
+        if existing_index is None:
+            duplicate_indexes[duplicate_key] = len(canonical)
+            canonical.append(event)
+            continue
+        existing = canonical[existing_index]
+        channels = {str(existing.get("channel") or ""), str(event.get("channel") or "")}
+        source_types = {str(existing.get("source_type") or ""), str(event.get("source_type") or "")}
+        is_messenger_duplicate = (
+            bool(channels & mirror_channels)
+            and "crm_timeline_comment" in source_types
+            and "crm_activity" in source_types
+        )
+        if not is_messenger_duplicate:
+            duplicate_indexes[(duplicate_key[0], f"{duplicate_key[1]}:{len(canonical)}")] = len(canonical)
+            canonical.append(event)
+            continue
+        preferred = event if str(event.get("channel") or "") in mirror_channels else existing
+        merged = dict(preferred)
+        merged["source_ids"] = sorted({
+            str(value)
+            for value in [*(existing.get("source_ids") or []), *(event.get("source_ids") or [])]
+            if value
+        })
+        merged["entity_keys"] = sorted({
+            str(value)
+            for value in [*(existing.get("entity_keys") or []), *(event.get("entity_keys") or [])]
+            if value
+        })
+        canonical[existing_index] = merged
+
+    return canonical
 
 
 def parse_bitrix_datetime(value: Any) -> datetime | None:
@@ -1210,6 +1410,50 @@ def build_history_sections(bundle: dict[str, Any]) -> dict[str, Any]:
             key=sort_key,
         ),
     }
+
+
+def build_deal_normalized_communications(
+    raw_bundle: dict[str, Any],
+    customer_history_bundle: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Use the customer ledger, or adapt the saved raw deal context to that same normalizer."""
+    if isinstance(customer_history_bundle, dict):
+        return build_normalized_communications(customer_history_bundle)
+
+    deal = (raw_bundle.get("deal") or {}).get("item") or {}
+    deal_id = str(deal.get("ID") or raw_bundle.get("deal_id") or "")
+    histories: dict[str, Any] = {}
+    if deal_id:
+        histories[f"deal:{deal_id}"] = {
+            "entity_type": "deal",
+            "entity_id": deal_id,
+            "activities": raw_bundle.get("activities") or {},
+            "activity_details": raw_bundle.get("activity_details") or {},
+            "timeline_comments": raw_bundle.get("timeline_comments") or [],
+        }
+    source_lead = raw_bundle.get("source_lead") or {}
+    lead_id = str(source_lead.get("lead_id") or "")
+    if lead_id:
+        histories[f"lead:{lead_id}"] = {
+            **source_lead,
+            "entity_type": "lead",
+            "entity_id": lead_id,
+        }
+    adapted: dict[str, Any] = {
+        "root_entity": {"type": "deal", "id": deal_id},
+        "deal": raw_bundle.get("deal"),
+        "lead": source_lead.get("lead"),
+        "contacts": raw_bundle.get("contacts") or {},
+        "activities_by_entity": histories,
+    }
+    contact = raw_bundle.get("contact")
+    if not adapted["contacts"] and isinstance(contact, dict):
+        contact_item = result_item(contact)
+        contact_id = str(contact_item.get("ID") or "")
+        if contact_id:
+            adapted["contacts"] = {contact_id: contact}
+    adapted.update(build_history_sections(adapted))
+    return build_normalized_communications(adapted)
 
 
 def internal_im_chat_targets(

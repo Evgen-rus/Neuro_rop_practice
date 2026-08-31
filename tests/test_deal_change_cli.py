@@ -22,6 +22,7 @@ class DealChangeCliTests(unittest.TestCase):
         force_full: bool = False,
         context_error: Exception | None = None,
         analyzer_side_effect=None,
+        change: str = "transcript_changed",
     ):
         args = SimpleNamespace(
             deal_id="7", deal_root=str(root), db_path=str(root / "state.sqlite"),
@@ -30,7 +31,7 @@ class DealChangeCliTests(unittest.TestCase):
         decision = ProcessingDecision(
             status=INCREMENTAL_LLM_ANALYSIS,
             reasons=["new evidence"], triggers=[],
-            diff={"changes": ["transcript_changed"], "details": {}},
+            diff={"changes": [change], "details": {}},
         )
         context_side_effect = context_error or {
             "previous_analysis": {}, "new_events": [{"type": "transcript"}], "crm_delta": {}
@@ -112,6 +113,16 @@ class DealChangeCliTests(unittest.TestCase):
     def test_incremental_feature_disabled_preserves_full_analyzer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             analyzer = self._run_incremental_main(Path(directory), enabled=False)
+            analyzer.assert_called_once()
+            self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context_path"))
+
+    def test_new_client_reply_with_v2_off_preserves_full_analyzer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer = self._run_incremental_main(
+                Path(directory),
+                enabled=False,
+                change="new_client_reply",
+            )
             analyzer.assert_called_once()
             self.assertIsNone(analyzer.call_args.kwargs.get("incremental_context_path"))
 

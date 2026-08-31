@@ -1249,7 +1249,6 @@ function DealDetail(props: {
   const [freshQuickHelpId, setFreshQuickHelpId] = useState<number | null>(null)
   const [askedByDeal, setAskedByDeal] = useState<Record<string, [boolean, boolean]>>({})
   const [scriptCopyNotice, setScriptCopyNotice] = useState('')
-  const [openReviewEventId, setOpenReviewEventId] = useState('')
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
   // На дашборде правая панель следует роли: менеджер всегда видит свой экран,
@@ -1289,7 +1288,6 @@ function DealDetail(props: {
     setAssistantOpen(false)
     setFreshQuickHelpId(null)
     setScriptCopyNotice('')
-    setOpenReviewEventId('')
   }, [activeDealId, activeReportId])
 
   useEffect(() => {
@@ -1692,8 +1690,6 @@ function DealDetail(props: {
       onToggleAsked={toggleAsked}
       onCopyScript={() => void copyReviewScript()}
       copyNotice={scriptCopyNotice}
-      openEventId={openReviewEventId}
-      onToggleEvent={(eventId) => setOpenReviewEventId((current) => current === eventId ? '' : eventId)}
     />}
     <DealMarkdownReport reportId={coaching.report_id} userRole={props.userRole} onCopy={props.onCopy} />
   </aside>
@@ -1809,16 +1805,12 @@ function RopDealScreen({
   onToggleAsked,
   onCopyScript,
   copyNotice,
-  openEventId,
-  onToggleEvent,
 }: {
   deal: DealControlDeal
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
   onCopyScript: () => void
   copyNotice: string
-  openEventId: string
-  onToggleEvent: (eventId: string) => void
 }) {
   return <DealReviewCard
     deal={deal.review || null}
@@ -1826,11 +1818,8 @@ function RopDealScreen({
     onToggleAsked={onToggleAsked}
     onCopyScript={onCopyScript}
     copyNotice={copyNotice}
-    openEventId={openEventId}
-    onToggleEvent={onToggleEvent}
     showHeader={false}
     emptyText="Разбор сделки пока недоступен."
-    contentNote="Содержимое коммуникации загружается отдельно при раскрытии."
     scriptHint="Для разговора с менеджером"
   />
 }

@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 
 import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommunicationsToday } from './api'
-import { CommunicationContent } from './CommunicationContent'
+import { useCommunicationDialog } from './communicationDialogContext'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView'
@@ -13,7 +13,6 @@ const QUALITY_LABELS = {
 } as const
 
 const NO_DATA = 'Нет данных'
-const DEFAULT_CONTENT_NOTE = 'Содержимое загружается отдельно и не является частью сохранённого снимка.'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
 
 const ICON_PATHS = {
@@ -337,16 +336,14 @@ export function DealReviewCard(props: {
   onToggleAsked: (index: 0 | 1) => void
   onCopyScript: () => void
   copyNotice: string
-  openEventId: string
-  onToggleEvent: (eventId: string) => void
   showHeader?: boolean
   emptyText?: string
-  contentNote?: string
   scriptHint?: string
   snapshotDay?: boolean
   snapshotCutoffAt?: string | null
 }) {
   const [eventsOpen, setEventsOpen] = useState(false)
+  const { openCommunication } = useCommunicationDialog()
   const deal = props.deal
   if (!deal) {
     return <section className="dc-daily-card"><p className="dc-daily-empty-list">{props.emptyText || 'Выберите другую категорию, чтобы открыть сделку.'}</p></section>
@@ -354,7 +351,6 @@ export function DealReviewCard(props: {
   const communications = deal.communications_today
   const summary = summaryView(communications)
   const events = displayEvents(communications.items || [])
-  const contentNote = props.contentNote || DEFAULT_CONTENT_NOTE
   const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
   const script = meetingScript(deal)
   return (
@@ -441,11 +437,24 @@ export function DealReviewCard(props: {
               {events.length ? (
                 <div className="dc-daily-event-list">
                   {events.map((item) => {
-                    const open = props.openEventId === item.event_id
                     const attempt = statusIsAttempt(item)
+                    const canOpen = canOpenContent(item)
                     return (
-                      <div className={`dc-daily-comm-event ${open ? 'open' : ''}`} key={item.event_id}>
-                        <button type="button" aria-expanded={open} onClick={() => props.onToggleEvent(item.event_id)}>
+                      <div className="dc-daily-comm-event" key={item.event_id}>
+                        <button
+                          type="button"
+                          aria-haspopup={canOpen ? 'dialog' : undefined}
+                          onClick={() => {
+                            if (!canOpen) return
+                            openCommunication({
+                              dealId: deal.deal_id,
+                              eventId: item.event_id,
+                              channel: item.channel,
+                              title: item.subject || item.participant_name,
+                              occurredAt: item.occurred_at,
+                            })
+                          }}
+                        >
                           <time>{formatClock(item.occurred_at)}</time>
                           <span className="dc-daily-event-icon"><DailyIcon name={channelIcon(item.channel)} /></span>
                           <span className="dc-daily-event-main">
@@ -454,32 +463,13 @@ export function DealReviewCard(props: {
                           </span>
                           <span className="dc-daily-event-contact">{item.participant_name || item.subject || ''}</span>
                           <em className="dc-daily-event-duration">{eventDurationLabel(item)}</em>
-                          <i className="dc-daily-event-chevron" aria-hidden="true">{open ? '▴' : '▾'}</i>
+                          <i className="dc-daily-event-chevron" aria-hidden="true">{canOpen ? '↗' : '—'}</i>
                         </button>
-                        {open ? (
-                          <div className="dc-daily-comm-event-detail">
-                            <p className="dc-daily-event-meta">
-                              {item.subject ? <span>Тема: <b>{item.subject}</b></span> : null}
-                              <span>ID события: {item.event_id}</span>
-                            </p>
-                            {attempt ? (
-                              <div className="dc-daily-attempt-note">
-                                {item.call_outcome === 'unknown'
-                                  ? 'Исход звонка не доказан — событие не считается разговором.'
-                                  : 'Соединение не установлено — расшифровки разговора нет.'}
-                              </div>
-                            ) : null}
-                            {canOpenContent(item) ? (
-                              <CommunicationContent
-                                dealId={deal.deal_id}
-                                eventId={item.event_id}
-                                channel={item.channel}
-                                allowLoad={item.channel !== 'call' || item.call_outcome === 'connected'}
-                              />
-                            ) : null}
-                            <small>{contentNote}</small>
-                          </div>
-                        ) : null}
+                        {attempt ? <small className="dc-daily-attempt-note">
+                          {item.call_outcome === 'unknown'
+                            ? 'Исход звонка не доказан — событие не считается разговором.'
+                            : 'Соединение не установлено — расшифровки разговора нет.'}
+                        </small> : null}
                       </div>
                     )
                   })}

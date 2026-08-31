@@ -100,6 +100,42 @@ class DealChangeDecisionTests(unittest.TestCase):
         self.assertEqual(transcript.status, INCREMENTAL_LLM_ANALYSIS)
         self.assertEqual(message.status, INCREMENTAL_LLM_ANALYSIS)
 
+    def test_canonical_client_reply_triggers_llm_and_legacy_snapshot_bootstraps(self):
+        from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
+
+        raw = {"deal": {"item": {"ID": "7", "CLOSED": "N"}}}
+        reply = {
+            "event_id": "crm_mirror:reply",
+            "source_ids": ["10", "11"],
+            "occurred_at": "2026-08-31T10:00:00+03:00",
+            "channel": "whatsapp",
+            "direction": "incoming",
+            "participant_role": "client",
+            "contact_class": "confirmed_contact",
+            "content": "Да",
+            "conversation_key": "conversation:v1:test",
+        }
+        empty = build_deal_snapshot(raw, normalized_communications=[])
+        current = build_deal_snapshot(raw, normalized_communications=[reply])
+        diff = compare_snapshots(empty, current)
+        self.assertEqual(diff["changes"], ["new_client_reply"])
+        self.assertEqual(diff["details"]["new_client_reply_event_ids"], ["crm_mirror:reply"])
+        self.assertEqual(decision(diff, current).status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertNotIn("Да", str(current))
+        duplicate_binding = build_deal_snapshot(
+            raw,
+            normalized_communications=[{**reply, "source_ids": ["10", "11", "12"]}],
+        )
+        self.assertNotIn(
+            "new_client_reply",
+            compare_snapshots(current, duplicate_binding)["changes"],
+        )
+
+        legacy = dict(empty)
+        legacy.pop("client_replies")
+        bootstrap = compare_snapshots(legacy, current)
+        self.assertNotIn("new_client_reply", bootstrap["changes"])
+
     def test_non_meaningful_transcript_change_stays_local(self):
         result = decision({"changes": ["transcript_changed_non_meaningful"], "details": {}}, snapshot())
         self.assertEqual(result.status, MINI_RECOMMENDATION_NO_LLM)

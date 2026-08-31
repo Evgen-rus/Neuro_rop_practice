@@ -166,7 +166,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [leftWidth, setLeftWidth] = useState(SPLITTER_DEFAULT)
   const [dragging, setDragging] = useState(false)
   const [copyNotice, setCopyNotice] = useState('')
-  const [openEventId, setOpenEventId] = useState('')
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const dealScrollRef = useRef<HTMLDivElement | null>(null)
   const generating = generation?.status === 'running' || generation?.status === 'queued'
@@ -630,8 +629,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
               onToggleAsked={toggleAsked}
               onCopyScript={() => void copyScript()}
               copyNotice={copyNotice}
-              openEventId={openEventId}
-              onToggleEvent={(eventId) => setOpenEventId((current) => current === eventId ? '' : eventId)}
               snapshotDay
               snapshotCutoffAt={report.cutoff_at}
             />

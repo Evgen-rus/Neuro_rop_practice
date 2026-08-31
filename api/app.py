@@ -84,6 +84,10 @@ from api.deal_communication_content import (
     DealCommunicationContentNotFound,
     get_deal_communication_content,
 )
+from api.deal_communication_thread import (
+    DealCommunicationThreadNotFound,
+    get_deal_communication_thread,
+)
 from api.deal_task_guidance import get_task_guidance_job, start_task_guidance_job
 from api.deal_manager_quick_help import (
     get_manager_assistant_workspace,
@@ -1340,6 +1344,19 @@ def deal_communication_content_get(deal_id: str, event_id: str) -> dict[str, Any
             db_path=DEFAULT_DB_PATH,
         )
     except DealCommunicationContentNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/deals/{deal_id}/communications/{event_id}/thread")
+def deal_communication_thread_get(deal_id: str, event_id: str) -> dict[str, Any]:
+    require_deal(deal_id, action="open")
+    try:
+        return get_deal_communication_thread(
+            deal_id,
+            event_id,
+            db_path=DEFAULT_DB_PATH,
+        )
+    except DealCommunicationThreadNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 

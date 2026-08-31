@@ -476,8 +476,11 @@ def _today_communications(
             "content": clean_text(raw.get("DESCRIPTION")) if channel in {"email", "message"} and raw.get("DESCRIPTION") else str(event.get("content") or ""),
             "duration_seconds": event.get("duration_seconds"),
             "contact_class": str(event.get("contact_class") or "attempt"),
+            "participant_role": str(event.get("participant_role") or "unknown"),
             "participant_name": _communication_contact_label(event, raw),
             "source_type": str(event.get("source_type") or ""),
+            "conversation_key": str(event.get("conversation_key") or ""),
+            "conversation_scope": str(event.get("conversation_scope") or ""),
             # Server-side provenance for lazy transcript lookup; not an access grant from the UI.
             "entity_type": event.get("entity_type"),
             "entity_id": event.get("entity_id"),

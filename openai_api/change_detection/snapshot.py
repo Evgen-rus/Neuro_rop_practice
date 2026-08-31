@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from bitrix.customer_history import is_confirmed_client_reply
 from openai_api.audio.transcript_quality import is_meaningful_transcript
 
 
@@ -363,9 +364,30 @@ def transcript_change_type(previous: dict[str, Any], current: dict[str, Any]) ->
     return "transcript_changed" if has_new_meaningful_item else "transcript_changed_non_meaningful"
 
 
+def client_reply_ledger(events: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    """Project canonical client replies without storing message bodies in change state."""
+    ledger: dict[str, dict[str, Any]] = {}
+    for event in events or []:
+        if not isinstance(event, dict) or not is_confirmed_client_reply(event):
+            continue
+        event_id = str(event.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        ledger[event_id] = {
+            "event_id": event_id,
+            "source_ids": sorted({str(value) for value in event.get("source_ids") or [] if value}),
+            "occurred_at": str(event.get("occurred_at") or ""),
+            "channel": str(event.get("channel") or ""),
+            "conversation_key": str(event.get("conversation_key") or ""),
+            "content_hash": text_hash(event.get("content")),
+        }
+    return dict(sorted(ledger.items()))
+
+
 def build_deal_snapshot(
     raw_bundle: dict[str, Any], transcript_path: Path | None = None,
     *, daily_quality_context: dict[str, Any] | None = None,
+    normalized_communications: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     deal = raw_bundle.get("deal", {}).get("item", {}) or {}
     activities = normalize_activities(
@@ -428,6 +450,7 @@ def build_deal_snapshot(
             "file_refs_count": len(file_refs),
         },
         "transcript": transcript,
+        "client_replies": client_reply_ledger(normalized_communications),
     }
     snapshot["counts"] = {
         "activities": len(activities),
@@ -525,6 +548,24 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
 
     changes: list[str] = []
     details: dict[str, Any] = {}
+    if "client_replies" in previous:
+        old_replies = previous.get("client_replies") or {}
+        new_replies = current.get("client_replies") or {}
+        new_reply_ids = sorted(set(new_replies) - set(old_replies))
+        updated_reply_ids = sorted(
+            event_id
+            for event_id in set(old_replies) & set(new_replies)
+            if any(
+                old_replies[event_id].get(field) != new_replies[event_id].get(field)
+                for field in ("content_hash", "channel", "occurred_at", "conversation_key")
+            )
+        )
+        if new_reply_ids or updated_reply_ids:
+            changes.append("new_client_reply")
+            if new_reply_ids:
+                details["new_client_reply_event_ids"] = new_reply_ids
+            if updated_reply_ids:
+                details["updated_client_reply_event_ids"] = updated_reply_ids
     old_quality = previous.get("daily_quality_events") or {}
     new_quality = current.get("daily_quality_events") or {}
     changed_quality_ids = sorted(key for key, value in new_quality.items() if old_quality.get(key) != value)

@@ -23,6 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
+from bitrix.customer_history import build_deal_normalized_communications
+from bitrix.deals.communication_history import include_source_lead_communications
 from openai_api.llm.deal_daily_quality import load_daily_quality_context
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.audio.transcript_context import AGGREGATE_STEM
@@ -137,6 +139,30 @@ def raw_bundle_path(args: argparse.Namespace) -> Path:
     if fallback.exists():
         return fallback
     raise FileNotFoundError(f"Deal raw context not found: {workspace_path} or {fallback}")
+
+
+def normalized_communications_for_snapshot(
+    current_deal_dir: Path,
+    deal_id: str,
+    raw_bundle: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Read the already saved canonical ledger; never refresh Bitrix from change detection."""
+    history_path = (
+        current_deal_dir / "raw" / f"deal_{deal_id}_customer_history_bundle.json"
+    )
+    history: dict[str, Any] | None = None
+    if history_path.exists():
+        try:
+            value = load_json(history_path)
+        except (OSError, ValueError):
+            value = None
+        if isinstance(value, dict):
+            history = include_source_lead_communications(
+                value,
+                raw_bundle,
+                deal_id=str(deal_id),
+            )
+    return build_deal_normalized_communications(raw_bundle, history)
 
 
 def latest_transcript_or_none(transcripts_dir: Path) -> Path | None:
@@ -582,8 +608,18 @@ def main() -> None:
         raw_path = raw_bundle_path(args)
         transcript_path, analyzer_transcript_arg = resolve_transcript_for_snapshot(args.transcript, current_deal_dir)
         raw_bundle = load_json(raw_path)
+        normalized_communications = normalized_communications_for_snapshot(
+            current_deal_dir,
+            str(args.deal_id),
+            raw_bundle,
+        )
         daily_quality_context = load_daily_quality_context(current_deal_dir, str(args.deal_id))
-        snapshot = build_deal_snapshot(raw_bundle, transcript_path, daily_quality_context=daily_quality_context)
+        snapshot = build_deal_snapshot(
+            raw_bundle,
+            transcript_path,
+            daily_quality_context=daily_quality_context,
+            normalized_communications=normalized_communications,
+        )
         fingerprint = fingerprint_snapshot(snapshot)
         previous_state = get_entity_state(db_path, "deal", str(args.deal_id))
         previous_snapshot = (previous_state or {}).get("snapshot")

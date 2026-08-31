@@ -335,7 +335,9 @@ def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str,
     hard = sorted(changes & HARD_CHANGE_TYPES)
     activities_by_id = {str(item.get("id") or ""): item for item in current_snapshot.get("activities", []) or []}
     new_ids = (diff.get("details") or {}).get("new_activity_ids") or []
-    if any(
+    if "new_client_reply" in changes:
+        hard.append("new_client_reply")
+    elif "client_replies" not in current_snapshot and any(
         str(activities_by_id.get(str(activity_id), {}).get("kind") or "") in {"email", "message"}
         and _is_inbound_customer_direction(activities_by_id.get(str(activity_id), {}).get("direction"))
         for activity_id in new_ids
@@ -351,13 +353,23 @@ def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str,
 def deal_incremental_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
     """Return meaningful changes that can use a proven previous-analysis baseline."""
     hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard & {"transcript_changed", "new_inbound_customer_message", "daily_quality_evidence_changed"})
+    return sorted(hard & {
+        "transcript_changed",
+        "new_client_reply",
+        "new_inbound_customer_message",
+        "daily_quality_evidence_changed",
+    })
 
 
 def deal_direct_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
     """Return hard changes that remain unsafe for the V1 incremental path."""
     hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard - {"transcript_changed", "new_inbound_customer_message", "daily_quality_evidence_changed"})
+    return sorted(hard - {
+        "transcript_changed",
+        "new_client_reply",
+        "new_inbound_customer_message",
+        "daily_quality_evidence_changed",
+    })
 
 
 def lead_soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:

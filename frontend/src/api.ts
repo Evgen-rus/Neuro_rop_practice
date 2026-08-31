@@ -726,6 +726,30 @@ export type DealCommunicationContent = {
   truncated: boolean
 }
 
+export type DealCommunicationThreadMessage = {
+  event_id: string
+  occurred_at: string
+  channel: string
+  direction: string
+  participant_role: string
+  participant_name?: string | null
+  text: string
+  is_excerpt: boolean
+  truncated: boolean
+}
+
+export type DealCommunicationThread = {
+  deal_id: string
+  anchor_event_id: string
+  conversation_key: string
+  conversation_scope: 'provider' | 'contact' | 'channel' | 'unknown' | string
+  date: string
+  timezone: 'Europe/Moscow'
+  channel: string
+  messages: DealCommunicationThreadMessage[]
+  truncated: boolean
+}
+
 export type DealControlCommunicationsToday = {
   date: string
   available: boolean
@@ -1591,6 +1615,12 @@ export function fetchDealCallTranscript(dealId: string, eventId: string) {
 export function fetchDealCommunicationContent(dealId: string, eventId: string) {
   return api<DealCommunicationContent>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/communications/${encodeURIComponent(eventId)}/content`,
+  )
+}
+
+export function fetchDealCommunicationThread(dealId: string, eventId: string) {
+  return api<DealCommunicationThread>(
+    `/api/deal-control/deals/${encodeURIComponent(dealId)}/communications/${encodeURIComponent(eventId)}/thread`,
   )
 }
 
