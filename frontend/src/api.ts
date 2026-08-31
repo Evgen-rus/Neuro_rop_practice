@@ -925,7 +925,6 @@ export type DealControlDashboard = {
   deals: DealControlDeal[]
 }
 
-export type DailyControlFreshnessState = 'current' | 'stale' | 'historical' | 'missing'
 export type DailyControlCreationKind = 'manual' | 'automatic_planning' | 'automatic_day_end'
 
 export type DailyControlManager = {
@@ -965,14 +964,6 @@ export type DailyControlSnapshot = {
   }
 }
 
-export type DailyControlFreshness = {
-  state: DailyControlFreshnessState
-  label: string
-  is_latest: boolean
-  live_watermark: string
-  report_watermark?: string | null
-}
-
 export type DailyControlGeneration = {
   status: 'queued' | 'running' | 'done' | 'error'
   started_at?: string | null
@@ -996,7 +987,6 @@ export type DailyControlReportMeta = {
   error?: string | null
   position?: number
   total?: number
-  freshness?: DailyControlFreshness
 }
 
 export type DailyControlHistory = {
@@ -1005,13 +995,11 @@ export type DailyControlHistory = {
   reports: DailyControlReportMeta[]
   latest_id: number | null
   total: number
-  live_watermark: string
   generation: DailyControlGeneration | null
 }
 
 export type DailyControlReport = DailyControlReportMeta & {
   snapshot: DailyControlSnapshot
-  freshness: DailyControlFreshness
   previous_id?: number | null
   next_id?: number | null
   generation?: DailyControlGeneration | null

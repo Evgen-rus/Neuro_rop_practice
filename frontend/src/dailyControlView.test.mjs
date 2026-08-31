@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
 import { dailyQualityCaption } from './dailyControlView.ts'
-import { canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
+import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
@@ -90,13 +90,25 @@ test('untouched obligation stays in the report without a separate badge', () => 
 test('report heading puts date and cutoff time in the title', () => {
   assert.equal(
     reportHeading({ creation_kind: 'automatic_planning', business_date: '2026-08-27', cutoff_at: '2026-08-27T15:45:00+03:00' }),
-    'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45',
+    'Состояние команды на четверг, 27 августа 2026 — срез на 15:45 МСК',
   )
   assert.equal(
     reportHeading({ creation_kind: 'automatic_day_end', business_date: '2026-08-27', cutoff_at: '2026-08-27T23:00:00+03:00' }),
-    'ОТЧЕТ ФИНАЛЬНЫЙ ЗА 27.08 23:00',
+    'Итог команды за четверг, 27 августа 2026 — срез на 23:00 МСК',
   )
-  assert.equal(reportHeading({ heading: 'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45' }), 'ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45')
+  assert.equal(reportHeading({ heading: 'Сохранённый заголовок' }), 'Сохранённый заголовок')
+})
+
+test('routine preparation details stay hidden while source failures remain visible', () => {
+  assert.deepEqual(businessReportWarnings([
+    'Завершение автоматического пакета за сегодня не подтверждено. Использованы последние сохранённые данные.',
+    'На момент создания отчёта автоматический пакет ещё выполнялся. После его завершения можно сформировать новый отчёт.',
+    'Bitrix sync: timeout',
+    'Коммуникации за сегодня недоступны для 2 сделок — это не нулевая активность.',
+  ]), [
+    'Bitrix sync: timeout',
+    'Коммуникации за сегодня недоступны для 2 сделок — это не нулевая активность.',
+  ])
 })
 
 test('background refresh opens a new report only outside an active review or chosen history', () => {

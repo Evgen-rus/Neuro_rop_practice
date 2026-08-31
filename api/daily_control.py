@@ -23,7 +23,6 @@ from storage.rop_db import (
     dumps_json,
     get_daily_control_report,
     get_latest_automatic_analysis_run,
-    get_latest_daily_control_report,
     get_latest_ui_report,
     list_daily_control_reports,
     list_deal_control_deals,
@@ -167,17 +166,21 @@ def report_heading(
         day = cutoff.date()
     if day is None:
         return "Ежедневный контроль"
-    stamp = f"{day.strftime('%d.%m')}"
-    if cutoff is not None:
-        stamp = f"{stamp} {cutoff.strftime('%H:%M')}"
+    weekdays = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
+    stamp = f"{weekdays[day.weekday()]}, {day.day} {months[day.month - 1]} {day.year}"
+    cutoff_label = f"{cutoff.strftime('%H:%M')} МСК" if cutoff is not None else "время не указано"
     kind = str(creation_kind or "")
     if kind == "automatic_planning":
-        return f"ОТЧЕТ К ПЛАНЕРКЕ {stamp}"
+        return f"Состояние команды на {stamp} — срез на {cutoff_label}"
     if kind == "automatic_day_end":
-        return f"ОТЧЕТ ФИНАЛЬНЫЙ ЗА {stamp}"
+        return f"Итог команды за {stamp} — срез на {cutoff_label}"
     if kind == "manual":
-        return f"ОТЧЕТ ВРУЧНУЮ {stamp}"
-    return f"Ежедневный контроль {stamp}"
+        return f"Ручной слепок за {stamp} — на {cutoff_label}"
+    return f"Ежедневный контроль за {stamp} — срез на {cutoff_label}"
 
 
 def project_report_day_scope(
@@ -1171,40 +1174,6 @@ def start_manual_daily_control_report(
     return state
 
 
-def freshness_for_report(
-    report: dict[str, Any] | None,
-    *,
-    db_path: str | Path = DEFAULT_DB_PATH,
-    now: datetime | None = None,
-    live_watermark: str | None = None,
-) -> dict[str, Any]:
-    latest = get_latest_daily_control_report(db_path, include_snapshot=False)
-    live = live_watermark or compute_source_watermark(db_path, now=now)
-    if report is None:
-        return {
-            "state": "missing",
-            "label": "Отчёта ещё нет",
-            "is_latest": False,
-            "live_watermark": live,
-            "report_watermark": None,
-        }
-    is_latest = latest is not None and int(latest["id"]) == int(report["id"])
-    stored = str(report.get("source_watermark") or "")
-    if not is_latest:
-        state, label = "historical", "Исторический"
-    elif stored == live:
-        state, label = "current", "Совпадает с сохранёнными данными"
-    else:
-        state, label = "stale", "Данные обновились"
-    return {
-        "state": state,
-        "label": label,
-        "is_latest": is_latest,
-        "live_watermark": live,
-        "report_watermark": stored,
-    }
-
-
 def project_daily_control_snapshot(snapshot: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
     """Apply the same deal-access contract as live deal-control. Stored JSON stays intact."""
     from api.access import deal_access, rop_team_manager_ids
@@ -1270,7 +1239,6 @@ def project_daily_control_snapshot(snapshot: dict[str, Any], user: dict[str, Any
 
 def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None) -> dict[str, Any]:
     reports = list_daily_control_reports(db_path)
-    live = compute_source_watermark(db_path, now=now)
     latest_id = int(reports[0]["id"]) if reports else None
     current = _aware(now or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     default_id = latest_id
@@ -1306,7 +1274,6 @@ def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | No
                     str(report.get("business_date") or ""),
                     report.get("cutoff_at"),
                 ),
-                "freshness": freshness_for_report(report, db_path=db_path, now=now, live_watermark=live),
             }
         )
     return {
@@ -1315,7 +1282,6 @@ def history_payload(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | No
         "default_id": default_id,
         "missing_morning_final": morning and morning_final is None,
         "total": len(reports),
-        "live_watermark": live,
         "generation": generation_status(),
     }
 
@@ -1343,7 +1309,6 @@ def report_payload(
         **snapshot,
         "deals": deals,
     }
-    live = compute_source_watermark(db_path, now=now)
     history = list_daily_control_reports(db_path)
     ids = [int(item["id"]) for item in history]
     index = ids.index(int(report["id"])) if int(report["id"]) in ids else None
@@ -1366,7 +1331,6 @@ def report_payload(
         "warnings": report.get("warnings") or [],
         "error": report.get("error"),
         "snapshot": snapshot,
-        "freshness": freshness_for_report(report, db_path=db_path, now=now, live_watermark=live),
         "position": position_from_oldest,
         "total": len(ids),
         "previous_id": ids[index + 1] if index is not None and index + 1 < len(ids) else None,

@@ -7779,19 +7779,7 @@ ul.facts.bad li:before {
   .dc-shell .dc-reschedule-popover > header > button { width: 44px; height: 44px; }
 }
 
-.dc-daily-head-copy p {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
-}
-
 .dc-daily-source,
-.dc-daily-freshness,
 .dc-daily-pill {
   display: inline-flex;
   align-items: center;
@@ -7803,10 +7791,6 @@ ul.facts.bad li:before {
 
 .dc-daily-source.automatic_planning { color: var(--daily-blue); background: var(--daily-blue-soft); }
 .dc-daily-source.manual { color: #334155; background: #eef2f6; }
-.dc-daily-freshness.current { color: var(--daily-green); background: var(--daily-green-soft); }
-.dc-daily-freshness.stale { color: var(--daily-yellow); background: var(--daily-yellow-soft); }
-.dc-daily-freshness.historical { color: #334155; background: #e8eef5; }
-.dc-daily-freshness.missing { color: #9a3412; background: #ffedd5; }
 .dc-daily-pill { gap: 6px; font-weight: 650; }
 .dc-daily-pill::before {
   content: '';
@@ -7852,11 +7836,6 @@ ul.facts.bad li:before {
   color: #9a3412;
   background: #fff4e5;
   border-color: #f0c27a;
-}
-
-.dc-daily-banner.dc-daily-prep {
-  font-size: 14px;
-  font-weight: 650;
 }
 
 .dc-daily-team {

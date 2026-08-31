@@ -176,11 +176,29 @@ export function reportHeading(report: {
   const dateMatch = String(report.business_date || report.cutoff_at || '').match(/(\d{4})-(\d{2})-(\d{2})/)
   const timeMatch = String(report.cutoff_at || '').match(/T(\d{2}):(\d{2})/)
   if (!dateMatch) return 'Ежедневный контроль'
-  const stamp = timeMatch ? `${dateMatch[3]}.${dateMatch[2]} ${timeMatch[1]}:${timeMatch[2]}` : `${dateMatch[3]}.${dateMatch[2]}`
-  if (report.creation_kind === 'automatic_planning') return `ОТЧЕТ К ПЛАНЕРКЕ ${stamp}`
-  if (report.creation_kind === 'automatic_day_end') return `ОТЧЕТ ФИНАЛЬНЫЙ ЗА ${stamp}`
-  if (report.creation_kind === 'manual') return `ОТЧЕТ ВРУЧНУЮ ${stamp}`
-  return `Ежедневный контроль ${stamp}`
+  const year = Number(dateMatch[1])
+  const month = Number(dateMatch[2])
+  const day = Number(dateMatch[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const weekdays = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу']
+  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
+  const stamp = `${weekdays[date.getUTCDay()]}, ${day} ${months[month - 1]} ${year}`
+  const cutoff = timeMatch ? `${timeMatch[1]}:${timeMatch[2]} МСК` : 'время не указано'
+  if (report.creation_kind === 'automatic_planning') return `Состояние команды на ${stamp} — срез на ${cutoff}`
+  if (report.creation_kind === 'automatic_day_end') return `Итог команды за ${stamp} — срез на ${cutoff}`
+  if (report.creation_kind === 'manual') return `Ручной слепок за ${stamp} — на ${cutoff}`
+  return `Ежедневный контроль за ${stamp} — срез на ${cutoff}`
+}
+
+const ROUTINE_TECHNICAL_WARNING_PREFIXES = [
+  'Завершение автоматического пакета за сегодня не подтверждено.',
+  'На момент создания отчёта автоматический пакет ещё выполнялся.',
+]
+
+export function businessReportWarnings(warnings: readonly string[] | null | undefined): string[] {
+  return (warnings || []).filter((warning) =>
+    !ROUTINE_TECHNICAL_WARNING_PREFIXES.some((prefix) => warning.startsWith(prefix)),
+  )
 }
 
 export function shouldOpenLatestReport(currentId: number | undefined, latestId: number | null, reviewStarted: boolean, historyPinned: boolean) {

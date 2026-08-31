@@ -17,7 +17,6 @@ from api.daily_control import (
     build_direct_manager_question,
     classify_deal_status,
     compute_source_watermark,
-    freshness_for_report,
     history_payload,
     project_deal_review_card,
     project_report_day_scope,
@@ -658,7 +657,7 @@ class DailyControlStorageTests(unittest.TestCase):
         payload = history_payload(db_path=self.db_path, now=NOW.replace(hour=17))
         self.assertEqual(payload["latest_id"], second["id"])
         detail = report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=NOW)
-        self.assertEqual(detail["freshness"]["state"], "historical")
+        self.assertNotIn("freshness", detail)
         self.assertEqual(detail["next_id"], second["id"])
         self.assertIsNone(detail["previous_id"])
 
@@ -723,7 +722,7 @@ class DailyControlStorageTests(unittest.TestCase):
         stored = get_daily_control_report(self.db_path, saved['id'])
         self.assertNotIn('day_scope', stored['snapshot']['deals'][0])
 
-    def test_work_event_changes_freshness_but_does_not_rewrite_snapshot(self) -> None:
+    def test_work_event_after_cutoff_does_not_rewrite_snapshot(self) -> None:
         from storage.rop_db import record_manager_trajectory_event
 
         _seed_deal(self.db_path)
@@ -734,7 +733,6 @@ class DailyControlStorageTests(unittest.TestCase):
                 event_type='crm_activity_observed', source='test', source_event_key='later-call',
                 occurred_at=NOW.isoformat(), payload={'activity_kind': 'call', 'completed': True},
             )
-        self.assertEqual(freshness_for_report(first, db_path=self.db_path, now=NOW)['state'], 'stale')
         self.assertEqual(
             get_daily_control_report(self.db_path, first['id'])['snapshot']['deals'][0]['day_scope']['activity_kinds'],
             first['snapshot']['deals'][0]['day_scope']['activity_kinds'],
@@ -751,11 +749,11 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(first["cutoff_at"][:16], "2026-08-18T15:45")
         self.assertEqual(
             report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
-            "ОТЧЕТ К ПЛАНЕРКЕ 18.08 15:45",
+            "Состояние команды на вторник, 18 августа 2026 — срез на 15:45 МСК",
         )
         self.assertEqual(
             report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=due)["heading"],
-            "ОТЧЕТ К ПЛАНЕРКЕ 18.08 15:45",
+            "Состояние команды на вторник, 18 августа 2026 — срез на 15:45 МСК",
         )
         self.crm_refresh.assert_called()
 
@@ -784,7 +782,7 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(first["cutoff_at"][:16], "2026-08-18T23:00")
         self.assertEqual(
             report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
-            "ОТЧЕТ ФИНАЛЬНЫЙ ЗА 18.08 23:00",
+            "Итог команды за вторник, 18 августа 2026 — срез на 23:00 МСК",
         )
         self.assertEqual(len(list_daily_control_reports(self.db_path)), 2)
 
@@ -940,7 +938,7 @@ class DailyControlStorageTests(unittest.TestCase):
                 self.assertEqual(report['source_status'], 'partial')
                 self.assertTrue(any('за сегодня не подтверждено' in warning for warning in report['warnings']))
 
-    def test_latest_report_becomes_stale_after_source_changes(self) -> None:
+    def test_reading_report_does_not_recompute_current_sources(self) -> None:
         _seed_deal(self.db_path)
         report = publish_daily_control_report(
             db_path=self.db_path,
@@ -950,30 +948,15 @@ class DailyControlStorageTests(unittest.TestCase):
             now=NOW,
             refresh=False,
         )
-        fresh = freshness_for_report(report, db_path=self.db_path, now=NOW)
-        self.assertEqual(fresh["state"], "current")
-        upsert_deal_control_deal(
-            self.db_path,
-            deal_id="101",
-            source="initial",
-            title="Сделка 101",
-            manager_id="10",
-            manager_name="Иванов Иван",
-            stage_id="C15:NEW",
-            stage_name="Новая",
-            pipeline_id="15",
-            amount="150000",
-            currency_id="RUB",
-            created_at_crm="2026-08-17T09:00:00+03:00",
-            modified_at_crm="2026-08-18T18:00:00+03:00",
-            is_active=True,
-        )
-        stale = freshness_for_report(report, db_path=self.db_path, now=NOW)
-        self.assertEqual(stale["state"], "stale")
-        self.assertNotEqual(stale["live_watermark"], report["source_watermark"])
-        self.assertNotEqual(compute_source_watermark(self.db_path, now=NOW), report["source_watermark"])
+        with patch("api.daily_control.compute_source_watermark", side_effect=AssertionError("read path must stay frozen")):
+            history = history_payload(db_path=self.db_path, now=NOW)
+            detail = report_payload(report["id"], {"role": "admin"}, db_path=self.db_path, now=NOW)
+        self.assertEqual(history["latest_id"], report["id"])
+        self.assertEqual(detail["snapshot"], report["snapshot"])
+        self.assertNotIn("live_watermark", history)
+        self.assertNotIn("freshness", detail)
 
-    def test_reports_ignore_legacy_checklist_in_snapshot_and_freshness(self) -> None:
+    def test_reports_ignore_legacy_checklist_in_snapshot_and_source_watermark(self) -> None:
         _seed_deal(self.db_path)
         first = publish_daily_control_report(
             db_path=self.db_path, creation_kind="manual", started_at=NOW,
@@ -1031,9 +1014,9 @@ class DailySnapshotSelectionTests(unittest.TestCase):
     def test_heading_uses_kind_date_and_cutoff_time(self) -> None:
         planning = datetime(2026, 8, 27, 15, 45, tzinfo=MSK_TZ)
         final = datetime(2026, 8, 27, 23, 0, tzinfo=MSK_TZ)
-        self.assertEqual(report_heading("automatic_planning", "2026-08-27", planning), "ОТЧЕТ К ПЛАНЕРКЕ 27.08 15:45")
-        self.assertEqual(report_heading("automatic_day_end", "2026-08-27", final), "ОТЧЕТ ФИНАЛЬНЫЙ ЗА 27.08 23:00")
-        self.assertEqual(report_heading("manual", "2026-08-27", NOW), "ОТЧЕТ ВРУЧНУЮ 27.08 16:00")
+        self.assertEqual(report_heading("automatic_planning", "2026-08-27", planning), "Состояние команды на четверг, 27 августа 2026 — срез на 15:45 МСК")
+        self.assertEqual(report_heading("automatic_day_end", "2026-08-27", final), "Итог команды за четверг, 27 августа 2026 — срез на 23:00 МСК")
+        self.assertEqual(report_heading("manual", "2026-08-27", NOW), "Ручной слепок за четверг, 27 августа 2026 — на 16:00 МСК")
 
     def test_future_deal_with_internal_activity_stays_out_unless_client_contact(self) -> None:
         from storage.rop_db import record_manager_trajectory_event

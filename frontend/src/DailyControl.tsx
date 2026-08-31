@@ -13,11 +13,11 @@ import {
   type DailyControlStatus,
 } from './api'
 import { copyTextToClipboard } from './contextPersist'
-import { formatMoscowDateTime, parseMoscowDateTime } from './dateTime'
+import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport } from './dailyControlView'
+import { businessReportWarnings, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
@@ -44,14 +44,6 @@ function managerCountLabel(count: number) {
   if (mod10 === 1 && mod100 !== 11) return `${count} менеджер`
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} менеджера`
   return `${count} менеджеров`
-}
-
-function sameMinute(left?: string | null, right?: string | null) {
-  if (!left || !right) return true
-  const first = parseMoscowDateTime(left)
-  const second = parseMoscowDateTime(right)
-  if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) return left === right
-  return Math.abs(first.getTime() - second.getTime()) < 60_000
 }
 
 function money(value?: string | number | null, currency = 'RUB') {
@@ -262,10 +254,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
         const defaultId = payload.default_id || payload.latest_id
         if (shouldOpenLatestReport(viewedId, defaultId, reviewStarted.current, historyPinned.current)) {
           await loadReport(defaultId!, true)
-        } else if (payload.latest_id === viewedId) {
-          // Refresh freshness only: never replace the frozen snapshot during a review.
-          const meta = payload.reports.find((item) => item.id === viewedId)
-          if (meta?.freshness) setReport((previous) => previous?.id === viewedId ? { ...previous, freshness: meta.freshness! } : previous)
         }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
@@ -439,12 +427,8 @@ export function DailyControl({ user }: { user: AuthUser }) {
     window.setTimeout(() => setCopyNotice(''), 2500)
   }
 
-  const freshness = report?.freshness
   const newerReportAvailable = Boolean(report && history?.latest_id && history.latest_id > report.id)
-  const preparation = snapshot?.source_preparation
-  const preparationFinished = preparation?.status === 'done' && preparation.finished_at
-  const preparationReady = Boolean(preparationFinished && preparation?.business_date === report?.business_date)
-  const legacyDayScope = allDeals.some((deal) => deal.day_scope?.legacy)
+  const visibleWarnings = businessReportWarnings(report?.warnings)
   const heading = report ? reportHeading(report) : 'Ежедневный контроль'
   const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
   const managerCounts = {
@@ -463,12 +447,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
       <header className="dc-daily-head">
         <div className="dc-daily-head-copy">
           <h1>{heading}</h1>
-          <p>
-            {report && !sameMinute(report.cutoff_at, report.created_at) && formatClock(report.created_at)
-              ? `сформирован ${formatClock(report.created_at)}`
-              : null}
-            {freshness ? <span className={`dc-daily-freshness ${freshness.state}`}>{freshness.label}</span> : null}
-          </p>
         </div>
         <div className="dc-daily-head-actions">
           <nav className="dc-daily-history" aria-label="История отчётов">
@@ -485,19 +463,8 @@ export function DailyControl({ user }: { user: AuthUser }) {
       {error ? <div className="dc-alert error">{error}</div> : null}
       {history?.missing_morning_final ? <div className="dc-daily-banner warn">Итоговый отчёт за предыдущий рабочий день ещё не найден. На экране — доступный сохранённый срез. Автоматические отчёты формируются по будням в 15:45 и 23:00 МСК.</div> : null}
       {newerReportAvailable ? <div className="dc-daily-banner">Появился новый отчёт. Текущий разбор сохранён на экране. <button type="button" className="dc-button" onClick={() => void openReport(history?.latest_id)}>Открыть новый отчёт</button></div> : null}
-      {legacyDayScope ? <div className="dc-daily-banner">Старый срез: отбор и подписи используют только сохранённые в нём сроки, коммуникации и отметки. История стадий, комментариев и задач из текущей базы не добавляется.</div> : null}
       {generating && report ? <div className="dc-daily-banner">Формируется новый отчёт. Предыдущий срез остаётся на экране до публикации.</div> : null}
-      {freshness?.state === 'stale' ? <div className="dc-daily-banner">После этого среза появились более свежие данные. Сохранённый отчёт не меняется.{canGenerate ? ' Можно сформировать новый отчёт.' : ''}</div> : null}
-      {preparation ? <div className={`dc-daily-banner dc-daily-prep${preparationReady ? '' : ' warn'}`}>
-        {preparationReady
-          ? `Анализ к срезу: последний автоматический пакет завершён ${formatMoscowDateTime(preparation.finished_at || '', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} МСК. Новый AI перед этим отчётом не запускался.`
-          : preparation.status === 'running'
-            ? 'Анализ к срезу: автоматический пакет ещё выполнялся. Отчёт опубликован вовремя, без ожидания модели. После завершения пакета можно сформировать новый отчёт.'
-            : preparation.status === 'error' || preparation.status === 'interrupted'
-              ? 'Анализ к срезу: автоматический пакет не завершился успешно. Отчёт собран из последних сохранённых данных, без нового AI.'
-              : 'Анализ к срезу: успешное завершение автоматического пакета за сегодня не подтверждено. Использованы последние сохранённые данные, без нового AI.'}
-      </div> : null}
-      {report?.warnings?.length ? <details className="dc-sync-errors"><summary>Оговорки об актуальности и доступности данных: {report.warnings.length}</summary><ul>{report.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
+      {visibleWarnings.length ? <details className="dc-sync-errors"><summary>Проблемы с полнотой данных: {visibleWarnings.length}</summary><ul>{visibleWarnings.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
 
       {!report ? <div className="dc-daily-empty">Автоматические отчёты появляются по будням в 15:45 и 23:00 МСК.{canGenerate ? ' Нажмите «Сформировать отчёт», чтобы сохранить первый срез вручную.' : ''}</div> : null}
 
