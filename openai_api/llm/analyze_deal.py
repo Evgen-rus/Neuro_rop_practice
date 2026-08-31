@@ -310,6 +310,8 @@ CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в акту�
 - value_development=1 только если касание имело конкретный информационный повод, добавляло ценность или уточняло производство, сроки либо бюджет; пустое «не надумали?» — 0.
 - data_collection=1 только если менеджер, опираясь на историю, собрал или актуализировал необходимые технические, логистические, реквизитные данные либо сведения о ЛПР; игнорирование существенного пробела — 0.
 - Для каждого критерия с 0 добавь отдельный zero_reason: criterion, короткая ошибка и короткая дословная цитата из звонка/переписки. Для критериев с 1 zero_reason не добавляй.
+- Оценивай совокупный подтверждённый результат текущего дня. Позднее слабое касание не отменяет ранее подтверждённую единицу.
+- Если клиент прямо отменил ранее согласованный следующий шаг, а новый шаг не зафиксирован, сохрани дневной балл за выполненную работу и верни next_action_warning со status="cancelled_without_replacement", explanation и дословной quote. Иначе next_action_warning=null.
 - Если содержательной коммуникации нет, верни status="insufficient_evidence", все score=JSON null, zero_reasons=[], summary_for_rop=null и объясни insufficient_reason. null запрещён при status="assessed". Не оценивай недозвон как разговор.
 - summary_for_rop при assessed — 1-2 предложения: реальный статус клиента и конкретный следующий шаг менеджера для продвижения сделки.
 - scope_summary кратко перечисляет, какие виды коммуникаций реально учтены, без выдуманных количеств и дат.
@@ -330,7 +332,12 @@ CRM_STAGE_POLICY и PRIOR_NEURO_ROP_RECOMMENDATION переданы в акту�
       {"criterion": "next_action|value_development|data_collection", "explanation": "где менеджер ошибся", "quote": "короткая цитата из клиентской коммуникации"}
     ],
     "summary_for_rop": "1-2 предложения о статусе клиента и следующем шаге менеджера или null",
-    "insufficient_reason": "причина недостаточности коммуникации или null"
+    "insufficient_reason": "причина недостаточности коммуникации или null",
+    "next_action_warning": {
+      "status": "cancelled_without_replacement",
+      "explanation": "почему действующего шага больше нет",
+      "quote": "цитата клиента об отмене"
+    }
   },
 """ if COMMUNICATION_QUALITY_AUDIT_ENABLED else ""
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
@@ -1332,6 +1339,13 @@ def render_report(
             f"- {item.get('explanation', 'Ошибка не описана')} Цитата: «{item.get('quote', 'не указано')}»"
             for item in reasons if isinstance(item, dict)
         ) or "- Ошибок не выявлено"
+        warning = value.get("next_action_warning")
+        warning_md = (
+            "\n\n### Внимание: следующий шаг отменён\n\n"
+            f"{warning.get('explanation')} Цитата: «{warning.get('quote')}»"
+            if isinstance(warning, dict)
+            else ""
+        )
         return f"""## Контроль качества ведения сделки
 
 - Основание: {value.get('scope_summary', 'не указано')}
@@ -1345,7 +1359,7 @@ def render_report(
 
 ### Резюме для РОПа
 
-{value.get('summary_for_rop', 'не указано')}"""
+{value.get('summary_for_rop', 'не указано')}{warning_md}"""
 
     communication_audit_md = render_communication_quality_audit(communication_audit)
     communication_audit_section = f"\n\n{communication_audit_md}\n" if communication_audit_md else ""

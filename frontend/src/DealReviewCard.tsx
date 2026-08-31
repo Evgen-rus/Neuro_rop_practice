@@ -212,6 +212,8 @@ function QualityArgumentation({
 function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
   const quality = deal.quality
   const qualityCaption = dailyQualityCaption(quality, snapshotDay)
+  const assessedAt = quality.evaluated_through || quality.cutoff_at
+  const hasScores = Object.values(quality.criteria).some((item) => item.score != null)
   const tipId = useId()
   const [pinned, setPinned] = useState<keyof typeof QUALITY_LABELS | null>(null)
   const blockRef = useRef<HTMLElement | null>(null)
@@ -236,11 +238,22 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
         {quality.business_date ? (
           <p className="dc-daily-meta">
             За {quality.business_date.split('-').reverse().join('.')} · {quality.source === 'ai' ? 'AI-оценка' : 'Программный контроль'}
-            {quality.cutoff_at ? ` · на ${formatClock(quality.cutoff_at)} МСК` : ''}
+            {assessedAt ? ` · оценено до ${formatClock(assessedAt)} МСК` : ''}
           </p>
         ) : null}
-        {quality.status !== 'assessed' ? <p>{humanQualityText(quality.scope_summary, snapshotDay) || qualityCaption}</p> : null}
-        <ul className={`dc-daily-criteria${['assessed', 'no_work'].includes(quality.status) ? '' : ' compact'}`}>
+        {quality.pending_message ? (
+          <p className="dc-daily-block-note">{humanQualityText(quality.pending_message, snapshotDay)}</p>
+        ) : quality.status !== 'assessed' ? (
+          <p>{humanQualityText(quality.scope_summary, snapshotDay) || qualityCaption}</p>
+        ) : null}
+        {quality.next_action_warning ? (
+          <div className="dc-daily-attempt-note" role="status">
+            <strong>Согласованный шаг отменён, новый не зафиксирован.</strong>
+            <span>{quality.next_action_warning.explanation}</span>
+            {quality.next_action_warning.quote ? <q>{quality.next_action_warning.quote}</q> : null}
+          </div>
+        ) : null}
+        <ul className={`dc-daily-criteria${hasScores || quality.status === 'no_work' ? '' : ' compact'}`}>
           {(Object.keys(QUALITY_LABELS) as Array<keyof typeof QUALITY_LABELS>).map((key) => {
             const item = quality.criteria[key]
             const tone = item.score === 1 ? 'good' : item.score === 0 ? 'bad' : 'neutral'

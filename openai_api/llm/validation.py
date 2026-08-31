@@ -1814,6 +1814,26 @@ def _validate_deal_management_shapes(analysis: dict[str, Any], errors: list[str]
                 if audit.get("summary_for_rop") is not None:
                     errors.append(f"{path}.summary_for_rop must be null when evidence is insufficient")
                 _expect_non_empty_string(audit.get("insufficient_reason"), f"{path}.insufficient_reason", errors)
+            warning = audit.get("next_action_warning")
+            if warning is not None:
+                warning = _expect_dict(warning, f"{path}.next_action_warning", errors)
+                if warning:
+                    _expect_enum(
+                        warning.get("status"),
+                        f"{path}.next_action_warning.status",
+                        {"cancelled_without_replacement"},
+                        errors,
+                    )
+                    _expect_non_empty_string(
+                        warning.get("explanation"),
+                        f"{path}.next_action_warning.explanation",
+                        errors,
+                    )
+                    _expect_non_empty_string(
+                        warning.get("quote"),
+                        f"{path}.next_action_warning.quote",
+                        errors,
+                    )
     control_brief = _expect_dict(analysis.get("deal_control_brief"), "deal_control_brief", errors)
     if control_brief:
         for field in (

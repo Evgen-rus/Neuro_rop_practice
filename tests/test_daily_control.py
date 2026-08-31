@@ -31,9 +31,11 @@ from setup import MSK_TZ
 from openai_api.llm.deal_daily_quality import quality_event_signature
 from storage.rop_db import (
     connect,
+    get_deal_daily_quality_state,
     get_daily_control_report,
     init_db,
     list_daily_control_reports,
+    merge_deal_daily_quality_state,
     save_deal_control_communications_today,
     save_deal_control_scope,
     save_ui_report,
@@ -47,9 +49,10 @@ project_deal_review_card = partial(project_deal_review_card, now=NOW)
 
 
 def _quality_event(**overrides):
-    return {"event_id": "crm_activity:1", "channel": "email", "direction": "outgoing",
+    return {"event_id": "crm_activity:1", "channel": "email", "direction": "incoming",
             "occurred_at": "2026-08-18T10:15:00+03:00", "content": "Отправляю условия поставки до пятницы.",
-            "content_available": True, **overrides}
+            "content_available": True, "participant_role": "client",
+            "contact_class": "confirmed_contact", **overrides}
 
 
 def _deal_row(**overrides):
@@ -96,7 +99,7 @@ def _audit(*, next_action=1, value=1, data=1, status="assessed"):
         "zero_reasons": reasons if status == "assessed" else [],
         "summary_for_rop": "Клиент ждёт условия." if status == "assessed" else None,
         "insufficient_reason": None if status == "assessed" else "Нет содержательной коммуникации.",
-        "daily_scope": {"version": 1, "business_date": "2026-08-18", "evaluated_through": NOW.isoformat(),
+        "daily_scope": {"version": 2, "business_date": "2026-08-18", "evaluated_through": NOW.isoformat(),
                         "event_signatures": {"crm_activity:1": quality_event_signature(_quality_event())}},
     }
 
@@ -270,8 +273,41 @@ class DailyQualityTests(unittest.TestCase):
         self.assertEqual(self.quality()["source"], "ai")
         event = self.deal["communications_today"]["items"][0]
         for overrides in ({"event_id": "crm_activity:2"}, {"content": "Сроки изменились, свяжемся завтра."}):
-            self.deal["communications_today"]["items"] = [{**event, **overrides}]
-            self.assertEqual(self.quality()["status"], "pending_analysis")
+            changed = {**event, **overrides}
+            self.deal["communications_today"]["items"] = (
+                [event, changed] if changed["event_id"] != event["event_id"] else [changed]
+            )
+            result = self.quality()
+            self.assertEqual(result["status"], "pending_analysis")
+            self.assertEqual(result["confirmed_count"], 3)
+            self.assertEqual(result["evaluated_through"], NOW.isoformat())
+
+    def test_weak_attempt_does_not_hide_persisted_confirmed_scores(self):
+        audit = self.deal["coaching"]["communication_quality_audit"]
+        self.deal["daily_quality_state"] = {
+            "audit": audit,
+            "daily_scope": audit["daily_scope"],
+        }
+        self.deal["communications_today"]["items"] = [
+            _quality_event(channel="call", call_outcome="no_answer")
+        ]
+        result = self.quality()
+        self.assertEqual(result["status"], "assessed")
+        self.assertEqual(result["confirmed_count"], 3)
+
+    def test_cancelled_next_step_warns_without_reducing_score(self):
+        self.deal["coaching"]["communication_quality_audit"]["next_action_warning"] = {
+            "status": "cancelled_without_replacement",
+            "explanation": "Клиент отменил встречу, новый срок не согласован.",
+            "quote": "Завтра не сможем, новую дату пока не назначаем.",
+        }
+        result = self.quality()
+        self.assertEqual(result["criteria"]["next_action"]["score"], 1)
+        self.assertEqual(
+            result["next_action_warning"]["status"],
+            "cancelled_without_replacement",
+        )
+        self.assertEqual(classify_deal_status(self.deal)[0], "yellow")
 
     def test_publishing_old_or_legacy_analysis_today_cannot_make_it_current(self):
         audit = self.deal["coaching"]["communication_quality_audit"]
@@ -306,6 +342,73 @@ class DailyQualityTests(unittest.TestCase):
         self.deal["communications_today"]["items"] = [_quality_event(occurred_at="2026-08-18T17:00:00+03:00")]
         snapshot = build_daily_control_snapshot({"deals": [self.deal]}, cutoff_at=NOW)
         self.assertEqual(snapshot["deals"][0]["quality"]["status"], "no_work")
+
+
+class DailyQualityStateTests(unittest.TestCase):
+    def test_scores_are_monotonic_until_evidence_is_invalidated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            first = _audit(next_action=1, value=0, data=1)
+            merge_deal_daily_quality_state(db_path, deal_id="101", audit=first)
+            revised = _audit(next_action=0, value=1, data=0)
+            saved = merge_deal_daily_quality_state(
+                db_path, deal_id="101", audit=revised,
+            )
+            self.assertEqual(
+                [saved["audit"]["criteria"][name]["score"] for name in (
+                    "next_action", "value_development", "data_collection"
+                )],
+                [1, 1, 1],
+            )
+            invalidated = merge_deal_daily_quality_state(
+                db_path,
+                deal_id="101",
+                audit=revised,
+                invalidated_event_ids=["crm_activity:1"],
+            )
+            self.assertEqual(
+                invalidated["audit"]["criteria"]["next_action"]["score"], 0
+            )
+            self.assertEqual(
+                invalidated["audit"]["criteria"]["data_collection"]["score"], 1
+            )
+            self.assertEqual(len(invalidated["revision_log"]), 1)
+            self.assertIsNotNone(get_deal_daily_quality_state(
+                db_path, deal_id="101", business_date="2026-08-18",
+            ))
+
+    def test_removed_only_evidence_invalidates_assessed_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            merge_deal_daily_quality_state(
+                db_path, deal_id="102", audit=_audit(),
+            )
+            insufficient = {
+                "status": "insufficient_evidence",
+                "scope_summary": "Подтверждённого evidence больше нет.",
+                "criteria": {
+                    name: {"score": None} for name in (
+                        "next_action", "value_development", "data_collection"
+                    )
+                },
+                "zero_reasons": [],
+                "summary_for_rop": None,
+                "insufficient_reason": "Исходное событие удалено.",
+                "daily_scope": {
+                    "version": 2,
+                    "business_date": "2026-08-18",
+                    "evaluated_through": NOW.isoformat(),
+                    "event_signatures": {},
+                },
+            }
+            saved = merge_deal_daily_quality_state(
+                db_path,
+                deal_id="102",
+                audit=insufficient,
+                invalidated_event_ids=["crm_activity:1"],
+            )
+            self.assertEqual(saved["audit"]["status"], "insufficient_evidence")
+            self.assertEqual(len(saved["revision_log"]), 3)
 
 
 class DirectQuestionTests(unittest.TestCase):

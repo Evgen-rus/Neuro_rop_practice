@@ -430,6 +430,10 @@ def build_materialization_contract(
                 "insufficient_reason is non-empty"
             ),
             "next_action": COMMUNICATION_QUALITY_AUDIT_NEXT_ACTION_RULE,
+            "next_action_warning": (
+                "optional null or {status:'cancelled_without_replacement', explanation, quote}; "
+                "client cancellation does not by itself downgrade a previously confirmed daily score"
+            ),
         }
     return structural, continuity, constraints
 

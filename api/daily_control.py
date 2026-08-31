@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from api.deal_task_day import is_reschedule, stamp, task_results, task_totals
-from openai_api.llm.deal_daily_quality import CLIENT_CHANNELS, is_quality_candidate, quality_event_signature, quality_time
+from openai_api.llm.deal_daily_quality import (
+    CLIENT_CHANNELS,
+    is_daily_quality_evidence,
+    quality_event_signature,
+    quality_time,
+)
 
 from setup import MSK_TZ, get_logger
 from storage.rop_db import (
@@ -47,6 +52,7 @@ COMMUNICATION_ITEM_KEYS = (
     "call_outcome",
     "talk_duration_seconds",
     "content_available",
+    "quality_evidence",
     "participant_name",
     "status_label",
     "source_type",
@@ -413,7 +419,12 @@ def classify_deal_status(
     zero_count = sum(1 for score in scores.values() if score == 0)
     next_action_zero = scores.get("next_action") == 0
     assessed = audit.get("status") in {"assessed", "no_work"}
-    insufficient = audit.get("status") in {"insufficient_evidence", "missing", "pending_analysis"}
+    insufficient = audit.get("status") in {"insufficient_evidence", "missing"}
+    pending_without_baseline = (
+        audit.get("status") == "pending_analysis"
+        and all(score is None for score in scores.values())
+    )
+    next_action_warning = audit.get("next_action_warning")
     overdue_bitrix = (
         str(bitrix_task.get("time_bucket") or "") == "overdue"
         and str(bitrix_task.get("completion_state") or "open") == "open"
@@ -427,9 +438,11 @@ def classify_deal_status(
     if (
         no_analysis
         or insufficient
+        or pending_without_baseline
         or next_action_zero
         or zero_count >= 1
         or overdue_bitrix
+        or bool(next_action_warning)
     ):
         return "yellow", STATUS_LABELS["yellow"]
     return "green", STATUS_LABELS["green"]
@@ -565,7 +578,9 @@ def _daily_quality_block(deal: dict[str, Any], now: datetime) -> dict[str, Any]:
                 for name in ("next_action", "value_development", "data_collection")
             }, "confirmed_count": 0 if zero else None, "total": 3,
             "scope_summary": reason, "zero_reasons": [], "summary_for_rop": None,
-            "insufficient_reason": reason,
+            "insufficient_reason": reason, "evaluated_through": None,
+            "pending_message": reason if status == "pending_analysis" else None,
+            "pending_events_count": 0, "next_action_warning": None,
         }
 
     if communications.get("date") != day or not communications.get("available") or communications.get("quality_sources_available") is False:
@@ -574,38 +589,102 @@ def _daily_quality_block(deal: dict[str, Any], now: datetime) -> dict[str, Any]:
              and item.get("channel") in CLIENT_CHANNELS and _at_or_before(item.get("occurred_at"), current)]
     if not communications.get("items") and int(communications.get("completed") or 0) > 0:
         return state("missing", "Нет данных: есть счётчики коммуникаций, но нет событий для проверки качества.")
-    candidates = [item for item in items if item.get("quality_candidate", is_quality_candidate(item))]
+    candidates = [
+        item for item in items
+        if item.get("quality_evidence", is_daily_quality_evidence(item))
+    ]
     if not candidates and any(item.get("channel") == "call" and item.get("call_outcome") not in {"connected", "no_answer"} for item in items):
         return state("missing", "Нет данных: результат сегодняшнего звонка ещё не подтверждён.")
     obligation = _has_current_quality_obligation(deal, current)
-    if not candidates:
-        if obligation:
-            return state("no_work", "Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.", zero=True)
-        return state("not_required", "На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.")
+    current_audit = coaching.get("communication_quality_audit") or {}
+    current_scope = current_audit.get("daily_scope") or {}
+    saved_state = deal.get("daily_quality_state") if isinstance(deal.get("daily_quality_state"), dict) else {}
+    saved_audit = saved_state.get("audit") if isinstance(saved_state.get("audit"), dict) else {}
+    saved_scope = saved_state.get("daily_scope") if isinstance(saved_state.get("daily_scope"), dict) else {}
 
-    audit = coaching.get("communication_quality_audit") or {}
-    scope = audit.get("daily_scope") or {}
+    def valid_scope(scope: dict[str, Any]) -> bool:
+        return (
+            scope.get("version") in {1, 2}
+            and scope.get("business_date") == day
+            and quality_time(scope.get("evaluated_through")) is not None
+        )
+
+    # Before the first post-migration write, a strict same-day audit is a read-only fallback.
+    if not saved_audit and valid_scope(current_scope):
+        signatures = current_scope.get("event_signatures") or {}
+        candidate_map = {str(item.get("event_id")): item for item in candidates}
+        strict_scope = (
+            current_scope.get("version") == 2
+            and bool(signatures)
+            and set(signatures).issubset(candidate_map)
+        )
+        compatible_legacy_scope = signatures and all(
+            event_id in candidate_map
+            and signature == (
+                candidate_map[event_id].get("quality_source_signature")
+                or quality_event_signature(candidate_map[event_id])
+            )
+            for event_id, signature in signatures.items()
+        )
+        if strict_scope or compatible_legacy_scope:
+            saved_audit, saved_scope = current_audit, current_scope
+
+    if not saved_audit:
+        if not candidates:
+            if obligation:
+                return state("no_work", "Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации. Попытки дозвона не дают единицы.", zero=True)
+            return state("not_required", "На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.")
+        return state("pending_analysis", "Сегодня есть подтверждённая клиентская коммуникация. Ожидает AI-оценки.")
+
+    scope = saved_scope or saved_audit.get("daily_scope") or {}
     through = quality_time(scope.get("evaluated_through"))
     signatures = scope.get("event_signatures") or {}
-    covered = (
-        scope.get("version") == 1 and scope.get("business_date") == day
-        and through is not None and through.date() == current.date() and through <= current
-        and all(
-            quality_time(item.get("occurred_at")) <= through
-            and signatures.get(str(item.get("event_id"))) == (item.get("quality_source_signature") or quality_event_signature(item))
-            for item in candidates
+    candidate_signatures = {
+        str(item.get("event_id")): (
+            item.get("quality_source_signature") or quality_event_signature(item)
         )
+        for item in candidates
+    }
+    covered = (
+        scope.get("version") in {1, 2} and scope.get("business_date") == day
+        and through is not None and through.date() == current.date() and through <= current
+        and all(signatures.get(event_id) == signature
+                for event_id, signature in candidate_signatures.items())
+        and all(quality_time(item.get("occurred_at")) <= through for item in candidates)
     )
     if not covered:
-        return state("pending_analysis", "Сегодня есть клиентская коммуникация. Ожидает AI-оценки; прежние оценки не используются.")
-    if audit.get("status") == "insufficient_evidence":
+        result = _quality_block({"communication_quality_audit": saved_audit})
+        result.update(
+            status="pending_analysis",
+            business_date=day,
+            cutoff_at=_iso(current),
+            source="ai",
+            evaluated_through=scope.get("evaluated_through"),
+            pending_message=(
+                f"Оценено до {through.strftime('%H:%M') if through else '—'}, "
+                "новая коммуникация ожидает анализа."
+            ),
+            pending_events_count=sum(
+                1 for event_id, signature in candidate_signatures.items()
+                if signatures.get(event_id) != signature
+            ),
+        )
+        return result
+    if saved_audit.get("status") == "insufficient_evidence":
         if obligation:
             return state("no_work", "AI не подтвердил содержательную работу в сегодняшних коммуникациях.", zero=True)
         return state("not_required", "На сегодня нет актуальной задачи; AI не подтвердил содержательную коммуникацию.")
-    if audit.get("status") != "assessed" or any(value not in {0, 1} for value in _audit_scores(audit).values()):
+    if saved_audit.get("status") != "assessed" or any(value not in {0, 1} for value in _audit_scores(saved_audit).values()):
         return state("pending_analysis", "Ожидает корректной AI-оценки сегодняшней работы.")
-    result = _quality_block(coaching)
-    result.update(business_date=day, cutoff_at=_iso(current), source="ai")
+    result = _quality_block({"communication_quality_audit": saved_audit})
+    result.update(
+        business_date=day,
+        cutoff_at=_iso(current),
+        source="ai",
+        evaluated_through=scope.get("evaluated_through"),
+        pending_message=None,
+        pending_events_count=0,
+    )
     return result
 
 
@@ -625,6 +704,10 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
             "zero_reasons": [],
             "summary_for_rop": None,
             "insufficient_reason": "Нет данных",
+            "evaluated_through": None,
+            "pending_message": None,
+            "pending_events_count": 0,
+            "next_action_warning": None,
         }
     if audit.get("status") == "insufficient_evidence":
         return {
@@ -640,6 +723,10 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
             "zero_reasons": [],
             "summary_for_rop": None,
             "insufficient_reason": audit.get("insufficient_reason") or "Нет данных",
+            "evaluated_through": (audit.get("daily_scope") or {}).get("evaluated_through"),
+            "pending_message": None,
+            "pending_events_count": 0,
+            "next_action_warning": audit.get("next_action_warning"),
         }
     scores = _audit_scores(audit)
     labels = {
@@ -679,6 +766,10 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
         "zero_reasons": reasons,
         "summary_for_rop": audit.get("summary_for_rop"),
         "insufficient_reason": None,
+        "evaluated_through": (audit.get("daily_scope") or {}).get("evaluated_through"),
+        "pending_message": None,
+        "pending_events_count": 0,
+        "next_action_warning": audit.get("next_action_warning"),
     }
 
 

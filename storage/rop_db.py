@@ -550,6 +550,18 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS deal_daily_quality_state (
+                deal_id TEXT NOT NULL,
+                business_date TEXT NOT NULL,
+                audit_json TEXT NOT NULL,
+                daily_scope_json TEXT NOT NULL,
+                next_action_warning_json TEXT,
+                revision_log_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(deal_id, business_date)
+            );
+
             CREATE TABLE IF NOT EXISTS deal_manager_situation_reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deal_id TEXT NOT NULL,
@@ -5765,6 +5777,153 @@ def daily_paid_capacity_used(db_path: str | Path, *, day_prefix: str) -> int:
 # Deal control is separate from the lead workflow: it tracks local ROP tasks and
 # only observes the corresponding read-only CRM facts.
 DEAL_CONTROL_SCOPE_KEY = "active"
+DAILY_QUALITY_CRITERIA = ("next_action", "value_development", "data_collection")
+
+
+def _row_to_daily_quality_state(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    value["audit"] = loads_json(value.pop("audit_json", None), {})
+    value["daily_scope"] = loads_json(value.pop("daily_scope_json", None), {})
+    value["next_action_warning"] = loads_json(
+        value.pop("next_action_warning_json", None), None
+    )
+    value["revision_log"] = loads_json(value.pop("revision_log_json", None), [])
+    return value
+
+
+def get_deal_daily_quality_state(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    business_date: str,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM deal_daily_quality_state
+            WHERE deal_id = ? AND business_date = ?
+            """,
+            (str(deal_id), str(business_date)),
+        ).fetchone()
+    return _row_to_daily_quality_state(row)
+
+
+def merge_deal_daily_quality_state(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    audit: dict[str, Any],
+    invalidated_event_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Persist a monotonic same-day audit after successful LLM validation."""
+    init_db(db_path)
+    scope = audit.get("daily_scope") if isinstance(audit.get("daily_scope"), dict) else {}
+    business_date = str(scope.get("business_date") or "")
+    if scope.get("version") not in {1, 2} or not business_date:
+        return None
+    invalidated = sorted({str(item) for item in invalidated_event_ids or [] if item})
+    now = utcish_now()
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM deal_daily_quality_state
+            WHERE deal_id = ? AND business_date = ?
+            """,
+            (str(deal_id), business_date),
+        ).fetchone()
+        previous = _row_to_daily_quality_state(row)
+        previous_audit = (
+            previous.get("audit")
+            if isinstance(previous, dict) and isinstance(previous.get("audit"), dict)
+            else {}
+        )
+        merged = loads_json(dumps_json(audit), {})
+        revisions = list((previous or {}).get("revision_log") or [])
+        if previous_audit.get("status") == "assessed":
+            if merged.get("status") != "assessed":
+                if invalidated:
+                    old_criteria = previous_audit.get("criteria") or {}
+                    revisions.extend({
+                        "criterion": criterion,
+                        "from_score": 1,
+                        "to_score": None,
+                        "reason": "quality_evidence_invalidated",
+                        "event_ids": invalidated,
+                        "created_at": now,
+                    } for criterion in DAILY_QUALITY_CRITERIA
+                    if (old_criteria.get(criterion) or {}).get("score") == 1)
+                else:
+                    merged = loads_json(dumps_json(previous_audit), {})
+            else:
+                old_criteria = previous_audit.get("criteria") or {}
+                new_criteria = merged.get("criteria") or {}
+                reasons = [
+                    item for item in merged.get("zero_reasons") or []
+                    if isinstance(item, dict)
+                ]
+                reason_criteria = {
+                    str(item.get("criterion") or "") for item in reasons
+                }
+                for criterion in DAILY_QUALITY_CRITERIA:
+                    old_score = (old_criteria.get(criterion) or {}).get("score")
+                    new_score = (new_criteria.get(criterion) or {}).get("score")
+                    if old_score != 1 or new_score != 0:
+                        continue
+                    if invalidated and criterion in reason_criteria:
+                        revisions.append({
+                            "criterion": criterion,
+                            "from_score": 1,
+                            "to_score": 0,
+                            "reason": "quality_evidence_invalidated",
+                            "event_ids": invalidated,
+                            "created_at": now,
+                        })
+                    else:
+                        new_criteria[criterion] = loads_json(
+                            dumps_json(old_criteria.get(criterion)), {"score": 1}
+                        )
+                        reasons = [
+                            item for item in reasons
+                            if item.get("criterion") != criterion
+                        ]
+                merged["zero_reasons"] = reasons
+        merged["daily_scope"] = loads_json(dumps_json(scope), {})
+        warning = merged.get("next_action_warning")
+        conn.execute(
+            """
+            INSERT INTO deal_daily_quality_state (
+                deal_id, business_date, audit_json, daily_scope_json,
+                next_action_warning_json, revision_log_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id, business_date) DO UPDATE SET
+                audit_json = excluded.audit_json,
+                daily_scope_json = excluded.daily_scope_json,
+                next_action_warning_json = excluded.next_action_warning_json,
+                revision_log_json = excluded.revision_log_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(deal_id),
+                business_date,
+                dumps_json(merged),
+                dumps_json(scope),
+                dumps_json(warning) if warning is not None else None,
+                dumps_json(revisions),
+                (previous or {}).get("created_at") or now,
+                now,
+            ),
+        )
+        saved = conn.execute(
+            """
+            SELECT * FROM deal_daily_quality_state
+            WHERE deal_id = ? AND business_date = ?
+            """,
+            (str(deal_id), business_date),
+        ).fetchone()
+    return _row_to_daily_quality_state(saved)
 
 
 def _normalize_pipeline_id_list(values: Any) -> list[str]:

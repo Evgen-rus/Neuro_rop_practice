@@ -91,6 +91,7 @@ from storage.rop_db import (
     get_latest_deal_semantic_checkpoint,
     get_latest_neuro_rop_recommendation_projection,
     init_db,
+    merge_deal_daily_quality_state,
     save_analysis_run,
     save_deal_incremental_v2_run,
     save_deal_semantic_checkpoint,
@@ -421,6 +422,35 @@ def persist_successful_llm_run(
 ) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
+    audit = analysis.get("communication_quality_audit") if isinstance(analysis, dict) else None
+    if isinstance(audit, dict):
+        details = ((decision_reason.get("diff") or {}).get("details") or {})
+        invalidated_event_ids = [
+            *list(details.get("revised_daily_quality_event_ids") or []),
+            *list(details.get("daily_quality_removed_event_ids") or []),
+        ]
+        quality_state = merge_deal_daily_quality_state(
+            db_path,
+            deal_id=str(args.deal_id),
+            audit=audit,
+            invalidated_event_ids=invalidated_event_ids,
+        )
+        if quality_state is not None:
+            analysis["communication_quality_audit"] = quality_state["audit"]
+            save_json(paths["analysis"], payload)
+            _, diagnostics, _ = load_context_diagnostics_for_analysis(
+                entity_type="deal",
+                entity_id=str(args.deal_id),
+                workspace_root=Path(args.deal_root),
+            )
+            paths["report"].write_text(
+                render_report(
+                    analysis,
+                    payload.get("model_metadata"),
+                    diagnostics,
+                ),
+                encoding="utf-8",
+            )
     if evidence_ids_included is None and isinstance(payload.get("evidence_ids_included"), list):
         evidence_ids_included = [str(item) for item in payload["evidence_ids_included"]]
     memory_update = analysis.get("memory_update") if isinstance(analysis, dict) else None

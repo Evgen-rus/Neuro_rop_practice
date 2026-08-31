@@ -735,6 +735,7 @@ export type DealControlCommunicationItem = {
   call_outcome?: 'connected' | 'no_answer' | 'unknown' | null
   talk_duration_seconds?: number | null
   content_available?: boolean
+  quality_evidence?: boolean
   participant_name?: string | null
   status_label?: string | null
   source_type?: string | null
@@ -831,6 +832,11 @@ export type CommunicationQualityAudit = {
   }>
   summary_for_rop?: string | null
   insufficient_reason?: string | null
+  next_action_warning?: {
+    status: 'cancelled_without_replacement'
+    explanation: string
+    quote: string
+  } | null
 }
 
 export type DailyControlStatus = 'red' | 'yellow' | 'green'
@@ -871,6 +877,14 @@ export type DailyControlDeal = {
     zero_reasons: Array<{ criterion?: string | null; explanation?: string | null; quote?: string | null }>
     summary_for_rop?: string | null
     insufficient_reason?: string | null
+    evaluated_through?: string | null
+    pending_message?: string | null
+    pending_events_count?: number
+    next_action_warning?: {
+      status: 'cancelled_without_replacement'
+      explanation: string
+      quote: string
+    } | null
   }
   summary_for_rop?: string | null
   direct_question: string

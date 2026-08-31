@@ -463,8 +463,10 @@ def build_deal_snapshot(
     if daily_quality_context is not None:
         snapshot["daily_quality_events"] = {
             str(item["event_id"]): item.get("evidence_signature") or item["source_signature"]
-            for item in daily_quality_context.get("events") or [] if item.get("text")
+            for item in daily_quality_context.get("events") or []
+            if item.get("quality_evidence") and item.get("text")
         }
+        snapshot["daily_quality_business_date"] = daily_quality_context.get("business_date")
     return snapshot
 
 
@@ -568,11 +570,28 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
                 details["updated_client_reply_event_ids"] = updated_reply_ids
     old_quality = previous.get("daily_quality_events") or {}
     new_quality = current.get("daily_quality_events") or {}
-    changed_quality_ids = sorted(key for key, value in new_quality.items() if old_quality.get(key) != value)
+    new_quality_ids = sorted(set(new_quality) - set(old_quality))
+    revised_quality_ids = sorted(
+        key for key in set(new_quality) & set(old_quality)
+        if old_quality.get(key) != new_quality.get(key)
+    )
+    changed_quality_ids = sorted([*new_quality_ids, *revised_quality_ids])
     # Empty new-day evidence never triggers an LLM just to reset the daily score.
     if changed_quality_ids:
         changes.append("daily_quality_evidence_changed")
         details["daily_quality_event_ids"] = changed_quality_ids
+        if new_quality_ids:
+            details["new_daily_quality_event_ids"] = new_quality_ids
+        if revised_quality_ids:
+            details["revised_daily_quality_event_ids"] = revised_quality_ids
+    removed_quality_ids = sorted(set(old_quality) - set(new_quality))
+    same_quality_day = (
+        previous.get("daily_quality_business_date")
+        and previous.get("daily_quality_business_date") == current.get("daily_quality_business_date")
+    )
+    if removed_quality_ids and same_quality_day:
+        changes.append("daily_quality_evidence_removed")
+        details["daily_quality_removed_event_ids"] = removed_quality_ids
 
     previous_deal = previous.get("deal", {}) or {}
     current_deal = current.get("deal", {}) or {}

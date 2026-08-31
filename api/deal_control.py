@@ -38,7 +38,7 @@ from bitrix.workspace import (
 )
 from openai_api.audio.short_call import load_recording_durations
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
-from openai_api.llm.deal_daily_quality import is_quality_candidate, quality_event_signature
+from openai_api.llm.deal_daily_quality import is_daily_quality_evidence, quality_event_signature
 from progress_events import compact_decision_status
 from setup import MSK_TZ
 from storage.rop_db import (
@@ -48,6 +48,7 @@ from storage.rop_db import (
     get_deal_manager_situation_state,
     get_deal_control_scope,
     get_deal_control_metrics,
+    get_deal_daily_quality_state,
     get_entity_state,
     get_latest_deal_manager_situation_review,
     get_latest_ui_report,
@@ -689,7 +690,7 @@ def _today_communications(
             item["talk_duration_seconds"] = None
             item["status_label"] = None
             item["content_available"] = bool(str(item.get("content") or "").strip())
-        item["quality_candidate"] = is_quality_candidate(item)
+        item["quality_evidence"] = is_daily_quality_evidence(item)
         item["quality_source_signature"] = quality_event_signature(item)
         today_events.append(item)
     today_events.sort(key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("event_id") or "")))
@@ -1375,6 +1376,11 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
         else:
             missing += 1
         deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
+        deal["daily_quality_state"] = get_deal_daily_quality_state(
+            db_path,
+            deal_id=str(deal["deal_id"]),
+            business_date=current_date,
+        )
         deal["manager_situation"] = get_deal_manager_situation_state(
             db_path,
             deal_id=str(deal["deal_id"]),

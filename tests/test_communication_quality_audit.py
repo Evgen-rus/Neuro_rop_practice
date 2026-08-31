@@ -86,6 +86,21 @@ class CommunicationQualityAuditTests(unittest.TestCase):
             }, errors)
         self.assertTrue(any("cover exactly" in error for error in errors))
 
+    def test_validator_accepts_structured_next_action_warning(self) -> None:
+        value = audit(next_action=1)
+        value["next_action_warning"] = {
+            "status": "cancelled_without_replacement",
+            "explanation": "Клиент отменил встречу, новый срок не согласован.",
+            "quote": "Встречу отменяем, новую дату пока не назначаем.",
+        }
+        errors: list[str] = []
+        with patch("openai_api.llm.validation.COMMUNICATION_QUALITY_AUDIT_ENABLED", True):
+            _validate_deal_management_shapes({
+                "communication_quality_audit": value,
+                "client_communication_profile": {},
+            }, errors)
+        self.assertFalse(any("next_action_warning" in error for error in errors), errors)
+
     def test_insufficient_evidence_has_null_scores_and_no_false_failures(self) -> None:
         value = {
             "status": "insufficient_evidence",
@@ -254,8 +269,12 @@ class DailyAuditContextTests(unittest.TestCase):
         self.now = datetime(2026, 8, 18, 16, tzinfo=MSK_TZ)
         self.events = [
             {"event_id": "crm_activity:1", "channel": "email", "direction": "outgoing",
+             "participant_role": "employee", "contact_class": "attempt",
+             "conversation_key": "conversation:v1:test",
              "occurred_at": "2026-08-18T10:00:00+03:00", "content": "Отправляю условия поставки к пятнице."},
             {"event_id": "timeline_comment:2", "channel": "max", "direction": "incoming",
+             "participant_role": "client", "contact_class": "confirmed_contact",
+             "conversation_key": "conversation:v1:test",
              "occurred_at": "2026-08-18T13:00:00+03:00", "content": "Готовы согласовать объём и доставку."},
         ]
 
@@ -297,12 +316,13 @@ class DailyAuditContextTests(unittest.TestCase):
         stamp_daily_quality_scope(analysis, self.context())
         scope = analysis["communication_quality_audit"]["daily_scope"]
         self.assertEqual(scope["business_date"], "2026-08-18")
-        self.assertEqual(scope["event_signatures"]["crm_activity:1"], quality_event_signature(self.events[0]))
+        self.assertNotIn("crm_activity:1", scope["event_signatures"])
+        self.assertEqual(scope["event_signatures"]["timeline_comment:2"], quality_event_signature(self.events[1]))
         stamp_daily_quality_scope(analysis, None)
         self.assertNotIn("daily_scope", analysis["communication_quality_audit"])
 
     def test_missing_body_cannot_stamp_complete_ai_coverage(self):
-        context = self.context([{**self.events[0], "content": ""}])
+        context = self.context([{**self.events[1], "content": ""}])
         self.assertFalse(context["content_complete"])
         analysis = {"communication_quality_audit": audit()}
         stamp_daily_quality_scope(analysis, context)
@@ -317,21 +337,25 @@ class DailyAuditContextTests(unittest.TestCase):
             _touchpoint(when="2026-08-18T11:00:00+03:00", event_id="2", event_type="call", direction="2"),
         ]
         activities = [{**point["raw"], "TYPE_ID": "4" if index == 0 else "2", "FILES": ["1"] if index else []} for index, point in enumerate(points)]
-        # Sync can precede transcription; the ensuing AI result must match immediately.
-        with patch("api.deal_control.find_call_transcript", return_value=None):
+        # After transcription, sync and AI use the same CRM source signature.
+        with patch("api.deal_control.find_call_transcript", return_value={"text": call_text}):
             communications = _today_communications(activities, self.now, deal_id="1")
         with patch("openai_api.llm.deal_current_situation._transcripts_by_activity", return_value={"2": {"text": call_text}}):
             context = build_daily_quality_context({"client_touchpoints": points}, now=self.now, deal_id="1")
-        self.assertEqual(len(context["events"]), 2)
-        self.assertEqual(context["events"][0]["text"], message.strip())
+        self.assertEqual(len(context["events"]), 1)
+        self.assertEqual(context["events"][0]["event_id"], "crm_activity:2")
         self.assertEqual(
             {item["event_id"]: item["source_signature"] for item in context["events"]},
-            {item["event_id"]: item["quality_source_signature"] for item in communications["items"]},
+            {
+                item["event_id"]: item["quality_source_signature"]
+                for item in communications["items"]
+                if item["quality_evidence"]
+            },
         )
         with patch("openai_api.llm.deal_current_situation._transcripts_by_activity", return_value={"2": {"text": call_text + " Уточнение."}}):
             revised = build_daily_quality_context({"client_touchpoints": points}, now=self.now, deal_id="1")
-        self.assertEqual(context["events"][1]["source_signature"], revised["events"][1]["source_signature"])
-        self.assertNotEqual(context["events"][1]["evidence_signature"], revised["events"][1]["evidence_signature"])
+        self.assertEqual(context["events"][0]["source_signature"], revised["events"][0]["source_signature"])
+        self.assertNotEqual(context["events"][0]["evidence_signature"], revised["events"][0]["evidence_signature"])
 
     def test_related_other_deal_and_uncompleted_activity_cannot_give_daily_points(self):
         from tests.test_deal_current_situation import _touchpoint
@@ -342,7 +366,7 @@ class DailyAuditContextTests(unittest.TestCase):
             {**self.events[0], "event_id": "crm_activity:4", "source_ids": ["4"]},
         ], "client_touchpoints": [pending]}
         context = build_daily_quality_context(bundle, now=self.now, deal_id="1")
-        self.assertEqual([item["event_id"] for item in context["events"]], ["crm_activity:1"])
+        self.assertEqual(context["events"], [])
 
     def test_comment_fetch_failure_marks_quality_sources_unavailable(self):
         unavailable = set()

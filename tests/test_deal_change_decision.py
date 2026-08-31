@@ -37,7 +37,8 @@ class DealChangeDecisionTests(unittest.TestCase):
         for event_id in ("crm_activity:9", "timeline_comment:10"):
             with self.subTest(event_id=event_id):
                 current = build_deal_snapshot(raw, daily_quality_context={"events": [
-                    {"event_id": event_id, "source_signature": "new-body", "text": "Согласуем сроки поставки завтра."},
+                    {"event_id": event_id, "source_signature": "new-body",
+                     "quality_evidence": True, "text": "Согласуем сроки поставки завтра."},
                 ]})
                 diff = compare_snapshots(empty, current)
                 self.assertEqual(decision(diff, current).status, INCREMENTAL_LLM_ANALYSIS)
@@ -45,6 +46,28 @@ class DealChangeDecisionTests(unittest.TestCase):
                 self.assertNotIn("daily_quality_evidence_changed", compare_snapshots(current, empty)["changes"])
                 revised = {**current, "daily_quality_events": {event_id: "revised-body"}}
                 self.assertIn("daily_quality_evidence_changed", compare_snapshots(current, revised)["changes"])
+
+    def test_evidence_removal_is_hard_only_inside_same_business_day(self):
+        from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
+        raw = {"deal": {"item": {"ID": "7", "CLOSED": "N"}}}
+        previous = build_deal_snapshot(raw, daily_quality_context={
+            "business_date": "2026-08-18",
+            "events": [{"event_id": "crm_activity:9", "source_signature": "body",
+                        "quality_evidence": True, "text": "Ответ клиента"}],
+        })
+        same_day = build_deal_snapshot(raw, daily_quality_context={
+            "business_date": "2026-08-18", "events": [],
+        })
+        rollover = build_deal_snapshot(raw, daily_quality_context={
+            "business_date": "2026-08-19", "events": [],
+        })
+        same_day_diff = compare_snapshots(previous, same_day)
+        self.assertIn("daily_quality_evidence_removed", same_day_diff["changes"])
+        self.assertEqual(decision(same_day_diff, same_day).status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertNotIn(
+            "daily_quality_evidence_removed",
+            compare_snapshots(previous, rollover)["changes"],
+        )
 
     def test_disabling_structured_commercial_sources_does_not_signal_a_deal_change(self):
         from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots

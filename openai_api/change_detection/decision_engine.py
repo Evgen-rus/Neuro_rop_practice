@@ -29,6 +29,7 @@ HARD_CHANGE_TYPES = {
     "commercial_refs_changed",
     "transcript_changed",
     "daily_quality_evidence_changed",
+    "daily_quality_evidence_removed",
 }
 
 LEAD_HARD_CHANGE_TYPES = {
@@ -358,6 +359,7 @@ def deal_incremental_analysis_changes(diff: dict[str, Any], current_snapshot: di
         "new_client_reply",
         "new_inbound_customer_message",
         "daily_quality_evidence_changed",
+        "daily_quality_evidence_removed",
     })
 
 
@@ -369,6 +371,7 @@ def deal_direct_full_analysis_changes(diff: dict[str, Any], current_snapshot: di
         "new_client_reply",
         "new_inbound_customer_message",
         "daily_quality_evidence_changed",
+        "daily_quality_evidence_removed",
     })
 
 

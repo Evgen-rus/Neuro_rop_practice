@@ -369,6 +369,39 @@ test('daily quality renders system zeros, pending, unavailable and not-required 
   }
 })
 
+test('pending quality keeps confirmed scores and shows the evaluated boundary', () => {
+  const quality = {
+    status: 'pending_analysis',
+    business_date: '2026-08-18',
+    source: 'ai',
+    confirmed_count: 2,
+    total: 3,
+    evaluated_through: '2026-08-18T15:30:00+03:00',
+    pending_message: 'Оценено до 15:30, новая коммуникация ожидает анализа.',
+    next_action_warning: {
+      status: 'cancelled_without_replacement',
+      explanation: 'Клиент отменил встречу, новый срок не согласован.',
+      quote: 'Новую дату пока не назначаем.',
+    },
+    zero_reasons: [],
+    criteria: {
+      next_action: { score: 1, verdict: 'Следующий шаг зафиксирован' },
+      value_development: { score: 0, verdict: 'Ценность не подтверждена' },
+      data_collection: { score: 1, verdict: 'Данные собраны' },
+    },
+  }
+  const html = renderToStaticMarkup(createElement(DealQualityAndFocus, {
+    deal: { quality, ai_context: {} }, asked: [false, false], onToggleAsked() {},
+  }))
+  assert.match(html, /2 из 3 · ожидает обновления/)
+  assert.match(html, /оценено до 15:30 МСК/)
+  assert.match(html, /новая коммуникация ожидает анализа/)
+  assert.match(html, /Согласованный шаг отменён/)
+  assert.match(html, /Новую дату пока не назначаем/)
+  assert.equal((html.match(/dc-daily-criterion good/g) || []).length, 2)
+  assert.equal((html.match(/dc-daily-criterion bad/g) || []).length, 1)
+})
+
 test('review card shows quality, then today communications, then focus, with per-criterion argumentation', () => {
   const deal = {
     ...communicationDeal([]),

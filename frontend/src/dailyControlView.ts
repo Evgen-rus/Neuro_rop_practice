@@ -48,7 +48,11 @@ export function snapshotDayText(value?: string | null): string {
 }
 
 export function dailyQualityCaption(quality: DailyControlDeal['quality'], snapshotDay = false) {
-  if (quality.status === 'pending_analysis') return 'Ожидает AI-оценки'
+  if (quality.status === 'pending_analysis') {
+    return quality.confirmed_count != null
+      ? `${quality.confirmed_count} из ${quality.total} · ожидает обновления`
+      : 'Ожидает AI-оценки'
+  }
   if (quality.status === 'not_required') return snapshotDay ? 'В этот день не требуется' : 'Сегодня не требуется'
   if (quality.status === 'no_work') return '0 из 3 · работа не подтверждена'
   if (quality.status === 'assessed' && quality.confirmed_count != null) {
