@@ -105,13 +105,14 @@ import {
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { ManagerTrajectory } from './ManagerTrajectory'
+import { LearningShadow } from './LearningShadow'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
 import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
 
-type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'team' | 'manager'
+type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'shadow' | 'team' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
 const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
@@ -139,6 +140,10 @@ const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = 
   trajectory: {
     title: 'Траектория',
     subtitle: 'Наблюдаемая активность менеджеров в течение рабочего дня',
+  },
+  shadow: {
+    title: 'Learning Shadow',
+    subtitle: 'Связь рекомендаций с действиями менеджера и результатом сделки',
   },
   team: {
     title: 'Команда',
@@ -536,6 +541,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
   function openTrajectoryView() {
     setView('trajectory')
+    setManagerFilter('')
+    setTimeView('all')
+  }
+
+  function openShadowView() {
+    setView('shadow')
     setManagerFilter('')
     setTimeView('all')
   }
@@ -962,6 +973,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Траектория">
           <span>⌁</span><b>Траектория</b><small>Рабочий день менеджеров</small>
         </button> : null}
+        {user.role === 'admin' ? <button className={view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Learning Shadow">
+          <span>↯</span><b>Learning Shadow</b><small>Рекомендации → действия</small>
+        </button> : null}
         {user.role === 'admin' ? <span className="dc-sidebar-split" aria-hidden="true" /> : null}
         {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Команда">
           <span>◍</span><b>Команда</b><small>Логины и Bitrix ID</small>
@@ -972,7 +986,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content">
-      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
+      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />

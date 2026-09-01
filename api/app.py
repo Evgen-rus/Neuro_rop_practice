@@ -66,6 +66,11 @@ from api.jobs import (
     workspace_dir,
 )
 from api.compact_shadow import get_compact_job, get_evidence, review_payload, start_compact_job
+from api.learning_shadow import (
+    get_learning_shadow_run,
+    list_learning_shadow_runs,
+    start_learning_shadow_run,
+)
 from api.deal_control import add_task as add_deal_control_task
 from api.deal_control import build_deal_control_dashboard, edit_task as edit_deal_control_task
 from api.deal_control import confirm_task_crm_match as confirm_deal_control_task_crm_match
@@ -345,6 +350,12 @@ class DealManagerCompanionRequest(BaseModel):
     confirm_paid: bool = False
     regenerate: bool = False
     manager_note: str = Field(default="", max_length=4000)
+
+
+class LearningShadowRunRequest(BaseModel):
+    from_date: date
+    to_date: date
+    confirm_paid: bool = False
 
 
 class PromptLabSnapshotRequest(BaseModel):
@@ -921,6 +932,35 @@ def manager_trajectory_event_get(
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/admin/learning-shadow/runs")
+def learning_shadow_runs_get(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    _require_admin()
+    return {"items": list_learning_shadow_runs(DEFAULT_DB_PATH, limit=limit)}
+
+
+@app.post("/api/admin/learning-shadow/runs", status_code=202)
+def learning_shadow_run_create(body: LearningShadowRunRequest) -> dict[str, Any]:
+    _require_admin_paid()
+    try:
+        return start_learning_shadow_run(
+            from_date=body.from_date,
+            to_date=body.to_date,
+            confirm_paid=body.confirm_paid,
+            db_path=DEFAULT_DB_PATH,
+        )
+    except (ValueError, PermissionError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/admin/learning-shadow/runs/{run_id}")
+def learning_shadow_run_get(run_id: int) -> dict[str, Any]:
+    _require_admin()
+    run = get_learning_shadow_run(DEFAULT_DB_PATH, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Shadow run не найден")
+    return run
 
 
 @app.get("/api/deal-control")

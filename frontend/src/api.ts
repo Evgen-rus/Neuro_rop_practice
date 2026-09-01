@@ -19,6 +19,54 @@ export type AuthMeResponse = {
   user: AuthUser
 }
 
+export type LearningShadowTimelineEvent = {
+  event_id: string
+  timestamp: string
+  actor: 'manager' | 'client' | 'system'
+  event_type: string
+  direction?: string | null
+  channel: string
+  content: string
+  transcript_excerpt: string
+  changes: Record<string, unknown>
+  source_event_id?: string | null
+}
+
+export type LearningShadowCase = {
+  id: number
+  deal_id: string
+  manager_id?: string | null
+  first_view_at: string
+  last_view_at: string
+  unique_recommendation_ids: string[]
+  view_count: number
+  action_event_ids: string[]
+  client_event_ids: string[]
+  recommendations: Array<Record<string, unknown>>
+  timeline: LearningShadowTimelineEvent[]
+  status: 'pending' | 'no_action_observed' | 'analyzing' | 'completed' | 'failed'
+  llm_result?: Record<string, unknown> | null
+  model_meta?: Record<string, unknown> | null
+  error?: string | null
+}
+
+export type LearningShadowRun = {
+  id: number
+  from_date: string
+  to_date: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  model: string
+  reasoning_effort: string
+  total_cases: number
+  no_action_cases: number
+  llm_cases: number
+  completed_cases: number
+  error?: string | null
+  created_at: string
+  completed_at?: string | null
+  cases: LearningShadowCase[]
+}
+
 export type TrajectoryCategory = 'all' | 'deals' | 'leads' | 'communications' | 'tasks' | 'crm' | 'neurorop'
 
 export type TrajectoryTotals = {
@@ -2568,6 +2616,25 @@ export function fetchTrajectoryEvent(eventId: number | string, managerId: string
   return api<TrajectoryEventDetail>(
     `/api/admin/trajectory/event/${encodeURIComponent(String(eventId))}?${query.toString()}`,
   )
+}
+
+export function startLearningShadowRun(payload: {
+  from_date: string
+  to_date: string
+  confirm_paid: boolean
+}) {
+  return api<LearningShadowRun>('/api/admin/learning-shadow/runs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function fetchLearningShadowRun(runId: number) {
+  return api<LearningShadowRun>(`/api/admin/learning-shadow/runs/${runId}`)
+}
+
+export function fetchLearningShadowRuns() {
+  return api<{ items: LearningShadowRun[] }>('/api/admin/learning-shadow/runs')
 }
 
 export function asRecord(value: unknown): Record<string, unknown> {

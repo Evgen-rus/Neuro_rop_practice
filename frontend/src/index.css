@@ -3641,6 +3641,19 @@ textarea {
 
 }
 
+.ls-page { min-height: 100%; padding: 22px; background: #f4f7fb; }
+.ls-controls { display: flex; align-items: end; gap: 10px; margin: 14px 0; padding: 14px; border: 1px solid #d9e3ee; border-radius: 12px; background: #fff; }
+.ls-controls label { display: grid; gap: 5px; color: #63778e; font-size: 11px; font-weight: 700; }
+.ls-controls input { padding: 8px 10px; border: 1px solid #cdd9e6; border-radius: 8px; color: #26394f; background: #fff; }
+.ls-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ls-kpis div { display: grid; gap: 3px; padding: 14px; border: 1px solid #d9e3ee; border-radius: 10px; background: #fff; }
+.ls-kpis b { color: #1768f2; font-size: 24px; }.ls-kpis span,.ls-run-status,.ls-empty { color: #63778e; font-size: 12px; }
+.ls-cases { display: grid; gap: 14px; }.ls-case { padding: 16px; border: 1px solid #d9e3ee; border-radius: 12px; background: #fff; }
+.ls-case > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.ls-case h3,.ls-case header p { margin: 0; }.ls-case header p { color: #718298; font-size: 12px; }.ls-case header span { padding: 5px 8px; border-radius: 999px; color: #245883; background: #eaf3fb; font-size: 11px; }
+.ls-flow { display: grid; gap: 5px; margin: 14px 0; }.ls-flow section { padding: 11px 12px; border-left: 3px solid #81aee6; border-radius: 7px; background: #f7faff; }.ls-flow section p { margin: 5px 0 0; color: #344a63; white-space: pre-wrap; }.ls-flow section small { color: #718298; }.ls-flow > i { padding-left: 16px; color: #81aee6; font-style: normal; }
+.ls-case details { margin-top: 7px; border: 1px solid #e0e7ef; border-radius: 8px; }.ls-case summary { padding: 9px 11px; cursor: pointer; }.ls-case pre { max-height: 420px; margin: 0; padding: 12px; overflow: auto; border-top: 1px solid #e0e7ef; color: #30465f; background: #f7f9fc; font-size: 11px; white-space: pre-wrap; }
+@media (max-width: 800px) { .ls-controls { align-items: stretch; flex-direction: column; }.ls-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 @media (max-width: 760px) {
   .dc-shell,
   .dc-shell.menu-open {

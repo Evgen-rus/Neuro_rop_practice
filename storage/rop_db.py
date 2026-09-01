@@ -27,6 +27,8 @@ DEFAULT_DEAL_CONTROL_PIPELINE_ID = "15"
 DEFAULT_DEAL_CONTROL_PIPELINE_IDS = ["15", "17", "47"]
 
 DEAL_ANALYSIS_PURGE_QUERIES: tuple[tuple[str, str], ...] = (
+    ("learning_shadow_cases", "DELETE FROM learning_shadow_cases"),
+    ("learning_shadow_runs", "DELETE FROM learning_shadow_runs"),
     ("manager_trajectory_events", "DELETE FROM manager_trajectory_events WHERE entity_type = 'deal'"),
     ("manager_trajectory_entity_state", "DELETE FROM manager_trajectory_entity_state WHERE entity_type = 'deal'"),
     ("deal_manager_assistant_events", "DELETE FROM deal_manager_assistant_events"),
@@ -879,6 +881,54 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_manager_trajectory_event_type_time
                 ON manager_trajectory_events(event_type, occurred_at);
+
+            CREATE TABLE IF NOT EXISTS learning_shadow_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_date TEXT NOT NULL,
+                to_date TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+                model TEXT NOT NULL,
+                reasoning_effort TEXT NOT NULL,
+                total_cases INTEGER NOT NULL DEFAULT 0,
+                no_action_cases INTEGER NOT NULL DEFAULT 0,
+                llm_cases INTEGER NOT NULL DEFAULT 0,
+                completed_cases INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_learning_shadow_runs_period
+                ON learning_shadow_runs(from_date, to_date, id DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_shadow_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                deal_id TEXT NOT NULL,
+                manager_id TEXT,
+                from_date TEXT NOT NULL,
+                to_date TEXT NOT NULL,
+                first_view_at TEXT NOT NULL,
+                last_view_at TEXT NOT NULL,
+                unique_recommendation_ids_json TEXT NOT NULL,
+                view_count INTEGER NOT NULL,
+                action_event_ids_json TEXT NOT NULL,
+                client_event_ids_json TEXT NOT NULL,
+                recommendations_json TEXT NOT NULL,
+                timeline_json TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'no_action_observed', 'analyzing', 'completed', 'failed')),
+                llm_result_json TEXT,
+                model_meta_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(run_id, deal_id),
+                FOREIGN KEY(run_id) REFERENCES learning_shadow_runs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_learning_shadow_cases_run
+                ON learning_shadow_cases(run_id, id);
 
             CREATE TABLE IF NOT EXISTS manager_trajectory_collection_state (
                 collection_key TEXT NOT NULL PRIMARY KEY,
@@ -8274,3 +8324,189 @@ def record_quick_help_opened_event(
                 "occurrence_id": normalized_occurrence_id,
             },
         )
+
+
+def create_learning_shadow_run(
+    db_path: str | Path,
+    *,
+    from_date: str,
+    to_date: str,
+    model: str,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    """Create an explicit immutable-period Shadow revision."""
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO learning_shadow_runs (
+                from_date, to_date, status, model, reasoning_effort, created_at, updated_at
+            ) VALUES (?, ?, 'queued', ?, ?, ?, ?)
+            """,
+            (str(from_date), str(to_date), str(model), str(reasoning_effort), now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM learning_shadow_runs WHERE id = ?", (int(cursor.lastrowid),),
+        ).fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def update_learning_shadow_run(
+    db_path: str | Path,
+    run_id: int,
+    **changes: Any,
+) -> dict[str, Any]:
+    allowed = {
+        "status", "total_cases", "no_action_cases", "llm_cases",
+        "completed_cases", "error", "completed_at",
+    }
+    values = {key: value for key, value in changes.items() if key in allowed}
+    values["updated_at"] = utcish_now()
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE learning_shadow_runs SET "
+            + ", ".join(f"{key} = ?" for key in values)
+            + " WHERE id = ?",
+            [*values.values(), int(run_id)],
+        )
+        if cursor.rowcount != 1:
+            raise LookupError("Shadow run не найден")
+        row = conn.execute(
+            "SELECT * FROM learning_shadow_runs WHERE id = ?", (int(run_id),),
+        ).fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def save_learning_shadow_case(
+    db_path: str | Path,
+    *,
+    run_id: int,
+    deal_id: str,
+    manager_id: str | None,
+    from_date: str,
+    to_date: str,
+    first_view_at: str,
+    last_view_at: str,
+    unique_recommendation_ids: list[str],
+    view_count: int,
+    action_event_ids: list[str],
+    client_event_ids: list[str],
+    recommendations: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    status: str,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = utcish_now()
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO learning_shadow_cases (
+                run_id, deal_id, manager_id, from_date, to_date, first_view_at,
+                last_view_at, unique_recommendation_ids_json, view_count,
+                action_event_ids_json, client_event_ids_json, recommendations_json,
+                timeline_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(run_id), str(deal_id), str(manager_id or "") or None,
+                str(from_date), str(to_date), str(first_view_at), str(last_view_at),
+                dumps_json(unique_recommendation_ids), int(view_count),
+                dumps_json(action_event_ids), dumps_json(client_event_ids),
+                dumps_json(recommendations), dumps_json(timeline), str(status), now, now,
+            ),
+        )
+        case_id = int(cursor.lastrowid)
+    result = get_learning_shadow_case(db_path, case_id)
+    assert result is not None
+    return result
+
+
+def update_learning_shadow_case(
+    db_path: str | Path,
+    case_id: int,
+    *,
+    status: str,
+    llm_result: dict[str, Any] | None = None,
+    model_meta: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE learning_shadow_cases
+            SET status = ?, llm_result_json = ?, model_meta_json = ?, error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                str(status), dumps_json(llm_result) if llm_result is not None else None,
+                dumps_json(model_meta) if model_meta is not None else None,
+                str(error)[:2000] if error else None, utcish_now(), int(case_id),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise LookupError("Shadow case не найден")
+    result = get_learning_shadow_case(db_path, case_id)
+    assert result is not None
+    return result
+
+
+def _row_to_learning_shadow_case(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    value = dict(row)
+    for column, key, fallback in (
+        ("unique_recommendation_ids_json", "unique_recommendation_ids", []),
+        ("action_event_ids_json", "action_event_ids", []),
+        ("client_event_ids_json", "client_event_ids", []),
+        ("recommendations_json", "recommendations", []),
+        ("timeline_json", "timeline", []),
+        ("llm_result_json", "llm_result", None),
+        ("model_meta_json", "model_meta", None),
+    ):
+        value[key] = loads_json(value.pop(column, None), fallback)
+    return value
+
+
+def get_learning_shadow_case(db_path: str | Path, case_id: int) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM learning_shadow_cases WHERE id = ?", (int(case_id),),
+        ).fetchone()
+    return _row_to_learning_shadow_case(row)
+
+
+def get_learning_shadow_run(db_path: str | Path, run_id: int) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM learning_shadow_runs WHERE id = ?", (int(run_id),),
+        ).fetchone()
+        cases = conn.execute(
+            "SELECT * FROM learning_shadow_cases WHERE run_id = ? ORDER BY id",
+            (int(run_id),),
+        ).fetchall() if row is not None else []
+    if row is None:
+        return None
+    result = dict(row)
+    result["cases"] = [item for case in cases if (item := _row_to_learning_shadow_case(case))]
+    return result
+
+
+def list_learning_shadow_runs(
+    db_path: str | Path,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM learning_shadow_runs ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
