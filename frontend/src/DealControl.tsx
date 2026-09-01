@@ -96,6 +96,12 @@ import {
   workspaceModeClassName,
 } from './dealPush'
 import { copyTextToClipboard, persistTextAndOpenUrl } from './contextPersist'
+import {
+  controlTimeBucket,
+  dealMatchesTime,
+  primaryBitrixTaskOf,
+  ropTaskKpis,
+} from './dealControlTimeView'
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { ManagerTrajectory } from './ManagerTrajectory'
@@ -335,25 +341,8 @@ function recommendationRankOf(deal: DealControlDeal) {
   return ({ not_done: 0, attempted: 1, contacted: 2, unconfirmed: 2, achieved: 3 } as Record<DealControlRecommendationState, number>)[recommendationStateOf(task)]
 }
 
-function primaryBitrixTaskOf(deal: DealControlDeal) {
-  return deal.primary_bitrix_task || deal.bitrix_tasks?.[0] || null
-}
-
-function controlTimeBucket(deal: DealControlDeal): string {
-  return primaryBitrixTaskOf(deal)?.time_bucket || 'missing'
-}
-
 function timeRank(deal: DealControlDeal) {
   return ({ missing: 0, overdue: 1, today: 2, tomorrow: 3, future: 4, unscheduled: 5 } as Record<string, number>)[controlTimeBucket(deal) || ''] ?? 6
-}
-
-function dealMatchesTime(deal: DealControlDeal, view: TimeView) {
-  if (view === 'all') return true
-  const bucket = controlTimeBucket(deal)
-  if (view === 'attention') return bucket === 'missing' || bucket === 'overdue'
-  if (view === 'today') return bucket === 'missing' || bucket === 'today' || bucket === 'overdue'
-  if (view === 'future') return bucket === 'future' || bucket === 'unscheduled'
-  return bucket === view
 }
 
 function bitrixTaskTone(task: DealControlBitrixTask) {
@@ -685,7 +674,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       .filter((deal) => {
         const bitrixTask = primaryBitrixTaskOf(deal)
         if (timeView === 'all') return view === 'dashboard' || Boolean(bitrixTask) || controlTimeBucket(deal) === 'missing'
-        return dealMatchesTime(deal, timeView)
+        return dealMatchesTime(deal, timeView, { keepRescheduledInToday: view === 'rop' })
       })
       .sort((a, b) => {
         const recommendationRank = view === 'rop' ? recommendationRankOf(a) - recommendationRankOf(b) : 0
@@ -719,39 +708,40 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     const probabilities = filteredDeals
       .map((deal) => deal.probability)
       .filter((value): value is number => value != null)
+    const ropCounts = view === 'rop' ? ropTaskKpis(filteredDeals) : null
     return {
       active_deals: filteredDeals.length,
       portfolio_amount: filteredDeals.reduce((sum, deal) => sum + (Number(deal.amount) || 0), 0),
       tasks_total: bitrixTasks.length,
-      tasks_today: today,
-      tasks_tomorrow: activeBuckets.filter((bucket) => bucket === 'tomorrow').length,
-      tasks_future: activeBuckets.filter((bucket) => bucket === 'future' || bucket === 'unscheduled').length,
-      tasks_overdue: overdue,
-      tasks_completed_today: bitrixTasks.filter((task) =>
+      tasks_today: ropCounts?.tasks_today ?? today,
+      tasks_tomorrow: ropCounts?.tasks_tomorrow ?? activeBuckets.filter((bucket) => bucket === 'tomorrow').length,
+      tasks_future: ropCounts?.tasks_future ?? activeBuckets.filter((bucket) => bucket === 'future' || bucket === 'unscheduled').length,
+      tasks_overdue: ropCounts?.tasks_overdue ?? overdue,
+      tasks_completed_today: ropCounts?.tasks_completed_today ?? bitrixTasks.filter((task) =>
         ['overdue', 'today'].includes(task.time_bucket)
         && ['local', 'bitrix'].includes(task.completion_state)
       ).length,
-      tasks_rescheduled_today: filteredDeals
+      tasks_rescheduled_today: ropCounts?.tasks_rescheduled_today ?? filteredDeals
         .flatMap((deal) => deal.bitrix_tasks || [])
         .filter((task) => Boolean(task.day_result?.reschedules.length)).length,
-      tasks_missing: missing,
-      tasks_plan_today: missing + overdue + today,
+      tasks_missing: ropCounts?.tasks_missing ?? missing,
+      tasks_plan_today: ropCounts?.tasks_plan_today ?? missing + overdue + today,
       average_probability: probabilities.length
         ? Math.round(probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length)
         : null,
     }
-  }, [filteredDeals])
+  }, [filteredDeals, view])
 
   const timeCounts = useMemo(() => {
-    const controlDeals = filteredDeals
+    const keepRescheduledInToday = view === 'rop'
     return {
-      all: controlDeals.length,
-      overdue: controlDeals.filter((deal) => controlTimeBucket(deal) === 'overdue').length,
-      today: controlDeals.filter((deal) => ['missing', 'overdue', 'today'].includes(controlTimeBucket(deal) || '')).length,
-      tomorrow: controlDeals.filter((deal) => controlTimeBucket(deal) === 'tomorrow').length,
-      future: controlDeals.filter((deal) => ['future', 'unscheduled'].includes(controlTimeBucket(deal) || '')).length,
+      all: filteredDeals.length,
+      overdue: filteredDeals.filter((deal) => dealMatchesTime(deal, 'overdue', { keepRescheduledInToday })).length,
+      today: filteredDeals.filter((deal) => dealMatchesTime(deal, 'today', { keepRescheduledInToday })).length,
+      tomorrow: filteredDeals.filter((deal) => dealMatchesTime(deal, 'tomorrow', { keepRescheduledInToday })).length,
+      future: filteredDeals.filter((deal) => dealMatchesTime(deal, 'future', { keepRescheduledInToday })).length,
     }
-  }, [filteredDeals])
+  }, [filteredDeals, view])
 
   useEffect(() => {
     const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))

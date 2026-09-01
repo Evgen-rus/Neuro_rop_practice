@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
-import { formatRescheduleDeadline, newestReschedules } from './taskReschedules.ts'
+import { formatRescheduleDeadline, newestReschedules, rescheduleFromDueOnOrBeforeToday, rescheduleFromDueToday } from './taskReschedules.ts'
 
 const changes = [
   { from_deadline: '1787903400', to_deadline: '1787907000', occurred_at: '2026-08-28T11:00:00+03:00' },
@@ -21,6 +21,16 @@ test('transfer deadlines format Unix seconds, milliseconds and ISO in Moscow tim
   assert.equal(formatRescheduleDeadline(null), 'Без срока')
   assert.equal(formatRescheduleDeadline(''), 'Без срока')
   assert.equal(formatRescheduleDeadline('bad-date'), 'Срок не определён')
+})
+
+test('old deadline on or before today is recognized from ISO and Unix values', () => {
+  const now = '2026-09-01T15:00:00+03:00'
+  assert.equal(rescheduleFromDueToday('2026-09-01T18:00:00+03:00', now), true)
+  assert.equal(rescheduleFromDueToday('1788274800', now), true)
+  assert.equal(rescheduleFromDueToday('2026-08-28T18:00:00+03:00', now), false)
+  assert.equal(rescheduleFromDueOnOrBeforeToday('2026-08-28T18:00:00+03:00', now), true)
+  assert.equal(rescheduleFromDueOnOrBeforeToday('2026-09-02T18:00:00+03:00', now), false)
+  assert.equal(rescheduleFromDueOnOrBeforeToday('', now), false)
 })
 
 test('history is newest first without changing API data; equal timestamps keep latest entry first', () => {
