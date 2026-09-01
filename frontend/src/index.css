@@ -537,8 +537,17 @@ textarea {
 
 .dc-sidebar nav {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 8px;
   padding: 12px 0;
+}
+
+.dc-sidebar-split {
+  display: block;
+  height: 1px;
+  margin: auto 14px 4px;
+  background: var(--dc-line);
 }
 
 .dc-sidebar nav button {
@@ -3651,6 +3660,11 @@ textarea {
     padding: 6px;
   }
 
+  .dc-sidebar-split {
+    grid-column: 1 / -1;
+    margin: 2px 8px;
+  }
+
   .dc-sidebar nav button {
     display: flex;
     min-height: 42px;
@@ -3856,6 +3870,186 @@ textarea {
   .trajectory-header, .trajectory-filter-row { align-items: stretch; flex-direction: column; }
   .trajectory-filter-row { width: 100%; }.trajectory-filter-row select, .trajectory-filter-row input, .trajectory-json-btn { width: 100%; }
   .trajectory-summary { grid-template-columns: repeat(2, 1fr); }.trajectory-summary article { border-bottom: 1px solid #e3e9f1; }
+}
+
+.team-page {
+  min-height: 100%;
+  padding: 24px 26px 34px;
+  color: #11253d;
+  background: #f4f7fb;
+  font-family: var(--dc-font-family);
+}
+
+.team-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.team-header h1 {
+  margin: 3px 0 4px;
+  color: #102037;
+  font-size: var(--dc-type-page-title);
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -.03em;
+}
+
+.team-header p {
+  margin: 0;
+  max-width: 46rem;
+  color: #6c7f95;
+  font-size: 13px;
+}
+
+.team-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.team-card {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #d8e2ed;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgba(32, 52, 76, .05);
+}
+
+.team-card-head h2 {
+  margin: 0 0 4px;
+  color: #162a42;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.team-card-head p {
+  margin: 0 0 6px;
+  color: #6d8095;
+  font-size: 13px;
+}
+
+.team-card label {
+  display: grid;
+  gap: 4px;
+  color: #718298;
+  font-size: var(--dc-type-label);
+  font-weight: 700;
+}
+
+.team-card input,
+.dc-modal input {
+  min-height: 39px;
+  padding: 8px 11px;
+  border: 1px solid #d5e0ed;
+  border-radius: 9px;
+  color: var(--dc-text, #0f1f3a);
+  background: #fff;
+  font: inherit;
+  font-size: var(--dc-type-control);
+}
+
+.team-card input:focus,
+.dc-modal input:focus {
+  outline: none;
+  border-color: #80adf8;
+  box-shadow: 0 0 0 3px rgba(23, 104, 242, .1);
+}
+
+.team-role-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.team-role-tabs button {
+  min-height: 39px;
+  border: 1px solid #d5e0ed;
+  border-radius: 9px;
+  color: #26394f;
+  background: #fff;
+  font: inherit;
+  font-size: var(--dc-type-control);
+  font-weight: 700;
+}
+
+.team-role-tabs button.active {
+  border-color: var(--dc-blue, #1768f2);
+  color: #fff;
+  background: var(--dc-blue, #1768f2);
+}
+
+.team-list {
+  gap: 8px;
+}
+
+.team-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #e3e9f1;
+  border-radius: 10px;
+  background: #fcfdff;
+}
+
+.team-account.inactive {
+  opacity: .72;
+  background: #f7f9fc;
+}
+
+.team-account strong,
+.team-account small {
+  display: block;
+}
+
+.team-account strong {
+  color: #162a42;
+  font-size: 13px;
+}
+
+.team-account small {
+  margin-top: 3px;
+  color: #6d8095;
+  font-size: 12px;
+}
+
+.team-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.team-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #6d8095;
+  font-size: 13px;
+}
+
+@media (max-width: 980px) {
+  .team-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .team-page { padding: 16px 12px 24px; }
+  .team-header { align-items: stretch; flex-direction: column; }
+  .team-account { align-items: stretch; flex-direction: column; }
+  .team-account-actions { justify-content: stretch; }
+  .team-account-actions .dc-button { flex: 1 1 auto; }
 }
 
 @media (max-width: 480px) {

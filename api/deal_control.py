@@ -57,6 +57,7 @@ from storage.rop_db import (
     list_deal_control_task_history,
     list_deal_control_tasks,
     record_deal_control_task_event,
+    add_deal_control_manager_ids,
     save_deal_control_scope,
     save_deal_control_bitrix_tasks,
     save_deal_control_communications_today,
@@ -1444,6 +1445,10 @@ def save_scope(
         pipeline_id=pipeline_id,
         pipeline_ids=pipeline_ids,
     )
+
+
+def add_manager_ids(*, db_path: str | Path, manager_ids: list[str]) -> dict[str, Any]:
+    return add_deal_control_manager_ids(db_path, manager_ids)
 
 
 def save_deal_fields(*, db_path: str | Path, deal_id: str, probability: int | None,

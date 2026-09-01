@@ -2,11 +2,15 @@ export type Priority = 'high' | 'medium' | 'low'
 
 export type AuthRole = 'admin' | 'rop' | 'manager'
 
-export type AuthUser = {
+export type AuthAccount = {
   id: number
   login: string
   role: AuthRole
   manager_id: string | null
+  is_active: boolean
+}
+
+export type AuthUser = AuthAccount & {
   is_active: true
 }
 
@@ -1549,6 +1553,42 @@ export function logout() {
   return api<void>('/api/auth/logout', { method: 'POST' }, { suppressUnauthorizedEvent: true })
 }
 
+export function fetchAuthUsers() {
+  return api<{ items: AuthAccount[] }>('/api/auth/users')
+}
+
+export function createAuthUser(body: {
+  login: string
+  password: string
+  role: AuthRole
+  manager_id?: string | null
+  is_active?: boolean
+}) {
+  return api<{ user: AuthAccount }>('/api/auth/users', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function setAuthUserPassword(userId: number, password: string) {
+  return api<{ user: AuthAccount }>(`/api/auth/users/${encodeURIComponent(String(userId))}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+}
+
+export function deactivateAuthUser(userId: number) {
+  return api<{ user: AuthAccount }>(`/api/auth/users/${encodeURIComponent(String(userId))}/deactivate`, {
+    method: 'POST',
+  })
+}
+
+export function activateAuthUser(userId: number) {
+  return api<{ user: AuthAccount }>(`/api/auth/users/${encodeURIComponent(String(userId))}/activate`, {
+    method: 'POST',
+  })
+}
+
 function normalizeDealControlDashboard(payload: DealControlDashboard): DealControlDashboard {
   const emptyCommunications: DealControlCommunicationsToday = {
     date: '',
@@ -2121,6 +2161,13 @@ export function syncDealControl() {
 export function saveDealControlScope(body: { initial_deal_ids: string[]; manager_ids: string[]; pipeline_id?: string; pipeline_ids?: string[] }) {
   return api<{ ok: boolean; scope: DealControlDashboard['scope'] }>('/api/deal-control/scope', {
     method: 'PUT', body: JSON.stringify(body),
+  })
+}
+
+export function addDealControlManagers(managerIds: string[]) {
+  return api<{ ok: boolean; scope: DealControlDashboard['scope'] }>('/api/deal-control/scope/managers', {
+    method: 'POST',
+    body: JSON.stringify({ manager_ids: managerIds }),
   })
 }
 

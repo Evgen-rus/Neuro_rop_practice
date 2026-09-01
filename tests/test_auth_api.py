@@ -342,6 +342,33 @@ class AuthContractTests(unittest.TestCase):
         self.assertEqual(calls[0]["user_id"], 10)
         self.assertIsNone(calls[0]["manager_id"])
 
+    def test_scope_manager_append_is_admin_only(self) -> None:
+        from fastapi import HTTPException
+
+        from api import app as api_app
+
+        body = api_app.DealControlManagersRequest.model_validate({"manager_ids": ["2775"]})
+        manager = _user("manager", manager_id="10", user_id=10)
+        rop = _user("rop", user_id=2)
+        admin = _user("admin")
+        with patch.object(api_app, "auth_current_user", return_value=manager):
+            with self.assertRaises(HTTPException) as error:
+                api_app.deal_control_scope_add_managers(body)
+            self.assertEqual(error.exception.status_code, 403)
+        with patch.object(api_app, "auth_current_user", return_value=rop):
+            with self.assertRaises(HTTPException) as error:
+                api_app.deal_control_scope_add_managers(body)
+            self.assertEqual(error.exception.status_code, 403)
+        with patch.object(api_app, "auth_current_user", return_value=admin), patch.object(
+            api_app,
+            "add_deal_control_manager_ids",
+            return_value={"manager_ids": ["1421", "2775"], "configured": True},
+        ) as add_ids:
+            payload = api_app.deal_control_scope_add_managers(body)
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["scope"]["manager_ids"], ["1421", "2775"])
+        self.assertEqual(add_ids.call_args.kwargs["manager_ids"], ["2775"])
+
 
 class AuthMiddlewareTests(unittest.TestCase):
     def test_public_health_login_logout_and_review_boundary(self) -> None:

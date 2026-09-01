@@ -72,6 +72,7 @@ from api.deal_control import confirm_task_crm_match as confirm_deal_control_task
 from api.deal_control import record_task_outcome as record_deal_control_task_outcome
 from api.deal_control import record_task_event as record_deal_control_task_event
 from api.deal_control import (
+    add_manager_ids as add_deal_control_manager_ids,
     load_deal_comments,
     refresh_deal_control,
     save_bitrix_task_completion,
@@ -279,6 +280,10 @@ class DealControlScopeRequest(BaseModel):
     manager_ids: list[str] = Field(default_factory=list, max_length=30)
     pipeline_id: str = Field(default="15", min_length=1, max_length=40)
     pipeline_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class DealControlManagersRequest(BaseModel):
+    manager_ids: list[str] = Field(min_length=1, max_length=30)
 
 
 class DealControlFieldsRequest(BaseModel):
@@ -962,6 +967,19 @@ def deal_control_scope_put(body: DealControlScopeRequest) -> dict[str, Any]:
             manager_ids=body.manager_ids,
             pipeline_id=body.pipeline_id,
             pipeline_ids=pipeline_ids or list(DEFAULT_DEAL_CONTROL_PIPELINE_IDS),
+        )
+        return {"ok": True, "scope": scope}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/deal-control/scope/managers")
+def deal_control_scope_add_managers(body: DealControlManagersRequest) -> dict[str, Any]:
+    _require_admin()
+    try:
+        scope = add_deal_control_manager_ids(
+            db_path=DEFAULT_DB_PATH,
+            manager_ids=body.manager_ids,
         )
         return {"ok": True, "scope": scope}
     except ValueError as error:

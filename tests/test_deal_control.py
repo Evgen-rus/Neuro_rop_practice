@@ -29,6 +29,7 @@ from storage.rop_db import (
     materialize_deal_recommendation_from_report,
     review_deal_control_task_crm_fact,
     save_deal_control_bitrix_tasks,
+    add_deal_control_manager_ids,
     save_deal_control_scope,
     save_deal_control_task_crm_fact,
     save_deal_control_task_outcome,
@@ -833,6 +834,23 @@ class DealControlTests(unittest.TestCase):
             self.assertEqual(scope["manager_ids"], ["10"])
             self.assertEqual(scope["pipeline_id"], "15")
             self.assertEqual(scope["pipeline_ids"], ["15"])
+
+    def test_add_manager_ids_appends_without_replacing_existing_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(
+                db_path,
+                initial_deal_ids=["101", "202"],
+                manager_ids=["1421", "2653"],
+                pipeline_id="15",
+                pipeline_ids=["15", "17", "47"],
+            )
+            scope = add_deal_control_manager_ids(db_path, ["2775", "1421", " 2775 "])
+            self.assertEqual(scope["manager_ids"], ["1421", "2653", "2775"])
+            self.assertEqual(scope["initial_deal_ids"], ["101", "202"])
+            self.assertEqual(scope["pipeline_ids"], ["15", "17", "47"])
+            with self.assertRaisesRegex(ValueError, "ответственного"):
+                add_deal_control_manager_ids(db_path, ["", "  "])
 
     def test_sync_keeps_initial_deals_and_adds_only_target_manager_from_pipeline(self):
         with tempfile.TemporaryDirectory() as directory:

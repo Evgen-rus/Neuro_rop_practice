@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test:reveal": "node --test src/quickHelpReveal.test.mjs",
-    "test:ui": "node --test src/quickHelpReveal.test.mjs src/dealPush.test.mjs src/automaticAnalysis.test.mjs src/contextPersist.test.mjs src/trajectoryWindow.test.mjs src/promptLabWorkspace.test.mjs src/analysisReviewBanner.test.mjs src/dailyControlView.test.mjs src/taskReschedules.test.mjs src/communicationDialog.test.mjs",
+    "test:ui": "node --test src/quickHelpReveal.test.mjs src/dealPush.test.mjs src/automaticAnalysis.test.mjs src/contextPersist.test.mjs src/trajectoryWindow.test.mjs src/promptLabWorkspace.test.mjs src/analysisReviewBanner.test.mjs src/dailyControlView.test.mjs src/taskReschedules.test.mjs src/communicationDialog.test.mjs src/teamAdminView.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

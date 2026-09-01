@@ -32,7 +32,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Семантика стадий | `openai_api/change_detection/stage_policy.py` |
 | Отображаемые Bitrix воронки и названия стадий | локальный `crm_pipeline_map.json` через `api/candidates.py` |
 | Рабочий срез воронок/этапов контроля сделок | `api/deal_control.py` (`DEAL_CONTROL_PIPELINE_STAGE_IDS`); выбранные ID — `storage/rop_db.py` |
-| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/PromptLab.tsx`, `frontend/src/DailyControl.tsx`, `frontend/src/ManagerTrajectory.tsx`, `frontend/src/DealReviewCard.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` |
+| Browser UI и клиентские контракты | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/PromptLab.tsx`, `frontend/src/DailyControl.tsx`, `frontend/src/ManagerTrajectory.tsx`, `frontend/src/TeamAdmin.tsx`, `frontend/src/DealReviewCard.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` |
 | Compact attention-delta shadow | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py`, `benchmarks/*` |
 
 `README.md` описывает только быстрый запуск. Операционные детали принадлежат runbook-файлам и не должны дублироваться здесь.
@@ -150,7 +150,7 @@ Compact run доступен только для уже сохранённых f
 | Стоимость, Responses API, retries | `llm_client.py`, `pricing.py`, `reliability/retry.py`, человеческий дневник — `openai_api/spend_diary.py` | progress events и tests retry/validation |
 | Change detection или семантика стадий | `openai_api/change_detection/*` | `analyze_*_if_changed.py`, state storage и tests |
 | Ранжирование кандидатов, профили, daily summary | `api/candidates.py`, `api/app.py`, `storage/rop_db.py` | `frontend/src/api.ts`, `App.tsx` при изменении API |
-| Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, auth tests |
+| Пользователи, сессии, роли и доступ к сущностям | `api/auth.py`, `api/access.py`, `storage/rop_db.py` | `api/app.py`, `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx`, `TeamAdmin.tsx`, auth tests |
 | Ручной анализ, job status или report projection | `api/jobs.py`, `api/app.py` | `frontend/src/api.ts`, `App.tsx`, `DealControl.tsx` |
 | Автоматический Bitrix-цикл в будни 07:00–18:00 МСК, цикл в 22:00 и публикация daily-control в 15:45 и 23:00 | `api/daytime_cycle.py`, `api/daily_control.py` | `api/app.py`, `api/jobs.py`, `api/deal_control.py`, `api/deal_task_day.py`, `api/manager_trajectory.py`, `storage/rop_db.py`, `frontend/src/DealControl.tsx`, `frontend/src/DailyControl.tsx`, `frontend/src/dailyControlView.ts` |
 | Живая карта контекста сделки, ручные приоритеты рычагов, задача контроля сделки, её baseline/исходы/CRM-факты, дневные коммуникации, Quick Help / «Дожим сделки», сопроводительный текст и полный скрипт | `openai_api/llm/analyze_deal.py`, `api/deal_control.py`, `api/deal_task_guidance.py`, `api/deal_manager_quick_help.py`, `api/deal_manager_full_script.py`, `api/deal_manager_companion.py`, `storage/rop_db.py` | `openai_api/llm/validation.py`, `openai_api/llm/deal_task_guidance.py`, `openai_api/llm/deal_manager_*.py`, `api/app.py`, `frontend/src/api.ts`, `frontend/src/DealControl.tsx`, `frontend/src/dealPush.ts` |
@@ -158,7 +158,7 @@ Compact run доступен только для уже сохранённых f
 | Manager trajectory, manager-wide CRM collection, admin trajectory UI или developer/admin retrospective | `api/manager_trajectory.py`, `api/manager_trajectory_ui.py`, `api/daytime_cycle.py`, `storage/rop_db.py`, `scripts/manager_trajectory.py` | `api/app.py`, `frontend/src/api.ts`, `frontend/src/ManagerTrajectory.tsx`, `frontend/src/DealControl.tsx`, change-aware run linkage и targeted tests |
 | Lead workflow, manager review или qualification feedback | `api/app.py`, `storage/rop_db.py`, lead analysis contract | UI и regression tests workflow |
 | Compact UI/run/feedback | `api/compact_shadow.py`, `openai_api/llm/attention_delta*.py` | `storage/rop_db.py`, UI API types и evidence tests |
-| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/PromptLab.tsx`, `frontend/src/DailyControl.tsx`, `frontend/src/DealReviewCard.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` | FastAPI только если HTTP-contract меняется |
+| Frontend-only поведение | `frontend/src/App.tsx`, `frontend/src/DealControl.tsx`, `frontend/src/PromptLab.tsx`, `frontend/src/DailyControl.tsx`, `frontend/src/ManagerTrajectory.tsx`, `frontend/src/TeamAdmin.tsx`, `frontend/src/DealReviewCard.tsx`, `frontend/src/api.ts`, `frontend/src/dealPush.ts` | FastAPI только если HTTP-contract меняется |
 | Московское форматирование дат в UI | `frontend/src/dateTime.ts` | компоненты должны использовать общий helper, а не локальный `Date` formatter |
 
 ## Интеграционные границы и данные
@@ -174,7 +174,7 @@ Compact run доступен только для уже сохранённых f
 
 ## Known gaps and pitfalls
 
-- Для пилота есть role-based auth и manager scope, но нет frontend-админки пользователей: учётные записи управляются через `scripts/manage_user.py`.
+- Для пилота есть role-based auth, manager scope и admin-only экран «Команда» в Контроле сделок. CLI `scripts/manage_user.py` остаётся запасным путём.
 - Неполные или недоступные Bitrix источники фиксируются в diagnostics. `Access denied` на конкретном REST-методе обычно отражает права webhook/user, а не renderer failure.
 - `latest` transcript выбирается по времени файла. При нескольких записях предпочитай явно заданный режим/список transcript, если задача требует определённого звонка.
 - `not_confirmed`, `unknown` и `negative` — разные состояния. Не превращай недостаток evidence в отказ клиента.

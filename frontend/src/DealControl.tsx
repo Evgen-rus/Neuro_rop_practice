@@ -76,6 +76,7 @@ import {
   shouldReloadAfterAutomaticAnalysis,
 } from './automaticAnalysis'
 import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
+import { TeamAdmin } from './TeamAdmin'
 import { TaskReschedules } from './TaskDayResults'
 import { TaskReschedulePopover } from './TaskReschedulePopover'
 import {
@@ -104,7 +105,7 @@ import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
 import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
 
-type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'manager'
+type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'team' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
 const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
@@ -132,6 +133,10 @@ const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = 
   trajectory: {
     title: 'Траектория',
     subtitle: 'Наблюдаемая активность менеджеров в течение рабочего дня',
+  },
+  team: {
+    title: 'Команда',
+    subtitle: 'Логины НейроРОПа и Bitrix ID ответственных',
   },
   manager: {
     title: 'Мои задачи',
@@ -545,6 +550,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setTimeView('all')
   }
 
+  function openTeamView() {
+    setView('team')
+    setManagerFilter('')
+    setTimeView('all')
+  }
+
   function openManagerView() {
     setView('manager')
     setManagerFilter(user.role === 'manager'
@@ -572,6 +583,13 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  const refreshScope = useCallback(async () => {
+    const response = await fetchDealControl()
+    setData(response)
+    setInitialIds(response.scope.initial_deal_ids.join('\n'))
+    setManagerIds(response.scope.manager_ids.join('\n'))
   }, [])
 
   useEffect(() => { void reload() }, [reload])
@@ -942,11 +960,15 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Ежедневный контроль">
           <span>▣</span><b>Ежедневный контроль</b><small>Разбор команды к планёрке</small>
         </button> : null}
+        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
+          <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
+        </button> : null}
         {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Траектория">
           <span>⌁</span><b>Траектория</b><small>Рабочий день менеджеров</small>
         </button> : null}
-        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
-          <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
+        {user.role === 'admin' ? <span className="dc-sidebar-split" aria-hidden="true" /> : null}
+        {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Команда">
+          <span>◍</span><b>Команда</b><small>Логины и Bitrix ID</small>
         </button> : null}
       </nav>
       {onExit ? <button className="dc-exit" onClick={onExit}><span>←</span><b>К основному интерфейсу</b></button> : null}
@@ -954,7 +976,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content">
-      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : <>
+      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} />

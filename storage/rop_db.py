@@ -6037,6 +6037,23 @@ def save_deal_control_scope(
     return get_deal_control_scope(db_path)
 
 
+def add_deal_control_manager_ids(db_path: str | Path, manager_ids: list[str]) -> dict[str, Any]:
+    """Append responsible Bitrix IDs to deal-control scope without replacing the rest."""
+
+    incoming = list(dict.fromkeys(str(value).strip() for value in manager_ids if str(value).strip()))
+    if not incoming:
+        raise ValueError("Нужен хотя бы один ID ответственного")
+    scope = get_deal_control_scope(db_path)
+    current = [str(item).strip() for item in (scope.get("manager_ids") or []) if str(item).strip()]
+    return save_deal_control_scope(
+        db_path,
+        initial_deal_ids=list(scope.get("initial_deal_ids") or []),
+        manager_ids=[*current, *incoming],
+        pipeline_id=str(scope.get("pipeline_id") or DEFAULT_DEAL_CONTROL_PIPELINE_ID),
+        pipeline_ids=list(scope.get("pipeline_ids") or DEFAULT_DEAL_CONTROL_PIPELINE_IDS),
+    )
+
+
 def upsert_deal_control_deal(db_path: str | Path, *, deal_id: str, source: str, title: str | None,
                              manager_id: str | None, manager_name: str | None, stage_id: str | None,
                              stage_name: str | None, pipeline_id: str | None, amount: str | None,
