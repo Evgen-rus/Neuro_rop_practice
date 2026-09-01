@@ -517,7 +517,13 @@ class DealControlTests(unittest.TestCase):
             activities,
             datetime(2026, 7, 20, 16, tzinfo=MSK),
             comments=comments,
-            client_names={"олег клиент"},
+            communication_bundle={
+                "contacts": {
+                    "7": {"ok": True, "response": {"result": {
+                        "ID": "7", "NAME": "Олег", "LAST_NAME": "Клиент",
+                    }}},
+                },
+            },
             deal_id="101",
         )
         self.assertEqual(result["calls_total"], 6)
@@ -536,6 +542,63 @@ class DealControlTests(unittest.TestCase):
         unknown = next(item for item in result["items"] if item["event_id"] == "crm_activity:806")
         self.assertEqual(unknown["call_outcome"], "unknown")
         self.assertTrue(all("Внутренняя заметка" not in str(item.get("content") or "") for item in result["items"]))
+
+    def test_today_communications_reuses_linked_contact_mirror_classification(self):
+        when = "2026-07-20T11:06:09+03:00"
+        content = "Предложение подходит, можно продолжать."
+        bundle = {
+            "contacts": {
+                "7": {"ok": True, "response": {"result": {
+                    "ID": "7", "NAME": "Лариса", "LAST_NAME": "Петрова",
+                }}},
+            },
+            "internal_context": [{
+                "when": when,
+                "category": "timeline_comment",
+                "entity_type": "contact",
+                "entity_id": "7",
+                "entity_key": "contact:7",
+                "id": "101",
+                "text": f"[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Лариса Петрова:\n{content}",
+            }],
+        }
+        result = _today_communications(
+            [],
+            datetime(2026, 7, 20, 16, tzinfo=MSK),
+            comments=[
+                {
+                    "ID": "99",
+                    "CREATED": "2026-07-20T10:40:00+03:00",
+                    "COMMENT": "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Менеджер:\nНаправляю предложение.",
+                },
+                {
+                    "ID": "100",
+                    "CREATED": when,
+                    "COMMENT": f"[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Лариса:\n{content}",
+                },
+                {
+                    "ID": "102",
+                    "CREATED": "2026-07-20T11:09:00+03:00",
+                    "COMMENT": "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Менеджер:\nСогласую следующий шаг.",
+                },
+            ],
+            communication_bundle=bundle,
+            deal_id="9",
+        )
+
+        self.assertEqual(len(result["items"]), 3)
+        item = result["items"][1]
+        self.assertEqual(item["direction"], "incoming")
+        self.assertEqual(item["participant_role"], "client")
+        self.assertEqual(item["contact_class"], "confirmed_contact")
+        self.assertTrue(item["quality_evidence"])
+        self.assertFalse(result["items"][0]["quality_evidence"])
+        self.assertFalse(result["items"][2]["quality_evidence"])
+        self.assertEqual(
+            {event["conversation_key"] for event in result["items"]},
+            {item["conversation_key"]},
+        )
+        self.assertEqual(result["last_confirmed_contact"]["event_id"], item["event_id"])
 
     def test_completed_call_without_recording_is_not_a_conversation(self):
         result = _today_communications(

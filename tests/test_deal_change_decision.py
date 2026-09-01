@@ -159,6 +159,34 @@ class DealChangeDecisionTests(unittest.TestCase):
         bootstrap = compare_snapshots(legacy, current)
         self.assertNotIn("new_client_reply", bootstrap["changes"])
 
+    def test_stable_mirror_id_migration_does_not_replay_existing_evidence(self):
+        from openai_api.change_detection.snapshot import compare_snapshots
+
+        reply = {
+            "source_ids": ["10"],
+            "occurred_at": "2026-09-01T11:06:09+03:00",
+            "channel": "max",
+            "conversation_key": "conversation:v1:test",
+            "content_hash": "same-content",
+        }
+        previous = {
+            **snapshot(),
+            "client_replies": {"crm_mirror:legacy": {**reply, "event_id": "crm_mirror:legacy"}},
+            "daily_quality_events": {"crm_mirror:legacy": "legacy-id-derived-signature"},
+            "daily_quality_business_date": "2026-09-01",
+        }
+        current = {
+            **snapshot(),
+            "client_replies": {"crm_mirror:stable": {**reply, "event_id": "crm_mirror:stable"}},
+            "daily_quality_events": {"crm_mirror:stable": "stable-id-derived-signature"},
+            "daily_quality_business_date": "2026-09-01",
+        }
+
+        diff = compare_snapshots(previous, current)
+        self.assertNotIn("new_client_reply", diff["changes"])
+        self.assertNotIn("daily_quality_evidence_changed", diff["changes"])
+        self.assertNotIn("daily_quality_evidence_removed", diff["changes"])
+
     def test_non_meaningful_transcript_change_stays_local(self):
         result = decision({"changes": ["transcript_changed_non_meaningful"], "details": {}}, snapshot())
         self.assertEqual(result.status, MINI_RECOMMENDATION_NO_LLM)

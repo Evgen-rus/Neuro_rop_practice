@@ -168,6 +168,43 @@ class NormalizedCommunicationsTests(unittest.TestCase):
         self.assertEqual(events[1]["contact_class"], "internal_information")
         self.assertEqual(events[1]["evidence_level"], "reported")
 
+    def test_mirror_identity_is_stable_and_linked_contact_copy_confirms_deal_copy(self) -> None:
+        when = "2026-09-01T11:06:09+03:00"
+        content = "Подтверждаем, предложение подходит."
+
+        def mirror(entity_type: str, entity_id: str, source_id: str, speaker: str) -> dict:
+            return {
+                "when": when,
+                "category": "timeline_comment",
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "entity_key": f"{entity_type}:{entity_id}",
+                "id": source_id,
+                "text": f"[img]https://static.wazzup24.com/images/bitrix/max.png[/img] {speaker}:\n{content}",
+            }
+
+        deal_copy = mirror("deal", "9", "100", "Лариса")
+        contact_copy = mirror("contact", "7", "101", "Лариса Петрова")
+        unknown = build_normalized_communications({
+            "contacts": {}, "client_touchpoints": [], "internal_context": [deal_copy],
+        })[0]
+        events = build_normalized_communications({
+            "contacts": {
+                "7": response({"ID": "7", "NAME": "Лариса", "LAST_NAME": "Петрова"}),
+            },
+            "client_touchpoints": [],
+            "internal_context": [deal_copy, contact_copy],
+        })
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_id"], unknown["event_id"])
+        self.assertEqual(events[0]["direction"], "incoming")
+        self.assertEqual(events[0]["participant_role"], "client")
+        self.assertEqual(events[0]["contact_class"], "confirmed_contact")
+        self.assertEqual(events[0]["source_ids"], ["100", "101"])
+        self.assertEqual(events[0]["entity_keys"], ["contact:7", "deal:9"])
+        self.assertTrue(is_confirmed_client_reply(events[0]))
+
     def test_messenger_mirror_from_comment_detects_max_and_ignores_plain_notes(self) -> None:
         mirrored = messenger_mirror_from_comment(
             "[img]https://static.wazzup24.com/images/bitrix/max.png[/img] Александр:\nНаправляем предварительное КП."

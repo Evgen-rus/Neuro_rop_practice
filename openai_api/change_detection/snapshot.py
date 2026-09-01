@@ -550,10 +550,30 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
 
     changes: list[str] = []
     details: dict[str, Any] = {}
+    reply_id_migrations: dict[str, str] = {}
     if "client_replies" in previous:
         old_replies = previous.get("client_replies") or {}
         new_replies = current.get("client_replies") or {}
-        new_reply_ids = sorted(set(new_replies) - set(old_replies))
+
+        def reply_identity(item: dict[str, Any]) -> tuple[str, str, str]:
+            return (
+                str(item.get("channel") or ""),
+                str(item.get("occurred_at") or ""),
+                str(item.get("content_hash") or ""),
+            )
+
+        old_ids_by_identity: dict[tuple[str, str, str], list[str]] = {}
+        for event_id, item in old_replies.items():
+            old_ids_by_identity.setdefault(reply_identity(item), []).append(event_id)
+        for event_id in set(new_replies) - set(old_replies):
+            matches = old_ids_by_identity.get(reply_identity(new_replies[event_id]), [])
+            if len(matches) == 1 and matches[0] not in new_replies:
+                reply_id_migrations[event_id] = matches[0]
+
+        new_reply_ids = sorted(
+            event_id for event_id in set(new_replies) - set(old_replies)
+            if event_id not in reply_id_migrations
+        )
         updated_reply_ids = sorted(
             event_id
             for event_id in set(old_replies) & set(new_replies)
@@ -570,7 +590,14 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
                 details["updated_client_reply_event_ids"] = updated_reply_ids
     old_quality = previous.get("daily_quality_events") or {}
     new_quality = current.get("daily_quality_events") or {}
-    new_quality_ids = sorted(set(new_quality) - set(old_quality))
+    migrated_quality_ids = {
+        new_id: old_id for new_id, old_id in reply_id_migrations.items()
+        if new_id in new_quality and old_id in old_quality
+    }
+    new_quality_ids = sorted(
+        event_id for event_id in set(new_quality) - set(old_quality)
+        if event_id not in migrated_quality_ids
+    )
     revised_quality_ids = sorted(
         key for key in set(new_quality) & set(old_quality)
         if old_quality.get(key) != new_quality.get(key)
@@ -584,7 +611,10 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
             details["new_daily_quality_event_ids"] = new_quality_ids
         if revised_quality_ids:
             details["revised_daily_quality_event_ids"] = revised_quality_ids
-    removed_quality_ids = sorted(set(old_quality) - set(new_quality))
+    removed_quality_ids = sorted(
+        event_id for event_id in set(old_quality) - set(new_quality)
+        if event_id not in migrated_quality_ids.values()
+    )
     same_quality_day = (
         previous.get("daily_quality_business_date")
         and previous.get("daily_quality_business_date") == current.get("daily_quality_business_date")

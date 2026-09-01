@@ -368,6 +368,25 @@ class DailyAuditContextTests(unittest.TestCase):
         context = build_daily_quality_context(bundle, now=self.now, deal_id="1")
         self.assertEqual(context["events"], [])
 
+    def test_contact_mirror_counts_only_when_same_event_is_bound_to_deal(self):
+        event = {
+            **self.events[1],
+            "event_id": "crm_mirror:stable",
+            "entity_type": "contact",
+            "entity_id": "7",
+            "entity_key": "contact:7",
+            "entity_keys": ["contact:7", "deal:1"],
+        }
+        context = build_daily_quality_context(
+            {"normalized_communications": [event]}, now=self.now, deal_id="1",
+        )
+        self.assertEqual([item["event_id"] for item in context["events"]], ["crm_mirror:stable"])
+        contact_only = {**event, "entity_keys": ["contact:7"]}
+        context = build_daily_quality_context(
+            {"normalized_communications": [contact_only]}, now=self.now, deal_id="1",
+        )
+        self.assertEqual(context["events"], [])
+
     def test_comment_fetch_failure_marks_quality_sources_unavailable(self):
         unavailable = set()
         with patch("api.deal_control._list_many", side_effect=RuntimeError("offline")):

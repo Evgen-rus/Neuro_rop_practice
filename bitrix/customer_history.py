@@ -519,7 +519,11 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
             contact_class = "confirmed_contact" if is_client and content else "attempt" if speaker and content else "unknown"
             evidence_level = "direct" if content else "unknown"
             source_label = f"CRM/{'WhatsApp' if channel == 'whatsapp' else 'Max' if channel == 'max' else 'Telegram'}"
-            identity = f"{channel}|{direction}|{speaker}|{content}"
+            # Contact enrichment may later refine unknown to incoming. Keep the
+            # physical mirror identity independent from that classification.
+            # Timestamp is added by _communication_event_id; channel + body also
+            # collapse the same mirror stored on both deal and contact.
+            identity = f"{channel}|{content}"
             event_id = _communication_event_id("crm_mirror", item.get("when"), identity)
             contact_identity = client_identities.get(normalized_speaker, "")
             if not contact_identity and len(contact_ids) == 1:
@@ -605,16 +609,22 @@ def build_normalized_communications(bundle: dict[str, Any]) -> list[dict[str, An
         if existing is None:
             deduplicated[event_id] = event
             continue
-        existing["source_ids"] = sorted(
+        # Prefer a copy whose author is verified as the client, while retaining
+        # every explicit entity binding of duplicated CRM mirrors.
+        preferred = event if is_confirmed_client_reply(event) and not is_confirmed_client_reply(existing) else existing
+        merged = dict(preferred)
+        merged["source_ids"] = sorted(
             {str(value) for value in [*(existing.get("source_ids") or []), *(event.get("source_ids") or [])] if value}
         )
-        if not existing.get("entity_key") and event.get("entity_key"):
-            existing["entity_key"] = event.get("entity_key")
-        existing["entity_keys"] = sorted({
+        merged["entity_keys"] = sorted({
             str(value)
-            for value in [*(existing.get("entity_keys") or []), *(event.get("entity_keys") or [])]
+            for value in [
+                existing.get("entity_key"), event.get("entity_key"),
+                *(existing.get("entity_keys") or []), *(event.get("entity_keys") or []),
+            ]
             if value
         })
+        deduplicated[event_id] = merged
 
     canonical: list[dict[str, Any]] = []
     duplicate_indexes: dict[tuple[str, str], int] = {}

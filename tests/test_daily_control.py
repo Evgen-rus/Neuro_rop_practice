@@ -247,14 +247,25 @@ class DailyQualityTests(unittest.TestCase):
         self.assertEqual(card["quality"]["status"], "no_work")
         self.assertEqual(card["communications_today"]["calls_no_answer"], 3)
 
-    def test_no_task_or_moved_task_does_not_require_work(self):
+    def test_no_task_does_not_require_work_but_moved_due_task_keeps_zeros(self):
         self.empty_day()
-        for task in (None, {"deadline": "2026-08-19T10:00:00+03:00", "time_bucket": "today"}):
-            self.deal["primary_bitrix_task"] = task
-            self.deal["day_scope"] = {"had_day_obligation": True, "task_buckets": ["today"]}
-            result = self.quality()
-            self.assertEqual(result["status"], "not_required")
-            self.assertIsNone(result["confirmed_count"])
+        self.deal["primary_bitrix_task"] = None
+        self.deal.pop("day_scope", None)
+        result = self.quality()
+        self.assertEqual(result["status"], "not_required")
+        self.assertIsNone(result["confirmed_count"])
+
+        self.deal["primary_bitrix_task"] = {
+            "deadline": "2026-08-19T10:00:00+03:00", "time_bucket": "tomorrow",
+        }
+        self.deal["day_scope"] = {
+            "business_date": "2026-08-18",
+            "had_day_obligation": True,
+            "task_buckets": ["today"],
+        }
+        result = self.quality()
+        self.assertEqual(result["status"], "no_work")
+        self.assertEqual([item["score"] for item in result["criteria"].values()], [0, 0, 0])
 
     def test_overdue_secondary_bitrix_task_is_required_but_local_control_point_is_not(self):
         self.empty_day()
@@ -1077,6 +1088,11 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(task["reschedules"][0]["to_deadline"], "2026-08-19T18:00:00+03:00")
         self.assertTrue(deal["day_scope"]["had_day_obligation"])
         self.assertTrue(deal["day_scope"]["untouched"])
+        self.assertEqual(deal["quality"]["status"], "no_work")
+        self.assertEqual(
+            [item["score"] for item in deal["quality"]["criteria"].values()],
+            [0, 0, 0],
+        )
         self.assertEqual(report["snapshot"]["team"]["tasks_completed"], 1)
         self.assertEqual(report["snapshot"]["team"]["tasks_rescheduled"], 1)
 

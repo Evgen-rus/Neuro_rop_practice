@@ -20,7 +20,6 @@ from api.deal_manager_quick_help import load_local_communication_bundle
 from bitrix.customer_history import (
     INTERNAL_CHANNELS,
     MESSENGER_CHANNELS,
-    _bundle_client_names,
     activity_type,
     build_normalized_communications,
     classify_call_outcome,
@@ -244,13 +243,6 @@ def _empty_daily_communications(now: datetime, *, available: bool) -> dict[str, 
         "last_confirmed_contact": None,
         "items": [],
     }
-
-
-def _contacts_bundle_from_names(names: set[str]) -> dict[str, Any]:
-    contacts: dict[str, Any] = {}
-    for index, name in enumerate(sorted(names)):
-        contacts[str(index)] = {"ok": True, "response": {"result": {"NAME": name}}}
-    return contacts
 
 
 def _source_activity_id(event: dict[str, Any]) -> str:
@@ -568,7 +560,7 @@ def _today_communications(
     now: datetime,
     *,
     comments: list[dict[str, Any]] | None = None,
-    client_names: set[str] | None = None,
+    communication_bundle: dict[str, Any] | None = None,
     deal_id: str = "",
     lead_id: str = "",
     lead_activities: list[dict[str, Any]] | None = None,
@@ -622,11 +614,35 @@ def _today_communications(
             "id": str(comment.get("ID") or ""),
             "text": text,
         })
-    events = build_normalized_communications({
-        "client_touchpoints": touchpoints,
-        "internal_context": internal_context,
-        "contacts": _contacts_bundle_from_names(client_names or set()),
-    })
+    bundle = dict(communication_bundle or {})
+
+    def merge_rows(section: str, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = [dict(item) for item in bundle.get(section) or [] if isinstance(item, dict)]
+        indexes = {
+            (
+                str(item.get("category") or ""),
+                str(item.get("id") or ""),
+                str(item.get("entity_key") or ""),
+            ): index
+            for index, item in enumerate(rows)
+        }
+        for item in fresh:
+            marker = (
+                str(item.get("category") or ""),
+                str(item.get("id") or ""),
+                str(item.get("entity_key") or ""),
+            )
+            if marker in indexes:
+                rows[indexes[marker]] = item
+            else:
+                indexes[marker] = len(rows)
+                rows.append(item)
+        return rows
+
+    bundle["client_touchpoints"] = merge_rows("client_touchpoints", touchpoints)
+    bundle["internal_context"] = merge_rows("internal_context", internal_context)
+    bundle.pop("normalized_communications", None)
+    events = build_normalized_communications(bundle)
     today_events: list[dict[str, Any]] = []
     recording_durations: dict[str, float] | None = None
     lead_recording_durations: dict[str, float] | None = None
@@ -1053,9 +1069,9 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
             tasks=_open_bitrix_tasks(list(deal_activities.values()), current),
         )
         comments = today_comments.get(deal_id, [])
-        client_names: set[str] = set()
+        communication_bundle: dict[str, Any] = {}
         if comments or lead_comments.get(lead_id):
-            client_names = _bundle_client_names(load_local_communication_bundle(deal_id))
+            communication_bundle = load_local_communication_bundle(deal_id)
         save_deal_control_communications_today(
             db_path,
             deal_id=deal_id,
@@ -1063,7 +1079,7 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
                 completed_items,
                 current,
                 comments=comments,
-                client_names=client_names,
+                communication_bundle=communication_bundle,
                 deal_id=deal_id,
                 lead_id=lead_id,
                 lead_activities=lead_items,
@@ -1281,7 +1297,7 @@ def _has_refined_value(value: Any) -> bool:
 
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
                                  sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
-    from api.daily_control import project_deal_review_card
+    from api.daily_control import project_deal_review_card, project_report_day_scope
     from api.deal_task_day import day_events, task_results
 
     current = now or datetime.now(MSK_TZ)
@@ -1359,6 +1375,13 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             )
             bitrix_tasks.append(projected)
         results = task_results(bitrix_tasks, events_by_deal.get(str(deal["deal_id"]), []), current)
+        deal["task_results"] = results
+        deal["day_scope"] = project_report_day_scope(
+            deal,
+            current,
+            source_deal=deal,
+            events=events_by_deal.get(str(deal["deal_id"]), []),
+        )
         results_by_key = {item["key"]: item for item in results}
         for task in bitrix_tasks:
             key = f"task:{task['task_id']}" if task.get("task_id") else f"activity:{task.get('activity_id')}"

@@ -543,9 +543,21 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
 
 
 def _has_current_quality_obligation(deal: dict[str, Any], current: datetime) -> bool:
-    # Current Bitrix deadlines win over a historical "was_due" / planning membership.
-    # Local Neuro ROP recommendations are advisory and must not create a daily
-    # quality obligation or turn the traffic light red.
+    # A task that was due today remains part of today's control even if it was
+    # merely moved to a future date. Local Neuro ROP recommendations are still
+    # advisory and must not create this obligation.
+    scope = deal.get("day_scope") if isinstance(deal.get("day_scope"), dict) else {}
+    if scope.get("business_date") in {None, "", current.date().isoformat()} and (
+        scope.get("had_day_obligation")
+        or bool(set(scope.get("task_buckets") or []) & DAY_OBLIGATION_BUCKETS)
+    ):
+        return True
+    if any(
+        item.get("was_due") or item.get("overdue")
+        for item in deal.get("task_results") or []
+        if isinstance(item, dict)
+    ):
+        return True
     tasks = list(deal.get("bitrix_tasks") or [])
     if not tasks and isinstance(deal.get("primary_bitrix_task"), dict):
         tasks.append(deal["primary_bitrix_task"])
@@ -950,6 +962,20 @@ def build_daily_control_snapshot(
                 recorded_through=recorded_through,
             )
             _mark_day_membership(deal, carried=deal["deal_id"] in carried)
+            quality_source = {
+                **sources[deal["deal_id"]],
+                "day_scope": deal["day_scope"],
+                "task_results": deal["task_results"],
+            }
+            quality = _daily_quality_block(quality_source, quality_now)
+            status, status_label = classify_deal_status(quality_source, quality=quality)
+            deal.update(
+                quality=quality,
+                summary_for_rop=quality.get("summary_for_rop"),
+                status=status,
+                status_label=status_label,
+                attention_reason=_attention_reason(quality_source, quality),
+            )
             if _belongs_to_daily_snapshot(deal):
                 selected.append(deal)
         deals = selected
