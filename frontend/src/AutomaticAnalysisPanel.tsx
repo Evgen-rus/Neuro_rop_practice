@@ -27,14 +27,12 @@ export function AutomaticAnalysisPanel({ snapshot, role }: {
           </strong>
           {current ? <span className="dc-auto-analysis-current">{current}</span> : null}
           <small>
-            {snapshot.business_date ? `${snapshot.business_date} · ` : ''}
             {automaticAnalysisCountersText(snapshot)}
             {stage ? ` · этап: ${stage}` : ''}
             {updated ? ` · обновлено ${formatMoscowDateTime(updated, {
               day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
             }) || '—'}` : ''}
           </small>
-          <small>Подробности FULL / MINI</small>
         </span>
       </summary>
       <div className="dc-auto-analysis-details">

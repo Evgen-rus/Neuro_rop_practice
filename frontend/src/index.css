@@ -639,10 +639,17 @@ textarea {
 .dc-refresh {
   display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
   color: var(--dc-muted);
   font-size: 12px;
+}
+
+.dc-refresh > span {
+  max-width: 100%;
+  line-height: 1.2;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -3693,7 +3700,11 @@ textarea {
   }
 
   .dc-refresh {
-    justify-content: space-between;
+    align-items: stretch;
+  }
+
+  .dc-refresh > span {
+    text-align: center;
   }
 
   .dc-auto-analysis {
@@ -4058,7 +4069,7 @@ textarea {
   }
 
   .dc-refresh > span {
-    display: none;
+    white-space: normal;
   }
 
   .dc-two-columns,
@@ -8595,13 +8606,6 @@ ul.facts.bad li:before {
   border-left-width: 3px;
   border-radius: 8px;
   background: #fff;
-  cursor: help;
-}
-
-.dc-daily-criterion:focus,
-.dc-daily-criterion:focus-visible {
-  outline: 2px solid var(--daily-blue);
-  outline-offset: 1px;
 }
 
 .dc-daily-criteria.compact .dc-daily-criterion {
@@ -8641,12 +8645,16 @@ ul.facts.bad li:before {
   font-weight: 550;
 }
 
+.dc-daily-criterion-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dc-daily-criteria.compact .dc-daily-criterion-name {
   color: var(--text);
   font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .dc-daily-criterion-score {
@@ -8675,18 +8683,38 @@ ul.facts.bad li:before {
 .dc-daily-criterion.bad .dc-daily-criterion-icon { background: var(--daily-red); }
 .dc-daily-criterion.bad .dc-daily-criterion-state { color: var(--daily-red); }
 
+.dc-daily-criterion-hint-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .dc-daily-criterion-hint {
   display: grid;
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   place-items: center;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   background: #edf3fb;
   color: #315a86;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1;
+  font: 800 9px/1 inherit;
+  cursor: help;
+}
+
+.dc-daily-criterion-hint:hover,
+.dc-daily-criterion-hint:focus-visible,
+.dc-daily-criterion-hint-wrap.pinned .dc-daily-criterion-hint {
+  background: #d7e6f8;
+  color: #1768f2;
+}
+
+.dc-daily-criterion-hint:focus-visible {
+  outline: 2px solid var(--daily-blue);
+  outline-offset: 1px;
 }
 
 .dc-daily-criterion-tip {
@@ -8694,10 +8722,11 @@ ul.facts.bad li:before {
   position: absolute;
   z-index: 12;
   top: 100%;
-  left: 0;
-  width: max(100%, 280px);
-  max-width: min(420px, calc(100vw - 32px));
-  padding-top: 8px;
+  left: 50%;
+  width: max-content;
+  max-width: min(240px, calc(100vw - 32px));
+  padding-top: 4px;
+  transform: translateX(-50%);
   text-align: left;
   cursor: default;
 }
@@ -8705,25 +8734,25 @@ ul.facts.bad li:before {
 .dc-daily-criterion:last-child .dc-daily-criterion-tip {
   left: auto;
   right: 0;
+  transform: none;
 }
 
-.dc-daily-criterion:hover .dc-daily-criterion-tip,
-.dc-daily-criterion:focus .dc-daily-criterion-tip,
-.dc-daily-criterion:focus-within .dc-daily-criterion-tip,
-.dc-daily-criterion.pinned .dc-daily-criterion-tip {
+.dc-daily-criterion-hint-wrap:hover .dc-daily-criterion-tip,
+.dc-daily-criterion-hint-wrap:focus-within .dc-daily-criterion-tip,
+.dc-daily-criterion-hint-wrap.pinned .dc-daily-criterion-tip {
   display: block;
 }
 
 .dc-daily-argument-body {
   display: grid;
-  gap: 8px;
-  max-height: min(360px, 50vh);
+  gap: 6px;
+  max-height: min(240px, 40vh);
   overflow: auto;
-  padding: 9px 10px 10px;
-  border: 1px solid #ccd8e8;
-  border-radius: 8px;
-  background: #f9fbfd;
-  box-shadow: 0 10px 28px rgba(20, 40, 70, .16);
+  padding: 8px 10px;
+  border: 1px solid #d5deea;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(20, 40, 70, .14);
 }
 
 .dc-daily-argument-scope {
@@ -9494,10 +9523,9 @@ ul.facts.bad li:before {
   .dc-daily-argument-scope { grid-template-columns: 1fr; }
 
   .dc-daily-criterion:last-child .dc-daily-criterion-tip {
-    left: 0;
+    left: auto;
     right: 0;
-    width: auto;
-    max-width: none;
+    transform: none;
   }
 }
 

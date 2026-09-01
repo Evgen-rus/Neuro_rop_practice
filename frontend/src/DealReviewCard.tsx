@@ -212,7 +212,6 @@ function QualityArgumentation({
 function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
   const quality = deal.quality
   const qualityCaption = dailyQualityCaption(quality, snapshotDay)
-  const assessedAt = quality.evaluated_through || quality.cutoff_at
   const hasScores = Object.values(quality.criteria).some((item) => item.score != null)
   const tipId = useId()
   const [pinned, setPinned] = useState<keyof typeof QUALITY_LABELS | null>(null)
@@ -235,16 +234,8 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
         <small>{qualityCaption}</small>
       </header>
       <div className="dc-daily-quality-body">
-        {quality.business_date ? (
-          <p className="dc-daily-meta">
-            За {quality.business_date.split('-').reverse().join('.')} · {quality.source === 'ai' ? 'AI-оценка' : 'Программный контроль'}
-            {assessedAt ? ` · оценено до ${formatClock(assessedAt)} МСК` : ''}
-          </p>
-        ) : null}
         {quality.pending_message ? (
           <p className="dc-daily-block-note">{humanQualityText(quality.pending_message, snapshotDay)}</p>
-        ) : quality.status !== 'assessed' ? (
-          <p>{humanQualityText(quality.scope_summary, snapshotDay) || qualityCaption}</p>
         ) : null}
         {quality.next_action_warning ? (
           <div className="dc-daily-attempt-note" role="status">
@@ -258,26 +249,32 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
             const item = quality.criteria[key]
             const tone = item.score === 1 ? 'good' : item.score === 0 ? 'bad' : 'neutral'
             const describedBy = `${tipId}-${key}`
+            const label = QUALITY_LABELS[key]
             return (
-              <li
-                key={key}
-                className={`dc-daily-criterion ${tone}${pinned === key ? ' pinned' : ''}`}
-                tabIndex={0}
-                aria-describedby={describedBy}
-                onClick={() => setPinned((current) => current === key ? null : key)}
-              >
+              <li key={key} className={`dc-daily-criterion ${tone}`}>
                 <span className="dc-daily-criterion-icon" aria-hidden="true">{item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}</span>
                 <span className="dc-daily-criterion-name">
-                  {QUALITY_LABELS[key]}
-                  <span className="dc-daily-criterion-hint" aria-hidden="true">i</span>
+                  <span className="dc-daily-criterion-label">{label}</span>
+                  <span className={`dc-daily-criterion-hint-wrap${pinned === key ? ' pinned' : ''}`}>
+                    <button
+                      type="button"
+                      className="dc-daily-criterion-hint"
+                      aria-label={`Пояснение: ${label}`}
+                      aria-describedby={describedBy}
+                      aria-expanded={pinned === key}
+                      onClick={() => setPinned((current) => current === key ? null : key)}
+                    >
+                      i
+                    </button>
+                    <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
+                      <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
+                    </div>
+                  </span>
                 </span>
                 <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
                 {item.score != null ? (
                   <span className="dc-daily-criterion-state">{humanQualityText(item.verdict, snapshotDay)}</span>
                 ) : null}
-                <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
-                  <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
-                </div>
               </li>
             )
           })}

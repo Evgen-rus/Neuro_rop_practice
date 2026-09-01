@@ -981,10 +981,10 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} />
         <div className="dc-refresh">
-          <span>{syncStatus || `Обновлено ${dateTime(data.generated_at)}`}</span>
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
             {syncing ? <><span className="dc-spinner" />Обновляем Bitrix…</> : <><span>⟳</span>Обновить Bitrix</>}
           </button>
+          <span>{syncStatus || `Обновлено ${dateTime(data.generated_at)}`}</span>
         </div>
       </header>
       <AutomaticAnalysisStatus role={user.role} onReportsPublished={() => { void reload() }} />
