@@ -101,8 +101,9 @@ def deal_access(user: dict[str, Any], deal: dict[str, Any]) -> DealAccess:
     if role == "admin":
         can_open = can_edit = can_run_paid_ai = True
     elif role == "rop":
-        can_open = can_edit = str(deal.get("manager_id") or "") in _rop_team_manager_ids()
-        can_run_paid_ai = False
+        # РОП и заместитель работают с Дожимом и прочим платным AI по сделкам команды.
+        in_team = str(deal.get("manager_id") or "") in _rop_team_manager_ids()
+        can_open = can_edit = can_run_paid_ai = in_team
     else:
         can_open = can_edit = is_own
         can_run_paid_ai = is_own

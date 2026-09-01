@@ -145,10 +145,26 @@ class DealAuthorizationTests(unittest.TestCase):
         self.assertTrue(team.can_open)
         self.assertTrue(team.can_edit)
         self.assertTrue(team.can_run_analysis)
-        self.assertFalse(team.can_run_paid_ai)
+        self.assertTrue(team.can_run_paid_ai)
         self.assertFalse(foreign.can_open)
         self.assertFalse(foreign.can_run_analysis)
+        self.assertFalse(foreign.can_run_paid_ai)
         self.assertTrue(foreign.read_only)
+
+    def test_rop_paid_ai_guard_allows_team_deal_and_rejects_foreign(self) -> None:
+        rop = _user("rop", user_id=2)
+        deals = {"101": _deal("101", "10"), "202": _deal("202", "77")}
+        with patch.object(
+            access.storage,
+            "get_deal_control_scope",
+            return_value={"manager_ids": ["10"]},
+            create=True,
+        ), patch.object(access, "get_deal", side_effect=lambda deal_id, **_: deals.get(str(deal_id))):
+            allowed = access.require_deal("101", user=rop, action="paid_ai")
+            self.assertTrue(allowed.can_run_paid_ai)
+            with self.assertRaises(HTTPException) as error:
+                access.require_deal("202", user=rop, action="paid_ai")
+        self.assertEqual(error.exception.status_code, 403)
 
     def test_rop_paid_analysis_scope_accepts_team_deal_but_not_lead(self) -> None:
         rop = _user("rop", user_id=2)
