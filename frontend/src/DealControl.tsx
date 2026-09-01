@@ -1026,7 +1026,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
             attention={filteredSummary.tasks_missing + filteredSummary.tasks_overdue}
             today={filteredSummary.tasks_plan_today}
             tomorrow={filteredSummary.tasks_tomorrow}
-            future={filteredSummary.tasks_future + filteredSummary.tasks_tomorrow}
+            future={filteredSummary.tasks_future}
             countForPlan={(bucket) => timeCounts[bucket as keyof typeof timeCounts] || 0}
           />
           <div className="dc-board-title">
@@ -1150,7 +1150,7 @@ function TimeTabs(props: {
   countForPlan: (view: TimeView) => number
 }) {
   const tabs: Array<[TimeView, string, number]> = props.view === 'dashboard'
-    ? [['all', 'Все сделки', props.totalDeals], ['attention', 'Требуют внимания', props.attention], ['today', 'На сегодня', props.today], ['future', 'Будущие', props.future]]
+    ? [['all', 'Все сделки', props.totalDeals], ['attention', 'Требуют внимания', props.attention], ['today', 'На сегодня', props.today], ['tomorrow', 'На завтра', props.tomorrow], ['future', 'Будущие', props.future]]
     : [['overdue', 'Просроченные', props.countForPlan('overdue')], ['today', 'Сегодня', props.countForPlan('today')], ['tomorrow', 'Завтра', props.countForPlan('tomorrow')], ['future', 'Будущие', props.countForPlan('future')], ['all', 'Все', props.countForPlan('all')]]
   return <nav className="dc-time-tabs">
     {tabs.map(([key, label, count]) => <button className={props.active === key ? 'active' : ''} key={key} onClick={() => props.onChange(key)}>{label}<span>{count}</span></button>)}
