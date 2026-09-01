@@ -386,9 +386,9 @@ test('pending quality keeps confirmed scores and shows the evaluated boundary', 
     },
     zero_reasons: [],
     criteria: {
-      next_action: { score: 1, verdict: 'Следующий шаг зафиксирован' },
-      value_development: { score: 0, verdict: 'Ценность не подтверждена' },
-      data_collection: { score: 1, verdict: 'Данные собраны' },
+      next_action: { score: 1, verdict: 'Выполнено' },
+      value_development: { score: 0, verdict: 'Не выполнено' },
+      data_collection: { score: 1, verdict: 'Выполнено' },
     },
   }
   const html = renderToStaticMarkup(createElement(DealQualityAndFocus, {
@@ -417,9 +417,9 @@ test('review card shows quality, then today communications, then focus, with per
       scope_summary: 'Общая аргументация за день',
       zero_reasons: [],
       criteria: {
-        next_action: { score: 1, verdict: 'Следующий шаг зафиксирован' },
-        value_development: { score: 1, verdict: 'Касания дали ценность' },
-        data_collection: { score: 1, verdict: 'Ключевые данные собраны' },
+        next_action: { score: 1, verdict: 'Выполнено' },
+        value_development: { score: 1, verdict: 'Выполнено' },
+        data_collection: { score: 1, verdict: 'Выполнено' },
       },
     },
   }
@@ -438,9 +438,10 @@ test('review card shows quality, then today communications, then focus, with per
   assert.doesNotMatch(html, /dc-daily-criterion-hint/)
   assert.doesNotMatch(html, /dc-daily-criterion[^>]*tabindex/)
   assert.equal((html.match(/Общая аргументация за день/g) || []).length, 0)
-  assert.equal((html.match(/Следующий шаг зафиксирован/g) || []).length, 2)
-  assert.equal((html.match(/Касания дали ценность/g) || []).length, 2)
-  assert.equal((html.match(/Ключевые данные собраны/g) || []).length, 2)
+  assert.equal((html.match(/Выполнено/g) || []).length, 6)
+  assert.doesNotMatch(html, /Следующий шаг зафиксирован/)
+  assert.doesNotMatch(html, /Касания дали ценность/)
+  assert.doesNotMatch(html, /Ключевые данные собраны/)
 })
 
 test('read-only situation uses live or frozen snapshot heading and hides empty values', () => {

@@ -543,12 +543,12 @@ def _sanitize_communications(value: Any) -> dict[str, Any]:
 
 
 def _has_current_quality_obligation(deal: dict[str, Any], current: datetime) -> bool:
-    # Current deadlines win over a historical "was_due" / planning membership.
+    # Current Bitrix deadlines win over a historical "was_due" / planning membership.
+    # Local Neuro ROP recommendations are advisory and must not create a daily
+    # quality obligation or turn the traffic light red.
     tasks = list(deal.get("bitrix_tasks") or [])
     if not tasks and isinstance(deal.get("primary_bitrix_task"), dict):
         tasks.append(deal["primary_bitrix_task"])
-    if isinstance(deal.get("current_task"), dict):
-        tasks.append(deal["current_task"])
     for task in tasks:
         if task.get("local_status") in {"cancelled", "canceled"}:
             continue
@@ -729,20 +729,15 @@ def _quality_block(coaching: dict[str, Any]) -> dict[str, Any]:
             "next_action_warning": audit.get("next_action_warning"),
         }
     scores = _audit_scores(audit)
-    labels = {
-        "next_action": ("Следующий шаг зафиксирован", "Нет точного следующего шага"),
-        "value_development": ("Касания дали ценность", "Ценность касаний не подтверждена"),
-        "data_collection": ("Ключевые данные собраны", "Данных недостаточно"),
-    }
     criteria = {}
     confirmed = 0
-    for name, (ok_text, bad_text) in labels.items():
+    for name in ("next_action", "value_development", "data_collection"):
         score = scores.get(name)
         if score == 1:
             confirmed += 1
-            verdict = ok_text
+            verdict = "Выполнено"
         elif score == 0:
-            verdict = bad_text
+            verdict = "Не выполнено"
         else:
             verdict = "Нет данных"
         criteria[name] = {"score": score, "verdict": verdict}

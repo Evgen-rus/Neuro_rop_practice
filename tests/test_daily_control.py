@@ -252,14 +252,14 @@ class DailyQualityTests(unittest.TestCase):
             self.assertEqual(result["status"], "not_required")
             self.assertIsNone(result["confirmed_count"])
 
-    def test_overdue_secondary_task_and_local_control_point_are_required(self):
+    def test_overdue_secondary_bitrix_task_is_required_but_local_control_point_is_not(self):
         self.empty_day()
         self.deal["primary_bitrix_task"] = {"deadline": "2026-08-19T10:00:00+03:00"}
         self.deal["bitrix_tasks"] = [self.deal["primary_bitrix_task"], {"deadline": "2026-08-17T10:00:00+03:00"}]
         self.assertEqual(self.quality()["status"], "no_work")
         self.deal["bitrix_tasks"] = []
         self.deal["current_task"] = {"due_at": "2026-08-18T10:00:00+03:00", "local_status": "active"}
-        self.assertEqual(self.quality()["status"], "no_work")
+        self.assertEqual(self.quality()["status"], "not_required")
 
     def test_closing_crm_task_today_does_not_prove_work(self):
         self.empty_day()
@@ -267,6 +267,22 @@ class DailyQualityTests(unittest.TestCase):
         self.assertEqual(self.quality()["status"], "no_work")
         self.deal["primary_bitrix_task"]["bitrix_completed_at"] = "2026-08-17T11:00:00+03:00"
         self.assertEqual(self.quality()["status"], "not_required")
+
+    def test_assessed_criteria_use_done_or_not_done_verdicts(self):
+        result = self.quality()
+        self.assertEqual(
+            {name: item["verdict"] for name, item in result["criteria"].items()},
+            {
+                "next_action": "Выполнено",
+                "value_development": "Выполнено",
+                "data_collection": "Выполнено",
+            },
+        )
+        self.deal["coaching"]["communication_quality_audit"] = _audit(next_action=0, value=0)
+        result = self.quality()
+        self.assertEqual(result["criteria"]["next_action"]["verdict"], "Не выполнено")
+        self.assertEqual(result["criteria"]["value_development"]["verdict"], "Не выполнено")
+        self.assertEqual(result["criteria"]["data_collection"]["verdict"], "Выполнено")
 
     def test_current_ai_audit_is_used_but_new_or_revised_event_waits(self):
         self.assertEqual(self.quality()["confirmed_count"], 3)
