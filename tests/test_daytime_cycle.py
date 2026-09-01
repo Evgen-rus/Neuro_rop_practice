@@ -18,6 +18,7 @@ from api.daytime_cycle import (
 from setup import MSK_TZ
 from storage.rop_db import (
     init_db,
+    list_automatic_analysis_items,
     save_analysis_run,
     save_deal_control_scope,
     upsert_deal_control_deal,
@@ -254,6 +255,10 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["decisions"]["skip"], 1)
         self.assertEqual(result["decisions"]["full"], 0)
+        self.assertEqual(
+            set(result["phase_seconds"]),
+            {"deal_control_sync", "manager_trajectory", "change_detection_and_enqueue", "tick_total"},
+        )
         diary = (Path(self.temp.name) / "spend" / f"{NOW.date().isoformat()}.txt").read_text(encoding="utf-8")
         self.assertIn("1 — без изменений, LLM не вызывался", diary)
         self.assertIn("За этот запуск: ~0 ₽", diary)
@@ -431,6 +436,9 @@ class DaytimeCycleRunTests(unittest.TestCase):
         self.assertTrue(options.extra_env and "SPEND_DIARY_BATCH_PATH" in options.extra_env)
         self.assertNotIn("BITRIX_USAGE_DAILY_DIR", options.extra_env)
         self.assertEqual(payload["job_id"], "abc")
+        items = list_automatic_analysis_items(self.db_path, int(payload["automatic_analysis_run_id"]))
+        self.assertEqual(items[0]["sync_mode"], "full")
+        self.assertEqual(items[0]["sync_reasons"], ["initial_or_unacknowledged"])
 
     def test_job_extra_env_copies_diagnostic_vars_and_entity_id(self) -> None:
         from api.daytime_cycle import _job_extra_env

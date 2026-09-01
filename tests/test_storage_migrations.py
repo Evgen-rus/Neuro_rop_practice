@@ -115,6 +115,9 @@ class StorageMigrationTests(unittest.TestCase):
                 analysis_columns = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)")}
                 report_columns = {row[1] for row in conn.execute("PRAGMA table_info(ui_reports)")}
                 event_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_trajectory_events)")}
+                automatic_item_columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(automatic_analysis_items)")
+                }
                 indexes = {
                     row[1]
                     for row in conn.execute("PRAGMA index_list(manager_trajectory_events)")
@@ -129,6 +132,7 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("idx_manager_trajectory_manager_time", indexes)
             self.assertIn("automatic_analysis_runs", tables)
             self.assertIn("automatic_analysis_items", tables)
+            self.assertTrue({"sync_mode", "sync_reasons_json"} <= automatic_item_columns)
             self.assertIn("daily_control_reports", tables)
             self.assertIn("deal_manager_companion_messages", tables)
 

@@ -987,6 +987,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 processing_status TEXT NOT NULL DEFAULT 'queued',
                 job_id TEXT,
                 attempt_count INTEGER NOT NULL DEFAULT 0,
+                sync_mode TEXT,
+                sync_reasons_json TEXT NOT NULL DEFAULT '[]',
                 started_at TEXT,
                 finished_at TEXT,
                 updated_at TEXT NOT NULL,
@@ -1037,6 +1039,8 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         _ensure_column(conn, "automatic_analysis_items", "processing_status", "TEXT NOT NULL DEFAULT 'queued'")
         _ensure_column(conn, "automatic_analysis_items", "job_id", "TEXT")
         _ensure_column(conn, "automatic_analysis_items", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "automatic_analysis_items", "sync_mode", "TEXT")
+        _ensure_column(conn, "automatic_analysis_items", "sync_reasons_json", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "automatic_analysis_items", "started_at", "TEXT")
         _ensure_column(conn, "automatic_analysis_items", "finished_at", "TEXT")
         conn.execute(
@@ -2572,7 +2576,10 @@ def _row_to_automatic_analysis_run(row: sqlite3.Row | None) -> dict[str, Any] | 
 def _row_to_automatic_analysis_item(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
-    return dict(row)
+    value = dict(row)
+    reasons = loads_json(value.pop("sync_reasons_json", None), [])
+    value["sync_reasons"] = reasons if isinstance(reasons, list) else []
+    return value
 
 
 def create_automatic_analysis_run(
@@ -2586,6 +2593,7 @@ def create_automatic_analysis_run(
     current_stage: str | None = "queued",
     business_date: str | None = None,
     spend_batch_path: str | None = None,
+    item_sync_plans: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
     now = utcish_now()
@@ -2608,13 +2616,21 @@ def create_automatic_analysis_run(
         )
         run_id = int(cursor.lastrowid)
         for entity_id in ids:
+            sync_plan = (item_sync_plans or {}).get(entity_id) or {}
+            sync_mode = str(sync_plan.get("mode") or "").strip() or None
+            sync_reasons = [
+                str(reason).strip()
+                for reason in (sync_plan.get("reasons") or [])
+                if str(reason).strip()
+            ]
             conn.execute(
                 """
                 INSERT INTO automatic_analysis_items (
                     run_id, entity_type, entity_id, stage, decision_status,
-                    analysis_run_id, report_id, error, publication_status, updated_at
+                    analysis_run_id, report_id, error, publication_status,
+                    sync_mode, sync_reasons_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -2626,6 +2642,8 @@ def create_automatic_analysis_run(
                     None,
                     None,
                     "pending",
+                    sync_mode,
+                    dumps_json(sync_reasons),
                     now,
                 ),
             )

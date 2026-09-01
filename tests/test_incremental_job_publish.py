@@ -49,6 +49,21 @@ def _ready(job: JobState, entity_id: str, *, run_id: int, decision: str) -> None
 
 
 class IncrementalJobPublishTests(unittest.TestCase):
+    def test_automatic_item_persists_technical_sync_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            packet = create_automatic_analysis_run(
+                db_path,
+                trigger="test",
+                entity_ids=["101"],
+                item_sync_plans={
+                    "101": {"mode": "incremental", "reasons": ["activity", "trajectory"]},
+                },
+            )
+            items = list_automatic_analysis_items(db_path, int(packet["id"]))
+        self.assertEqual(items[0]["sync_mode"], "incremental")
+        self.assertEqual(items[0]["sync_reasons"], ["activity", "trajectory"])
+
     def test_successful_publish_materializes_recommendation_without_daily_checklist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "rop.sqlite"

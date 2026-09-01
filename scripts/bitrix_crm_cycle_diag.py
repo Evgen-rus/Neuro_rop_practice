@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="С --full-cycle: jobs только по сделкам, уже done в последнем automatic run",
     )
+    parser.add_argument(
+        "--one-automatic-cycle",
+        action="store_true",
+        help="Один штатный automatic cycle рядом с работающим API; сохранить изолированный summary.json",
+    )
     parser.add_argument("--skip-preflight", action="store_true", help="Не проверять API/git/ffmpeg (только для тестов)")
     return parser.parse_args()
 
@@ -684,7 +689,12 @@ def _api_health(host: str = "127.0.0.1", port: int = 8000) -> dict[str, Any] | N
     return payload if isinstance(payload, dict) else {"ok": True, "service": "unknown-listener"}
 
 
-def preflight_full_cycle(*, db_path: str | Path, skip_git: bool = False) -> dict[str, Any]:
+def preflight_full_cycle(
+    *,
+    db_path: str | Path,
+    skip_git: bool = False,
+    allow_running_api: bool = False,
+) -> dict[str, Any]:
     problems: list[str] = []
     if not skip_git:
         try:
@@ -699,7 +709,7 @@ def preflight_full_cycle(*, db_path: str | Path, skip_git: bool = False) -> dict
         if branch and branch != "main":
             problems.append(f"Ожидалась ветка main, сейчас {branch}.")
     health = _api_health()
-    if health is not None:
+    if health is not None and not allow_running_api:
         service = str(health.get("service") or "")
         if service == "rop-assistant-api" or health.get("ok"):
             problems.append(
@@ -1042,6 +1052,14 @@ def collect_analysis_metrics(
     fetch_ids = {str(item.get("deal_id") or "") for item in per_deal_bitrix.get("all") or []}
     durations: list[float] = []
     by_decision: dict[str, list[str]] = {"full": [], "mini": [], "skip": [], "error": []}
+    plan_modes: dict[str, int] = defaultdict(int)
+    plan_reasons: dict[str, int] = defaultdict(int)
+    item_metrics: list[dict[str, Any]] = []
+    per_deal_rows = {
+        str(row.get("deal_id") or ""): row
+        for row in (per_deal_bitrix.get("all") or [])
+        if str(row.get("deal_id") or "").strip()
+    }
     for item in items:
         decision = str(item.get("decision_status") or "")
         entity_id = str(item.get("entity_id") or "")
@@ -1055,15 +1073,35 @@ def collect_analysis_metrics(
             by_decision["error"].append(entity_id)
         if decision == "skip" and entity_id in fetch_ids:
             fetch_and_skip.append(entity_id)
+        sync_mode = str(item.get("sync_mode") or "unknown")
+        sync_reasons = [str(reason) for reason in (item.get("sync_reasons") or []) if str(reason)]
+        plan_modes[sync_mode] += 1
+        for reason in sync_reasons:
+            plan_reasons[reason] += 1
         started = item.get("started_at")
         finished = item.get("finished_at")
+        duration_seconds: float | None = None
         if started and finished:
             try:
                 start_dt = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
                 end_dt = datetime.fromisoformat(str(finished).replace("Z", "+00:00"))
-                durations.append(max(0.0, (end_dt - start_dt).total_seconds()))
+                duration_seconds = max(0.0, (end_dt - start_dt).total_seconds())
+                durations.append(duration_seconds)
             except ValueError:
                 pass
+        bitrix = per_deal_rows.get(entity_id) or {}
+        item_metrics.append(
+            {
+                "deal_id": entity_id,
+                "sync_mode": sync_mode,
+                "sync_reasons": sync_reasons,
+                "decision": decision or None,
+                "processing_status": item.get("processing_status"),
+                "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
+                "bitrix_physical_http": int(bitrix.get("physical_http") or 0),
+                "bitrix_duration_ms": round(float(bitrix.get("duration_ms") or 0), 3),
+            }
+        )
     openai_deals = counts["full"]  # compact FULL includes incremental LLM
     return {
         "active_deals": counts["checked"],
@@ -1083,6 +1121,11 @@ def collect_analysis_metrics(
             "answer": "B" if counts["jobs"] and len(fetch_ids) >= max(1, counts["jobs"] - counts["error"]) else "unknown",
         },
         "duration_seconds": _number_stats(durations),
+        "sync_plan": {
+            "modes": dict(sorted(plan_modes.items())),
+            "reasons": dict(sorted(plan_reasons.items())),
+        },
+        "items": item_metrics,
         "ids": {key: value for key, value in by_decision.items() if value},
     }
 
@@ -1403,9 +1446,20 @@ def run_one_full_cycle(
     _progress(f"{run_id}: старт полного automatic cycle.")
     with _temporary_env(env), bitrix_trace_context(run_id=run_id):
         runner = cycle_fn or run_daytime_cycle
+        previous_run = get_latest_automatic_analysis_run(db_path) or {}
+        previous_run_id = int(previous_run.get("id") or 0)
         cycle_payload = runner(db_path=db_path, trigger=trigger)
-        latest = get_latest_automatic_analysis_run(db_path) or {}
-        automatic_run_id = int(latest.get("id") or 0)
+        automatic_run_id = int((cycle_payload or {}).get("automatic_analysis_run_id") or 0)
+        if not automatic_run_id:
+            latest = get_latest_automatic_analysis_run(db_path) or {}
+            latest_id = int(latest.get("id") or 0)
+            if latest_id > previous_run_id and str(latest.get("trigger") or "") == trigger:
+                automatic_run_id = latest_id
+        if not automatic_run_id:
+            raise RuntimeError(
+                f"Diagnostic cycle не создал свой automatic run (status={(cycle_payload or {}).get('status')}). "
+                "Вероятно, другой цикл уже выполняется; повторите команду позже."
+            )
         _progress(
             f"{run_id}: tick завершён status={cycle_payload.get('status')}, "
             f"automatic_run_id={automatic_run_id}, жду analysis jobs."
@@ -1459,6 +1513,7 @@ def run_one_full_cycle(
             "status": (cycle_payload or {}).get("status"),
             "trigger": trigger,
             "deal_count": len(deal_ids),
+            "phase_seconds": (cycle_payload or {}).get("phase_seconds") or {},
         },
         "wait": {"job_ids": wait_payload.get("job_ids") or [], "run_status": wait_payload.get("run_status")},
         "bitrix": usage,
@@ -1485,6 +1540,7 @@ def run_full_cycle_diagnostic(
     max_wait_seconds: float | None = None,
     single_cycle: bool = False,
     second_pass_done_only: bool = False,
+    allow_running_api: bool = False,
 ) -> dict[str, Any]:
     isolated = Path(usage_dir) if usage_dir is not None else None
     previous = _load_previous_summary(isolated) if isolated is not None else None
@@ -1497,7 +1553,11 @@ def run_full_cycle_diagnostic(
     raw_path = Path(raw_dir or DEFAULT_RAW_DIR)
     audio_path = Path(audio_dir or DEFAULT_AUDIO_MANIFEST_DIR)
     if not skip_preflight:
-        preflight = preflight_full_cycle(db_path=db_path)
+        preflight = preflight_full_cycle(
+            db_path=db_path,
+            skip_git=allow_running_api,
+            allow_running_api=allow_running_api,
+        )
         if not preflight["ok"]:
             raise RuntimeError("Preflight не пройден: " + " ".join(preflight["problems"]))
     else:
@@ -1608,6 +1668,19 @@ def main() -> None:
 
     load_dotenv()
     args = parse_args()
+    if args.one_automatic_cycle:
+        if args.full_cycle or args.single_cycle or args.second_pass_done_only:
+            raise SystemExit("--one-automatic-cycle используется отдельно, без full-cycle флагов.")
+        summary = run_full_cycle_diagnostic(
+            db_path=args.db_path,
+            usage_dir=Path(args.usage_dir) if args.usage_dir else None,
+            raw_dir=Path(args.raw_dir),
+            audio_dir=Path(args.audio_dir),
+            single_cycle=True,
+            allow_running_api=True,
+        )
+        print(f"Диагностика завершена. Передайте файл: {summary.get('summary_path')}")
+        return
     if args.single_cycle or args.second_pass_done_only:
         if not args.full_cycle:
             raise SystemExit("--single-cycle / --second-pass-done-only работают только вместе с --full-cycle.")

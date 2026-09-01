@@ -349,6 +349,63 @@ class BitrixCrmCycleDiagTests(unittest.TestCase):
             self.assertTrue((usage_dir / "run2").is_dir())
             self.assertFalse((usage_dir / "run1").is_dir())
 
+    def test_analysis_metrics_include_sync_plan_and_safe_per_item_numbers(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import collect_analysis_metrics
+
+        metrics = collect_analysis_metrics(
+            [
+                {
+                    "entity_id": "101",
+                    "sync_mode": "incremental",
+                    "sync_reasons": ["activity", "trajectory"],
+                    "decision_status": "skip",
+                    "processing_status": "done",
+                    "job_id": "job-1",
+                    "started_at": "2026-08-18T09:00:00+00:00",
+                    "finished_at": "2026-08-18T09:00:12+00:00",
+                },
+                {
+                    "entity_id": "202",
+                    "sync_mode": "skip",
+                    "sync_reasons": [],
+                    "decision_status": "skip",
+                    "processing_status": "done",
+                },
+            ],
+            per_deal_bitrix={
+                "all": [{"deal_id": "101", "physical_http": 7, "duration_ms": 1234.5}],
+            },
+        )
+        self.assertEqual(metrics["sync_plan"]["modes"], {"incremental": 1, "skip": 1})
+        self.assertEqual(metrics["sync_plan"]["reasons"], {"activity": 1, "trajectory": 1})
+        self.assertEqual(metrics["items"][0]["duration_seconds"], 12.0)
+        self.assertEqual(metrics["items"][0]["bitrix_physical_http"], 7)
+
+    def test_one_cycle_refuses_to_reuse_previous_run_when_tick_is_locked(self) -> None:
+        from scripts.bitrix_crm_cycle_diag import run_one_full_cycle
+        from storage.rop_db import create_automatic_analysis_run
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "rop.sqlite"
+            init_db(db_path)
+            create_automatic_analysis_run(
+                db_path,
+                trigger="interval_30m",
+                entity_ids=["101"],
+                status="done",
+            )
+            with self.assertRaisesRegex(RuntimeError, "не создал свой automatic run"):
+                run_one_full_cycle(
+                    db_path=db_path,
+                    run_dir=root / "run",
+                    run_id="diagnostic-test",
+                    trigger="diagnostic_full_run2",
+                    raw_dir=root / "raw",
+                    audio_dir=root / "audio",
+                    cycle_fn=lambda **_kwargs: {"status": "skipped_locked"},
+                )
+
     def test_previous_done_deal_ids_skips_error_items(self) -> None:
         from scripts.bitrix_crm_cycle_diag import previous_done_deal_ids
         from storage.rop_db import create_automatic_analysis_run, update_automatic_analysis_item

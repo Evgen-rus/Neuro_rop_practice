@@ -7,6 +7,7 @@ import sys
 import threading
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any, Callable
 
 from openai_api.change_detection.decision_engine import (
@@ -308,6 +309,7 @@ def _analyze_work_pool(
         current_stage="queued",
         business_date=business_date,
         spend_batch_path=str(batch_path),
+        item_sync_plans=plans,
     )
     automatic_run_id = int(automatic_run["id"])
     for entity_id in idle_ids:
@@ -593,6 +595,8 @@ def run_daytime_cycle(
     trajectory_payload: dict[str, Any] | None = None
     analysis_payload: dict[str, Any] | None = None
     deal_ids: list[str] = []
+    phase_seconds: dict[str, float] = {}
+    cycle_started_monotonic = monotonic()
     cycle_file_lock = None
     logger.info("Начало дневного цикла (%s) в %s МСК.", trigger, started_at)
     try:
@@ -640,6 +644,7 @@ def run_daytime_cycle(
             )
         )
 
+        phase_started = monotonic()
         try:
             logger.info("Bitrix sync рабочего пула сделок.")
             sync_payload = refresh(db_path=db_path, client=client_factory(), now=started)
@@ -653,6 +658,8 @@ def run_daytime_cycle(
             message = f"Bitrix sync: {error}"
             errors.append(message)
             logger.error("%s", message)
+        finally:
+            phase_seconds["deal_control_sync"] = round(monotonic() - phase_started, 3)
 
         deal_ids = [
             str(item["deal_id"])
@@ -661,6 +668,7 @@ def run_daytime_cycle(
         ]
         logger.info("Рабочий пул после sync: %s сделок.", len(deal_ids))
 
+        phase_started = monotonic()
         try:
             logger.info("Сбор CRM-фактов manager trajectory.")
             trajectory_payload = collect(client_factory(), db_path=db_path)
@@ -677,7 +685,10 @@ def run_daytime_cycle(
             message = f"Manager trajectory: {error}"
             errors.append(message)
             logger.error("%s", message)
+        finally:
+            phase_seconds["manager_trajectory"] = round(monotonic() - phase_started, 3)
 
+        phase_started = monotonic()
         try:
             logger.info("Change detection / decision engine для %s сделок.", len(deal_ids))
             analysis_payload = analyze(
@@ -707,6 +718,8 @@ def run_daytime_cycle(
                 "error": str(error),
                 "counts": _empty_decision_counts() | {"checked": len(deal_ids), "error": len(deal_ids)},
             }
+        finally:
+            phase_seconds["change_detection_and_enqueue"] = round(monotonic() - phase_started, 3)
 
         status = "success" if not errors else "partial" if (sync_payload or trajectory_payload or analysis_payload) else "error"
         counts = (analysis_payload or {}).get("counts") or _empty_decision_counts()
@@ -723,7 +736,12 @@ def run_daytime_cycle(
             },
             "decisions": counts,
             "analysis_job_id": (analysis_payload or {}).get("job_id"),
+            "automatic_analysis_run_id": (analysis_payload or {}).get("automatic_analysis_run_id"),
             "busy_ids": (analysis_payload or {}).get("busy_ids") or [],
+            "phase_seconds": {
+                **phase_seconds,
+                "tick_total": round(monotonic() - cycle_started_monotonic, 3),
+            },
             "errors": errors,
         }
         if errors:
