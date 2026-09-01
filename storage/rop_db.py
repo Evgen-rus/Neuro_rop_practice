@@ -1945,6 +1945,41 @@ def crm_trajectory_signal_versions(db_path: str | Path) -> dict[str, int]:
     return {f"{row['entity_type']}:{row['entity_id']}": int(row["version"]) for row in rows}
 
 
+def list_crm_trajectory_signals_since(
+    db_path: str | Path,
+    entity_versions: Mapping[str, int],
+) -> list[dict[str, Any]]:
+    """Return newly ingested read-only Bitrix facts for selected entities.
+
+    Versions are ingestion IDs rather than occurrence timestamps, so a late
+    historical fact is still classified by the automatic-analysis gate.
+    """
+    normalized: list[tuple[str, str, int]] = []
+    for entity_key, version in entity_versions.items():
+        entity_type, separator, entity_id = str(entity_key).partition(":")
+        if separator and entity_type in MANAGER_TRAJECTORY_ENTITY_TYPES and entity_id:
+            normalized.append((entity_type, entity_id, max(0, int(version or 0))))
+    if not normalized:
+        return []
+    clauses = ["(entity_type = ? AND entity_id = ? AND id > ?)"] * len(normalized)
+    params: list[Any] = []
+    for entity_type, entity_id, version in normalized:
+        params.extend((entity_type, entity_id, version))
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM manager_trajectory_events "
+            "WHERE source LIKE 'bitrix%' AND (" + " OR ".join(clauses) + ") ORDER BY id",
+            params,
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        value = dict(row)
+        value["payload"] = loads_json(value.pop("payload_json", None), None)
+        result.append(value)
+    return result
+
+
 def get_entity_state(db_path: str | Path, entity_type: str, entity_id: str) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:

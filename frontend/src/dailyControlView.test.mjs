@@ -434,6 +434,7 @@ test('review card shows quality, then today communications, then focus, with per
   assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
   assert.doesNotMatch(html, />Аргументация</)
   assert.equal((html.match(/dc-daily-criterion-tip/g) || []).length, 3)
+  assert.equal((html.match(/popover="manual"/g) || []).length, 3)
   assert.equal((html.match(/dc-daily-criterion-icon-wrap/g) || []).length, 3)
   assert.match(html, /aria-label="Пояснение: Следующий шаг"/)
   assert.doesNotMatch(html, /dc-daily-criterion-hint/)

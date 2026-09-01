@@ -19,11 +19,13 @@ from bitrix.deals.download_deals_call_audio import (
 from bitrix.usage_trace import bitrix_trace_context
 from setup import BASE_DIR, MSK_TZ
 from storage.rop_db import (
-    crm_trajectory_signal_versions, get_crm_sync_state, list_deal_control_deals, put_crm_sync_state,
+    crm_trajectory_signal_versions, get_crm_sync_state, list_crm_trajectory_signals_since,
+    list_deal_control_deals, put_crm_sync_state,
 )
 
 WORKSPACE_ROOT = BASE_DIR / "reports" / "rop_assistant" / "deals"
 AUDIO_ROOT = BASE_DIR / "reports" / "bitrix_customer_path" / "audio"
+TRAJECTORY_GATE_ACK_PREFIX = "deal_trajectory_gate_ack:"
 
 
 def transcript_signature(deal_id: str, workspace_root: Path = WORKSPACE_ROOT) -> str:
@@ -156,10 +158,123 @@ def _same_amount(left: Any, right: Any) -> bool:
     return left_number == right_number
 
 
+def _trajectory_direction(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"1", "in", "incoming", "входящий"}:
+        return "incoming"
+    if normalized in {"2", "out", "outgoing", "исходящий"}:
+        return "outgoing"
+    return "unknown"
+
+
+def trajectory_event_disposition(event: dict[str, Any]) -> str:
+    """Classify a new trajectory fact for the automatic-analysis gate.
+
+    Only explicit manager-side operational facts are soft. Anything that may
+    contain a client signal, a stage/business change, or cannot be identified
+    confidently keeps the previous conservative heavy path.
+    """
+    event_type = str(event.get("event_type") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if event_type in {"deal_stage_changed", "lead_stage_changed", "crm_stage_history_observed"}:
+        return "hard"
+    if event_type == "crm_business_field_changed":
+        field_name = str(payload.get("field_name") or "").strip().upper()
+        return "soft" if field_name in {"DATE_MODIFY", "MODIFY_BY_ID", "COMMENTS"} else "hard"
+    if event_type == "crm_task_history_observed":
+        return "soft"
+    if event_type == "crm_timeline_comment_observed":
+        return "hard" if payload.get("is_messenger_mirror") else "soft"
+    if event_type == "crm_activity_planned":
+        return "soft"
+    if event_type != "crm_activity_observed":
+        return "hard"
+
+    kind = str(payload.get("activity_kind") or "").strip().lower()
+    if kind == "task":
+        return "soft"
+    if kind not in {"call", "email", "message"}:
+        return "hard"
+    if not bool(payload.get("completed")):
+        return "hard"
+    direction = _trajectory_direction(payload.get("direction"))
+    if kind in {"email", "message"}:
+        return "soft" if direction == "outgoing" else "hard"
+    if kind == "call":
+        # A recording may appear after the first CRM observation. Keep calls on
+        # the existing audio/context path rather than permanently hiding their ID.
+        return "hard"
+    return "hard"
+
+
+def _trajectory_probe_ignores(events: list[dict[str, Any]]) -> dict[str, set[str]]:
+    ignores: dict[str, set[str]] = {}
+    for event in events:
+        if trajectory_event_disposition(event) != "soft":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        entity_key = f"{event.get('entity_type')}:{event.get('entity_id')}"
+        activity_id = str(payload.get("activity_id") or "").strip()
+        if activity_id:
+            ignores.setdefault(f"activity:{entity_key}", set()).add(activity_id)
+        comment_id = str(payload.get("comment_id") or "").strip()
+        if comment_id:
+            ignores.setdefault(f"timeline:{entity_key}", set()).add(comment_id)
+        task_id = str(payload.get("task_id") or payload.get("associated_entity_id") or "").strip()
+        if task_id:
+            ignores.setdefault("task", set()).add(task_id)
+    return ignores
+
+
+def _stored_probe_ignores(payload: dict[str, Any]) -> dict[str, set[str]]:
+    raw = payload.get("probe_ignores") if isinstance(payload, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): {str(value) for value in values if str(value)}
+        for key, values in raw.items()
+        if isinstance(values, list)
+    }
+
+
+def _merge_probe_ignores(*groups: dict[str, set[str]]) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for group in groups:
+        for key, values in group.items():
+            result.setdefault(key, set()).update(values)
+    return result
+
+
+def _save_trajectory_gate_ack(
+    db_path: str | Path,
+    deal_id: str,
+    *,
+    events: dict[str, int],
+    probe_ignores: dict[str, set[str]],
+    expected_revision: int,
+) -> None:
+    try:
+        put_crm_sync_state(
+            db_path,
+            f"{TRAJECTORY_GATE_ACK_PREFIX}{deal_id}",
+            {
+                "events": dict(events),
+                "probe_ignores": {key: sorted(values) for key, values in probe_ignores.items() if values},
+            },
+            expected_revision=expected_revision,
+        )
+    except RuntimeError:
+        # A concurrent scheduler/job retained a newer watermark. Re-reading it
+        # next cycle is safer than replacing it with this older observation.
+        pass
+
+
 def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | None = None,
-                  probe_states: dict[str, dict] | None = None) -> dict[str, set[str]]:
+                  probe_states: dict[str, dict] | None = None,
+                  ignored_ids: dict[str, dict[str, set[str]]] | None = None) -> dict[str, set[str]]:
     current = now or datetime.now(MSK_TZ)
     probe_states = probe_states or {}
+    ignored_ids = ignored_ids or {}
     def failed_before(response):
         return response.get("ok") is False or response.get("refresh_ok") is False
 
@@ -242,7 +357,9 @@ def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | Non
                         continue
                     rows = [row for row in response.get("items", []) if str(row.get("OWNER_ID")) == key.split(":", 1)[1]]
                     for deal_id, history in histories[key].items():
-                        if _different(rows, history.get("activities", {}).get("items", []), ("LAST_UPDATED", "FILES")):
+                        ignored = ignored_ids.get(deal_id, {}).get(f"activity:{key}", set())
+                        rows_for_deal = [row for row in rows if str(row.get("ID") or row.get("id") or "") not in ignored]
+                        if _different(rows_for_deal, history.get("activities", {}).get("items", []), ("LAST_UPDATED", "FILES")):
                             changes[deal_id].add("activity")
         for kind in ("contact", "company", "deal"):
             keys = [key for key in linked_records if key.startswith(kind + ":")]
@@ -273,11 +390,18 @@ def probe_changes(client: Any, payloads: dict[str, dict], *, now: datetime | Non
                 changed = not response.get("ok")
                 changed |= was_failed and bool(response.get("ok"))
                 if key.startswith("timeline:"):
-                    changed |= not isinstance(data, list) or _different(data or [], previous)
+                    ignored = ignored_ids.get(deal_id, {}).get(key, set())
+                    rows = [
+                        row for row in data
+                        if str(row.get("ID") or row.get("id") or "") not in ignored
+                    ] if isinstance(data, list) else []
+                    changed |= not isinstance(data, list) or _different(rows, previous)
                 elif key.startswith("chat:"):
                     changed |= not isinstance(data, dict) or _different((data or {}).get("messages", []), previous, ("text", "date", "author_id"))
                 else:
-                    changed |= digest(data) != digest(previous[0])
+                    task_id = key.split(":", 1)[1]
+                    if task_id not in ignored_ids.get(deal_id, {}).get("task", set()):
+                        changed |= digest(data) != digest(previous[0])
                 if changed:
                     changes[deal_id].add(key.split(":", 1)[0])
     return changes
@@ -290,14 +414,42 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
     versions = crm_trajectory_signal_versions(db_path)
     portfolio = {str(row["deal_id"]): row for row in list_deal_control_deals(db_path)}
     plans, probe_payloads = {}, {}
+    trajectory_probe_ignores: dict[str, dict[str, set[str]]] = {}
+    soft_ack_candidates: dict[str, tuple[dict[str, int], dict[str, set[str]], int]] = {}
     for deal_id in deal_ids:
         stored = get_crm_sync_state(db_path, f"deal_context:{deal_id}")
         ack = get_crm_sync_state(db_path, f"deal_ack:{deal_id}")
+        trajectory_ack = get_crm_sync_state(db_path, f"{TRAJECTORY_GATE_ACK_PREFIX}{deal_id}")
         payload, acknowledged = (stored or {}).get("payload", {}), (ack or {}).get("payload", {})
+        trajectory_acknowledged = (
+            (trajectory_ack or {}).get("payload", {})
+            if trajectory_ack is not None
+            else acknowledged
+        )
         raw = payload.get("context") or {}
         events = {key: versions.get(key, 0) for key in entity_histories(payload)}
         events[f"deal:{deal_id}"] = versions.get(f"deal:{deal_id}", 0)
-        plan = {"mode": "skip", "reasons": [], "events": events, "ack_revision": (ack or {}).get("revision", 0)}
+        prior_events = {
+            key: int((trajectory_acknowledged.get("events") or {}).get(key, 0) or 0)
+            for key in events
+        }
+        trajectory_events = list_crm_trajectory_signals_since(db_path, prior_events)
+        hard_trajectory = [event for event in trajectory_events if trajectory_event_disposition(event) == "hard"]
+        soft_trajectory = [event for event in trajectory_events if trajectory_event_disposition(event) == "soft"]
+        probe_ignores = _merge_probe_ignores(
+            _stored_probe_ignores(trajectory_acknowledged),
+            _trajectory_probe_ignores(soft_trajectory),
+        )
+        trajectory_probe_ignores[deal_id] = probe_ignores
+        plan = {
+            "mode": "skip",
+            "reasons": [],
+            "events": events,
+            "ack_revision": (ack or {}).get("revision", 0),
+            "trajectory_ack_revision": (trajectory_ack or {}).get("revision", 0),
+            "trajectory_event_types": sorted({str(event.get("event_type") or "unknown") for event in hard_trajectory}),
+            "trajectory_soft_event_types": sorted({str(event.get("event_type") or "unknown") for event in soft_trajectory}),
+        }
         if not raw or not ack or not raw.get("sync", {}).get("activity_cursor"):
             plan.update(mode="full", reasons=["initial_or_unacknowledged"])
         elif due(payload.get("full_attempt_at") or payload.get("full_success_at"), current):
@@ -306,10 +458,10 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
             deal = (raw.get("deal") or {}).get("item") or {}
             row = portfolio.get(deal_id) or {}
             if any(str(deal.get(field) or "") != str(row.get(local) or "") for field, local in (
-                ("DATE_MODIFY", "modified_at_crm"), ("STAGE_ID", "stage_id"), ("ASSIGNED_BY_ID", "manager_id"),
+                ("STAGE_ID", "stage_id"), ("ASSIGNED_BY_ID", "manager_id"),
             )) or not _same_amount(deal.get("OPPORTUNITY"), row.get("amount")):
                 plan["reasons"].append("deal_fields")
-            if events != acknowledged.get("events"):
+            if hard_trajectory:
                 plan["reasons"].append("trajectory")
             retry_at = parsed_at(raw.get("sync", {}).get("retry_at"))
             retry_due = raw.get("sync", {}).get("retry_required") and (retry_at is None or current >= retry_at)
@@ -328,6 +480,12 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
             if plan["mode"] in {"skip", "local"} and audio_due(payload, deal_id, current, audio_root=audio_root):
                 plan["mode"] = "audio"
                 plan["reasons"].append("audio_recheck")
+        if soft_trajectory and not hard_trajectory and sources_ok:
+            soft_ack_candidates[deal_id] = (
+                events,
+                probe_ignores,
+                (trajectory_ack or {}).get("revision", 0),
+            )
         plans[deal_id] = plan
     if probe_payloads:
         if client is None:
@@ -337,12 +495,27 @@ def plan_automatic_refresh(*, db_path: str | Path, deal_ids: list[str], client: 
             deal_id: ((get_crm_sync_state(db_path, f"deal_probe:{deal_id}") or {}).get("payload") or {})
             for deal_id in probe_payloads
         }
-        for deal_id, reasons in probe_changes(client, probe_payloads, now=current, probe_states=probe_states).items():
+        for deal_id, reasons in probe_changes(
+            client,
+            probe_payloads,
+            now=current,
+            probe_states=probe_states,
+            ignored_ids=trajectory_probe_ignores,
+        ).items():
             if reasons:
                 plans[deal_id]["mode"] = "incremental"
                 plans[deal_id]["reasons"].extend(sorted(reasons))
             if "probe_error" not in reasons:
                 record_activity_probe(db_path, deal_id, current)
+    for deal_id, (events, probe_ignores, expected_revision) in soft_ack_candidates.items():
+        if plans[deal_id]["mode"] == "skip":
+            _save_trajectory_gate_ack(
+                db_path,
+                deal_id,
+                events=events,
+                probe_ignores=probe_ignores,
+                expected_revision=expected_revision,
+            )
     return plans
 
 
@@ -360,3 +533,10 @@ def acknowledge_refresh(db_path: str | Path, deal_id: str, plan: dict, *, worksp
         "transcript_signature": transcript_signature(deal_id, workspace_root),
         "time_signal": time_signal(stored["payload"].get("context") or {}, datetime.now(MSK_TZ)),
     }, expected_revision=plan.get("ack_revision", 0))
+    _save_trajectory_gate_ack(
+        db_path,
+        deal_id,
+        events=events,
+        probe_ignores={},
+        expected_revision=plan.get("trajectory_ack_revision", 0),
+    )

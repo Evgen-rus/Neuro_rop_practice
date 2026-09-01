@@ -8,7 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from crm_sync_fixture import SnapshotHarness
-from api.crm_change_gate import _same_amount, acknowledge_refresh, audio_due, deal_job_can_acknowledge, probe_changes, transcript_signature
+from api.crm_change_gate import (
+    _same_amount, acknowledge_refresh, audio_due, deal_job_can_acknowledge, probe_changes,
+    trajectory_event_disposition, transcript_signature,
+)
 from bitrix.context_sync import ContextReadClient, atomic_json, dialog_delta, local_sync_lock, retained_response, retain_failed_sources, timeline_delta
 from bitrix.deals.download_deals_call_audio import refresh_missing_call_files
 from bitrix.internal_im_chat import fetch_internal_im_chats
@@ -119,7 +122,6 @@ class CrmChangeGateTests(unittest.TestCase):
         for field, value in (
             ("STAGE_ID", "NEXT"),
             ("ASSIGNED_BY_ID", "8"),
-            ("DATE_MODIFY", (self.h.remote.now + timedelta(seconds=1)).isoformat()),
         ):
             with self.subTest(field=field):
                 self.h.remote.deals[self.deal_id] = {**original, "OPPORTUNITY": "100.000000", field: value}
@@ -127,6 +129,15 @@ class CrmChangeGateTests(unittest.TestCase):
                 plan = self.h.plans()[self.deal_id]
                 self.assertEqual(plan["mode"], "incremental")
                 self.assertIn("deal_fields", plan["reasons"])
+
+    def test_date_modify_alone_is_not_a_substantial_deal_change(self):
+        self.h.remote.deals[self.deal_id]["DATE_MODIFY"] = (
+            self.h.remote.now + timedelta(seconds=1)
+        ).isoformat()
+        self.h.sync_portfolio()
+        plan = self.h.plans()[self.deal_id]
+        self.assertEqual(plan["mode"], "skip", plan)
+        self.assertNotIn("deal_fields", plan["reasons"])
 
     def test_new_activity_refreshes_delta_without_invoices_and_products(self):
         row = copy.deepcopy(self.h.remote.activities[self.deal_id][0])
@@ -272,6 +283,159 @@ class CrmChangeGateTests(unittest.TestCase):
         plan = self.h.plans()[self.deal_id]
         self.assertEqual(plan["mode"], "local")
         self.assertIn("new_transcript", plan["reasons"])
+
+    def test_trajectory_classifier_keeps_client_and_uncertain_signals_heavy(self):
+        cases = [
+            ({"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "email", "completed": True, "direction": "1",
+            }}, "hard"),
+            ({"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "message", "completed": True, "direction": None,
+            }}, "hard"),
+            ({"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "call", "completed": True, "direction": "2", "files": [{"id": "recording"}],
+            }}, "hard"),
+            ({"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "call", "completed": True, "direction": "2", "files": [],
+            }}, "hard"),
+            ({"event_type": "crm_timeline_comment_observed", "payload": {
+                "is_messenger_mirror": True,
+            }}, "hard"),
+            ({"event_type": "deal_stage_changed", "payload": {}}, "hard"),
+            ({"event_type": "crm_business_field_changed", "payload": {
+                "field_name": "OPPORTUNITY",
+            }}, "hard"),
+            ({"event_type": "unknown_bitrix_fact", "payload": {}}, "hard"),
+        ]
+        for event, expected in cases:
+            with self.subTest(event_type=event["event_type"]):
+                self.assertEqual(trajectory_event_disposition(event), expected)
+
+    def test_trajectory_classifier_marks_only_explicit_manager_operations_soft(self):
+        cases = [
+            {"event_type": "crm_activity_planned", "payload": {"activity_kind": "task"}},
+            {"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "task", "completed": True,
+            }},
+            {"event_type": "crm_activity_observed", "payload": {
+                "activity_kind": "email", "completed": True, "direction": "2",
+            }},
+            {"event_type": "crm_task_history_observed", "payload": {"task_id": "77"}},
+            {"event_type": "crm_timeline_comment_observed", "payload": {
+                "comment_id": "88", "author_is_manager": True,
+            }},
+            {"event_type": "crm_business_field_changed", "payload": {"field_name": "DATE_MODIFY"}},
+            {"event_type": "crm_business_field_changed", "payload": {"field_name": "COMMENTS"}},
+        ]
+        for event in cases:
+            with self.subTest(event_type=event["event_type"], payload=event["payload"]):
+                self.assertEqual(trajectory_event_disposition(event), "soft")
+
+    def test_outgoing_trajectory_activity_is_acknowledged_without_deal_job(self):
+        activity = copy.deepcopy(self.h.remote.activities[self.deal_id][0])
+        activity.update(ID="99920", DIRECTION="2", LAST_UPDATED=self.h.remote.now.isoformat(),
+                        START_TIME=self.h.remote.now.isoformat(), FILES=[])
+        self.h.remote.activities[self.deal_id].append(activity)
+        record_manager_trajectory_event(
+            self.h.db,
+            entity_type="deal",
+            entity_id=self.deal_id,
+            manager_id="7",
+            event_type="crm_activity_observed",
+            source="bitrix",
+            source_event_key="outgoing-email-99920",
+            occurred_at=self.h.remote.now.isoformat(),
+            payload={
+                "activity_id": "99920", "activity_kind": "email", "completed": True,
+                "direction": "2", "files": [],
+            },
+        )
+        first = self.h.plans()[self.deal_id]
+        self.assertEqual(first["mode"], "skip", first)
+        self.assertEqual(first["trajectory_soft_event_types"], ["crm_activity_observed"])
+        self.assertNotIn("trajectory", first["reasons"])
+        self.assertEqual(self.h.plans()[self.deal_id]["mode"], "skip")
+        trajectory_ack = get_crm_sync_state(self.h.db, f"deal_trajectory_gate_ack:{self.deal_id}")
+        self.assertIn("99920", trajectory_ack["payload"]["probe_ignores"][f"activity:deal:{self.deal_id}"])
+
+    def test_internal_comment_trajectory_does_not_reappear_as_timeline_probe(self):
+        self.h.remote.comments[("deal", self.deal_id)].append({
+            "ID": "99921", "CREATED": self.h.remote.now.isoformat(), "AUTHOR_ID": "7",
+            "COMMENT": "Синтетический внутренний комментарий",
+        })
+        record_manager_trajectory_event(
+            self.h.db,
+            entity_type="deal",
+            entity_id=self.deal_id,
+            manager_id="7",
+            event_type="crm_timeline_comment_observed",
+            source="bitrix_timeline",
+            source_event_key="internal-comment-99921",
+            occurred_at=self.h.remote.now.isoformat(),
+            payload={"comment_id": "99921", "author_is_manager": True},
+        )
+        first = self.h.plans()[self.deal_id]
+        self.assertEqual(first["mode"], "skip", first)
+        self.assertEqual(self.h.plans()[self.deal_id]["mode"], "skip")
+
+    def test_task_history_trajectory_does_not_reappear_as_task_probe(self):
+        state = self.h.state()
+        state["payload"]["context"]["bitrix_open_task_ids"] = ["77"]
+        state["payload"]["context"]["bitrix_tasks"] = {
+            "77": {"ok": True, "response": {"result": {"task": {
+                "id": "77", "status": "2", "deadline": self.h.remote.now.isoformat(),
+            }}}},
+        }
+        put_crm_sync_state(
+            self.h.db,
+            f"deal_context:{self.deal_id}",
+            state["payload"],
+            expected_revision=state["revision"],
+        )
+        ack = get_crm_sync_state(self.h.db, f"deal_ack:{self.deal_id}")
+        trajectory_ack = get_crm_sync_state(self.h.db, f"deal_trajectory_gate_ack:{self.deal_id}")
+        acknowledge_refresh(self.h.db, self.deal_id, {
+            "ack_revision": ack["revision"],
+            "trajectory_ack_revision": trajectory_ack["revision"],
+            "events": ack["payload"]["events"],
+        }, workspace_root=self.h.workspace)
+        self.h.remote.tasks["77"] = {
+            "id": "77", "status": "5", "deadline": self.h.remote.now.isoformat(),
+        }
+        record_manager_trajectory_event(
+            self.h.db,
+            entity_type="deal",
+            entity_id=self.deal_id,
+            manager_id="7",
+            event_type="crm_task_history_observed",
+            source="bitrix_tasks",
+            source_event_key="task-status-77",
+            occurred_at=self.h.remote.now.isoformat(),
+            payload={"task_id": "77", "field": "STATUS", "from_value": "2", "to_value": "5"},
+        )
+        first = self.h.plans()[self.deal_id]
+        self.assertEqual(first["mode"], "skip", first)
+        self.assertEqual(self.h.plans()[self.deal_id]["mode"], "skip")
+
+    def test_incoming_trajectory_activity_keeps_previous_incremental_path(self):
+        record_manager_trajectory_event(
+            self.h.db,
+            entity_type="deal",
+            entity_id=self.deal_id,
+            manager_id="7",
+            event_type="crm_activity_observed",
+            source="bitrix",
+            source_event_key="incoming-email-99922",
+            occurred_at=self.h.remote.now.isoformat(),
+            payload={
+                "activity_id": "99922", "activity_kind": "email", "completed": True,
+                "direction": "1", "files": [],
+            },
+        )
+        plan = self.h.plans()[self.deal_id]
+        self.assertEqual(plan["mode"], "incremental", plan)
+        self.assertIn("trajectory", plan["reasons"])
+        self.assertEqual(plan["trajectory_event_types"], ["crm_activity_observed"])
 
     def test_late_trajectory_event_is_not_swallowed_by_job_acknowledgement(self):
         plan = self.h.plans()[self.deal_id]

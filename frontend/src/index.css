@@ -8706,28 +8706,22 @@ ul.facts.bad li:before {
 .dc-daily-criterion.bad .dc-daily-criterion-state { color: var(--daily-red); }
 
 .dc-daily-criterion-tip {
-  display: none;
-  position: absolute;
-  z-index: 12;
-  top: 100%;
-  left: 50%;
+  position: fixed;
+  inset: auto;
+  box-sizing: border-box;
   width: max-content;
-  max-width: min(240px, calc(100vw - 32px));
-  padding-top: 4px;
-  transform: translateX(-50%);
+  max-width: min(280px, calc(100vw - 24px));
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
   text-align: left;
   cursor: default;
 }
 
-.dc-daily-criterion:last-child .dc-daily-criterion-tip {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-
-.dc-daily-criterion-icon-wrap:hover .dc-daily-criterion-tip,
-.dc-daily-criterion-icon-wrap:focus-within .dc-daily-criterion-tip,
-.dc-daily-criterion-icon-wrap.pinned .dc-daily-criterion-tip {
+.dc-daily-criterion-tip:popover-open {
   display: block;
 }
 
@@ -9509,12 +9503,6 @@ ul.facts.bad li:before {
   .dc-daily-resizer { display: none; }
 
   .dc-daily-argument-scope { grid-template-columns: 1fr; }
-
-  .dc-daily-criterion:last-child .dc-daily-criterion-tip {
-    left: auto;
-    right: 0;
-    transform: none;
-  }
 }
 
 .dc-prompt-lab { display: grid; gap: 12px; min-width: 0; }

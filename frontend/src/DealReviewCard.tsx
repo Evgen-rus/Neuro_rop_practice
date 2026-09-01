@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 
 import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommunicationsToday } from './api'
 import { useCommunicationDialog } from './communicationDialogContext'
@@ -221,17 +221,151 @@ function QualityArgumentation({
   )
 }
 
+function positionQualityTip(panel: HTMLElement, trigger: HTMLElement) {
+  const anchor = trigger.getBoundingClientRect()
+  const bounds = panel.getBoundingClientRect()
+  const margin = 12
+  const gap = 6
+  const below = anchor.bottom + gap
+  const top = below + bounds.height <= window.innerHeight - margin
+    ? below
+    : anchor.top - gap - bounds.height
+  panel.style.left = `${Math.max(margin, Math.min(anchor.left, window.innerWidth - bounds.width - margin))}px`
+  panel.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - bounds.height - margin))}px`
+}
+
+function QualityCriterionTip({
+  id,
+  open,
+  triggerRef,
+  onKeepOpen,
+  onRelease,
+  children,
+}: {
+  id: string
+  open: boolean
+  triggerRef: RefObject<HTMLButtonElement | null>
+  onKeepOpen: () => void
+  onRelease: () => void
+  children: ReactNode
+}) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  // popover="manual" поднимает подсказку в top layer, иначе её обрезают карточки и overflow родителя.
+  useLayoutEffect(() => {
+    const panel = panelRef.current
+    const trigger = triggerRef.current
+    if (!panel || typeof panel.showPopover !== 'function') return
+    if (open && trigger) {
+      if (!panel.matches(':popover-open')) panel.showPopover()
+      const place = () => positionQualityTip(panel, trigger)
+      place()
+      const frame = requestAnimationFrame(place)
+      window.addEventListener('resize', place)
+      window.addEventListener('scroll', place, true)
+      return () => {
+        cancelAnimationFrame(frame)
+        window.removeEventListener('resize', place)
+        window.removeEventListener('scroll', place, true)
+        if (panel.matches(':popover-open')) panel.hidePopover()
+      }
+    }
+    if (panel.matches(':popover-open')) panel.hidePopover()
+  }, [open, triggerRef])
+  return (
+    <div
+      ref={panelRef}
+      id={id}
+      popover="manual"
+      role="tooltip"
+      className="dc-daily-criterion-tip"
+      onPointerEnter={onKeepOpen}
+      onPointerLeave={onRelease}
+    >
+      {children}
+    </div>
+  )
+}
+
+function QualityCriterionIcon({
+  label,
+  describedBy,
+  score,
+  open,
+  pinned,
+  onKeepHover,
+  onReleaseHover,
+  onTogglePin,
+  children,
+}: {
+  label: string
+  describedBy: string
+  score?: number | null
+  open: boolean
+  pinned: boolean
+  onKeepHover: () => void
+  onReleaseHover: () => void
+  onTogglePin: () => void
+  children: ReactNode
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  return (
+    <span
+      className={`dc-daily-criterion-icon-wrap${pinned ? ' pinned' : ''}`}
+      onPointerEnter={onKeepHover}
+      onPointerLeave={onReleaseHover}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="dc-daily-criterion-icon"
+        aria-label={`Пояснение: ${label}`}
+        aria-describedby={describedBy}
+        aria-expanded={open}
+        onClick={onTogglePin}
+        onFocus={onKeepHover}
+        onBlur={onReleaseHover}
+      >
+        {score === 1 ? '✓' : score === 0 ? '!' : '–'}
+      </button>
+      <QualityCriterionTip
+        id={describedBy}
+        open={open}
+        triggerRef={triggerRef}
+        onKeepOpen={onKeepHover}
+        onRelease={onReleaseHover}
+      >
+        {children}
+      </QualityCriterionTip>
+    </span>
+  )
+}
+
 function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDeal; snapshotDay?: boolean }) {
   const quality = deal.quality
   const qualityCaption = dailyQualityCaption(quality, snapshotDay)
   const hasScores = Object.values(quality.criteria).some((item) => item.score != null)
   const tipId = useId()
   const [pinned, setPinned] = useState<keyof typeof QUALITY_LABELS | null>(null)
+  const [hovered, setHovered] = useState<keyof typeof QUALITY_LABELS | null>(null)
   const blockRef = useRef<HTMLElement | null>(null)
+  const hoverTimer = useRef<ReturnType<typeof window.setTimeout> | 0>(0)
+  const visible = pinned ?? hovered
+  function keepHover(key: keyof typeof QUALITY_LABELS) {
+    window.clearTimeout(hoverTimer.current)
+    setHovered(key)
+  }
+  function releaseHover() {
+    window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => setHovered(null), 140)
+  }
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
   useEffect(() => {
     if (!pinned) return
     const close = (event: PointerEvent) => {
-      if (!blockRef.current?.contains(event.target as Node)) setPinned(null)
+      const target = event.target
+      if (blockRef.current?.contains(target as Node)) return
+      if (target instanceof Element && target.closest('.dc-daily-criterion-tip')) return
+      setPinned(null)
     }
     document.addEventListener('pointerdown', close)
     return () => document.removeEventListener('pointerdown', close)
@@ -264,21 +398,18 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
             const label = QUALITY_LABELS[key]
             return (
               <li key={key} className={`dc-daily-criterion ${tone}`}>
-                <span className={`dc-daily-criterion-icon-wrap${pinned === key ? ' pinned' : ''}`}>
-                  <button
-                    type="button"
-                    className="dc-daily-criterion-icon"
-                    aria-label={`Пояснение: ${label}`}
-                    aria-describedby={describedBy}
-                    aria-expanded={pinned === key}
-                    onClick={() => setPinned((current) => current === key ? null : key)}
-                  >
-                    {item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}
-                  </button>
-                  <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
-                    <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
-                  </div>
-                </span>
+                <QualityCriterionIcon
+                  label={label}
+                  describedBy={describedBy}
+                  score={item.score}
+                  open={visible === key}
+                  pinned={pinned === key}
+                  onKeepHover={() => keepHover(key)}
+                  onReleaseHover={releaseHover}
+                  onTogglePin={() => setPinned((current) => current === key ? null : key)}
+                >
+                  <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
+                </QualityCriterionIcon>
                 <span className="dc-daily-criterion-name">
                   <span className="dc-daily-criterion-label">{label}</span>
                 </span>
