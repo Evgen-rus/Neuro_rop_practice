@@ -513,7 +513,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [analysisConfirmDeal, setAnalysisConfirmDeal] = useState<DealControlDeal | null>(null)
   const [commentsDealId, setCommentsDealId] = useState('')
   const canOpenRopView = user.role === 'admin' || user.role === 'rop'
-  const canOpenManagerView = user.role === 'admin' || user.role === 'manager'
+  const canOpenManagerView = user.role === 'admin' || user.role === 'rop' || user.role === 'manager'
+  const managerViewOwnTasks = user.role === 'manager'
 
   function openDashboard() {
     setView('dashboard')
@@ -547,9 +548,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
   function openManagerView() {
     setView('manager')
+    // РОП сразу видит всю команду; менеджер — только себя; admin — выбранного или первого.
     setManagerFilter(user.role === 'manager'
       ? user.manager_id || ''
-      : selected?.manager_id || managers[0]?.[0] || '')
+      : user.role === 'rop'
+        ? ''
+        : selected?.manager_id || managers[0]?.[0] || '')
     setTimeView('today')
   }
 
@@ -933,7 +937,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </main>
   }
 
-  const copyForView = VIEW_COPY[view]
+  const copyForView = view === 'manager' && !managerViewOwnTasks
+    ? { title: 'Задачи менеджера', subtitle: VIEW_COPY.manager.subtitle }
+    : VIEW_COPY[view]
 
   return <main className={`dc-shell ${menuOpen ? 'menu-open' : ''}`}>
     <aside className="dc-sidebar">
@@ -950,8 +956,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Ежедневный контроль">
           <span>▣</span><b>Ежедневный контроль</b><small>Разбор команды к планёрке</small>
         </button> : null}
-        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={user.role === 'manager' ? 'Мои задачи' : 'Задачи менеджера'}>
-          <span>✓</span><b>Мои задачи</b><small>Подготовка к касаниям</small>
+        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}>
+          <span>✓</span><b>{managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}</b><small>Подготовка к касаниям</small>
         </button> : null}
         {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Траектория">
           <span>⌁</span><b>Траектория</b><small>Рабочий день менеджеров</small>
@@ -969,7 +975,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
-        <Kpis view={view} summary={filteredSummary} />
+        <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />
         <div className="dc-refresh">
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
             {syncing ? <><span className="dc-spinner" />Обновляем Bitrix…</> : <><span>⟳</span>Обновить Bitrix</>}
@@ -1073,7 +1079,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   </main>
 }
 
-function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDashboard['summary'] }) {
+function Kpis({ view, summary, ownTasks }: { view: DealControlView; summary: DealControlDashboard['summary']; ownTasks: boolean }) {
   const dashboard = view === 'dashboard'
   const values = dashboard
     ? [
@@ -1084,7 +1090,7 @@ function Kpis({ view, summary }: { view: DealControlView; summary: DealControlDa
         ['%', 'Средняя вероятность', summary.average_probability == null ? '—' : `${summary.average_probability}%`, 'orange'],
       ]
     : [
-        ['◇', view === 'rop' ? 'Всего задач на контроле' : 'Всего моих задач', summary.tasks_total, 'blue'],
+        ['◇', view === 'rop' || !ownTasks ? 'Всего задач на контроле' : 'Всего моих задач', summary.tasks_total, 'blue'],
         ['◷', 'Просрочено', summary.tasks_overdue, 'red'],
         ['▣', 'На сегодня', summary.tasks_today, 'blue'],
         ['▤', 'На завтра', summary.tasks_tomorrow, 'orange'],
@@ -1114,7 +1120,7 @@ function Filters(props: {
 }) {
   return <section className="dc-filters">
     {props.showManagerFilter ? <select aria-label="Менеджер" value={props.managerFilter} onChange={(event) => props.onManager(event.target.value)}>
-      <option value="">{props.view === 'manager' ? 'Выберите менеджера' : 'Все менеджеры'}</option>
+      <option value="">Все менеджеры</option>
       {props.managers.map(([id, name]) => <option value={id} key={id}>{name}</option>)}
     </select> : null}
     {props.view === 'dashboard' ? <select value={props.stageFilter} onChange={(event) => props.onStage(event.target.value)}>
@@ -1559,7 +1565,7 @@ function DealDetail(props: {
   const activeReportId = props.deal?.coaching.report_id
   const activeDealId = props.deal?.deal_id || ''
   // На дашборде правая панель следует роли: менеджер всегда видит свой экран,
-  // admin/rop — экран РОПа. Вкладка «Мои задачи» по-прежнему открывает экран менеджера для admin.
+  // admin/rop — экран РОПа. Вкладка «Задачи менеджера» открывает экран менеджера для admin и rop.
   const managerScreen = props.userRole === 'manager' || props.view === 'manager'
   const reloadDetail = props.onReload
   const visibleRecommendation = props.deal ? neuroRopTaskOf(props.deal) : null
