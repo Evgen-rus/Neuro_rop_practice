@@ -79,6 +79,12 @@ function directionLabel(direction: string) {
 
 const INSUFFICIENT_QUALITY_LABEL = 'Нет данных для оценки'
 
+function criterionStateLabel(score?: number | null): string | null {
+  if (score === 1) return 'Выполнено'
+  if (score === 0) return 'Не выполнено'
+  return null
+}
+
 function humanQualityText(value?: string | null, snapshotDay = false) {
   if (!value) return value
   const cleaned = value
@@ -199,7 +205,13 @@ function QualityArgumentation({
 }) {
   const reason = quality.zero_reasons.find((item) => item.criterion === criterion)
   const item = quality.criteria[criterion]
-  const explanation = reason?.explanation || item.verdict || quality.insufficient_reason || quality.scope_summary
+  const explanation = (
+    reason?.explanation
+    || criterionStateLabel(item.score)
+    || item.verdict
+    || quality.insufficient_reason
+    || quality.scope_summary
+  )
   return (
     <div className="dc-daily-argument-body">
       <strong>{QUALITY_LABELS[criterion]}</strong>
@@ -272,7 +284,7 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
                 </span>
                 <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
                 {item.score != null ? (
-                  <span className="dc-daily-criterion-state">{humanQualityText(item.verdict, snapshotDay)}</span>
+                  <span className="dc-daily-criterion-state">{criterionStateLabel(item.score)}</span>
                 ) : null}
               </li>
             )

@@ -366,7 +366,8 @@ test('daily quality renders system zeros, pending, unavailable and not-required 
     assert.equal((html.match(/dc-daily-criterion bad/g) || []).length, status === 'no_work' ? 3 : 0)
     assert.doesNotMatch(html, /<details[^>]*dc-daily-argument/)
     assert.match(html, /dc-daily-criterion-tip/)
-    assert.equal((html.match(/<p>За сегодня<\/p>/g) || []).length, 3)
+    const tip = score === 1 ? 'Выполнено' : score === 0 ? 'Не выполнено' : 'За сегодня'
+    assert.equal((html.match(new RegExp(`<p>${tip}</p>`, 'g')) || []).length, 3)
   }
 })
 
@@ -529,7 +530,8 @@ test('snapshot wording names the report day instead of calendar today', () => {
   }))
   assert.match(html, /Коммуникации за этот день/)
   assert.doesNotMatch(html, /Коммуникации за сегодня/)
-  assert.match(html, /В этот день не подтверждено/)
+  assert.equal((html.match(/Не выполнено/g) || []).length, 6)
+  assert.doesNotMatch(html, /В этот день не подтверждено/)
   assert.match(html, /В этот день по актуальной задаче не было содержательной клиентской коммуникации/)
   assert.doesNotMatch(html, /Сегодня не подтверждено|ещё нет содержательной/)
 })

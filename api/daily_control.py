@@ -574,7 +574,7 @@ def _daily_quality_block(deal: dict[str, Any], now: datetime) -> dict[str, Any]:
         return {
             "status": status, "business_date": day, "cutoff_at": _iso(current),
             "source": "system", "criteria": {
-                name: {"score": 0 if zero else None, "verdict": "Сегодня не подтверждено" if zero else reason}
+                name: {"score": 0 if zero else None, "verdict": "Не выполнено" if zero else reason}
                 for name in ("next_action", "value_development", "data_collection")
             }, "confirmed_count": 0 if zero else None, "total": 3,
             "scope_summary": reason, "zero_reasons": [], "summary_for_rop": None,

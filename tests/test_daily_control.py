@@ -231,6 +231,10 @@ class DailyQualityTests(unittest.TestCase):
                 result = self.quality()
                 self.assertEqual(result["status"], "no_work")
                 self.assertEqual([v["score"] for v in result["criteria"].values()], [0, 0, 0])
+                self.assertEqual(
+                    {item["verdict"] for item in result["criteria"].values()},
+                    {"Не выполнено"},
+                )
                 self.assertEqual(result["source"], "system")
                 self.assertEqual(classify_deal_status(self.deal)[0], "red")
 
