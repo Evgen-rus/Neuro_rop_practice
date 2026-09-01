@@ -8614,23 +8614,44 @@ ul.facts.bad li:before {
   padding: 7px 9px;
 }
 
-.dc-daily-criterion-icon {
+.dc-daily-criterion-icon-wrap {
+  position: relative;
   grid-row: 1 / 3;
+  display: inline-flex;
+  align-self: start;
+  margin-top: 1px;
+}
+
+.dc-daily-criteria.compact .dc-daily-criterion-icon-wrap {
+  grid-row: auto;
+  align-self: center;
+  margin: 0;
+}
+
+.dc-daily-criterion-icon {
   display: grid;
   width: 20px;
   height: 20px;
-  margin-top: 1px;
   place-items: center;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   color: #fff;
   background: #94a3b8;
-  font-size: 11px;
-  font-weight: 700;
+  font: 700 11px/1 inherit;
+  cursor: help;
+  appearance: none;
 }
 
-.dc-daily-criteria.compact .dc-daily-criterion-icon {
-  grid-row: auto;
-  margin: 0;
+.dc-daily-criterion-icon:hover,
+.dc-daily-criterion-icon:focus-visible,
+.dc-daily-criterion-icon-wrap.pinned .dc-daily-criterion-icon {
+  box-shadow: 0 0 0 2px rgba(23, 104, 242, .28);
+}
+
+.dc-daily-criterion-icon:focus-visible {
+  outline: 2px solid var(--daily-blue);
+  outline-offset: 1px;
 }
 
 .dc-daily-criterion-name {
@@ -8683,40 +8704,6 @@ ul.facts.bad li:before {
 .dc-daily-criterion.bad .dc-daily-criterion-icon { background: var(--daily-red); }
 .dc-daily-criterion.bad .dc-daily-criterion-state { color: var(--daily-red); }
 
-.dc-daily-criterion-hint-wrap {
-  position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-}
-
-.dc-daily-criterion-hint {
-  display: grid;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: #edf3fb;
-  color: #315a86;
-  font: 800 9px/1 inherit;
-  cursor: help;
-}
-
-.dc-daily-criterion-hint:hover,
-.dc-daily-criterion-hint:focus-visible,
-.dc-daily-criterion-hint-wrap.pinned .dc-daily-criterion-hint {
-  background: #d7e6f8;
-  color: #1768f2;
-}
-
-.dc-daily-criterion-hint:focus-visible {
-  outline: 2px solid var(--daily-blue);
-  outline-offset: 1px;
-}
-
 .dc-daily-criterion-tip {
   display: none;
   position: absolute;
@@ -8737,9 +8724,9 @@ ul.facts.bad li:before {
   transform: none;
 }
 
-.dc-daily-criterion-hint-wrap:hover .dc-daily-criterion-tip,
-.dc-daily-criterion-hint-wrap:focus-within .dc-daily-criterion-tip,
-.dc-daily-criterion-hint-wrap.pinned .dc-daily-criterion-tip {
+.dc-daily-criterion-icon-wrap:hover .dc-daily-criterion-tip,
+.dc-daily-criterion-icon-wrap:focus-within .dc-daily-criterion-tip,
+.dc-daily-criterion-icon-wrap.pinned .dc-daily-criterion-tip {
   display: block;
 }
 

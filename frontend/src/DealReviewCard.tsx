@@ -252,24 +252,23 @@ function DealQualityBlock({ deal, snapshotDay = false }: { deal: DailyControlDea
             const label = QUALITY_LABELS[key]
             return (
               <li key={key} className={`dc-daily-criterion ${tone}`}>
-                <span className="dc-daily-criterion-icon" aria-hidden="true">{item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}</span>
+                <span className={`dc-daily-criterion-icon-wrap${pinned === key ? ' pinned' : ''}`}>
+                  <button
+                    type="button"
+                    className="dc-daily-criterion-icon"
+                    aria-label={`Пояснение: ${label}`}
+                    aria-describedby={describedBy}
+                    aria-expanded={pinned === key}
+                    onClick={() => setPinned((current) => current === key ? null : key)}
+                  >
+                    {item.score === 1 ? '✓' : item.score === 0 ? '!' : '–'}
+                  </button>
+                  <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
+                    <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
+                  </div>
+                </span>
                 <span className="dc-daily-criterion-name">
                   <span className="dc-daily-criterion-label">{label}</span>
-                  <span className={`dc-daily-criterion-hint-wrap${pinned === key ? ' pinned' : ''}`}>
-                    <button
-                      type="button"
-                      className="dc-daily-criterion-hint"
-                      aria-label={`Пояснение: ${label}`}
-                      aria-describedby={describedBy}
-                      aria-expanded={pinned === key}
-                      onClick={() => setPinned((current) => current === key ? null : key)}
-                    >
-                      i
-                    </button>
-                    <div id={describedBy} role="tooltip" className="dc-daily-criterion-tip">
-                      <QualityArgumentation quality={quality} criterion={key} snapshotDay={snapshotDay} />
-                    </div>
-                  </span>
                 </span>
                 <strong className="dc-daily-criterion-score">{item.score == null ? '—' : `${item.score}/1`}</strong>
                 {item.score != null ? (
