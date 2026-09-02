@@ -3524,7 +3524,12 @@ textarea {
 
 .dc-analysis-confirm {
   display: grid;
+  width: min(480px, 94vw);
   gap: 8px;
+}
+
+.dc-analysis-confirm > div {
+  flex-wrap: wrap;
 }
 
 .dc-analysis-confirm > span {

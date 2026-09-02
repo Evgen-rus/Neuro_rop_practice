@@ -2230,7 +2230,9 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
     if body.force_llm and not body.confirm_paid:
         raise HTTPException(status_code=409, detail="Для принудительного LLM-анализа подтвердите платный запуск")
     paid = bool(body.force_llm or (body.analyze and body.confirm_paid) or (body.transcribe_audio and body.confirm_paid))
-    _require_analyze_scope(body.entity_type, ids, paid=paid)
+    user = _require_analyze_scope(body.entity_type, ids, paid=paid)
+    if body.force_llm and str(user.get("role") or "") != "admin":
+        raise HTTPException(status_code=403, detail="Принудительный полный LLM-анализ доступен только администратору")
     options = AnalyzeOptions(
         entity_type=body.entity_type,
         ids=ids,

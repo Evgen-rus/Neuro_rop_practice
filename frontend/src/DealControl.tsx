@@ -69,6 +69,7 @@ import {
   isCallScriptContent,
   isNeuroRopTask,
 } from './api'
+import { analysisConfirmCopy, shouldConfirmAnalysis } from './analysisConfirm'
 import { laterCheckCopy, reviewFromLabel, reviewHeadlineAt } from './analysisReviewBanner'
 import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
@@ -898,7 +899,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }
 
-  async function runAnalyzeDeal(deal: DealControlDeal, confirmPaid = false) {
+  async function runAnalyzeDeal(deal: DealControlDeal, confirmPaid = false, forceLlm = false) {
     if (!deal.can_run_analysis) {
       setError('Анализ недоступен для этой сделки.')
       return
@@ -918,7 +919,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         redownload_audio: false,
         transcribe_audio: true,
         analyze: true,
-        force_llm: false,
+        force_llm: forceLlm,
         confirm_paid: confirmPaid,
         transcript_mode: 'all',
       })
@@ -930,7 +931,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }
 
   async function analyzeDeal(deal: DealControlDeal) {
-    if (deal.coaching.report_id) {
+    // Admin всегда выбирает проверку или принудительный FULL. Остальные роли видят окно только если отчёт уже есть.
+    if (shouldConfirmAnalysis(user.role, Boolean(deal.coaching.report_id))) {
       setAnalysisConfirmDeal(deal)
       return
     }
@@ -1108,15 +1110,13 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       </>}
     </section>
 
-    {analysisConfirmDeal ? <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) setAnalysisConfirmDeal(null) }}>
-      <section className="dc-modal dc-analysis-confirm">
-        <span>✦</span>
-        <h2>Проверить новые данные?</h2>
-        <p>Система обновит информацию из Bitrix и проверит новые звонки. Если появились существенные изменения, могут потребоваться платная транскрибация и новый AI-анализ.</p>
-        <small>Без значимых изменений текущий анализ останется актуальным, повторный LLM-анализ не запустится.</small>
-        <div><button className="dc-button" onClick={() => setAnalysisConfirmDeal(null)}>Отмена</button><button className="dc-button primary" onClick={() => { const deal = analysisConfirmDeal; setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true) }}>Проверить и обновить</button></div>
-      </section>
-    </div> : null}
+    {analysisConfirmDeal ? <AnalysisConfirmModal
+      deal={analysisConfirmDeal}
+      role={user.role}
+      onClose={() => setAnalysisConfirmDeal(null)}
+      onCheck={(deal) => { setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true, false) }}
+      onFull={(deal) => { setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true, true) }}
+    /> : null}
 
     {commentsDealId ? <DealCommentsModal
       deal={data?.deals.find((item) => item.deal_id === commentsDealId) || null}
@@ -1126,6 +1126,32 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
     {notice ? <NoticeToast message={notice} onClose={() => setNotice('')} /> : null}
   </main>
+}
+
+function AnalysisConfirmModal(props: {
+  deal: DealControlDeal
+  role: AuthUser['role']
+  onClose: () => void
+  onCheck: (deal: DealControlDeal) => void
+  onFull: (deal: DealControlDeal) => void
+}) {
+  const copy = analysisConfirmCopy({
+    role: props.role,
+    hasReport: Boolean(props.deal.coaching.report_id),
+  })
+  return <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
+    <section className="dc-modal dc-analysis-confirm">
+      <span>✦</span>
+      <h2>{copy.title}</h2>
+      <p>{copy.body}</p>
+      <small>{copy.note}</small>
+      <div>
+        <button className="dc-button" onClick={props.onClose}>Отмена</button>
+        <button className="dc-button primary" onClick={() => props.onCheck(props.deal)}>{copy.checkLabel}</button>
+        {copy.fullLabel ? <button className="dc-button" onClick={() => props.onFull(props.deal)}>{copy.fullLabel}</button> : null}
+      </div>
+    </section>
+  </div>
 }
 
 function Kpis({ view, summary, ownTasks }: { view: DealControlView; summary: DealControlDashboard['summary']; ownTasks: boolean }) {

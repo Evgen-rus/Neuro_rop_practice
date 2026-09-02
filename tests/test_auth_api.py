@@ -236,6 +236,35 @@ class DealAuthorizationTests(unittest.TestCase):
                 access.scoped_deal_metrics(_user("rop", user_id=2), manager_id="77")
         self.assertEqual(error.exception.status_code, 403)
 
+    def test_force_llm_analyze_is_admin_only(self) -> None:
+        body = app_api.AnalyzeRequest(
+            entity_type="deal",
+            ids="101",
+            force_llm=True,
+            confirm_paid=True,
+        )
+        with patch.object(app_api, "auth_current_user", return_value=_user("rop", user_id=2)), \
+             patch.object(app_api, "require_deal"), \
+             patch.object(app_api, "start_analyze_job") as start:
+            with self.assertRaises(HTTPException) as error:
+                app_api.analyze(body)
+        self.assertEqual(error.exception.status_code, 403)
+        start.assert_not_called()
+
+        with patch.object(app_api, "auth_current_user", return_value=_user("admin")), \
+             patch.object(app_api, "start_analyze_job", return_value={"job_id": "job-full"}) as start:
+            result = app_api.analyze(body)
+        self.assertEqual(result["job_id"], "job-full")
+        self.assertTrue(start.call_args.args[0].force_llm)
+
+    def test_force_llm_analyze_still_requires_paid_confirmation(self) -> None:
+        body = app_api.AnalyzeRequest(entity_type="deal", ids="101", force_llm=True, confirm_paid=False)
+        with patch.object(app_api, "start_analyze_job") as start:
+            with self.assertRaises(HTTPException) as error:
+                app_api.analyze(body)
+        self.assertEqual(error.exception.status_code, 409)
+        start.assert_not_called()
+
 
 class AuthContractTests(unittest.TestCase):
     def test_public_user_is_a_whitelist_and_source_role_is_not_request_identity(self) -> None:
