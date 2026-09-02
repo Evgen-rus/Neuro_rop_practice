@@ -478,6 +478,7 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
             latest = response.json()["latest"]
             self.assertEqual(latest["reports_published"], 1)
             self.assertEqual(latest["started_at"], run["started_at"])
+            self.assertEqual(latest["updated_deal_ids"], ["101"])
             if role == "admin":
                 read_details.assert_called_once_with(app_api.DEFAULT_DB_PATH, 42)
                 self.assertEqual(latest["details"][0]["deal_id"], "101")
@@ -486,7 +487,7 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
                 self.assertNotIn("details", latest)
                 self.assertNotIn("Deal 101", response.text)
 
-    def test_manager_aggregate_includes_only_own_deals_without_crm_ids(self) -> None:
+    def test_manager_aggregate_includes_only_own_ready_deal_ids(self) -> None:
         manager = _user("manager", manager_id="10", user_id=10)
         items = [
             {"entity_id": "101", "decision_status": "full", "publication_status": "published"},
@@ -510,11 +511,33 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
         self.assertEqual(payload["mini"], 0)
         self.assertEqual(payload["succeeded"], 1)
         self.assertEqual(payload["reports_published"], 1)
+        self.assertEqual(payload["updated_deal_ids"], ["101"])
         self.assertIsNone(payload["current"])
         dumped = json.dumps(payload)
         self.assertNotIn("entity_id", dumped)
-        self.assertNotIn("101", dumped)
+        self.assertNotIn("\"202\"", dumped)
         self.assertNotIn("Deal 101", dumped)
+
+    def test_latest_payload_lists_visible_full_and_mini_ids(self) -> None:
+        payload = access.automatic_analysis_latest_payload(
+            {
+                "business_date": "2026-08-18",
+                "status": "running",
+                "current_stage": "llm_analysis",
+                "started_at": "2026-08-18T12:00:00+03:00",
+                "updated_at": "2026-08-18T12:05:00+03:00",
+                "finished_at": None,
+            },
+            [
+                {"entity_id": "101", "decision_status": "full", "publication_status": "published"},
+                {"entity_id": "202", "decision_status": "mini", "publication_status": "not_applicable"},
+                {"entity_id": "303", "decision_status": "skip", "publication_status": "not_applicable"},
+                {"entity_id": "404", "decision_status": "full", "publication_status": "pending"},
+            ],
+        )
+        self.assertEqual(payload["updated_deal_ids"], ["101", "202"])
+        self.assertEqual(payload["reports_published"], 1)
+        self.assertEqual(payload["mini"], 1)
 
     def test_running_payload_shows_scoped_current_deal_without_foreign_ids(self) -> None:
         manager = _user("manager", manager_id="10", user_id=10)
@@ -558,6 +581,7 @@ class AutomaticAnalysisAccessTests(unittest.TestCase):
             payload = access.automatic_analysis_latest_payload(run, visible)
         self.assertEqual(payload["total"], 2)
         self.assertEqual(payload["current"], {"title": "Deal 303", "stage": "transcription"})
+        self.assertEqual(payload["updated_deal_ids"], [])
         dumped = json.dumps(payload)
         self.assertNotIn("entity_id", dumped)
         self.assertNotIn("Deal 202", dumped)

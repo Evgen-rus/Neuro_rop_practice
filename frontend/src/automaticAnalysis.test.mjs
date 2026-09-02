@@ -13,7 +13,7 @@ import {
   automaticAnalysisStageLabel,
   automaticAnalysisStatusLabel,
   canViewAutomaticAnalysis,
-  shouldReloadAfterAutomaticAnalysis,
+  automaticAnalysisRefreshPlan,
   shouldReloadAfterReportsPublished,
 } from './automaticAnalysis.ts'
 
@@ -136,21 +136,35 @@ test('reloads deal-control only when a new report appears', () => {
   assert.equal(shouldReloadAfterReportsPublished(undefined, 0), false)
 })
 
-test('reloads deal-control when an automatic packet finishes without a full report', () => {
-  assert.equal(shouldReloadAfterAutomaticAnalysis(
-    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
-    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
-  ), true)
+test('reloads the whole list when a new automatic packet starts after Bitrix sync', () => {
+  assert.deepEqual(automaticAnalysisRefreshPlan(
+    { status: 'done', started_at: '2026-08-20T08:00:00+03:00', updated_deal_ids: ['101'] },
+    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: [] },
+  ), { reloadPortfolio: true, dealIds: [] })
 })
 
-test('reloads deal-control when polling first sees a different completed packet', () => {
-  assert.equal(shouldReloadAfterAutomaticAnalysis(
-    { status: 'done', started_at: '2026-08-20T08:00:00+03:00', reports_published: 2 },
-    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 },
-  ), true)
+test('reloads the whole list when polling first sees a different completed packet', () => {
+  assert.deepEqual(automaticAnalysisRefreshPlan(
+    { status: 'done', started_at: '2026-08-20T08:00:00+03:00', updated_deal_ids: ['101'] },
+    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: [] },
+  ), { reloadPortfolio: true, dealIds: [] })
 })
 
-test('does not reload deal-control repeatedly for the same completed packet', () => {
-  const snapshot = { status: 'done', started_at: '2026-08-20T08:30:00+03:00', reports_published: 0 }
-  assert.equal(shouldReloadAfterAutomaticAnalysis(snapshot, snapshot), false)
+test('refreshes only newly ready FULL and MINI deals during the same packet', () => {
+  assert.deepEqual(automaticAnalysisRefreshPlan(
+    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: ['101'] },
+    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: ['101', '202'] },
+  ), { reloadPortfolio: false, dealIds: ['202'] })
+})
+
+test('does not rebuild the whole list when the same packet finishes', () => {
+  const snapshot = { status: 'done', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: ['101'] }
+  assert.deepEqual(
+    automaticAnalysisRefreshPlan(snapshot, snapshot),
+    { reloadPortfolio: false, dealIds: [] },
+  )
+  assert.deepEqual(automaticAnalysisRefreshPlan(
+    { status: 'running', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: ['101'] },
+    { status: 'done', started_at: '2026-08-20T08:30:00+03:00', updated_deal_ids: ['101'] },
+  ), { reloadPortfolio: false, dealIds: [] })
 })

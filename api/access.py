@@ -434,6 +434,24 @@ def _current_automatic_analysis_payload(
     return {"title": title, "stage": stage}
 
 
+def _updated_automatic_analysis_deal_ids(items: list[dict[str, Any]]) -> list[str]:
+    """IDs of scoped FULL published and MINI deals the UI can refresh one-by-one."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        decision = str(item.get("decision_status") or "")
+        publication = str(item.get("publication_status") or "")
+        entity_id = str(item.get("entity_id") or "").strip()
+        if not entity_id or entity_id in seen:
+            continue
+        ready = decision == "mini" or (decision == "full" and publication == "published")
+        if not ready:
+            continue
+        seen.add(entity_id)
+        ids.append(entity_id)
+    return ids
+
+
 def automatic_analysis_latest_payload(
     run: dict[str, Any] | None,
     items: list[dict[str, Any]],
@@ -467,6 +485,7 @@ def automatic_analysis_latest_payload(
         "full": full,
         "mini": mini,
         "reports_published": published,
+        "updated_deal_ids": _updated_automatic_analysis_deal_ids(items),
         "current_stage": run.get("current_stage"),
         "current": _current_automatic_analysis_payload(run, items),
         "started_at": run.get("started_at"),

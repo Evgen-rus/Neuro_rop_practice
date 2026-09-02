@@ -13,6 +13,7 @@ from api.deal_control import (
     _analysis_coaching,
     _today_communications,
     build_deal_control_dashboard,
+    build_deal_control_deal,
     load_deal_comments,
     refresh_deal_control,
 )
@@ -265,6 +266,17 @@ class DealControlTests(unittest.TestCase):
                 fallback = build_deal_control_dashboard(db_path=db_path)["deals"][0]
             self.assertEqual(fallback["pipeline_name"], "Воронка 15")
             self.assertEqual(fallback["review"]["pipeline_name"], "Воронка 15")
+
+    def test_single_deal_projection_matches_dashboard_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            self._save_deal(db_path)
+            now = datetime(2026, 7, 20, 12, tzinfo=MSK)
+            dashboard = build_deal_control_dashboard(db_path=db_path, now=now)
+            single = build_deal_control_deal(db_path=db_path, deal_id="101", now=now)
+            self.assertEqual(single, dashboard["deals"][0])
+            with self.assertRaisesRegex(ValueError, "не найдена"):
+                build_deal_control_deal(db_path=db_path, deal_id="missing", now=now)
 
     def test_neuro_recommendation_materialization_is_idempotent_and_uses_latest_report(self):
         with tempfile.TemporaryDirectory() as directory:

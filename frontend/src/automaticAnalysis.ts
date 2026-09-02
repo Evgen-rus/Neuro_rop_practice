@@ -33,12 +33,18 @@ export type AutomaticAnalysisLatest = {
   full: number
   mini: number
   reports_published: number
+  updated_deal_ids?: string[]
   current_stage: string | null
   current?: AutomaticAnalysisCurrent | null
   started_at: string | null
   updated_at: string | null
   finished_at: string | null
   details?: AutomaticAnalysisDetail[]
+}
+
+export type AutomaticAnalysisRefreshPlan = {
+  reloadPortfolio: boolean
+  dealIds: string[]
 }
 
 export function canViewAutomaticAnalysis(role: string): boolean {
@@ -122,14 +128,27 @@ export function shouldReloadAfterReportsPublished(
 
 type AutomaticAnalysisRefreshSnapshot = Pick<
   AutomaticAnalysisLatest,
-  'status' | 'started_at' | 'reports_published'
+  'status' | 'started_at' | 'updated_deal_ids'
 >
 
-export function shouldReloadAfterAutomaticAnalysis(
+function normalizedDealIds(value: string[] | null | undefined): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const raw of value || []) {
+    const id = String(raw || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+}
+
+export function automaticAnalysisRefreshPlan(
   previous: AutomaticAnalysisRefreshSnapshot | null | undefined,
   next: AutomaticAnalysisRefreshSnapshot | null | undefined,
-): boolean {
-  if (!previous || !next) return false
+): AutomaticAnalysisRefreshPlan {
+  const empty: AutomaticAnalysisRefreshPlan = { reloadPortfolio: false, dealIds: [] }
+  if (!previous || !next) return empty
 
   const previousStartedAt = String(previous.started_at || '')
   const nextStartedAt = String(next.started_at || '')
@@ -138,9 +157,14 @@ export function shouldReloadAfterAutomaticAnalysis(
     && nextStartedAt
     && previousStartedAt !== nextStartedAt,
   )
-  const nextTerminal = next.status !== 'running'
 
-  if (runChanged && nextTerminal) return true
-  if (!runChanged && previous.status === 'running' && nextTerminal) return true
-  return shouldReloadAfterReportsPublished(previous.reports_published, next.reports_published)
+  // A new packet appears only after Bitrix sync. One full dashboard reload
+  // picks up CRM fields and tasks across the visible list.
+  if (runChanged) {
+    return { reloadPortfolio: true, dealIds: [] }
+  }
+
+  const previousIds = new Set(normalizedDealIds(previous.updated_deal_ids))
+  const dealIds = normalizedDealIds(next.updated_deal_ids).filter((id) => !previousIds.has(id))
+  return { reloadPortfolio: false, dealIds }
 }

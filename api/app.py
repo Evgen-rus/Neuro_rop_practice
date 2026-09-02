@@ -33,6 +33,7 @@ from api.access import (
     can_view_job,
     deal_access,
     get_deal,
+    project_deal_row,
     require_deal,
     require_report,
     require_task,
@@ -72,7 +73,11 @@ from api.learning_shadow import (
     start_learning_shadow_run,
 )
 from api.deal_control import add_task as add_deal_control_task
-from api.deal_control import build_deal_control_dashboard, edit_task as edit_deal_control_task
+from api.deal_control import (
+    build_deal_control_dashboard,
+    build_deal_control_deal,
+    edit_task as edit_deal_control_task,
+)
 from api.deal_control import confirm_task_crm_match as confirm_deal_control_task_crm_match
 from api.deal_control import record_task_outcome as record_deal_control_task_outcome
 from api.deal_control import record_task_event as record_deal_control_task_event
@@ -1036,6 +1041,17 @@ def deal_control_sync() -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001 - surface a read-only CRM problem in the local UI
         raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.get("/api/deal-control/deals/{deal_id}")
+def deal_control_deal_get(deal_id: str) -> dict[str, Any]:
+    user = auth_current_user()
+    require_deal(deal_id, user=user, action="open")
+    try:
+        deal = build_deal_control_deal(db_path=DEFAULT_DB_PATH, deal_id=deal_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return project_deal_row(deal, user, full=True)
 
 
 @app.put("/api/deal-control/deals/{deal_id}")

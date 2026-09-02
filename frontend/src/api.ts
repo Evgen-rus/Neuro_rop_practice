@@ -1637,7 +1637,7 @@ export function activateAuthUser(userId: number) {
   })
 }
 
-function normalizeDealControlDashboard(payload: DealControlDashboard): DealControlDashboard {
+function normalizeDealControlDeal(deal: DealControlDeal): DealControlDeal {
   const emptyCommunications: DealControlCommunicationsToday = {
     date: '',
     available: false,
@@ -1666,33 +1666,35 @@ function normalizeDealControlDashboard(payload: DealControlDashboard): DealContr
     questions: [],
     script_variants: [],
   }
-  const deals = (Array.isArray(payload.deals) ? payload.deals : []).map((deal) => {
-    const foreignProjection = deal.read_only === true && deal.can_open !== true
-    return {
-      ...deal,
-      ownership: deal.ownership === 'own' || deal.ownership === 'foreign' || deal.ownership === 'unassigned'
-        ? deal.ownership
-        : 'unassigned',
-      is_own: deal.is_own === true,
-      read_only: deal.read_only === true,
-      can_open: deal.can_open === true,
-      can_edit: deal.can_edit === true,
-      can_run_analysis: deal.can_run_analysis === true,
-      can_run_paid_ai: deal.can_run_paid_ai === true,
-      bitrix_tasks: foreignProjection ? [] : (Array.isArray(deal.bitrix_tasks) ? deal.bitrix_tasks : []),
-      communications_today: foreignProjection ? emptyCommunications : (deal.communications_today || emptyCommunications),
-      manager_comments_preview: foreignProjection ? undefined : (deal.manager_comments_preview || {
-        available: false,
-        count: null,
-        items: [],
-      }),
-      tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
-      current_task: foreignProjection ? null : (deal.current_task || null),
-      manager_situation: foreignProjection ? null : (deal.manager_situation || null),
-      coaching: foreignProjection ? emptyCoaching : (deal.coaching || emptyCoaching),
-      review: foreignProjection ? undefined : deal.review,
-    }
-  })
+  const foreignProjection = deal.read_only === true && deal.can_open !== true
+  return {
+    ...deal,
+    ownership: deal.ownership === 'own' || deal.ownership === 'foreign' || deal.ownership === 'unassigned'
+      ? deal.ownership
+      : 'unassigned',
+    is_own: deal.is_own === true,
+    read_only: deal.read_only === true,
+    can_open: deal.can_open === true,
+    can_edit: deal.can_edit === true,
+    can_run_analysis: deal.can_run_analysis === true,
+    can_run_paid_ai: deal.can_run_paid_ai === true,
+    bitrix_tasks: foreignProjection ? [] : (Array.isArray(deal.bitrix_tasks) ? deal.bitrix_tasks : []),
+    communications_today: foreignProjection ? emptyCommunications : (deal.communications_today || emptyCommunications),
+    manager_comments_preview: foreignProjection ? undefined : (deal.manager_comments_preview || {
+      available: false,
+      count: null,
+      items: [],
+    }),
+    tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
+    current_task: foreignProjection ? null : (deal.current_task || null),
+    manager_situation: foreignProjection ? null : (deal.manager_situation || null),
+    coaching: foreignProjection ? emptyCoaching : (deal.coaching || emptyCoaching),
+    review: foreignProjection ? undefined : deal.review,
+  }
+}
+
+function normalizeDealControlDashboard(payload: DealControlDashboard): DealControlDashboard {
+  const deals = (Array.isArray(payload.deals) ? payload.deals : []).map(normalizeDealControlDeal)
   return { ...payload, deals }
 }
 
@@ -1751,6 +1753,12 @@ export function previewAnalysisProfile(
 
 export function fetchDealControl() {
   return api<DealControlDashboard>('/api/deal-control', { cache: 'no-store' }).then(normalizeDealControlDashboard)
+}
+
+export function fetchDealControlDeal(dealId: string) {
+  return api<DealControlDeal>(`/api/deal-control/deals/${encodeURIComponent(dealId)}`, { cache: 'no-store' }).then(
+    normalizeDealControlDeal,
+  )
 }
 
 export function fetchDealComments(dealId: string) {

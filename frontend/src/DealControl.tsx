@@ -6,6 +6,7 @@ import {
   fetchAutomaticAnalysisLatest,
   fetchDealComments,
   fetchDealControl,
+  fetchDealControlDeal,
   fetchManagerAssistantWorkspace,
   fetchManagerFullScript,
   fetchManagerFullScriptJob,
@@ -73,7 +74,8 @@ import { formatMoscowDateTime, moscowDateParts } from './dateTime'
 import {
   AUTOMATIC_ANALYSIS_IDLE_POLL_MS,
   automaticAnalysisPollInterval,
-  shouldReloadAfterAutomaticAnalysis,
+  automaticAnalysisRefreshPlan,
+  type AutomaticAnalysisRefreshPlan,
 } from './automaticAnalysis'
 import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
 import { TeamAdmin } from './TeamAdmin'
@@ -455,7 +457,13 @@ function NoticeToast({ message, onClose }: { message: string; onClose: () => voi
   )
 }
 
-function AutomaticAnalysisStatus({ onReportsPublished, role }: { onReportsPublished: () => void; role: string }) {
+function AutomaticAnalysisStatus({
+  onRefresh,
+  role,
+}: {
+  onRefresh: (plan: AutomaticAnalysisRefreshPlan) => void
+  role: string
+}) {
   // Keep polling for every role so hiding the panel does not disable dashboard refreshes.
   const [snapshot, setSnapshot] = useState<AutomaticAnalysisLatest | null>(null)
   const previousSnapshotRef = useRef<AutomaticAnalysisLatest | null>(null)
@@ -469,8 +477,9 @@ function AutomaticAnalysisStatus({ onReportsPublished, role }: { onReportsPublis
         if (cancelled) return
         const latest = payload.latest
         setSnapshot(latest)
-        if (shouldReloadAfterAutomaticAnalysis(previousSnapshotRef.current, latest)) {
-          onReportsPublished()
+        const plan = automaticAnalysisRefreshPlan(previousSnapshotRef.current, latest)
+        if (plan.reloadPortfolio || plan.dealIds.length) {
+          onRefresh(plan)
         }
         previousSnapshotRef.current = latest
         window.clearTimeout(timer)
@@ -486,7 +495,7 @@ function AutomaticAnalysisStatus({ onReportsPublished, role }: { onReportsPublis
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [onReportsPublished])
+  }, [onRefresh])
 
   return <AutomaticAnalysisPanel snapshot={snapshot} role={role} />
 }
@@ -589,6 +598,32 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }, [])
 
+  const reloadDeal = useCallback(async (dealId: string) => {
+    // Подтверждение, отметка задачи и конец анализа одной сделки меняют только её.
+    // Полный /api/deal-control здесь не нужен: он заново читает отчёты всего портфеля.
+    if (!dealId) return
+    const deal = await fetchDealControlDeal(dealId)
+    setData((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        deals: current.deals.map((item) => item.deal_id === deal.deal_id ? deal : item),
+      }
+    })
+  }, [])
+
+  const applyAutomaticAnalysisRefresh = useCallback((plan: AutomaticAnalysisRefreshPlan) => {
+    // Новый пакет: Bitrix sync уже прошёл, один полный reload подтягивает CRM по списку.
+    // Дальше FULL/MINI приходят по одной сделке — без повторной сборки портфеля.
+    if (plan.reloadPortfolio) {
+      void reload()
+      return
+    }
+    for (const dealId of plan.dealIds) {
+      void reloadDeal(dealId).catch(() => undefined)
+    }
+  }, [reload, reloadDeal])
+
   const refreshScope = useCallback(async () => {
     const response = await fetchDealControl()
     setData(response)
@@ -632,10 +667,10 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           setNotice(progress?.stage === 'skipped'
             ? 'Новых значимых данных нет — текущий анализ актуален.'
             : `Анализ сделки #${analyzingDealId} завершён. Карточка обновлена.`)
-          await reload()
+          await reloadDeal(analyzingDealId)
         } else if (!terminalHandled && next.status === 'error') {
           terminalHandled = true
-          await reload()
+          await reloadDeal(analyzingDealId)
           setError(next.error || `Не удалось завершить анализ сделки #${analyzingDealId}`)
         }
       } catch (reason) {
@@ -648,7 +683,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [analysisJobId, analysisJobStatus, analyzingDealId, reload])
+  }, [analysisJobId, analysisJobStatus, analyzingDealId, reloadDeal])
 
   const managers = useMemo(() => {
     const values = new Map<string, string>()
@@ -844,7 +879,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         completed,
       )
       setNotice(completed ? 'Задача отмечена выполненной в приложении.' : 'Задача возвращена в работу.')
-      await reload()
+      await reloadDeal(deal.deal_id)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -997,7 +1032,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           <span>{syncStatus || `Обновлено ${dateTime(data.generated_at)}`}</span>
         </div>
       </header>
-      <AutomaticAnalysisStatus role={user.role} onReportsPublished={() => { void reload() }} />
+      <AutomaticAnalysisStatus role={user.role} onRefresh={applyAutomaticAnalysisRefresh} />
 
       {error ? <div className="dc-alert error">{error}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
@@ -1061,7 +1096,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           view={view}
           userRole={user.role}
           deal={selected}
-          onReload={reload}
+          onReload={reloadDeal}
           onCopy={copy}
           onNotice={(message) => { setError(''); setNotice(message) }}
           onToggleBitrixCompletion={toggleBitrixCompletion}
@@ -1549,7 +1584,7 @@ function DealDetail(props: {
   view: DealControlView
   userRole: AuthUser['role']
   deal: DealControlDeal | null
-  onReload: () => Promise<void>
+  onReload: (dealId: string) => Promise<void>
   onCopy: (text: string, label: string) => Promise<void>
   onNotice: (message: string) => void
   onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
@@ -1682,7 +1717,7 @@ function DealDetail(props: {
         if (next.status === 'done') {
           terminalHandled = true
           markContextSaved(pendingSituationContextRef.current)
-          await reloadDetail()
+          await reloadDetail(activeDealId)
         } else if (next.status === 'error') {
           terminalHandled = true
           setSituationError(next.error || 'Не удалось пересобрать текущую ситуацию')
@@ -1751,7 +1786,7 @@ function DealDetail(props: {
     try {
       await confirmManagerSituation(props.deal.deal_id)
       setSituationContext('')
-      await props.onReload()
+      await props.onReload(props.deal.deal_id)
     } catch (reason) {
       setSituationError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -1775,7 +1810,7 @@ function DealDetail(props: {
       if (started.status === 'error') setSituationError(started.error || 'Не удалось пересобрать текущую ситуацию')
       if (started.status === 'done') {
         markContextSaved(context)
-        await props.onReload()
+        await props.onReload(props.deal.deal_id)
       }
     } catch (reason) {
       setSituationError(reason instanceof Error ? reason.message : String(reason))

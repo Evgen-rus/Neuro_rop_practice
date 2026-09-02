@@ -6355,6 +6355,23 @@ def list_deal_control_deals(db_path: str | Path, *, active_only: bool = True) ->
     return [_row_to_deal_control_deal(row) for row in rows if row is not None]
 
 
+def get_deal_control_deal(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    active_only: bool = False,
+) -> dict[str, Any] | None:
+    """Load one deal-control row without scanning the rest of the portfolio."""
+    init_db(db_path)
+    query = "SELECT * FROM deal_control_deals WHERE deal_id = ?"
+    params: list[Any] = [str(deal_id)]
+    if active_only:
+        query += " AND is_active = 1"
+    with connect(db_path) as conn:
+        row = conn.execute(query, params).fetchone()
+    return _row_to_deal_control_deal(row)
+
+
 def set_deal_control_deal_active(db_path: str | Path, *, deal_id: str, is_active: bool) -> None:
     init_db(db_path)
     with connect(db_path) as conn:

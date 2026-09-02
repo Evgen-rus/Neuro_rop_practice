@@ -47,6 +47,7 @@ from storage.rop_db import (
     get_deal_manager_situation_state,
     get_deal_control_scope,
     get_deal_control_metrics,
+    get_deal_control_deal,
     get_deal_daily_quality_state,
     get_entity_state,
     get_latest_deal_manager_situation_review,
@@ -1283,6 +1284,150 @@ def _analysis_check_fields(db_path: str | Path, deal_id: str) -> dict[str, Any]:
     }
 
 
+def _pipeline_names() -> dict[str, str]:
+    return {
+        str(item.get("id") or ""): str(item.get("name") or "")
+        for item in list_crm_pipelines().get("deal_pipelines") or []
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+
+
+def _project_deal_control_item(
+    deal: dict[str, Any],
+    *,
+    db_path: str | Path,
+    current: datetime,
+    pipeline_names: dict[str, str],
+    deal_tasks: list[dict[str, Any]],
+    bitrix_states: dict[str, dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Project one deal the same way as the dashboard row, without the rest of the portfolio."""
+    from api.daily_control import project_deal_review_card, project_report_day_scope
+    from api.deal_task_day import task_results
+
+    deal = dict(deal)
+    pipeline_id = str(deal.get("pipeline_id") or "").strip()
+    deal["pipeline_name"] = (
+        pipeline_names.get(pipeline_id)
+        or (f"Воронка {pipeline_id}" if pipeline_id else None)
+    )
+    communications_today = deal.get("communications_today")
+    current_date = current.astimezone(MSK_TZ).date().isoformat()
+    if not isinstance(communications_today, dict) or communications_today.get("date") != current_date:
+        communications_today = _empty_daily_communications(current, available=False)
+    deal["communications_today"] = communications_today
+    projected_tasks = []
+    for task in deal_tasks:
+        item = dict(task)
+        item["view_status"] = _task_view_status(item, current)
+        item["time_bucket"] = _task_time_bucket(item, current)
+        projected_tasks.append(item)
+    projected_tasks.sort(
+        key=lambda task: (
+            -int(task.get("attention_priority") or 0),
+            str(task.get("due_at") or "9999-12-31"),
+            int(task.get("id") or 0),
+        )
+    )
+    deal["tasks"] = projected_tasks
+    neuro_tasks = [
+        task for task in projected_tasks
+        if task.get("source_kind") == "neuro_rop" and task.get("local_status") == "active"
+    ]
+    deal["current_task"] = max(
+        neuro_tasks,
+        key=lambda task: (int(task.get("source_report_id") or 0), int(task.get("id") or 0)),
+        default=None,
+    )
+    bitrix_tasks = []
+    for bitrix_task in deal.get("bitrix_tasks") or []:
+        projected = dict(bitrix_task)
+        deadline = parse_bitrix_dt(projected.get("deadline"))
+        if deadline is not None and deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=MSK_TZ)
+        projected["time_bucket"] = _deadline_bucket(deadline, current)
+        local_state = bitrix_states.get(str(projected.get("activity_id") or ""), {})
+        projected["local_completed"] = bool(local_state.get("local_completed"))
+        projected["local_completed_at"] = local_state.get("local_completed_at")
+        projected["local_completed_by"] = local_state.get("local_completed_by")
+        projected["completion_state"] = (
+            "bitrix"
+            if projected.get("completed")
+            else "local"
+            if projected["local_completed"]
+            else "open"
+        )
+        bitrix_tasks.append(projected)
+    results = task_results(bitrix_tasks, events, current)
+    deal["task_results"] = results
+    deal["day_scope"] = project_report_day_scope(
+        deal,
+        current,
+        source_deal=deal,
+        events=events,
+    )
+    results_by_key = {item["key"]: item for item in results}
+    for task in bitrix_tasks:
+        key = f"task:{task['task_id']}" if task.get("task_id") else f"activity:{task.get('activity_id')}"
+        task["day_result"] = results_by_key.get(key)
+    rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
+    bitrix_tasks.sort(key=lambda item: (
+        rank.get(str(item.get("time_bucket")), 5),
+        int(str(item.get("completion_state")) != "open"),
+        str(item.get("deadline") or "9999-12-31"),
+        str(item.get("activity_id") or ""),
+    ))
+    deal["bitrix_tasks"] = bitrix_tasks
+    deal["primary_bitrix_task"] = bitrix_tasks[0] if bitrix_tasks else None
+    deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
+    deal["daily_quality_state"] = get_deal_daily_quality_state(
+        db_path,
+        deal_id=str(deal["deal_id"]),
+        business_date=current_date,
+    )
+    deal["manager_situation"] = get_deal_manager_situation_state(
+        db_path,
+        deal_id=str(deal["deal_id"]),
+    )
+    deal["review"] = project_deal_review_card(deal, now=current)
+    return deal
+
+
+def build_deal_control_deal(
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    deal_id: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Rebuild the dashboard projection for one deal without scanning every report."""
+    from api.deal_task_day import day_events
+
+    current = now or datetime.now(MSK_TZ)
+    deal = get_deal_control_deal(db_path, deal_id=str(deal_id), active_only=False)
+    if deal is None:
+        raise ValueError("Сделка не найдена в локальном контуре контроля")
+    wanted_id = str(deal["deal_id"])
+    events = [
+        event for event in day_events(db_path, current)
+        if str(event.get("entity_id")) == wanted_id
+    ]
+    tasks = list_deal_control_tasks(db_path, deal_ids=[wanted_id])
+    bitrix_states = {
+        str(item["activity_id"]): item
+        for item in list_deal_control_bitrix_task_states(db_path, deal_ids=[wanted_id])
+    }
+    return _project_deal_control_item(
+        deal,
+        db_path=db_path,
+        current=current,
+        pipeline_names=_pipeline_names(),
+        deal_tasks=tasks,
+        bitrix_states=bitrix_states,
+        events=events,
+    )
+
+
 def _has_refined_value(value: Any) -> bool:
     if value is None:
         return False
@@ -1297,19 +1442,14 @@ def _has_refined_value(value: Any) -> bool:
 
 def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
                                  sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
-    from api.daily_control import project_deal_review_card, project_report_day_scope
-    from api.deal_task_day import day_events, task_results
+    from api.deal_task_day import day_events
 
     current = now or datetime.now(MSK_TZ)
     events_by_deal: dict[str, list[dict[str, Any]]] = {}
     for event in day_events(db_path, current):
         events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)
     deals = list_deal_control_deals(db_path)
-    pipeline_names = {
-        str(item.get("id") or ""): str(item.get("name") or "")
-        for item in list_crm_pipelines().get("deal_pipelines") or []
-        if isinstance(item, dict) and item.get("id") is not None
-    }
+    pipeline_names = _pipeline_names()
     active_deal_ids = [str(deal["deal_id"]) for deal in deals]
     all_tasks = list_deal_control_tasks(db_path, deal_ids=active_deal_ids) if active_deal_ids else []
     bitrix_states = {
@@ -1318,99 +1458,25 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     } if active_deal_ids else {}
     tasks_by_deal: dict[str, list[dict[str, Any]]] = {}
     for task in all_tasks:
-        task = dict(task)
-        task["view_status"] = _task_view_status(task, current)
-        task["time_bucket"] = _task_time_bucket(task, current)
         tasks_by_deal.setdefault(str(task["deal_id"]), []).append(task)
     items = []
     projected_primary_tasks: list[dict[str, Any]] = []
     missing = 0
     for deal in deals:
-        deal = dict(deal)
-        pipeline_id = str(deal.get("pipeline_id") or "").strip()
-        deal["pipeline_name"] = (
-            pipeline_names.get(pipeline_id)
-            or (f"Воронка {pipeline_id}" if pipeline_id else None)
-        )
-        communications_today = deal.get("communications_today")
-        current_date = current.astimezone(MSK_TZ).date().isoformat()
-        if not isinstance(communications_today, dict) or communications_today.get("date") != current_date:
-            communications_today = _empty_daily_communications(current, available=False)
-        deal["communications_today"] = communications_today
-        deal_tasks = tasks_by_deal.get(str(deal["deal_id"]), [])
-        deal_tasks.sort(
-            key=lambda task: (
-                -int(task.get("attention_priority") or 0),
-                str(task.get("due_at") or "9999-12-31"),
-                int(task.get("id") or 0),
-            )
-        )
-        deal["tasks"] = deal_tasks
-        neuro_tasks = [
-            task for task in deal_tasks
-            if task.get("source_kind") == "neuro_rop" and task.get("local_status") == "active"
-        ]
-        deal["current_task"] = max(
-            neuro_tasks,
-            key=lambda task: (int(task.get("source_report_id") or 0), int(task.get("id") or 0)),
-            default=None,
-        )
-        bitrix_tasks = []
-        for bitrix_task in deal.get("bitrix_tasks") or []:
-            projected = dict(bitrix_task)
-            deadline = parse_bitrix_dt(projected.get("deadline"))
-            if deadline is not None and deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=MSK_TZ)
-            projected["time_bucket"] = _deadline_bucket(deadline, current)
-            local_state = bitrix_states.get(str(projected.get("activity_id") or ""), {})
-            projected["local_completed"] = bool(local_state.get("local_completed"))
-            projected["local_completed_at"] = local_state.get("local_completed_at")
-            projected["local_completed_by"] = local_state.get("local_completed_by")
-            projected["completion_state"] = (
-                "bitrix"
-                if projected.get("completed")
-                else "local"
-                if projected["local_completed"]
-                else "open"
-            )
-            bitrix_tasks.append(projected)
-        results = task_results(bitrix_tasks, events_by_deal.get(str(deal["deal_id"]), []), current)
-        deal["task_results"] = results
-        deal["day_scope"] = project_report_day_scope(
+        projected = _project_deal_control_item(
             deal,
-            current,
-            source_deal=deal,
+            db_path=db_path,
+            current=current,
+            pipeline_names=pipeline_names,
+            deal_tasks=tasks_by_deal.get(str(deal["deal_id"]), []),
+            bitrix_states=bitrix_states,
             events=events_by_deal.get(str(deal["deal_id"]), []),
         )
-        results_by_key = {item["key"]: item for item in results}
-        for task in bitrix_tasks:
-            key = f"task:{task['task_id']}" if task.get("task_id") else f"activity:{task.get('activity_id')}"
-            task["day_result"] = results_by_key.get(key)
-        rank = {"overdue": 0, "today": 1, "tomorrow": 2, "future": 3, "unscheduled": 4}
-        bitrix_tasks.sort(key=lambda item: (
-            rank.get(str(item.get("time_bucket")), 5),
-            int(str(item.get("completion_state")) != "open"),
-            str(item.get("deadline") or "9999-12-31"),
-            str(item.get("activity_id") or ""),
-        ))
-        deal["bitrix_tasks"] = bitrix_tasks
-        deal["primary_bitrix_task"] = bitrix_tasks[0] if bitrix_tasks else None
-        if deal["primary_bitrix_task"] is not None:
-            projected_primary_tasks.append(deal["primary_bitrix_task"])
+        if projected["primary_bitrix_task"] is not None:
+            projected_primary_tasks.append(projected["primary_bitrix_task"])
         else:
             missing += 1
-        deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
-        deal["daily_quality_state"] = get_deal_daily_quality_state(
-            db_path,
-            deal_id=str(deal["deal_id"]),
-            business_date=current_date,
-        )
-        deal["manager_situation"] = get_deal_manager_situation_state(
-            db_path,
-            deal_id=str(deal["deal_id"]),
-        )
-        deal["review"] = project_deal_review_card(deal, now=current)
-        items.append(deal)
+        items.append(projected)
     items = [
         deal for _, deal in sorted(
             enumerate(items),
