@@ -368,6 +368,110 @@ class DailyAuditContextTests(unittest.TestCase):
         context = build_daily_quality_context(bundle, now=self.now, deal_id="1")
         self.assertEqual(context["events"], [])
 
+    def test_confirmed_incoming_external_text_is_evidence_even_when_activity_is_open(self):
+        from tests.test_deal_current_situation import _touchpoint
+
+        for channel, event_type in (("email", "email"), ("message", "message")):
+            with self.subTest(channel=channel):
+                source_id = f"open-{channel}"
+                incoming = {
+                    **self.events[1],
+                    "event_id": f"crm_activity:{source_id}",
+                    "source_type": "crm_activity",
+                    "source_ids": [source_id],
+                    "channel": channel,
+                    "entity_type": "deal",
+                    "entity_id": "1",
+                    "entity_key": "deal:1",
+                    "entity_keys": ["deal:1"],
+                }
+                raw = _touchpoint(
+                    when="2026-08-18T13:00:00+03:00",
+                    event_id=source_id,
+                    event_type=event_type,
+                    direction="1",
+                    text="Клиент подтвердил следующий шаг.",
+                    completed="N",
+                )
+                context = build_daily_quality_context(
+                    {
+                        "normalized_communications": [incoming],
+                        "client_touchpoints": [raw],
+                    },
+                    now=self.now,
+                    deal_id="1",
+                )
+                self.assertEqual(
+                    [item["event_id"] for item in context["events"]],
+                    [f"crm_activity:{source_id}"],
+                )
+
+    def test_open_external_text_without_confirmed_incoming_direction_stays_excluded(self):
+        from tests.test_deal_current_situation import _touchpoint
+
+        for direction, role, contact_class in (
+            ("outgoing", "employee", "attempt"),
+            ("unknown", "unknown", "attempt"),
+        ):
+            with self.subTest(direction=direction):
+                source_id = f"open-{direction}"
+                event = {
+                    **self.events[1],
+                    "event_id": f"crm_activity:{source_id}",
+                    "source_type": "crm_activity",
+                    "source_ids": [source_id],
+                    "channel": "message",
+                    "direction": direction,
+                    "participant_role": role,
+                    "contact_class": contact_class,
+                    "entity_type": "deal",
+                    "entity_id": "1",
+                    "entity_key": "deal:1",
+                    "entity_keys": ["deal:1"],
+                }
+                raw_direction = "2" if direction == "outgoing" else ""
+                raw = _touchpoint(
+                    when="2026-08-18T13:00:00+03:00",
+                    event_id=source_id,
+                    event_type="message",
+                    direction=raw_direction,
+                    text="Сообщение без подтверждённого входящего направления.",
+                    completed="N",
+                )
+                context = build_daily_quality_context(
+                    {
+                        "normalized_communications": [event],
+                        "client_touchpoints": [raw],
+                    },
+                    now=self.now,
+                    deal_id="1",
+                )
+                self.assertEqual(context["events"], [])
+
+    def test_confirmed_wazzup_mirrors_are_kept_for_each_supported_channel(self):
+        events = [
+            {
+                **self.events[1],
+                "event_id": f"crm_mirror:{channel}",
+                "source_type": "crm_timeline_comment",
+                "channel": channel,
+                "entity_type": "deal",
+                "entity_id": "1",
+                "entity_key": "deal:1",
+                "entity_keys": ["deal:1"],
+            }
+            for channel in ("whatsapp", "telegram", "max")
+        ]
+        context = build_daily_quality_context(
+            {"normalized_communications": events},
+            now=self.now,
+            deal_id="1",
+        )
+        self.assertEqual(
+            {item["event_id"] for item in context["events"]},
+            {"crm_mirror:whatsapp", "crm_mirror:telegram", "crm_mirror:max"},
+        )
+
     def test_contact_mirror_counts_only_when_same_event_is_bound_to_deal(self):
         event = {
             **self.events[1],

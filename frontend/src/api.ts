@@ -1578,7 +1578,7 @@ async function api<T>(path: string, init?: RequestInit, options: ApiOptions = {}
     if (response.status === 401 && !options.suppressUnauthorizedEvent) unauthorizedHandler?.()
     const message = response.status === 403
       ? 'Недостаточно прав для этого действия'
-      : detail || 'Request failed'
+      : detail || `Ошибка запроса (${response.status})`
     throw new ApiError(message, response.status, response.headers.get('Retry-After'))
   }
   if (response.status === 204) return undefined as T
@@ -2581,7 +2581,7 @@ export async function fetchTrajectoryDayExport(params: {
     if (response.status === 401) unauthorizedHandler?.()
     const message = response.status === 403
       ? 'Недостаточно прав для этого действия'
-      : detail || 'Request failed'
+      : detail || `Ошибка запроса (${response.status})`
     throw new ApiError(message, response.status, response.headers.get('Retry-After'))
   }
   const fallback = params.manager_id

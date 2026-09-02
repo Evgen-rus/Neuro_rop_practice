@@ -60,6 +60,7 @@ from api.jobs import (
     extract_summary_fields,
     analysis_paths,
     get_job,
+    is_busy_analyze_error,
     list_jobs,
     parse_ids,
     start_analyze_job,
@@ -2246,7 +2247,11 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
         force_llm=body.force_llm,
         transcript_mode=body.transcript_mode,
     )
-    return start_analyze_job(options)
+    try:
+        return start_analyze_job(options)
+    except ValueError as error:
+        status = 409 if is_busy_analyze_error(error) else 400
+        raise HTTPException(status_code=status, detail=str(error)) from error
 
 
 @app.get("/api/jobs")

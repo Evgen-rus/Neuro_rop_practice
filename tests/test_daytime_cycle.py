@@ -640,7 +640,7 @@ class JobWaitTests(unittest.TestCase):
 
         with patch("api.jobs.threading.Thread.start"):
             start_analyze_job(AnalyzeOptions(entity_type="deal", ids=["101"]))
-            with self.assertRaisesRegex(ValueError, "101"):
+            with self.assertRaisesRegex(ValueError, "сделки 101 уже выполняется") as error:
                 start_analyze_job(
                     AnalyzeOptions(
                         entity_type="deal",
@@ -648,6 +648,7 @@ class JobWaitTests(unittest.TestCase):
                         automatic_analysis_run_id=7,
                     )
                 )
+        self.assertIn("Дождитесь окончания текущего запуска", str(error.exception))
 
     def test_automatic_jobs_are_limited_to_two_workers_by_default(self) -> None:
         from api.jobs import AnalyzeOptions, get_job, start_analyze_job, wait_for_job

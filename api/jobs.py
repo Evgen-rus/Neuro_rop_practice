@@ -221,6 +221,19 @@ def busy_analyze_entity_ids(entity_type: str) -> set[str]:
         return busy
 
 
+def busy_analyze_conflict_message(entity_ids: set[str] | list[str] | tuple[str, ...]) -> str:
+    listed = ", ".join(sorted({str(item).strip() for item in entity_ids if str(item).strip()}))
+    target = f"сделки {listed}" if "," not in listed else f"сделок {listed}"
+    return (
+        f"Анализ {target} уже выполняется. "
+        "Дождитесь окончания текущего запуска и повторите."
+    )
+
+
+def is_busy_analyze_error(error: BaseException) -> bool:
+    return "уже выполняется" in str(error)
+
+
 def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     with _LOCK:
         rows = sorted(_JOBS.values(), key=lambda item: item.created_at, reverse=True)
@@ -1409,7 +1422,7 @@ def start_analyze_job(options: AnalyzeOptions) -> dict[str, Any]:
                 continue
             overlapping.update(requested_ids.intersection(str(item) for item in existing_options.get("ids") or []))
         if overlapping:
-            raise ValueError(f"Анализ уже выполняется для: {', '.join(sorted(overlapping))}")
+            raise ValueError(busy_analyze_conflict_message(overlapping))
         _JOBS[job_id] = job
         _set_stage(job, "queued", "В очереди", "queued")
     if options.daily_summary_run_id:

@@ -12,6 +12,7 @@ from bitrix.customer_history import (
     EXTERNAL_TEXT_CHANNELS,
     build_normalized_communications,
     clean_text,
+    is_confirmed_client_reply,
 )
 from bitrix.deals.communication_history import include_source_lead_communications, source_lead_id
 from bitrix.workspace import DEFAULT_LEAD_WORKSPACE_ROOT
@@ -129,10 +130,14 @@ def build_daily_quality_context(
     for item in scoped:
         activity_id = str((item.get("source_ids") or [str(item.get("event_id") or "").removeprefix("crm_activity:")])[0])
         raw = activities.get(activity_id, {}) if item.get("source_type") != "crm_timeline_comment" else {}
-        if raw.get("COMPLETED") in {"N", False}:
-            continue
         if item.get("channel") in {"email", "message"} and raw.get("DESCRIPTION"):
             item["content"] = clean_text(raw["DESCRIPTION"])
+        # Bitrix may expose a received external message as COMPLETED=N. Its
+        # explicit incoming/client classification is stronger evidence than
+        # the activity lifecycle flag. Drafts, calls and unknown-direction
+        # messages remain excluded.
+        if raw.get("COMPLETED") in {"N", False} and not is_confirmed_client_reply(item):
+            continue
         scoped_completed.append(item)
     enriched = _enrich_communication_events(
         scoped_completed, bundle=bundle,

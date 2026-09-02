@@ -265,6 +265,22 @@ class DealAuthorizationTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 409)
         start.assert_not_called()
 
+    def test_analyze_busy_deal_returns_readable_conflict(self) -> None:
+        from api.jobs import busy_analyze_conflict_message
+
+        body = app_api.AnalyzeRequest(entity_type="deal", ids="101", confirm_paid=True)
+        with patch.object(app_api, "auth_current_user", return_value=_user("admin")), \
+             patch.object(
+                 app_api,
+                 "start_analyze_job",
+                 side_effect=ValueError(busy_analyze_conflict_message({"101"})),
+             ):
+            with self.assertRaises(HTTPException) as error:
+                app_api.analyze(body)
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("сделки 101 уже выполняется", error.exception.detail)
+        self.assertIn("Дождитесь", error.exception.detail)
+
 
 class AuthContractTests(unittest.TestCase):
     def test_public_user_is_a_whitelist_and_source_role_is_not_request_identity(self) -> None:
