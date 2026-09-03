@@ -1863,6 +1863,7 @@ function DealDetail(props: {
 
   async function requestQuickHelp(question: string, mode?: ManagerAssistantMode): Promise<boolean> {
     if (!props.deal) return false
+    if (mode === 'reanimator') return false
     const normalized = question.trim()
     if (normalized.length > 4000) {
       setQuickHelpError('Опиши вопрос от 1 до 4000 символов.')
@@ -2651,7 +2652,7 @@ function ManagerAssistantModal(props: {
   const [workspaceMode, setWorkspaceMode] = useState<'work' | 'lab'>('work')
   const [labUnsaved, setLabUnsaved] = useState(false)
   const [labLeaveTick, setLabLeaveTick] = useState(0)
-  const [assistantMode, setAssistantMode] = useState<ManagerAssistantMode>('push')
+  const assistantMode: ManagerAssistantMode = 'push'
   const [followups, setFollowups] = useState<ManagerFollowupsRecord | null>(null)
   const [followupsJob, setFollowupsJob] = useState<ManagerFollowupsJob | null>(null)
   const [followupsError, setFollowupsError] = useState('')
@@ -2762,13 +2763,6 @@ function ManagerAssistantModal(props: {
     setView('answer')
     setHistoryOffset(0)
     await props.onRequest(props.draft, assistantMode)
-  }
-
-  function switchMode(next: ManagerAssistantMode) {
-    if (next === assistantMode) return
-    setAssistantMode(next)
-    setHistoryOffset(0)
-    setView('answer')
   }
 
   function requestWorkspaceMode(next: 'work' | 'lab') {
@@ -2916,10 +2910,6 @@ function ManagerAssistantModal(props: {
             <button type="button" role="tab" aria-selected={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'active' : ''} onClick={() => requestWorkspaceMode('work')}>Рабочий</button>
             <button type="button" role="tab" aria-selected={workspaceMode === 'lab'} className={workspaceMode === 'lab' ? 'active' : ''} onClick={() => requestWorkspaceMode('lab')}>Prompt Lab</button>
           </div> : null}
-          {workspaceMode === 'work' ? <div className="dc-manager-mode-switch" role="tablist" aria-label="Режим работы">
-            <button type="button" role="tab" aria-selected={assistantMode === 'push'} className={assistantMode === 'push' ? 'active push' : ''} onClick={() => switchMode('push')}>Дожим</button>
-            <button type="button" role="tab" aria-selected={assistantMode === 'reanimator'} className={assistantMode === 'reanimator' ? 'active reanimator' : ''} onClick={() => switchMode('reanimator')}>Реаниматор</button>
-          </div> : null}
           {workspaceMode === 'work' && view === 'answer' && turns.length > 1 ? <nav className="dc-manager-request-navigation" aria-label="Навигация по рекомендациям"><button type="button" disabled={safeHistoryOffset >= turns.length - 1} onClick={() => navigateHistory(safeHistoryOffset + 1)}>← Предыдущий</button><span>{visibleTurnIndex + 1} из {turns.length}</span><button type="button" disabled={safeHistoryOffset === 0} onClick={() => navigateHistory(safeHistoryOffset - 1)}>Следующий →</button></nav> : null}
           <span className="dc-manager-disc-badge">{discProfileLabel(props.workspace.disc_profile)}</span>
           <span className="dc-manager-context-chip">Контекст учтён</span>
@@ -2928,7 +2918,6 @@ function ManagerAssistantModal(props: {
         <div className="dc-manager-assistant-content">
           {workspaceMode === 'lab' ? <PromptLabWorkspace
             dealId={props.deal.deal_id}
-            productionMode={assistantMode}
             question={props.draft}
             onQuestion={props.onDraft}
             onCopy={props.onCopy}

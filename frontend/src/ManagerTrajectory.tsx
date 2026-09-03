@@ -34,6 +34,8 @@ import {
   windowVisibleSummary,
   type WindowEventCategory,
 } from './trajectoryWindow'
+import { copyTextToClipboard } from './contextPersist'
+import { BitrixDealIdLink } from './dealPresentation'
 
 const CATEGORIES: Array<[TrajectoryCategory, string]> = [
   ['all', 'Все события'],
@@ -355,7 +357,7 @@ export function ManagerTrajectory() {
     {(windowData || drawerLoading) ? <aside className="trajectory-drawer" aria-label="События интервала">
       <div className="trajectory-drawer-head">
         <div>
-          <small>{entity ? `${entity.entity_type.toUpperCase()} #${entity.entity_id}` : windowData?.manager_name || 'Интервал'}</small>
+          {entity ? <TrajectoryDrawerEntityMark entity={entity} /> : <small>{windowData?.manager_name || 'Интервал'}</small>}
           <h2>{entity?.title || (windowData ? `${timeLabel(windowData.period.from)} – ${timeLabel(windowData.period.to)}` : 'Загрузка…')}</h2>
         </div>
         <button type="button" onClick={() => entity ? setEntity(null) : setWindowData(null)} aria-label={entity ? 'Назад к событиям' : 'Закрыть'}>{entity ? '←' : '×'}</button>
@@ -531,11 +533,98 @@ function TrajectoryEventRow({
   </article>
 }
 
+function TrajectoryDrawerEntityMark({ entity }: { entity: TrajectoryEntity }) {
+  if (entity.entity_type === 'deal' && entity.entity_id) {
+    return <small className="trajectory-drawer-entity">Сделка <BitrixDealIdLink dealId={entity.entity_id} /></small>
+  }
+  return <small>{`${entity.entity_type.toUpperCase()} #${entity.entity_id}`}</small>
+}
+
+function appendCopyBlock(lines: string[], label: string, value?: string | null) {
+  const text = String(value || '').trim()
+  if (!text) return
+  lines.push(label, text, '')
+}
+
+function materialCopyText(material: TrajectoryQuickHelpMaterialView) {
+  const payload = asRecord(material.content)
+  const lines = [`${material.channel_label} · ${material.strategy_label}`, '']
+  if (asString(payload.email_contract)) {
+    appendCopyBlock(lines, 'Тема', asString(payload.subject))
+    for (const key of ['greeting', 'context'] as const) {
+      const text = asString(payload[key]).trim()
+      if (text) lines.push(text, '')
+    }
+    const questions = asStringList(payload.questions)
+    if (questions.length) {
+      lines.push(...questions.map((question, index) => `${index + 1}. ${question}`), '')
+    }
+    for (const key of ['value_point', 'call_to_action', 'closing'] as const) {
+      const text = asString(payload[key]).trim()
+      if (text) lines.push(text, '')
+    }
+    return lines.join('\n').trim()
+  }
+  appendCopyBlock(lines, 'Цель', asString(payload.conversation_goal))
+  const blocks = Array.isArray(payload.blocks) ? payload.blocks : []
+  blocks.forEach((raw, index) => {
+    const block = asRecord(raw)
+    const title = asString(block.title) || `Шаг ${index + 1}`
+    lines.push(`${index + 1}. ${title}`)
+    const spoken = asString(block.spoken_text).trim()
+    if (spoken) lines.push(spoken)
+    const question = asString(block.clarifying_question).trim()
+    if (question) lines.push(question)
+    for (const phrase of asStringList(block.suggested_phrases)) lines.push(phrase)
+    lines.push('')
+  })
+  const closing = asString(payload.closing_agreement).trim()
+  if (closing) lines.push(closing)
+  return lines.join('\n').trim()
+}
+
+function quickHelpViewCopyText(view: TrajectoryQuickHelpView) {
+  const lines: string[] = []
+  appendCopyBlock(lines, 'Режим', view.mode_label)
+  appendCopyBlock(lines, 'Вопрос менеджера', view.question)
+  appendCopyBlock(lines, 'Ситуация', view.situation_summary)
+  appendCopyBlock(lines, 'Что сделать', view.next_action)
+  appendCopyBlock(lines, 'Ожидаемый результат', view.expected_result)
+  if (view.pressure_lever?.title) {
+    appendCopyBlock(lines, 'Рычаг дожима', `${view.pressure_lever.title}. ${view.pressure_lever.rationale || ''}`.trim())
+  }
+  for (const strategy of view.strategies || []) {
+    appendCopyBlock(lines, strategy.label, strategy.client_message)
+    appendCopyBlock(lines, `${strategy.label} · скрипт звонка`, strategy.call_script)
+  }
+  if (view.lifehacks?.length) {
+    const text = view.lifehacks.map((item) => {
+      return [item.title, item.action, item.why_relevant, item.conditions].filter(Boolean).join('. ')
+    }).join('\n')
+    appendCopyBlock(lines, 'Лайфхаки', text)
+  }
+  appendCopyBlock(lines, 'Если не сработало', view.fallback_action)
+  for (const material of view.materials || []) {
+    const text = materialCopyText(material)
+    if (text) lines.push(text, '')
+  }
+  return lines.join('\n').trim()
+}
+
 function TrajectoryQuickHelpDetail({ view }: { view: TrajectoryQuickHelpView }) {
+  const [copyNotice, setCopyNotice] = useState('')
   if (!view.available) {
     return <p>{view.missing_reason || 'Текст ответа не сохранился'}</p>
   }
+  async function copyView() {
+    const copied = await copyTextToClipboard(quickHelpViewCopyText(view))
+    setCopyNotice(copied ? 'Скопировано' : 'Скопировать не удалось — выделите текст вручную')
+  }
   return <div className="trajectory-quick-help">
+    <div className="trajectory-quick-help-copy">
+      <button type="button" className="dc-button" onClick={() => void copyView()}>Скопировать</button>
+      {copyNotice ? <small>{copyNotice}</small> : null}
+    </div>
     {view.mode_label ? <p className="trajectory-quick-help-mode"><b>{view.mode_label}</b></p> : null}
     {view.question ? <section><small>Вопрос менеджера</small><p>{view.question}</p></section> : null}
     {view.situation_summary ? <section><small>Ситуация</small><p>{view.situation_summary}</p></section> : null}

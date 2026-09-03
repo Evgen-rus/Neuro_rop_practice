@@ -48,7 +48,6 @@ type PendingNav =
 
 const MODULES: Array<{ key: PromptLabModuleKey; label: string }> = [
   { key: 'quick_help.push', label: 'Дожим' },
-  { key: 'quick_help.reanimator', label: 'Реаниматор' },
   { key: 'full_script.message', label: 'Message' },
   { key: 'full_script.call', label: 'Call' },
   { key: 'full_script.email', label: 'Email' },
@@ -66,7 +65,6 @@ function moscowStamp(value?: string | null) {
 
 export function PromptLabWorkspace({
   dealId,
-  productionMode,
   question,
   onQuestion,
   onCopy,
@@ -75,7 +73,6 @@ export function PromptLabWorkspace({
   onConfirmLeave,
 }: {
   dealId: string
-  productionMode: ManagerAssistantMode
   question: string
   onQuestion: (value: string) => void
   onCopy: (text: string, label: string) => Promise<void>
@@ -83,7 +80,7 @@ export function PromptLabWorkspace({
   onLeaveAttempt?: (blocked: boolean) => void
   onConfirmLeave?: () => void
 }) {
-  const [moduleKey, setModuleKey] = useState<PromptLabModuleKey>(productionMode === 'push' ? 'quick_help.push' : 'quick_help.reanimator')
+  const [moduleKey, setModuleKey] = useState<PromptLabModuleKey>('quick_help.push')
   const [bootstrap, setBootstrap] = useState<PromptLabBootstrap | null>(null)
   const [layout, setLayout] = useState<Layout>('both')
   const [currentPrompt, setCurrentPrompt] = useState('')
@@ -111,7 +108,7 @@ export function PromptLabWorkspace({
   const [previousMessage, setPreviousMessage] = useState('')
   const [qhUpstream, setQhUpstream] = useState<{ current: number | null; experiment: number | null }>({ current: null, experiment: null })
   const [qhSource, setQhSource] = useState<{ current: PromptLabRun | null; experiment: PromptLabRun | null }>({ current: null, experiment: null })
-  const [qhMode, setQhMode] = useState<ManagerAssistantMode>(productionMode === 'reanimator' ? 'reanimator' : 'push')
+  const [qhMode, setQhMode] = useState<ManagerAssistantMode>('push')
   const [workspaceLoading, setWorkspaceLoading] = useState(true)
   const unsaved = experimentPrompt !== savedExperiment
   const strategyRef = useRef(strategy)
@@ -209,10 +206,11 @@ export function PromptLabWorkspace({
   }, [dealId, qhMode])
 
   function applyModule(next: PromptLabModuleKey) {
+    if (next === 'quick_help.reanimator') return
     const previous = moduleKeyRef.current
     bootstrapSeqRef.current += 1
     if (next.startsWith('quick_help.')) {
-      setQhMode(next === 'quick_help.reanimator' ? 'reanimator' : 'push')
+      setQhMode('push')
     }
     if (previous.startsWith('quick_help.') && next.startsWith('full_script.')) {
       const currentQh = visibleLabRun(currentRun, previous)
@@ -369,6 +367,7 @@ export function PromptLabWorkspace({
   }
 
   async function generate(branch: PromptLabBranch, options: { force?: boolean; silentReuse?: boolean; snapshotId?: number | null } = {}) {
+    if (moduleKey === 'quick_help.reanimator') return
     if (workspaceLoading || !bootstrap) return
     if (!bootstrap.gate.ok && family !== 'companion') {
       setError(bootstrap.gate.reason || 'Prompt Lab заблокирован')

@@ -3855,6 +3855,7 @@ textarea {
 .trajectory-drawer { position: fixed; z-index: 120; top: 0; right: 0; width: min(430px, 94vw); height: 100vh; overflow-y: auto; border-left: 1px solid #d7e0ea; background: #fff; box-shadow: -18px 0 45px rgba(20, 42, 67, .16); }
 .trajectory-drawer-head { position: sticky; z-index: 2; top: 0; display: flex; min-height: 76px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #dce4ed; padding: 13px 16px; background: rgba(255,255,255,.96); backdrop-filter: blur(8px); }
 .trajectory-drawer-head small { color: #74869b; font-size: 10px; }.trajectory-drawer-head h2 { margin: 2px 0 0; font-size: 18px; }
+.trajectory-drawer-entity { display: flex; align-items: center; gap: 6px; }
 .trajectory-drawer-head button { width: 34px; height: 34px; border: 1px solid #d8e1eb; border-radius: 8px; color: #45617e; background: #fff; cursor: pointer; font-size: 20px; }
 .trajectory-window-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 16px; color: #65798f; background: #f7f9fc; font-size: 11px; }
 .trajectory-window-summary .trajectory-json-btn { min-height: 30px; padding: 0 10px; font-size: 11px; }
@@ -3876,6 +3877,9 @@ textarea {
 .trajectory-call-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 9px; }.trajectory-call-facts span { border: 1px solid #e0e8f0; border-radius: 7px; padding: 7px 8px; }.trajectory-call-facts small, .trajectory-call-facts b { display: block; }.trajectory-call-facts small { color: #7b8da1; font-size: 8px; }.trajectory-call-facts b { margin-top: 2px; color: #243d58; font-size: 10px; }
 .trajectory-full-event-text { max-height: 240px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .trajectory-quick-help { max-height: min(70vh, 640px); overflow-y: auto; display: grid; gap: 10px; }
+.trajectory-quick-help-copy { display: flex; align-items: center; gap: 8px; }
+.trajectory-quick-help-copy .dc-button { min-height: 28px; padding: 0 10px; font-size: 10px; }
+.trajectory-quick-help-copy small { text-transform: none; letter-spacing: 0; font-weight: 700; color: #168251; }
 .trajectory-quick-help section { display: grid; gap: 4px; }
 .trajectory-quick-help small { color: #5d738a; font-size: 9px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; }
 .trajectory-quick-help p, .trajectory-quick-help li { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
