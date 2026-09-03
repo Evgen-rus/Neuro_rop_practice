@@ -32,7 +32,6 @@ import {
   syncDealControl,
   transcribeManagerVoice,
   updateDealControlDeal,
-  updateDealControlBitrixTaskCompletion,
   updateDealContextLeverPriority,
   type DealControlDashboard,
   type DealCommentFile,
@@ -80,7 +79,6 @@ import {
 } from './automaticAnalysis'
 import { AutomaticAnalysisPanel } from './AutomaticAnalysisPanel'
 import { TeamAdmin } from './TeamAdmin'
-import { TaskReschedules } from './TaskDayResults'
 import { TaskReschedulePopover } from './TaskReschedulePopover'
 import {
   freshQuickHelpIdFromJob,
@@ -117,8 +115,6 @@ import { CallScriptResultView, CompanionResultView, EmailScriptResultView, Follo
 
 type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'shadow' | 'team' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
-
-const BITRIX_ORIGIN = 'https://obtorg.bitrix24.ru'
 
 const EXECUTION_LABELS: Record<DealControlTask['crm_execution_status'], string> = {
   not_reflected: 'Не отражено в Bitrix',
@@ -188,11 +184,6 @@ const ANALYSIS_STAGE_PROGRESS: Record<string, number> = {
 
 function splitIds(value: string) {
   return value.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean)
-}
-
-function bitrixTaskUrl(task: DealControlBitrixTask) {
-  if (!task.task_id || !task.responsible_id) return null
-  return `${BITRIX_ORIGIN}/company/personal/user/${encodeURIComponent(task.responsible_id)}/tasks/task/view/${encodeURIComponent(task.task_id)}/`
 }
 
 function money(value?: string | number | null, currency = 'RUB') {
@@ -376,26 +367,6 @@ function compactTaskText(value: string, maxLength = 120) {
   const clipped = normalized.slice(0, maxLength)
   const lastSpace = clipped.lastIndexOf(' ')
   return `${clipped.slice(0, lastSpace > 70 ? lastSpace : maxLength).trim()}…`
-}
-
-function bitrixTaskDisplayTitle(deal: DealControlDeal, task: DealControlBitrixTask) {
-  const subject = task.subject.replace(/^CRM:\s*/i, '').replace(/\s+/g, ' ').trim()
-  const dealTitle = (deal.title || '').replace(/\s+/g, ' ').trim()
-  if (dealTitle && subject.slice(0, dealTitle.length).toLocaleLowerCase('ru') === dealTitle.toLocaleLowerCase('ru')) {
-    const remainder = subject.slice(dealTitle.length).replace(/^\s*\/\s*/, '').trim()
-    if (remainder) return compactTaskText(remainder, 140)
-  }
-  return compactTaskText(subject, 140)
-}
-
-function bitrixTaskDeadline(task: DealControlBitrixTask) {
-  if (!task.deadline) return { label: 'Без срока', value: '' }
-  const date = formatMoscowDateTime(task.deadline, { day: '2-digit', month: '2-digit' }) || ''
-  const time = formatMoscowDateTime(task.deadline, { hour: '2-digit', minute: '2-digit' }) || ''
-  if (task.time_bucket === 'today') return { label: 'Сегодня', value: time }
-  if (task.time_bucket === 'tomorrow') return { label: 'Завтра', value: time }
-  if (task.time_bucket === 'overdue') return { label: 'Просрочено', value: `${date}${time ? `, ${time}` : ''}` }
-  return { label: date || 'Срок', value: time }
 }
 
 const MANAGER_SITUATION_DRAFT_PREFIX = 'rop-assistant:manager-situation:'
@@ -869,23 +840,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     }
   }
 
-  async function toggleBitrixCompletion(deal: DealControlDeal, task: DealControlBitrixTask) {
-    if (!deal.can_edit) return
-    setError('')
-    try {
-      const completed = task.completion_state !== 'local'
-      await updateDealControlBitrixTaskCompletion(
-        deal.deal_id,
-        task.activity_id,
-        completed,
-      )
-      setNotice(completed ? 'Задача отмечена выполненной в приложении.' : 'Задача возвращена в работу.')
-      await reloadDeal(deal.deal_id)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
   async function copy(text: string, label: string) {
     if (!text.trim()) {
       setNotice(`${label} пока не сформирован: нужен сохранённый анализ сделки.`)
@@ -1101,7 +1055,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           onReload={reloadDeal}
           onCopy={copy}
           onNotice={(message) => { setError(''); setNotice(message) }}
-          onToggleBitrixCompletion={toggleBitrixCompletion}
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
@@ -1323,14 +1276,12 @@ function TaskTable({
 
   if (view !== 'rop') return <div className="dc-table-wrap task-table">
     <div className="dc-table-scroll">
-      <div className="dc-task-columns"><span /><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
+      <div className="dc-task-columns"><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
         const bitrixTask = primaryBitrixTaskOf(deal)
-        const completed = bitrixTask?.completion_state === 'local' || bitrixTask?.completion_state === 'bitrix'
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
         return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
-          <span className={`dc-check ${completed ? 'checked' : ''}`}>{completed ? '✓' : ''}</span>
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
           <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
@@ -1352,7 +1303,6 @@ function TaskTable({
       </div>
       {deals.map((deal) => {
         const bitrixTask = primaryBitrixTaskOf(deal)
-        const completed = bitrixTask?.completion_state === 'local' || bitrixTask?.completion_state === 'bitrix'
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
         const preview = deal.manager_comments_preview
@@ -1364,7 +1314,6 @@ function TaskTable({
         >
           <div className="dc-plan-signal-cell">
             {deal.review ? <DealStatusIndicator status={deal.review.status} label={deal.review.status_label} /> : <span className="dc-deal-status-indicator neutral">–</span>}
-            <span className={`dc-check ${completed ? 'checked' : ''}`}>{completed ? '✓' : ''}</span>
           </div>
           <div className="dc-plan-deal-cell">
             <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
@@ -1613,7 +1562,6 @@ function DealDetail(props: {
   onReload: (dealId: string) => Promise<void>
   onCopy: (text: string, label: string) => Promise<void>
   onNotice: (message: string) => void
-  onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   analysisJob: JobState | null
   analyzingDealId: string
   onAnalyze: (deal: DealControlDeal) => Promise<void>
@@ -2070,7 +2018,6 @@ function DealDetail(props: {
       onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
-      onToggleBitrixCompletion={props.onToggleBitrixCompletion}
       asked={askedByDeal[deal.deal_id] || [false, false]}
       onToggleAsked={toggleAsked}
     /> : <RopDealScreen
@@ -2120,7 +2067,6 @@ type ManagerDealScreenProps = {
   onCompleteCommunication: (quickHelpId: number) => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
-  onToggleBitrixCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
 }
@@ -2155,7 +2101,6 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         loading={props.assistantLoading}
         onOpen={props.onOpenAssistant}
       />
-      <ManagerBitrixTaskCard deal={props.deal} onToggleCompletion={props.onToggleBitrixCompletion} />
       {props.deal.review ? (
         <section className="dc-daily-card">
           {/* Те же два блока, что у РОПа. Они внутри confirmed: без подтверждения ситуации их нет. */}
@@ -2322,18 +2267,6 @@ function ManagerSituationActions(props: {
       </section>
     </div>, document.body) : null}
   </>
-}
-
-function ManagerBitrixTaskCard({ deal, onToggleCompletion }: {
-  deal: DealControlDeal
-  onToggleCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-}) {
-  const task = primaryBitrixTaskOf(deal)
-  if (task) return <BitrixTaskCard deal={deal} task={task} onToggleCompletion={onToggleCompletion} />
-  return <section className={`dc-manager-bitrix-task ${task ? bitrixTaskTone(task) : 'missing'}`}>
-    <div className="dc-section-head"><div><h3>Текущая задача Bitrix</h3><p>Это рабочая задача из CRM, она видна независимо от подтверждения ситуации.</p></div><span>Bitrix</span></div>
-    <div className="dc-missing-task-state"><strong>В B24 нет открытой задачи</strong><p>Следующий контролируемый шаг по сделке не назначен.</p><a className="dc-button" href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer">Открыть сделку в B24 ↗</a></div>
-  </section>
 }
 
 function ManagerQuickHelp(props: {
@@ -3704,83 +3637,5 @@ function DealAnalysisProgress({ job, dealId }: { job: JobState; dealId: string }
     <p>{isError ? progress?.error || job.error || 'Проверьте сообщение об ошибке и повторите запуск.' : <>{counter ? <strong>{counter}. </strong> : null}{analysisStageDetail(job, dealId)}</>}</p>
     {!isDone && !isError && progress?.updated_at ? <small>Последнее обновление: {dateTime(progress.updated_at)}</small> : null}
     {stage === 'skipped' ? <small>Платный полный вызов не потребовался: значимых новых клиентских данных не обнаружено.</small> : null}
-  </section>
-}
-
-function BitrixTaskCard({ deal, task, onToggleCompletion }: {
-  deal: DealControlDeal
-  task: DealControlBitrixTask
-  onToggleCompletion: (deal: DealControlDeal, task: DealControlBitrixTask) => Promise<void>
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const description = task.description?.trim() || ''
-  const hasDescription = Boolean(description)
-  // Короткие тексты не режем — кнопка «Показать полностью» только когда реально нужно.
-  const canCollapse = description.length > 140
-  const deadline = bitrixTaskDeadline(task)
-  const title = bitrixTaskDisplayTitle(deal, task)
-  const completed = task.completion_state !== 'open'
-  const openUrl = bitrixTaskUrl(task)
-
-  useEffect(() => {
-    setExpanded(false)
-  }, [task.activity_id])
-
-  return <section className={`dc-bitrix-task-card ${completed ? 'done' : task.time_bucket}`} aria-label="Текущая задача Bitrix">
-    <header className="dc-bitrix-task-top">
-      <div className="dc-bitrix-task-mainline">
-        <span className="dc-bitrix-task-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <rect x="5" y="4" width="14" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
-            <path d="M9 4.5V3.8C9 2.8 9.8 2 10.8 2h2.4C14.2 2 15 2.8 15 3.8v.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            <path d="M8.5 10.8l2.1 2.1 4.7-4.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <div className="dc-bitrix-task-heading">
-          <h3 className="dc-bitrix-task-title"><span>Задача:</span> {title || 'Без названия'}</h3>
-          <p className="dc-bitrix-task-deal">{deal.title || `Сделка #${deal.deal_id}`}</p>
-        </div>
-      </div>
-      <div className="dc-bitrix-task-deadline">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-        <span>{deadline.label}</span>
-        {deadline.value ? <strong>{deadline.value}</strong> : null}
-      </div>
-    </header>
-
-    <div className="dc-bitrix-task-body">
-      <TaskReschedules task={task.day_result} />
-      {hasDescription
-        ? <p className={`dc-bitrix-task-description ${canCollapse && !expanded ? 'collapsed' : ''}`}>{description}</p>
-        : <p className="dc-bitrix-task-description muted">Описание задачи в Bitrix не заполнено</p>}
-      {hasDescription && canCollapse ? <button
-        className={`dc-bitrix-task-description-toggle ${expanded ? 'open' : ''}`}
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-      >
-        {expanded ? 'Скрыть' : 'Показать полностью'}
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="M5 7.5l5 5 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button> : null}
-    </div>
-
-    <footer className="dc-bitrix-task-actions">
-      {task.completion_state === 'bitrix'
-        ? <button className="dc-bitrix-task-btn primary" type="button" disabled>Выполнено в B24</button>
-        : <button
-            className={`dc-bitrix-task-btn ${task.completion_state === 'local' ? 'secondary' : 'primary'}`}
-            type="button"
-            onClick={() => void onToggleCompletion(deal, task)}
-          >
-            {task.completion_state === 'local' ? 'Вернуть в работу' : 'Отметить выполненной'}
-          </button>}
-      {openUrl
-        ? <a className="dc-bitrix-task-btn secondary" href={openUrl} target="_blank" rel="noreferrer">Открыть в Bitrix24 ↗</a>
-        : <button className="dc-bitrix-task-btn secondary" type="button" disabled title="Bitrix не передал ID связанной задачи">Открыть в Bitrix24 ↗</button>}
-    </footer>
   </section>
 }
