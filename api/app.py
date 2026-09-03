@@ -146,6 +146,7 @@ from api.daytime_cycle import (
 from api.daily_control import (
     history_payload as daily_control_history_payload,
     report_payload as daily_control_report_payload,
+    set_daily_control_deal_reviewed,
     start_manual_daily_control_report,
 )
 from api.manager_trajectory_ui import (
@@ -500,6 +501,10 @@ class DailySummaryCreateRequest(BaseModel):
 
 class DailySummaryStartRequest(BaseModel):
     confirm_paid: bool = False
+
+
+class DailyControlReviewRequest(BaseModel):
+    reviewed: bool
 
 
 class AuthLoginRequest(BaseModel):
@@ -1000,6 +1005,17 @@ def daily_control_report_get(report_id: int) -> dict[str, Any]:
 def daily_control_report_create() -> dict[str, Any]:
     _require_admin()
     return start_manual_daily_control_report()
+
+
+@app.put("/api/daily-control/reports/{report_id}/reviewed/{deal_id}")
+def daily_control_review_put(report_id: int, deal_id: str, body: DailyControlReviewRequest) -> dict[str, Any]:
+    user = _require_admin_or_rop()
+    try:
+        return set_daily_control_deal_reviewed(report_id, deal_id, body.reviewed, user)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error) or "Отчёт ежедневного контроля не найден") from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 @app.put("/api/deal-control/scope")

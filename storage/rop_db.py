@@ -1076,6 +1076,17 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_control_reports_day_end_date
                 ON daily_control_reports(business_date)
                 WHERE creation_kind = 'automatic_day_end';
+
+            CREATE TABLE IF NOT EXISTS daily_control_review_marks (
+                report_id INTEGER NOT NULL,
+                deal_id TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                reviewed_by_user_id INTEGER,
+                PRIMARY KEY (report_id, deal_id),
+                FOREIGN KEY(report_id) REFERENCES daily_control_reports(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_daily_control_review_marks_report
+                ON daily_control_review_marks(report_id);
             """
         )
         _ensure_column(conn, "analysis_runs", "model", "TEXT")
@@ -3201,6 +3212,63 @@ def get_latest_daily_control_report(
             f"SELECT {columns} FROM daily_control_reports ORDER BY id DESC LIMIT 1"
         ).fetchone()
     return _row_to_daily_control_report(row, include_snapshot=include_snapshot)
+
+
+def list_daily_control_review_marks(db_path: str | Path, report_id: int) -> list[str]:
+    """Shared ROP-reviewed deal IDs for one daily-control report. Does not read snapshot JSON."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT deal_id FROM daily_control_review_marks "
+            "WHERE report_id = ? ORDER BY reviewed_at, deal_id",
+            (int(report_id),),
+        ).fetchall()
+    return [str(row["deal_id"]) for row in rows if str(row["deal_id"] or "").strip()]
+
+
+def set_daily_control_review_mark(
+    db_path: str | Path,
+    report_id: int,
+    deal_id: str,
+    *,
+    reviewed: bool,
+    user_id: int | None = None,
+) -> list[str]:
+    """Insert or remove a shared review mark. Snapshot JSON is not rewritten."""
+    wanted = str(deal_id or "").strip()
+    if not wanted:
+        raise ValueError("deal_id обязателен")
+    init_db(db_path)
+    with connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM daily_control_reports WHERE id = ?",
+            (int(report_id),),
+        ).fetchone()
+        if existing is None:
+            raise KeyError("Отчёт ежедневного контроля не найден")
+        if reviewed:
+            conn.execute(
+                """
+                INSERT INTO daily_control_review_marks (
+                    report_id, deal_id, reviewed_at, reviewed_by_user_id
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(report_id, deal_id) DO UPDATE SET
+                    reviewed_at = excluded.reviewed_at,
+                    reviewed_by_user_id = excluded.reviewed_by_user_id
+                """,
+                (
+                    int(report_id),
+                    wanted,
+                    utcish_now(),
+                    int(user_id) if user_id is not None else None,
+                ),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM daily_control_review_marks WHERE report_id = ? AND deal_id = ?",
+                (int(report_id), wanted),
+            )
+    return list_daily_control_review_marks(db_path, report_id)
 
 
 def _row_to_deal_manager_situation_review(row: sqlite3.Row | None) -> dict[str, Any] | None:

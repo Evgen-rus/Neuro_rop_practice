@@ -5,12 +5,19 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView.ts'
-import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
+import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, firstUnreviewedDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDailyReviewDeals, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
   day_scope: { business_date: '2026-08-27', cutoff_at: '2026-08-27T15:45:00+03:00', task_buckets: bucket === 'missing' ? [] : [bucket], activity_kinds: [], legacy: false },
 }))
+
+test('reviewed deals stay in the current list and sink to the bottom', () => {
+  const ordered = sortDailyReviewDeals(deals, new Set(['0', '3']))
+  assert.deepEqual(ordered.map((deal) => deal.deal_id), ['1', '2', '4', '5', '0', '3'])
+  assert.equal(firstUnreviewedDeal(ordered, new Set(['0', '3'])).deal_id, '1')
+  assert.equal(firstUnreviewedDeal(deals, new Set(deals.map((deal) => deal.deal_id))).deal_id, '0')
+})
 
 test('default view shows the saved report set; today keeps due tasks, not idle deals', () => {
   const filtered = deals.filter((deal) => dealMatchesTime(deal, DEFAULT_TIME_FILTER))

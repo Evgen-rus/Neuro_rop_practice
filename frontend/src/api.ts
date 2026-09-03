@@ -1163,6 +1163,7 @@ export type DailyControlHistory = {
 
 export type DailyControlReport = DailyControlReportMeta & {
   snapshot: DailyControlSnapshot
+  reviewed_deal_ids?: string[]
   previous_id?: number | null
   next_id?: number | null
   generation?: DailyControlGeneration | null
@@ -2369,6 +2370,13 @@ export function fetchDailyControlReport(reportId: number) {
 
 export function startDailyControlReport() {
   return api<DailyControlGeneration>('/api/daily-control/reports', { method: 'POST' })
+}
+
+export function setDailyControlDealReviewed(reportId: number, dealId: string, reviewed: boolean) {
+  return api<{ deal_id: string; reviewed: boolean; reviewed_deal_ids: string[] }>(
+    `/api/daily-control/reports/${reportId}/reviewed/${encodeURIComponent(dealId)}`,
+    { method: 'PUT', body: JSON.stringify({ reviewed }) },
+  )
 }
 
 export function createDailySummary(

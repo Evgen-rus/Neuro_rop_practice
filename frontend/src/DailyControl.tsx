@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   fetchDailyControlHistory,
   fetchDailyControlReport,
+  setDailyControlDealReviewed,
   startDailyControlReport,
   type AuthUser,
   type DailyControlDeal,
@@ -17,7 +18,7 @@ import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { businessReportWarnings, dailyTaskTotals, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText } from './dailyControlView'
+import { businessReportWarnings, dailyTaskTotals, firstUnreviewedDeal, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText, sortDailyReviewDeals } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
@@ -163,6 +164,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const currentReportId = useRef<number | undefined>(undefined)
   const reportRequest = useRef(0)
   const [asked, setAsked] = useState<Record<string, [boolean, boolean]>>({})
+  const [reviewedDealIds, setReviewedDealIds] = useState<Set<string>>(() => new Set())
   const [leftWidth, setLeftWidth] = useState(SPLITTER_DEFAULT)
   const [dragging, setDragging] = useState(false)
   const [copyNotice, setCopyNotice] = useState('')
@@ -186,8 +188,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
     return searchedDeals.filter((deal) => String(deal.manager_id || '') === wanted)
   }, [selectedManager, searchedDeals])
   const visibleDeals = useMemo(
-    () => managerDeals.filter((deal) => filter === 'all' || deal.status === filter),
-    [filter, managerDeals],
+    () => sortDailyReviewDeals(
+      managerDeals.filter((deal) => filter === 'all' || deal.status === filter),
+      reviewedDealIds,
+    ),
+    [filter, managerDeals, reviewedDealIds],
   )
   const selectedDeal = visibleDeals.find((deal) => deal.deal_id === dealId) || visibleDeals[0] || null
 
@@ -204,6 +209,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
     if (reportRequest.current !== request || (background && (reviewStarted.current || historyPinned.current))) return payload
     currentReportId.current = id
     setReport(payload)
+    setReviewedDealIds(new Set(payload.reviewed_deal_ids || []))
     reviewStarted.current = false
     setGeneration(payload.generation || null)
     return payload
@@ -329,15 +335,24 @@ export function DailyControl({ user }: { user: AuthUser }) {
     setManagerId(String(next.manager_id || ''))
     setFilter('all')
     const wanted = String(next.manager_id || '')
-    const first = searchedDeals.find((deal) => String(deal.manager_id || '') === wanted)
+    const first = firstUnreviewedDeal(
+      sortDailyReviewDeals(
+        searchedDeals.filter((deal) => String(deal.manager_id || '') === wanted),
+        reviewedDealIds,
+      ),
+      reviewedDealIds,
+    )
     setDealId(first?.deal_id || '')
   }
 
   function selectFilter(next: 'all' | DailyControlStatus) {
     reviewStarted.current = true
     setFilter(next)
-    const deals = managerDeals.filter((deal) => next === 'all' || deal.status === next)
-    setDealId(deals[0]?.deal_id || '')
+    const deals = sortDailyReviewDeals(
+      managerDeals.filter((deal) => next === 'all' || deal.status === next),
+      reviewedDealIds,
+    )
+    setDealId(firstUnreviewedDeal(deals, reviewedDealIds)?.deal_id || '')
   }
 
   function selectDeal(nextId: string) {
@@ -404,6 +419,30 @@ export function DailyControl({ user }: { user: AuthUser }) {
       next[index] = !next[index]
       return { ...current, [selectedDeal.deal_id]: next }
     })
+  }
+
+  async function toggleReviewed(dealId: string, reviewed: boolean) {
+    if (!report) return
+    reviewStarted.current = true
+    const previousIds = reviewedDealIds
+    const selectedId = selectedDeal?.deal_id || ''
+    const nextIds = new Set(previousIds)
+    if (reviewed) nextIds.add(dealId)
+    else nextIds.delete(dealId)
+    setReviewedDealIds(nextIds)
+    // После «проверено» сразу открываем первую неразобранную сверху текущего списка.
+    if (reviewed && dealId === selectedId) {
+      const nextDeal = visibleDeals.find((item) => item.deal_id !== dealId && !previousIds.has(item.deal_id))
+      if (nextDeal) setDealId(nextDeal.deal_id)
+    }
+    try {
+      const payload = await setDailyControlDealReviewed(report.id, dealId, reviewed)
+      setReviewedDealIds(new Set(payload.reviewed_deal_ids || []))
+    } catch (reason) {
+      setReviewedDealIds(previousIds)
+      if (reviewed && dealId === selectedId) setDealId(selectedId)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
   }
 
   function onSplitterKey(event: KeyboardEvent<HTMLDivElement>) {
@@ -598,7 +637,9 @@ export function DailyControl({ user }: { user: AuthUser }) {
                   deal={deal}
                   cutoffAt={report?.cutoff_at}
                   selected={deal.deal_id === selectedDeal?.deal_id}
+                  reviewed={reviewedDealIds.has(deal.deal_id)}
                   onSelect={() => selectDeal(deal.deal_id)}
+                  onToggleReviewed={() => void toggleReviewed(deal.deal_id, !reviewedDealIds.has(deal.deal_id))}
                 />
               )) : (
                 <p className="dc-daily-empty-list">
@@ -639,12 +680,26 @@ export function DailyControl({ user }: { user: AuthUser }) {
   )
 }
 
-function DealRow({ deal, cutoffAt, selected, onSelect }: { deal: DailyControlDeal; cutoffAt?: string; selected: boolean; onSelect: () => void }) {
+function DealRow({
+  deal,
+  cutoffAt,
+  selected,
+  reviewed,
+  onSelect,
+  onToggleReviewed,
+}: {
+  deal: DailyControlDeal
+  cutoffAt?: string
+  selected: boolean
+  reviewed: boolean
+  onSelect: () => void
+  onToggleReviewed: () => void
+}) {
   const communications = deal.communications_today
   const dayLabels = reportDayLabels(deal, cutoffAt)
   return (
     <div
-      className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}`}
+      className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}${reviewed ? ' reviewed' : ''}`}
       role="tab"
       tabIndex={0}
       aria-selected={selected}
@@ -658,7 +713,25 @@ function DealRow({ deal, cutoffAt, selected, onSelect }: { deal: DailyControlDea
         }
       }}
     >
-      <DealStatusIndicator status={deal.status} label={deal.status_label} />
+      <div className="dc-daily-deal-status">
+        <DealStatusIndicator status={deal.status} label={deal.status_label} />
+        <label
+          className={`dc-daily-reviewed${reviewed ? ' is-on' : ''}`}
+          title="Проверено РОПом"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={reviewed}
+            aria-label="Проверено РОПом"
+            onChange={(event) => {
+              event.stopPropagation()
+              onToggleReviewed()
+            }}
+          />
+        </label>
+      </div>
       <div>
         <header>
           <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>

@@ -134,6 +134,7 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("automatic_analysis_items", tables)
             self.assertTrue({"sync_mode", "sync_reasons_json"} <= automatic_item_columns)
             self.assertIn("daily_control_reports", tables)
+            self.assertIn("daily_control_review_marks", tables)
             self.assertIn("deal_manager_companion_messages", tables)
 
             init_db(db_path)

@@ -256,6 +256,16 @@ export function firstReviewDeal(deals: DailyControlDeal[], managerId: string | n
   return own.find((deal) => deal.status === 'red') || own[0]
 }
 
+export function sortDailyReviewDeals(deals: DailyControlDeal[], reviewedIds: ReadonlySet<string>) {
+  const unreviewed = deals.filter((deal) => !reviewedIds.has(deal.deal_id))
+  const reviewed = deals.filter((deal) => reviewedIds.has(deal.deal_id))
+  return [...unreviewed, ...reviewed]
+}
+
+export function firstUnreviewedDeal(deals: DailyControlDeal[], reviewedIds: ReadonlySet<string>) {
+  return deals.find((deal) => !reviewedIds.has(deal.deal_id)) || deals[0]
+}
+
 export function dailyTaskTotals(deals: DailyControlDeal[]) {
   const tasks = deals.flatMap((deal) => deal.task_results || [])
   return {

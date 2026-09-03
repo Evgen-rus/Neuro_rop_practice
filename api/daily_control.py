@@ -30,8 +30,10 @@ from storage.rop_db import (
     get_latest_automatic_analysis_run,
     get_latest_ui_report,
     list_daily_control_reports,
+    list_daily_control_review_marks,
     list_deal_control_deals,
     list_manager_trajectory_events,
+    set_daily_control_review_mark,
     utcish_now,
 )
 
@@ -1435,6 +1437,12 @@ def report_payload(
         **snapshot,
         "deals": deals,
     }
+    visible_ids = {str(deal.get("deal_id") or "") for deal in deals}
+    reviewed_deal_ids = [
+        deal_id
+        for deal_id in list_daily_control_review_marks(db_path, int(report["id"]))
+        if deal_id in visible_ids
+    ]
     history = _visible_history_reports(db_path)
     ids = [int(item["id"]) for item in history]
     index = ids.index(int(report["id"])) if int(report["id"]) in ids else None
@@ -1457,9 +1465,41 @@ def report_payload(
         "warnings": report.get("warnings") or [],
         "error": report.get("error"),
         "snapshot": snapshot,
+        "reviewed_deal_ids": reviewed_deal_ids,
         "position": position_from_oldest,
         "total": len(ids),
         "previous_id": ids[index + 1] if index is not None and index + 1 < len(ids) else None,
         "next_id": ids[index - 1] if index is not None and index > 0 else None,
         "generation": generation_status(),
+    }
+
+
+def set_daily_control_deal_reviewed(
+    report_id: int,
+    deal_id: str,
+    reviewed: bool,
+    user: dict[str, Any],
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Toggle a shared ROP review mark. Does not rewrite the published snapshot."""
+    payload = report_payload(report_id, user, db_path=db_path)
+    if payload is None:
+        raise KeyError("Отчёт ежедневного контроля не найден")
+    wanted = str(deal_id or "").strip()
+    visible_ids = {str(deal.get("deal_id") or "") for deal in payload.get("snapshot", {}).get("deals") or []}
+    if not wanted or wanted not in visible_ids:
+        raise KeyError("Сделка не входит в этот отчёт")
+    user_id = user.get("id")
+    marks = set_daily_control_review_mark(
+        db_path,
+        int(report_id),
+        wanted,
+        reviewed=bool(reviewed),
+        user_id=int(user_id) if user_id is not None else None,
+    )
+    return {
+        "deal_id": wanted,
+        "reviewed": bool(reviewed),
+        "reviewed_deal_ids": [item for item in marks if item in visible_ids],
     }

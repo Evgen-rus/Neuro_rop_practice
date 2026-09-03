@@ -25,6 +25,7 @@ from api.daily_control import (
     publish_planning_daily_control_report,
     report_heading,
     report_payload,
+    set_daily_control_deal_reviewed,
 )
 from openai_api.llm.validation import _validate_deal_management_shapes
 from setup import MSK_TZ
@@ -35,6 +36,7 @@ from storage.rop_db import (
     get_daily_control_report,
     init_db,
     list_daily_control_reports,
+    list_daily_control_review_marks,
     merge_deal_daily_quality_state,
     save_deal_control_communications_today,
     save_deal_control_scope,
@@ -1460,6 +1462,77 @@ class DailyControlAccessTests(unittest.TestCase):
              patch.object(api_app, "start_manual_daily_control_report", return_value={"status": "running"}):
             self.assertEqual(api_app.daily_control_reports(), {"reports": []})
             self.assertEqual(api_app.daily_control_report_create()["status"], "running")
+
+        with patch.object(api_app, "auth_current_user", return_value=manager):
+            with self.assertRaises(HTTPException) as error:
+                api_app.daily_control_review_put(1, "101", api_app.DailyControlReviewRequest(reviewed=True))
+            self.assertEqual(error.exception.status_code, 403)
+
+
+class DailyControlReviewMarkTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp.name) / "daily.sqlite"
+        init_db(self.db_path)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _report(self, *, business_date="2026-08-31", kind="manual"):
+        from storage.rop_db import create_daily_control_report
+
+        snapshot = build_daily_control_snapshot(
+            {
+                "deals": [
+                    _deal_row(),
+                    _deal_row(deal_id="202", title="Сделка 202", manager_id="20", manager_name="Петров Пётр"),
+                ],
+                "managers": [],
+            },
+            cutoff_at=NOW,
+        )
+        return create_daily_control_report(
+            self.db_path,
+            business_date=business_date,
+            creation_kind=kind,
+            started_at=NOW.isoformat(),
+            cutoff_at=NOW.isoformat(),
+            snapshot=snapshot,
+            source_watermark="marks",
+        )
+
+    def test_shared_mark_does_not_rewrite_snapshot_and_is_per_report(self) -> None:
+        first = self._report()
+        second = self._report(kind="manual")
+        admin = {"id": 1, "role": "admin"}
+        rop = {"id": 2, "role": "rop"}
+        payload = set_daily_control_deal_reviewed(first["id"], "101", True, admin, db_path=self.db_path)
+        self.assertEqual(payload["reviewed_deal_ids"], ["101"])
+        frozen = get_daily_control_report(self.db_path, first["id"])
+        self.assertEqual(frozen["snapshot"], first["snapshot"])
+        self.assertNotIn("reviewed_deal_ids", frozen["snapshot"])
+        with patch("api.access._rop_team_manager_ids", return_value={"10", "20"}):
+            viewed = report_payload(first["id"], rop, db_path=self.db_path, now=NOW)
+        self.assertEqual(viewed["reviewed_deal_ids"], ["101"])
+        self.assertEqual(list_daily_control_review_marks(self.db_path, second["id"]), [])
+        with patch("api.access._rop_team_manager_ids", return_value={"10", "20"}):
+            cleared = set_daily_control_deal_reviewed(first["id"], "101", False, rop, db_path=self.db_path)
+        self.assertEqual(cleared["reviewed"], False)
+        self.assertEqual(cleared["reviewed_deal_ids"], [])
+        self.assertEqual(get_daily_control_report(self.db_path, first["id"])["snapshot"], first["snapshot"])
+
+    def test_rop_cannot_mark_or_see_a_deal_outside_the_team(self) -> None:
+        report = self._report()
+        admin = {"id": 1, "role": "admin"}
+        rop = {"id": 2, "role": "rop"}
+        set_daily_control_deal_reviewed(report["id"], "202", True, admin, db_path=self.db_path)
+        with patch("api.access._rop_team_manager_ids", return_value={"10"}):
+            viewed = report_payload(report["id"], rop, db_path=self.db_path, now=NOW)
+            self.assertEqual([deal["deal_id"] for deal in viewed["snapshot"]["deals"]], ["101"])
+            self.assertEqual(viewed["reviewed_deal_ids"], [])
+            with self.assertRaises(KeyError):
+                set_daily_control_deal_reviewed(report["id"], "202", True, rop, db_path=self.db_path)
+        self.assertEqual(list_daily_control_review_marks(self.db_path, report["id"]), ["202"])
 
 
 if __name__ == "__main__":
