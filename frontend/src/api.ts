@@ -924,7 +924,7 @@ export type CommunicationQualityAudit = {
   } | null
 }
 
-export type DailyControlStatus = 'red' | 'yellow' | 'green'
+export type DailyControlStatus = 'red' | 'yellow' | 'green' | 'neutral'
 
 export type DailyControlQualityCriterion = {
   score: 0 | 1 | null
@@ -1102,6 +1102,7 @@ export type DailyControlManager = {
   red: number
   yellow: number
   green: number
+  neutral?: number
 }
 
 export type DailyControlSnapshot = {

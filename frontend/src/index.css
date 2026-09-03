@@ -1168,9 +1168,11 @@ textarea {
 .dc-deal-row.review-red::before,
 .dc-deal-row.review-yellow::before,
 .dc-deal-row.review-green::before,
+.dc-deal-row.review-neutral::before,
 .dc-task-row.review-red::before,
 .dc-task-row.review-yellow::before,
-.dc-task-row.review-green::before {
+.dc-task-row.review-green::before,
+.dc-task-row.review-neutral::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 4px;
@@ -1185,6 +1187,9 @@ textarea {
 
 .dc-deal-row.review-green::before,
 .dc-task-row.review-green::before { background: var(--dc-green); }
+
+.dc-deal-row.review-neutral::before,
+.dc-task-row.review-neutral::before { background: #a8b5c4; }
 
 .dc-deal-row.selected,
 .dc-task-row.selected {
@@ -1384,6 +1389,7 @@ textarea {
 .dc-deal-status-indicator.red { background: var(--dc-red); }
 .dc-deal-status-indicator.yellow { background: var(--dc-orange); }
 .dc-deal-status-indicator.green { background: var(--dc-green); }
+.dc-deal-status-indicator.neutral { background: #a8b5c4; }
 
 .dc-stage-pill {
   display: inline-block;
@@ -7696,6 +7702,7 @@ ul.facts.bad li:before {
 .dc-daily-pill.red { color: var(--daily-red); background: var(--daily-red-soft); }
 .dc-daily-pill.yellow { color: var(--daily-yellow); background: var(--daily-yellow-soft); }
 .dc-daily-pill.green { color: var(--daily-green); background: var(--daily-green-soft); }
+.dc-daily-pill.neutral { color: #5d718c; background: #eef2f6; }
 
 .dc-daily-history {
   display: flex;
@@ -8551,6 +8558,12 @@ ul.facts.bad li:before {
 }
 .dc-daily-focus-step.risk.green .dc-daily-focus-icon { background: var(--daily-green); }
 .dc-daily-focus-step.risk.green small { color: #075f3b; }
+.dc-daily-focus-step.risk.neutral {
+  border-color: #d5dee8;
+  background: #f5f7fa;
+}
+.dc-daily-focus-step.risk.neutral .dc-daily-focus-icon { background: #a8b5c4; }
+.dc-daily-focus-step.risk.neutral small { color: #5d718c; }
 
 .dc-daily-focus-step.question {
   border-color: #bdd3f5;

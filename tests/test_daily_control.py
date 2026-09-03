@@ -177,7 +177,7 @@ class ClassifierTests(unittest.TestCase):
         baseline = classify_deal_status(deal)
         deal["checklist"] = {"completed": 0, "total": 5, "items": [{"text": "legacy marker"}]}
         self.assertEqual(classify_deal_status(deal), baseline)
-        self.assertEqual(baseline[0], "green")
+        self.assertEqual(baseline[0], "neutral")
         self.assertNotIn("legacy marker", build_direct_manager_question(deal))
 
     def test_overdue_local_rop_task_does_not_force_red(self) -> None:
@@ -210,6 +210,17 @@ class ClassifierTests(unittest.TestCase):
         ))
         self.assertEqual(status, "green")
         self.assertEqual(label, "В норме")
+
+    def test_not_required_quality_is_neutral_not_green(self) -> None:
+        deal = _deal_row(
+            primary_bitrix_task=None,
+            coaching={"report_id": 1, "communication_quality_audit": _audit()},
+            communications_today={"date": "2026-08-18", "available": True, "completed": 0, "items": []},
+        )
+        status, label = classify_deal_status(deal)
+        self.assertEqual(project_deal_review_card(deal)["quality"]["status"], "not_required")
+        self.assertEqual(status, "neutral")
+        self.assertEqual(label, "Сегодня не требуется")
 
     def test_open_overdue_bitrix_task_stays_green_when_scores_are_green(self) -> None:
         status, label = classify_deal_status(_deal_row(

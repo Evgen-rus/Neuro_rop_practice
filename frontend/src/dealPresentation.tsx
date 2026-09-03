@@ -5,6 +5,7 @@ const STATUS_SYMBOL: Record<DailyControlStatus, string> = {
   red: '!',
   yellow: '?',
   green: '✓',
+  neutral: '–',
 }
 
 export function BitrixDealIdLink({ dealId }: { dealId: string }) {

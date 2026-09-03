@@ -355,7 +355,7 @@ function reviewStripeClass(deal: DealControlDeal) {
   // Полоска — тот же светофор, что кружок. Без анализа это ещё не оценка: полоску не рисуем.
   const status = deal.review?.status
   if (!deal.coaching.report_id) return ''
-  if (status === 'red' || status === 'yellow' || status === 'green') return `review-${status}`
+  if (status === 'red' || status === 'yellow' || status === 'green' || status === 'neutral') return `review-${status}`
   return ''
 }
 

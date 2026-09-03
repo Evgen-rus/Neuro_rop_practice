@@ -42,6 +42,7 @@ STATUS_LABELS = {
     "red": "Требует решения РОПа",
     "yellow": "Нужна проверка",
     "green": "В норме",
+    "neutral": "Сегодня не требуется",
 }
 COMMUNICATION_ITEM_KEYS = (
     "event_id",
@@ -413,7 +414,7 @@ def compute_source_watermark(
 def classify_deal_status(
     deal: dict[str, Any], *, now: datetime | None = None, quality: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
-    """Server-side red/yellow/green from existing structured deal-control facts."""
+    """Server-side red/yellow/green/neutral from existing structured deal-control facts."""
     coaching = deal.get("coaching") if isinstance(deal.get("coaching"), dict) else {}
     audit = quality if quality is not None else _daily_quality_block(deal, now or datetime.now(MSK_TZ))
     bitrix_task = deal.get("primary_bitrix_task") if isinstance(deal.get("primary_bitrix_task"), dict) else {}
@@ -447,6 +448,9 @@ def classify_deal_status(
         or bool(next_action_warning)
     ):
         return "yellow", STATUS_LABELS["yellow"]
+    # Нет обязательства на сегодня — это не «в норме», а нейтральный серый.
+    if audit.get("status") == "not_required":
+        return "neutral", STATUS_LABELS["neutral"]
     return "green", STATUS_LABELS["green"]
 
 
@@ -907,7 +911,7 @@ def project_deal_review_card(deal: dict[str, Any], *, now: datetime | None = Non
 
 
 def _sort_deals(deals: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rank = {"red": 0, "yellow": 1, "green": 2}
+    rank = {"red": 0, "yellow": 1, "green": 2, "neutral": 3}
 
     def key(deal: dict[str, Any]) -> tuple[Any, ...]:
         untouched = 0 if (deal.get("day_scope") or {}).get("untouched") else 1

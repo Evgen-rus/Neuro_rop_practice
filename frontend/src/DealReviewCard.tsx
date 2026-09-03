@@ -18,6 +18,7 @@ const FOCUS_STATUS_SYMBOL = {
   red: '!',
   yellow: '?',
   green: '✓',
+  neutral: '–',
 } as const
 
 const ICON_PATHS = {

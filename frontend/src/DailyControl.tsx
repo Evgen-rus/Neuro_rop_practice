@@ -11,7 +11,6 @@ import {
   type DailyControlManager,
   type DailyControlReport,
   type DailyControlSnapshot,
-  type DailyControlStatus,
 } from './api'
 import { copyTextToClipboard } from './contextPersist'
 import { formatMoscowDateTime } from './dateTime'
@@ -27,7 +26,8 @@ const SPLITTER_MIN = 280
 const SPLITTER_MAX_MARGIN = 320
 const SPLITTER_STEP = 24
 const EMPTY_DEALS: DailyControlDeal[] = []
-const STATUS_FILTERS: Array<{ id: 'all' | DailyControlStatus; label: string }> = [
+type DailyTrafficFilter = 'all' | 'red' | 'yellow' | 'green'
+const STATUS_FILTERS: Array<{ id: DailyTrafficFilter; label: string }> = [
   { id: 'all', label: 'Все' },
   { id: 'red', label: 'Красные' },
   { id: 'yellow', label: 'Жёлтые' },
@@ -105,6 +105,7 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
       red: 0,
       yellow: 0,
       green: 0,
+      neutral: 0,
     }
     current.deals_count += 1
     const communications = deal.communications_today
@@ -120,7 +121,11 @@ function summarizeDailyControl(deals: DailyControlDeal[]): {
       current.messages += Number(communications?.messages || 0)
       current.talk_seconds += Number(communications?.duration_seconds || 0)
     }
-    current[deal.status] += 1
+    if (deal.status === 'red' || deal.status === 'yellow' || deal.status === 'green') {
+      current[deal.status] += 1
+    } else if (deal.status === 'neutral') {
+      current.neutral = (current.neutral || 0) + 1
+    }
     managersById.set(managerId, current)
   }
   const managers = [...managersById.values()].sort((left, right) => (
@@ -158,7 +163,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [generation, setGeneration] = useState<DailyControlGeneration | null>(null)
   const [managerId, setManagerId] = useState('')
   const [dealId, setDealId] = useState('')
-  const [filter, setFilter] = useState<'all' | DailyControlStatus>('all')
+  const [filter, setFilter] = useState<DailyTrafficFilter>('all')
   const reviewStarted = useRef(false)
   const historyPinned = useRef(false)
   const currentReportId = useRef<number | undefined>(undefined)
@@ -345,7 +350,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
     setDealId(first?.deal_id || '')
   }
 
-  function selectFilter(next: 'all' | DailyControlStatus) {
+  function selectFilter(next: DailyTrafficFilter) {
     reviewStarted.current = true
     setFilter(next)
     const deals = sortDailyReviewDeals(
