@@ -6,11 +6,14 @@ from pathlib import Path
 
 from storage.rop_db import (
     connect,
+    get_saved_deal_manager_quick_help,
     list_deal_context_lever_priorities,
     list_deal_manager_assistant_events,
     list_deal_manager_quick_help,
+    list_saved_deal_manager_channel_scripts,
     record_deal_manager_assistant_event,
     save_deal_context_lever_priority,
+    save_deal_manager_call_script,
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
     save_ui_report,
@@ -236,6 +239,39 @@ class DealManagerQuickHelpStorageTests(unittest.TestCase):
             with connect(db_path) as conn:
                 conn.execute("UPDATE deal_control_deals SET manager_id = '77' WHERE deal_id = '101'")
             self.assertEqual(list_deal_manager_assistant_events(db_path, deal_id="101"), [])
+
+    def test_saved_quick_help_snapshot_survives_manager_reassignment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            report_id, review_id = _seed_deal(db_path)
+            answer = save_deal_manager_quick_help(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                question="Что сказать?",
+                answer_json={"next_action": "Позвонить", "client_messages": {"primary": "Добрый день"}},
+            )
+            save_deal_manager_call_script(
+                db_path,
+                deal_id="101",
+                source_report_id=report_id,
+                situation_review_id=review_id,
+                quick_help_id=int(answer["id"]),
+                selected_strategy="primary",
+                script_json={"script_contract": "conversation_script_v2", "conversation_goal": "Согласовать шаг"},
+            )
+            with connect(db_path) as conn:
+                conn.execute("UPDATE deal_control_deals SET manager_id = '77' WHERE deal_id = '101'")
+            saved = get_saved_deal_manager_quick_help(
+                db_path, deal_id="101", quick_help_id=int(answer["id"]),
+            )
+            scripts = list_saved_deal_manager_channel_scripts(
+                db_path, deal_id="101", quick_help_id=int(answer["id"]),
+            )
+            self.assertEqual(saved["content"]["next_action"], "Позвонить")
+            self.assertEqual(scripts[0]["channel"], "call")
+            self.assertEqual(scripts[0]["content"]["conversation_goal"], "Согласовать шаг")
 
 
 if __name__ == "__main__":

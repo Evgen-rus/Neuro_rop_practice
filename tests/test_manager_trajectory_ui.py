@@ -15,13 +15,24 @@ from api.manager_trajectory_ui import (
     build_window_projection,
     day_export_filename,
 )
+from tests.test_deal_manager_email_followups import EMAIL
+from tests.test_deal_manager_full_script import CALL_SCRIPT, SCRIPT
+from tests.test_deal_manager_quick_help import ANSWER
 from setup import MSK_TZ
 from storage.rop_db import (
+    get_saved_deal_manager_quick_help,
     init_db,
+    list_saved_deal_manager_channel_scripts,
     observe_manager_trajectory_business_snapshot,
     record_manager_trajectory_event,
     save_deal_control_scope,
+    save_deal_manager_call_script,
+    save_deal_manager_email_script,
+    save_deal_manager_full_script,
+    save_deal_manager_quick_help,
+    save_deal_manager_situation_confirmation,
     save_manager_trajectory_collection_state,
+    save_ui_report,
     upsert_deal_control_deal,
 )
 
@@ -263,6 +274,13 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
         self.assertEqual(event_types, {"recommendation_viewed", "quick_help_opened"})
         self.assertNotIn("recommendation_generated", event_types)
         self.assertNotIn("recommendation_shown", event_types)
+        viewed = next(item for item in neurorop if item["label"] == "Открыл ответ Quick Help")
+        opened = next(item for item in neurorop if item["label"] == "Зашёл в дожим сделки")
+        clicked = next(item for item in neurorop if item["label"] == "Кликнул сделку в НейроРОПе")
+        self.assertTrue(viewed["expandable"])
+        self.assertEqual(viewed["subject"], "Ответ дожима")
+        self.assertFalse(opened.get("expandable"))
+        self.assertFalse(clicked.get("expandable"))
 
         day = build_day_projection(value=DAY, bucket_minutes=30, db_path=self.db_path)
         self.assertEqual(day["managers"][0]["totals"]["neurorop"], 3)
@@ -279,6 +297,94 @@ class ManagerTrajectoryUiProjectionTests(_ManagerTrajectoryUiFixture):
         for recommendation in usage.get("recommendations") or []:
             self.assertNotIn("generated_at", recommendation)
             self.assertNotIn("shown_at", recommendation)
+
+    def _seed_quick_help_answer(self) -> dict:
+        report_id = save_ui_report(
+            self.db_path, entity_type="deal", entity_id="101",
+            report_json={"deal_control_brief": {"current_situation": "КП отправлено"}},
+        )
+        review = save_deal_manager_situation_confirmation(
+            self.db_path, deal_id="101", source_report_id=report_id,
+        )
+        return save_deal_manager_quick_help(
+            self.db_path, deal_id="101", source_report_id=report_id,
+            situation_review_id=int(review["id"]), question="Что сказать клиенту?",
+            answer_json=ANSWER, mode="push",
+        )
+
+    def test_quick_help_view_detail_loads_saved_answer_and_opened_scripts(self) -> None:
+        quick_help = self._seed_quick_help_answer()
+        save_deal_manager_call_script(
+            self.db_path, deal_id="101", source_report_id=int(quick_help["source_report_id"]),
+            situation_review_id=int(quick_help["situation_review_id"]),
+            quick_help_id=int(quick_help["id"]), selected_strategy="primary",
+            script_json={**CALL_SCRIPT, "selected_strategy": "primary"},
+        )
+        save_deal_manager_full_script(
+            self.db_path, deal_id="101", source_report_id=int(quick_help["source_report_id"]),
+            situation_review_id=int(quick_help["situation_review_id"]),
+            quick_help_id=int(quick_help["id"]), selected_strategy="alternative",
+            script_json=SCRIPT,
+        )
+        save_deal_manager_email_script(
+            self.db_path, deal_id="101", source_report_id=int(quick_help["source_report_id"]),
+            situation_review_id=int(quick_help["situation_review_id"]),
+            quick_help_id=int(quick_help["id"]), selected_strategy="pattern_break",
+            script_json={**EMAIL, "selected_strategy": "pattern_break"},
+        )
+        viewed = record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="recommendation_viewed", recommendation_kind="quick_help",
+            recommendation_id=str(quick_help["id"]), source="manager_ui",
+            source_event_key="view:saved-qh",
+            occurred_at=(START + timedelta(minutes=12)).isoformat(),
+            payload={
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+                "occurrence_id": "view-saved-qh",
+            },
+        )
+        window = build_window_projection(
+            manager_id="10", from_at=START, to_at=START + timedelta(minutes=30),
+            db_path=self.db_path,
+        )
+        dumped = json.dumps(window, ensure_ascii=False)
+        self.assertNotIn(ANSWER["client_messages"]["primary"], dumped)
+
+        detail = build_event_detail_projection(
+            manager_id="10", event_id=str(viewed["id"]), value=DAY, db_path=self.db_path,
+        )
+        view = detail["quick_help_view"]
+        self.assertTrue(view["available"])
+        self.assertEqual(view["mode_label"], "Дожим")
+        self.assertEqual(view["question"], "Что сказать клиенту?")
+        self.assertEqual(
+            [item["id"] for item in view["strategies"]],
+            ["primary", "alternative", "pattern_break"],
+        )
+        self.assertEqual(view["strategies"][0]["label"], "Через короткий вопрос")
+        self.assertEqual(view["strategies"][0]["client_message"], ANSWER["client_messages"]["primary"])
+        self.assertEqual(view["strategies"][2]["client_message"], ANSWER["client_messages"]["pattern_break"])
+        channels = [item["channel"] for item in view["materials"]]
+        self.assertEqual(channels, ["call", "message", "email"])
+        self.assertIn("Добрый день. Хочу коротко пройтись по КП", json.dumps(view["materials"], ensure_ascii=False))
+        self.assertIn(EMAIL["subject"], json.dumps(view["materials"], ensure_ascii=False))
+
+    def test_quick_help_view_detail_says_text_was_not_saved(self) -> None:
+        viewed = record_manager_trajectory_event(
+            self.db_path, entity_type="deal", entity_id="101", manager_id="10",
+            event_type="recommendation_viewed", recommendation_kind="quick_help",
+            recommendation_id="missing", source="fixture", source_event_key="view:missing-qh",
+            occurred_at=(START + timedelta(minutes=13)).isoformat(),
+            payload={
+                "actor_verified": True, "actor_role": "manager", "actor_manager_id": "10",
+                "occurrence_id": "view-missing-qh",
+            },
+        )
+        detail = build_event_detail_projection(
+            manager_id="10", event_id=str(viewed["id"]), value=DAY, db_path=self.db_path,
+        )
+        self.assertFalse(detail["quick_help_view"]["available"])
+        self.assertEqual(detail["quick_help_view"]["missing_reason"], "Текст ответа не сохранился")
 
     def test_entity_communications_can_load_saved_content_lazily(self) -> None:
         self._event(

@@ -15,11 +15,33 @@ from api.manager_trajectory import (
     project_manager_trajectory_for_display,
 )
 from setup import MSK_TZ
-from storage.rop_db import DEFAULT_DB_PATH
+from storage.rop_db import (
+    DEFAULT_DB_PATH,
+    get_saved_deal_manager_quick_help,
+    list_saved_deal_manager_channel_scripts,
+)
 
 
 BUCKET_MINUTES = {30, 60}
 UI_CATEGORIES = {"all", "deals", "leads", "communications", "tasks", "crm", "neurorop"}
+QUICK_HELP_MISSING_TEXT = "Текст ответа не сохранился"
+QUICK_HELP_MODE_LABELS = {"push": "Дожим", "reanimator": "Реаниматор"}
+QUICK_HELP_STRATEGY_ORDER = ("primary", "alternative", "pattern_break")
+QUICK_HELP_STRATEGY_LABELS = {
+    "primary": "Основной ход",
+    "alternative": "Другой заход",
+    "pattern_break": "Смена механики",
+}
+QUICK_HELP_CHANNEL_LABELS = {
+    "call": "Скрипт звонка",
+    "message": "Переписка",
+    "email": "Письмо",
+}
+LEGACY_CLIENT_TONE_LABELS = {
+    "calm": "Спокойно",
+    "confident": "Уверенно",
+    "direct": "Прямо",
+}
 ENTITY_EVENT_KEYS = (
     "crm_actions", "stage_changes", "task_history", "timeline_comments",
     "business_field_changes", "stage_history",
@@ -201,6 +223,154 @@ def _base_event(
     }
 
 
+def _quick_help_text(value: Any, limit: int = 20_000) -> str:
+    if value is None or isinstance(value, (dict, list)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _strategy_label(content: dict[str, Any], strategy: str) -> str:
+    labels = content.get("strategy_labels") if isinstance(content.get("strategy_labels"), dict) else {}
+    custom = _quick_help_text(labels.get(strategy), 200)
+    return custom or QUICK_HELP_STRATEGY_LABELS.get(strategy, strategy)
+
+
+def _missing_quick_help_view() -> dict[str, Any]:
+    return {
+        "available": False,
+        "missing_reason": QUICK_HELP_MISSING_TEXT,
+        "mode": None,
+        "mode_label": None,
+        "question": None,
+        "situation_summary": None,
+        "next_action": None,
+        "expected_result": None,
+        "pressure_lever": None,
+        "strategies": [],
+        "lifehacks": [],
+        "fallback_action": None,
+        "materials": [],
+    }
+
+
+def _project_quick_help_strategies(content: dict[str, Any]) -> list[dict[str, str]]:
+    messages = content.get("client_messages") if isinstance(content.get("client_messages"), dict) else {}
+    call_scripts = content.get("call_scripts") if isinstance(content.get("call_scripts"), dict) else {}
+    contract = str(content.get("answer_contract") or "")
+    result: list[dict[str, str]] = []
+    if contract in {"strategy_v1", "strategy_v2", "strategy_v3"} or any(
+        key in messages for key in QUICK_HELP_STRATEGY_ORDER
+    ):
+        for strategy in QUICK_HELP_STRATEGY_ORDER:
+            item = {
+                "id": strategy,
+                "label": _strategy_label(content, strategy),
+                "client_message": _quick_help_text(messages.get(strategy)),
+            }
+            if contract == "strategy_v1":
+                item["call_script"] = _quick_help_text(call_scripts.get(strategy))
+            result.append(item)
+        return result
+    for tone, label in LEGACY_CLIENT_TONE_LABELS.items():
+        result.append({
+            "id": tone,
+            "label": label,
+            "client_message": _quick_help_text(messages.get(tone)),
+            "call_script": _quick_help_text(call_scripts.get(tone)),
+        })
+    return result
+
+
+def _project_quick_help_lifehacks(content: dict[str, Any]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    raw = content.get("lifehacks")
+    if not isinstance(raw, list):
+        return result
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        title = _quick_help_text(item.get("title"), 400)
+        action = _quick_help_text(item.get("action"))
+        if not title or not action:
+            continue
+        result.append({
+            "title": title,
+            "action": action,
+            "why_relevant": _quick_help_text(item.get("why_relevant")),
+            "conditions": _quick_help_text(item.get("conditions")),
+        })
+    return result
+
+
+def _project_quick_help_materials(
+    materials: list[dict[str, Any]],
+    content: dict[str, Any],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in materials:
+        channel = str(item.get("channel") or "")
+        strategy = str(item.get("selected_strategy") or "")
+        payload = item.get("content") if isinstance(item.get("content"), dict) else {}
+        if channel not in QUICK_HELP_CHANNEL_LABELS or not payload:
+            continue
+        result.append({
+            "channel": channel,
+            "channel_label": QUICK_HELP_CHANNEL_LABELS[channel],
+            "strategy": strategy,
+            "strategy_label": _strategy_label(content, strategy) if strategy in QUICK_HELP_STRATEGY_ORDER else strategy,
+            "created_at": item.get("created_at"),
+            "content": payload,
+        })
+    return result
+
+
+def _build_quick_help_view(
+    *,
+    db_path: str | Path,
+    deal_id: str,
+    recommendation_id: Any,
+) -> dict[str, Any]:
+    raw_id = str(recommendation_id or "").strip()
+    if not raw_id.isdigit():
+        return _missing_quick_help_view()
+    saved = get_saved_deal_manager_quick_help(
+        db_path, deal_id=str(deal_id), quick_help_id=int(raw_id),
+    )
+    if not saved:
+        return _missing_quick_help_view()
+    content = saved.get("content") if isinstance(saved.get("content"), dict) else {}
+    mode = str(saved.get("mode") or "").strip() or None
+    lever = content.get("pressure_lever") if isinstance(content.get("pressure_lever"), dict) else {}
+    lever_title = _quick_help_text(lever.get("title"), 400)
+    lever_rationale = _quick_help_text(lever.get("rationale"))
+    materials = list_saved_deal_manager_channel_scripts(
+        db_path, deal_id=str(deal_id), quick_help_id=int(raw_id),
+    )
+    return {
+        "available": True,
+        "missing_reason": None,
+        "mode": mode,
+        "mode_label": QUICK_HELP_MODE_LABELS.get(mode or ""),
+        "question": _quick_help_text(saved.get("question")),
+        "situation_summary": _quick_help_text(
+            content.get("situation_summary") or content.get("problem_summary"),
+        ),
+        "next_action": _quick_help_text(content.get("next_action") or content.get("recommended_action")),
+        "expected_result": _quick_help_text(content.get("expected_result")),
+        "pressure_lever": (
+            {"title": lever_title, "rationale": lever_rationale}
+            if lever_title and lever_rationale else None
+        ),
+        "strategies": _project_quick_help_strategies(content),
+        "lifehacks": _project_quick_help_lifehacks(content),
+        "fallback_action": _quick_help_text(content.get("fallback_action")),
+        "materials": _project_quick_help_materials(materials, content),
+    }
+
+
 def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
     metadata = _entity_meta(manager)
     events: list[dict[str, Any]] = []
@@ -223,6 +393,7 @@ def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
             "recommendation_id": recommendation.get("recommendation_id"),
         }
         entity = metadata.get(("deal", common["entity_id"])) or {}
+        is_quick_help = str(common.get("recommendation_kind") or "") == "quick_help"
         for occurrence in recommendation.get("view_occurrences") or []:
             events.append({
                 **common,
@@ -233,8 +404,9 @@ def _manager_events(manager: dict[str, Any]) -> list[dict[str, Any]]:
                 "entity_title": entity.get("title"),
                 "pipeline_name": entity.get("pipeline_name"),
                 "stage_name": entity.get("stage_name"),
-                "subject": None,
+                "subject": "Ответ дожима" if is_quick_help else None,
                 "description": None,
+                "expandable": is_quick_help,
                 "temporal_relation": None,
             })
     for opening in manager.get("product_usage", {}).get("quick_help_openings") or []:
@@ -587,6 +759,24 @@ def build_event_detail_projection(
                     "transcript_text": transcript.get("text") if transcript else None,
                     "transcript_truncated": bool(transcript and transcript.get("truncated")),
                 }
+    for event in _manager_events(manager):
+        if str(event.get("event_id") or "") != str(event_id):
+            continue
+        if event.get("event_type") != "recommendation_viewed":
+            continue
+        if str(event.get("recommendation_kind") or "") != "quick_help":
+            continue
+        return {
+            **event,
+            "details": [],
+            "transcript_text": None,
+            "transcript_truncated": False,
+            "quick_help_view": _build_quick_help_view(
+                db_path=db_path,
+                deal_id=str(event.get("entity_id") or ""),
+                recommendation_id=event.get("recommendation_id"),
+            ),
+        }
     raise LookupError("Событие не найдено в траектории выбранного дня")
 
 

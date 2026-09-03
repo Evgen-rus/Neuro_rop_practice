@@ -3875,6 +3875,13 @@ textarea {
 .trajectory-event-detail > p { margin: 6px 0; }.trajectory-event-detail > p.loading { display: flex; align-items: center; gap: 7px; color: #6b7f94; }.trajectory-event-detail > p.error { color: #b42335; }
 .trajectory-call-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 9px; }.trajectory-call-facts span { border: 1px solid #e0e8f0; border-radius: 7px; padding: 7px 8px; }.trajectory-call-facts small, .trajectory-call-facts b { display: block; }.trajectory-call-facts small { color: #7b8da1; font-size: 8px; }.trajectory-call-facts b { margin-top: 2px; color: #243d58; font-size: 10px; }
 .trajectory-full-event-text { max-height: 240px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.trajectory-quick-help { max-height: min(70vh, 640px); overflow-y: auto; display: grid; gap: 10px; }
+.trajectory-quick-help section { display: grid; gap: 4px; }
+.trajectory-quick-help small { color: #5d738a; font-size: 9px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; }
+.trajectory-quick-help p, .trajectory-quick-help li { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.trajectory-quick-help pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.trajectory-quick-help-material { padding-top: 8px; border-top: 1px solid #e6edf4; }
+.trajectory-quick-help-mode { margin: 0; color: #1d5fbf; }
 .trajectory-event-facts { display: grid; gap: 0; margin: 9px 0 0; border: 1px solid #e0e8f0; border-radius: 7px; }.trajectory-event-facts div { display: grid; grid-template-columns: minmax(90px, .7fr) minmax(0, 1.3fr); gap: 8px; border-top: 1px solid #edf1f5; padding: 7px 8px; }.trajectory-event-facts div:first-child { border-top: 0; }.trajectory-event-facts dt { color: #75879a; }.trajectory-event-facts dd { overflow-wrap: anywhere; margin: 0; color: #263d57; white-space: pre-wrap; }
 .trajectory-transcript { margin-top: 10px; border-top: 1px solid #e4eaf1; padding-top: 9px; }.trajectory-transcript summary { cursor: pointer; color: #1d68c9; font-weight: 800; }.trajectory-transcript pre { max-height: 360px; overflow: auto; margin: 8px 0 0; border-radius: 7px; padding: 10px; color: #263d57; background: #f4f7fa; font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }.trajectory-transcript > small { display: block; margin-top: 5px; color: #75879a; }
 .trajectory-open-entity { margin-top: 9px; border: 1px solid #cbdced; border-radius: 7px; padding: 6px 9px; color: #1967c8; background: #f2f7fd; cursor: pointer; font-size: 9px; font-weight: 800; }

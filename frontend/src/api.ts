@@ -148,10 +148,43 @@ export type TrajectoryEvent = {
   temporal_relation?: { kind: 'after_recommendation_view'; minutes: number; text: string } | null
 }
 
+export type TrajectoryQuickHelpStrategyView = {
+  id: string
+  label: string
+  client_message: string
+  call_script?: string | null
+}
+
+export type TrajectoryQuickHelpMaterialView = {
+  channel: 'call' | 'message' | 'email' | string
+  channel_label: string
+  strategy: string
+  strategy_label: string
+  created_at?: string | null
+  content: Record<string, unknown>
+}
+
+export type TrajectoryQuickHelpView = {
+  available: boolean
+  missing_reason?: string | null
+  mode?: string | null
+  mode_label?: string | null
+  question?: string | null
+  situation_summary?: string | null
+  next_action?: string | null
+  expected_result?: string | null
+  pressure_lever?: { title: string; rationale: string } | null
+  strategies?: TrajectoryQuickHelpStrategyView[]
+  lifehacks?: Array<{ title: string; action: string; why_relevant?: string; conditions?: string }>
+  fallback_action?: string | null
+  materials?: TrajectoryQuickHelpMaterialView[]
+}
+
 export type TrajectoryEventDetail = TrajectoryEvent & {
   details?: Array<{ label: string; value: string }>
   transcript_text?: string | null
   transcript_truncated?: boolean
+  quick_help_view?: TrajectoryQuickHelpView | null
 }
 
 export type TrajectoryWindow = {

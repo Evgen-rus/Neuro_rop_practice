@@ -5,6 +5,9 @@ import {
   fetchTrajectoryEntity,
   fetchTrajectoryEvent,
   fetchTrajectoryWindow,
+  asRecord,
+  asString,
+  asStringList,
   type TrajectoryBucket,
   type TrajectoryCategory,
   type TrajectoryDay,
@@ -12,6 +15,8 @@ import {
   type TrajectoryEvent,
   type TrajectoryEventDetail,
   type TrajectoryManager,
+  type TrajectoryQuickHelpMaterialView,
+  type TrajectoryQuickHelpView,
   type TrajectoryWindow,
 } from './api'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
@@ -515,14 +520,84 @@ function TrajectoryEventRow({
       {error ? <p className="error">{error}</p> : null}
       {detail ? <>
         {isCall ? <div className="trajectory-call-facts"><span><small>Направление</small><b>{directionLabel(detail.direction)}</b></span><span><small>Длительность</small><b>{durationLabel(detail.duration_seconds)}</b></span></div> : null}
-        {detail.subject ? <p><b>{detail.subject}</b></p> : null}
+        {detail.subject && !detail.quick_help_view ? <p><b>{detail.subject}</b></p> : null}
         {detail.description ? <p className="trajectory-full-event-text">{detail.description}</p> : null}
         {detail.details?.length ? <dl className="trajectory-event-facts">{detail.details.map((item, index) => <div key={`${item.label}-${index}`}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl> : null}
         {detail.transcript_text ? <details className="trajectory-transcript"><summary>Расшифровка звонка</summary><pre>{detail.transcript_text}</pre>{detail.transcript_truncated ? <small>Показан первый 1 000 000 символов.</small> : null}</details> : null}
+        {detail.quick_help_view ? <TrajectoryQuickHelpDetail view={detail.quick_help_view} /> : null}
         {!entityContext && event.entity_id && onOpenEntity ? <button type="button" className="trajectory-open-entity" onClick={() => void onOpenEntity(event)}>Открыть {event.entity_type?.toUpperCase()} #{event.entity_id}</button> : null}
       </> : null}
     </div> : null}
   </article>
+}
+
+function TrajectoryQuickHelpDetail({ view }: { view: TrajectoryQuickHelpView }) {
+  if (!view.available) {
+    return <p>{view.missing_reason || 'Текст ответа не сохранился'}</p>
+  }
+  return <div className="trajectory-quick-help">
+    {view.mode_label ? <p className="trajectory-quick-help-mode"><b>{view.mode_label}</b></p> : null}
+    {view.question ? <section><small>Вопрос менеджера</small><p>{view.question}</p></section> : null}
+    {view.situation_summary ? <section><small>Ситуация</small><p>{view.situation_summary}</p></section> : null}
+    {view.next_action ? <section><small>Что сделать</small><p>{view.next_action}</p></section> : null}
+    {view.expected_result ? <section><small>Ожидаемый результат</small><p>{view.expected_result}</p></section> : null}
+    {view.pressure_lever ? <section><small>Рычаг дожима</small><p><b>{view.pressure_lever.title}</b> {view.pressure_lever.rationale}</p></section> : null}
+    {view.strategies?.length ? view.strategies.map((strategy) => (
+      <section key={strategy.id}>
+        <small>{strategy.label}</small>
+        {strategy.client_message ? <pre>{strategy.client_message}</pre> : null}
+        {strategy.call_script ? <pre>{strategy.call_script}</pre> : null}
+      </section>
+    )) : null}
+    {view.lifehacks?.length ? <section>
+      <small>Лайфхаки</small>
+      {view.lifehacks.map((item, index) => (
+        <p key={`${item.title}-${index}`}><b>{item.title}.</b> {item.action}{item.why_relevant ? ` ${item.why_relevant}` : ''}{item.conditions ? ` ${item.conditions}` : ''}</p>
+      ))}
+    </section> : null}
+    {view.fallback_action ? <section><small>Если не сработало</small><p>{view.fallback_action}</p></section> : null}
+    {view.materials?.length ? view.materials.map((material, index) => (
+      <section key={`${material.channel}-${material.strategy}-${index}`} className="trajectory-quick-help-material">
+        <small>{material.channel_label} · {material.strategy_label}</small>
+        <TrajectoryQuickHelpMaterial content={material} />
+      </section>
+    )) : null}
+  </div>
+}
+
+function TrajectoryQuickHelpMaterial({ content }: { content: TrajectoryQuickHelpMaterialView }) {
+  const payload = asRecord(content.content)
+  if (asString(payload.email_contract)) {
+    const questions = asStringList(payload.questions)
+    return <>
+      {asString(payload.subject) ? <p><b>{asString(payload.subject)}</b></p> : null}
+      {asString(payload.greeting) ? <p>{asString(payload.greeting)}</p> : null}
+      {asString(payload.context) ? <p>{asString(payload.context)}</p> : null}
+      {questions.length ? <ol>{questions.map((question) => <li key={question}>{question}</li>)}</ol> : null}
+      {asString(payload.value_point) ? <p>{asString(payload.value_point)}</p> : null}
+      {asString(payload.call_to_action) ? <p>{asString(payload.call_to_action)}</p> : null}
+      {asString(payload.closing) ? <p>{asString(payload.closing)}</p> : null}
+    </>
+  }
+  const goal = asString(payload.conversation_goal)
+  const blocks = Array.isArray(payload.blocks) ? payload.blocks : []
+  return <>
+    {goal ? <p><b>Цель.</b> {goal}</p> : null}
+    {blocks.map((raw, index) => {
+      const block = asRecord(raw)
+      const title = asString(block.title) || `Шаг ${index + 1}`
+      const spoken = asString(block.spoken_text)
+      const phrases = asStringList(block.suggested_phrases)
+      const question = asString(block.clarifying_question)
+      return <div key={asString(block.block_id) || `${title}-${index}`}>
+        <p><b>{index + 1}. {title}</b></p>
+        {spoken ? <pre>{spoken}</pre> : null}
+        {question ? <p>{question}</p> : null}
+        {phrases.length ? phrases.map((phrase) => <pre key={phrase}>{phrase}</pre>) : null}
+      </div>
+    })}
+    {asString(payload.closing_agreement) ? <p>{asString(payload.closing_agreement)}</p> : null}
+  </>
 }
 
 function EntityDetail({ entity, date }: { entity: TrajectoryEntity; date: string }) {

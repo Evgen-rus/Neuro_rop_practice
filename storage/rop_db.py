@@ -4256,6 +4256,66 @@ def save_deal_manager_email_script(
     return result
 
 
+_SAVED_CHANNEL_SCRIPT_TABLES: tuple[tuple[str, str], ...] = (
+    ("call", "deal_manager_call_scripts"),
+    ("message", "deal_manager_full_scripts"),
+    ("email", "deal_manager_email_scripts"),
+)
+
+
+def get_saved_deal_manager_quick_help(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    quick_help_id: int,
+) -> dict[str, Any] | None:
+    """Return a stored Quick Help answer by deal and id, including after reassignment."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM deal_manager_quick_help WHERE id = ? AND deal_id = ?",
+            (int(quick_help_id), str(deal_id)),
+        ).fetchone()
+    return _row_to_deal_manager_quick_help(row)
+
+
+def list_saved_deal_manager_channel_scripts(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    quick_help_id: int,
+) -> list[dict[str, Any]]:
+    """List saved call, message and email materials for one Quick Help answer."""
+    init_db(db_path)
+    result: list[dict[str, Any]] = []
+    with connect(db_path) as conn:
+        for channel, table in _SAVED_CHANNEL_SCRIPT_TABLES:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM {table}
+                WHERE deal_id = ? AND quick_help_id = ?
+                ORDER BY CASE selected_strategy
+                    WHEN 'primary' THEN 1
+                    WHEN 'alternative' THEN 2
+                    WHEN 'pattern_break' THEN 3
+                    ELSE 4
+                END, id
+                """,
+                (str(deal_id), int(quick_help_id)),
+            ).fetchall()
+            for row in rows:
+                item = _row_to_deal_manager_full_script(row)
+                if item is None:
+                    continue
+                result.append({
+                    "channel": channel,
+                    "selected_strategy": item.get("selected_strategy"),
+                    "created_at": item.get("created_at"),
+                    "content": item.get("content") if isinstance(item.get("content"), dict) else {},
+                })
+    return result
+
+
 def _row_to_deal_manager_followups(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
