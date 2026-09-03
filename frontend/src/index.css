@@ -1165,18 +1165,26 @@ textarea {
   cursor: pointer;
 }
 
-.dc-deal-row::before {
+.dc-deal-row.review-red::before,
+.dc-deal-row.review-yellow::before,
+.dc-deal-row.review-green::before,
+.dc-task-row.review-red::before,
+.dc-task-row.review-yellow::before,
+.dc-task-row.review-green::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 4px;
-  background: #cbd7e5;
   content: "";
 }
 
-.dc-deal-row.overdue::before { background: var(--dc-red); }
-.dc-deal-row.today::before { background: var(--dc-orange); }
-.dc-deal-row.future::before { background: var(--dc-green); }
-.dc-deal-row.done::before { background: var(--dc-green); }
+.dc-deal-row.review-red::before,
+.dc-task-row.review-red::before { background: var(--dc-red); }
+
+.dc-deal-row.review-yellow::before,
+.dc-task-row.review-yellow::before { background: var(--dc-orange); }
+
+.dc-deal-row.review-green::before,
+.dc-task-row.review-green::before { background: var(--dc-green); }
 
 .dc-deal-row.selected,
 .dc-task-row.selected {

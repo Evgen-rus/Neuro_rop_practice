@@ -351,6 +351,14 @@ function bitrixTaskTone(task: DealControlBitrixTask) {
   return 'done'
 }
 
+function reviewStripeClass(deal: DealControlDeal) {
+  // Полоска — тот же светофор, что кружок. Без анализа это ещё не оценка: полоску не рисуем.
+  const status = deal.review?.status
+  if (!deal.coaching.report_id) return ''
+  if (status === 'red' || status === 'yellow' || status === 'green') return `review-${status}`
+  return ''
+}
+
 function taskPlanTitle(view: TimeView) {
   if (view === 'overdue') return 'Просроченные задачи'
   if (view === 'tomorrow') return 'План на завтра'
@@ -1203,7 +1211,7 @@ function DealTable(props: {
         const savePayment = (week: string, month: string) => void props.onSaveFields(deal, {
           expected_payment_period: formatPaymentPeriod(week, month),
         })
-        return <article className={`dc-deal-row ${task ? taskTone(task) : bitrixTask ? bitrixTaskTone(bitrixTask) : 'future'} ${props.selectedId === deal.deal_id ? 'selected' : ''}`} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
+        return <article className={['dc-deal-row', reviewStripeClass(deal), props.selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
           <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
           <div className="dc-stage-cell">
@@ -1281,7 +1289,7 @@ function TaskTable({
         const bitrixTask = primaryBitrixTaskOf(deal)
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
-        return <article className={`dc-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
+        return <article className={['dc-task-row', rowTone, reviewStripeClass(deal), selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
           <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
@@ -1307,7 +1315,7 @@ function TaskTable({
         const deadline = dateTimeParts(bitrixTask?.deadline)
         const preview = deal.manager_comments_preview
         return <article
-          className={`dc-task-row dc-rop-task-row ${rowTone} ${selectedId === deal.deal_id ? 'selected' : ''}`}
+          className={['dc-task-row', 'dc-rop-task-row', rowTone, reviewStripeClass(deal), selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')}
           style={{ gridTemplateColumns }}
           key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`}
           onClick={() => onSelect(deal.deal_id)}
