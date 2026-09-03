@@ -211,6 +211,39 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(status, "green")
         self.assertEqual(label, "В норме")
 
+    def test_open_overdue_bitrix_task_stays_green_when_scores_are_green(self) -> None:
+        status, label = classify_deal_status(_deal_row(
+            primary_bitrix_task={"time_bucket": "overdue", "completion_state": "open"},
+            coaching={"report_id": 1, "communication_quality_audit": _audit()},
+        ))
+        self.assertEqual(status, "green")
+        self.assertEqual(label, "В норме")
+
+    def test_open_overdue_bitrix_task_with_missing_next_step_is_red(self) -> None:
+        status, label = classify_deal_status(_deal_row(
+            primary_bitrix_task={"time_bucket": "overdue", "completion_state": "open"},
+            coaching={"report_id": 1, "communication_quality_audit": _audit(next_action=0)},
+        ))
+        self.assertEqual(status, "red")
+        self.assertEqual(label, "Требует решения РОПа")
+
+    def test_completed_overdue_bitrix_task_does_not_keep_warning_when_scores_are_green(self) -> None:
+        for state, flags in (
+            ("local", {"local_completed": True}),
+            ("bitrix", {"completed": True}),
+        ):
+            with self.subTest(completion_state=state):
+                status, label = classify_deal_status(_deal_row(
+                    primary_bitrix_task={
+                        "time_bucket": "overdue",
+                        "completion_state": state,
+                        **flags,
+                    },
+                    coaching={"report_id": 1, "communication_quality_audit": _audit()},
+                ))
+                self.assertEqual(status, "green")
+                self.assertEqual(label, "В норме")
+
 
 class DailyQualityTests(unittest.TestCase):
     def setUp(self):

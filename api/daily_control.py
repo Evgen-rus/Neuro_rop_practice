@@ -433,8 +433,9 @@ def classify_deal_status(
     )
     no_analysis = not coaching.get("report_id")
 
-    # Локальное поручение РОПа не красит светофор: в UI рабочий объект — открытая
-    # задача Bitrix. Скрытый AI-срок не должен зажигать красный.
+    # Локальное поручение РОПа не красит светофор. Открытая просрочка Bitrix
+    # сама по себе тоже не делает жёлтый: срок уже виден чипом. Красный — только
+    # если просрочка совпала с нулём следующего шага, либо две дневные оценки 0.
     if (assessed and zero_count >= 2) or (overdue_bitrix and next_action_zero):
         return "red", STATUS_LABELS["red"]
     if (
@@ -443,7 +444,6 @@ def classify_deal_status(
         or pending_without_baseline
         or next_action_zero
         or zero_count >= 1
-        or overdue_bitrix
         or bool(next_action_warning)
     ):
         return "yellow", STATUS_LABELS["yellow"]

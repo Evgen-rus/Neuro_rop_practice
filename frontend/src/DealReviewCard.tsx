@@ -14,6 +14,11 @@ const QUALITY_LABELS = {
 
 const NO_DATA = 'Нет данных'
 const DEFAULT_SCRIPT_HINT = 'Формулировки для разговора с менеджером на планёрке'
+const FOCUS_STATUS_SYMBOL = {
+  red: '!',
+  yellow: '?',
+  green: '✓',
+} as const
 
 const ICON_PATHS = {
   audit: <path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h7" />,
@@ -443,7 +448,7 @@ function DealFocusBlock(props: {
       </header>
       <div className="dc-daily-focus">
         <div className={`dc-daily-focus-step risk ${deal.status}`}>
-          <span className="dc-daily-focus-icon" aria-hidden="true">!</span>
+          <span className="dc-daily-focus-icon" aria-hidden="true">{FOCUS_STATUS_SYMBOL[deal.status]}</span>
           <div>
             <small>Вывод для РОПа</small>
             <p>{humanQualityText(deal.summary_for_rop || deal.quality.insufficient_reason, props.snapshotDay) || NO_DATA}</p>
