@@ -2698,7 +2698,6 @@ def report_markdown(report_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Markdown report not found")
     return {
         "report_id": report_id,
-        "path": str(md_path),
         "markdown": md_path.read_text(encoding="utf-8"),
     }
 

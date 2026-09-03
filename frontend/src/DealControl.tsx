@@ -2080,7 +2080,7 @@ function DealDetail(props: {
       onCopyScript={() => void copyReviewScript()}
       copyNotice={scriptCopyNotice}
     />}
-    <DealMarkdownReport reportId={coaching.report_id} userRole={props.userRole} onCopy={props.onCopy} />
+    <DealMarkdownReport reportId={coaching.report_id} dealId={deal.deal_id} userRole={props.userRole} onCopy={props.onCopy} />
   </aside>
 }
 
@@ -3030,6 +3030,7 @@ function ContextEvidence({ values }: { values: string[] }) {
 
 function DealMarkdownReport(props: {
   reportId?: number | null
+  dealId?: string | null
   markdownAvailable?: boolean
   userRole: AuthUser['role']
   onCopy: (text: string, label: string) => Promise<void>
@@ -3037,6 +3038,7 @@ function DealMarkdownReport(props: {
   const [markdown, setMarkdown] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [copying, setCopying] = useState(false)
   const [error, setError] = useState('')
   const [trace, setTrace] = useState<ReportAnalysisTrace | null>(null)
@@ -3046,19 +3048,30 @@ function DealMarkdownReport(props: {
   const [traceError, setTraceError] = useState('')
   const [copyingKey, setCopyingKey] = useState<'prompt' | 'raw' | null>(null)
   const reportId = props.reportId || null
+  const canSeeMarkdown = props.userRole === 'admin' || props.userRole === 'rop'
+  const canSeeTrace = props.userRole === 'admin'
   const canOpen = Boolean(reportId) && props.markdownAvailable !== false
-  const canOpenTrace = Boolean(reportId)
+  const canOpenTrace = canSeeTrace && Boolean(reportId)
 
   useEffect(() => {
     setMarkdown(null)
     setOpen(false)
     setError('')
+    setDownloading(false)
     setTrace(null)
     setOpenPrompt(false)
     setOpenRaw(false)
     setTraceError('')
     setTracePending(null)
   }, [reportId])
+
+  async function loadMarkdown() {
+    if (markdown) return markdown
+    if (!reportId) return null
+    const result = await fetchReportMarkdown(reportId)
+    setMarkdown(result.markdown)
+    return result.markdown
+  }
 
   async function toggle() {
     if (open) {
@@ -3073,13 +3086,39 @@ function DealMarkdownReport(props: {
     setLoading(true)
     setError('')
     try {
-      const result = await fetchReportMarkdown(reportId)
-      setMarkdown(result.markdown)
+      await loadMarkdown()
       setOpen(true)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Не удалось открыть Markdown-отчёт')
     } finally {
       setLoading(false)
+    }
+  }
+
+  function saveMarkdownFile(text: string) {
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    const dealPart = props.dealId ? `deal_${props.dealId}` : `report_${reportId}`
+    link.download = `${dealPart}_rop_report.md`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  async function downloadMarkdownFile() {
+    if (!reportId) return
+    setDownloading(true)
+    setError('')
+    try {
+      const text = await loadMarkdown()
+      if (text) saveMarkdownFile(text)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось скачать Markdown-отчёт')
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -3143,16 +3182,18 @@ function DealMarkdownReport(props: {
     }
   }
 
-  if (props.userRole !== 'admin') return null
+  if (!canSeeMarkdown) return null
 
-  const promptText = openPrompt && trace?.request_prompt ? trace.request_prompt : ''
-  const rawText = openRaw && trace?.raw_output ? trace.raw_output : ''
+  const promptText = canSeeTrace && openPrompt && trace?.request_prompt ? trace.request_prompt : ''
+  const rawText = canSeeTrace && openRaw && trace?.raw_output ? trace.raw_output : ''
 
   return (
     <section className="dc-analysis-material dc-manager-markdown dc-deal-context-markdown">
-      <small className="dc-analysis-trace-note">
-        Сырой запрос и ответ — от последнего полного анализа этой сделки. Они могут не совпадать с открытым Markdown, если анализ запускали ещё раз.
-      </small>
+      {canSeeTrace ? (
+        <small className="dc-analysis-trace-note">
+          Сырой запрос и ответ — от последнего полного анализа этой сделки. Они могут не совпадать с открытым Markdown, если анализ запускали ещё раз.
+        </small>
+      ) : null}
       <div className="dc-markdown-report-actions">
         <button
           type="button"
@@ -3162,6 +3203,11 @@ function DealMarkdownReport(props: {
         >
           {loading ? 'Открываем полный отчёт…' : open ? 'Скрыть полный Markdown-отчёт' : 'Открыть полный Markdown-отчёт'}
         </button>
+        {canOpen ? (
+          <button type="button" className="dc-button" disabled={downloading || loading} onClick={() => void downloadMarkdownFile()}>
+            {downloading ? 'Скачиваем…' : 'Скачать'}
+          </button>
+        ) : null}
         {open && markdown ? (
           <button type="button" className="dc-button" disabled={copying} onClick={() => void copyMarkdown()}>
             {copying ? 'Копируем…' : 'Скопировать'}
@@ -3170,39 +3216,43 @@ function DealMarkdownReport(props: {
       </div>
       {error ? <small className="dc-manager-error">{error}</small> : null}
       {open && markdown ? <pre>{markdown}</pre> : null}
-      <div className="dc-markdown-report-actions">
-        <button
-          type="button"
-          className="dc-analysis-material-link"
-          disabled={Boolean(tracePending) || !canOpenTrace}
-          onClick={() => void toggleTrace('prompt')}
-        >
-          {tracePending === 'prompt' ? 'Открываем сырой запрос…' : openPrompt ? 'Скрыть сырой запрос' : 'Открыть сырой запрос'}
-        </button>
-        {promptText ? (
-          <button type="button" className="dc-button" disabled={copyingKey === 'prompt'} onClick={() => void copyTrace('prompt')}>
-            {copyingKey === 'prompt' ? 'Копируем…' : 'Скопировать'}
-          </button>
-        ) : null}
-      </div>
-      {promptText ? <pre className="dc-analysis-trace-text">{promptText}</pre> : null}
-      <div className="dc-markdown-report-actions">
-        <button
-          type="button"
-          className="dc-analysis-material-link"
-          disabled={Boolean(tracePending) || !canOpenTrace}
-          onClick={() => void toggleTrace('raw')}
-        >
-          {tracePending === 'raw' ? 'Открываем сырой ответ…' : openRaw ? 'Скрыть сырой ответ' : 'Открыть сырой ответ'}
-        </button>
-        {rawText ? (
-          <button type="button" className="dc-button" disabled={copyingKey === 'raw'} onClick={() => void copyTrace('raw')}>
-            {copyingKey === 'raw' ? 'Копируем…' : 'Скопировать'}
-          </button>
-        ) : null}
-      </div>
-      {traceError ? <small className="dc-manager-error">{traceError}</small> : null}
-      {rawText ? <pre className="dc-analysis-trace-text">{rawText}</pre> : null}
+      {canSeeTrace ? (
+        <>
+          <div className="dc-markdown-report-actions">
+            <button
+              type="button"
+              className="dc-analysis-material-link"
+              disabled={Boolean(tracePending) || !canOpenTrace}
+              onClick={() => void toggleTrace('prompt')}
+            >
+              {tracePending === 'prompt' ? 'Открываем сырой запрос…' : openPrompt ? 'Скрыть сырой запрос' : 'Открыть сырой запрос'}
+            </button>
+            {promptText ? (
+              <button type="button" className="dc-button" disabled={copyingKey === 'prompt'} onClick={() => void copyTrace('prompt')}>
+                {copyingKey === 'prompt' ? 'Копируем…' : 'Скопировать'}
+              </button>
+            ) : null}
+          </div>
+          {promptText ? <pre className="dc-analysis-trace-text">{promptText}</pre> : null}
+          <div className="dc-markdown-report-actions">
+            <button
+              type="button"
+              className="dc-analysis-material-link"
+              disabled={Boolean(tracePending) || !canOpenTrace}
+              onClick={() => void toggleTrace('raw')}
+            >
+              {tracePending === 'raw' ? 'Открываем сырой ответ…' : openRaw ? 'Скрыть сырой ответ' : 'Открыть сырой ответ'}
+            </button>
+            {rawText ? (
+              <button type="button" className="dc-button" disabled={copyingKey === 'raw'} onClick={() => void copyTrace('raw')}>
+                {copyingKey === 'raw' ? 'Копируем…' : 'Скопировать'}
+              </button>
+            ) : null}
+          </div>
+          {traceError ? <small className="dc-manager-error">{traceError}</small> : null}
+          {rawText ? <pre className="dc-analysis-trace-text">{rawText}</pre> : null}
+        </>
+      ) : null}
     </section>
   )
 }
@@ -3255,6 +3305,7 @@ function ManagerDealContextView(props: {
   const markdownReport = (
     <DealMarkdownReport
       reportId={props.report?.report_id}
+      dealId={props.dealId}
       markdownAvailable={props.report?.markdown_available}
       userRole={props.userRole}
       onCopy={props.onCopy}
