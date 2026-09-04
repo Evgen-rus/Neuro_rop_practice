@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from bitrix.deals.download_deals_call_audio import (
     audio_file_discovery_expired,
+    client_day_related_call_activities,
     existing_transcriptions_by_activity,
     max_voice_messages,
     max_voice_urls,
@@ -16,6 +17,7 @@ from bitrix.deals.download_deals_call_audio import (
     process_max_voice,
     recording_readiness,
     record_transcribed_and_purged,
+    refresh_missing_call_files,
     should_recheck_recording,
 )
 from bitrix.leads.download_leads_call_audio import build_manifest as build_lead_audio_manifest
@@ -410,6 +412,86 @@ class AudioRetentionTests(unittest.TestCase):
 
         self.assertEqual(manifest["calls"][0]["status"], "no_files_check_expired")
         self.assertEqual(client.calls, [])
+
+    def test_related_client_day_call_uses_raw_recheck_and_skips_old_calls(self) -> None:
+        from datetime import timedelta
+
+        from tests.test_deal_control import related_history_bundle
+
+        now = datetime.now(MSK_TZ).astimezone(MSK_TZ)
+        started = now.replace(microsecond=0) - timedelta(hours=1)
+        today = {
+            "ID": "662009", "OWNER_ID": "2", "OWNER_TYPE_ID": "2", "TYPE_ID": "2",
+            "PROVIDER_ID": "VOXIMPLANT_CALL", "DIRECTION": "2", "COMPLETED": "Y",
+            "START_TIME": started.isoformat(timespec="seconds"),
+            "END_TIME": (started + timedelta(minutes=4)).isoformat(timespec="seconds"),
+            "FILES": [],
+        }
+        old = {
+            "ID": "old-call", "OWNER_ID": "2", "OWNER_TYPE_ID": "2", "TYPE_ID": "2",
+            "PROVIDER_ID": "VOXIMPLANT_CALL", "DIRECTION": "2", "COMPLETED": "Y",
+            "START_TIME": (now - timedelta(days=20)).isoformat(timespec="seconds"),
+            "FILES": [{"id": "9"}],
+        }
+        bundle = related_history_bundle("2", today, old)
+        related = client_day_related_call_activities(bundle, deal_id="1", now=now)
+        self.assertEqual([item["ID"] for item in related], ["662009"])
+        self.assertEqual(related[0]["_source"], "related_deal")
+        self.assertEqual(related[0]["_owner_id"], "2")
+
+        class DiscoveryClient:
+            retry_callback = None
+
+            def safe_call(self, method, params):
+                self.method = method
+                self.params = params
+                return {
+                    "ok": True,
+                    "response": {"result": {**today, "FILES": [{"id": "88", "ID": "88"}]}},
+                }
+
+        extras = client_day_related_call_activities(bundle, deal_id="1", now=now)
+        client = DiscoveryClient()
+        refresh_missing_call_files(
+            client,
+            {"deal_id": "1", "activities": {"items": []}},
+            extra_activities=extras,
+        )
+        self.assertEqual(client.method, "crm.activity.get")
+        self.assertEqual(client.params, {"id": "662009"})
+        self.assertEqual(extras[0]["FILES"], [{"id": "88", "ID": "88"}])
+
+        downloaded = {
+            "ok": True,
+            "status": "downloaded",
+            "local_path": "audio.mp3",
+            "size_bytes": 10,
+        }
+        with patch("bitrix.deals.download_deals_call_audio.try_download_url", return_value=downloaded):
+            processed = process_call(
+                client=RecordingClient(),
+                deal_audio_dir=Path("unused"),
+                activity=extras[0],
+                missing_only=True,
+            )
+        self.assertEqual(processed["source"], "related_deal")
+        self.assertEqual(processed["source_label"], "related_deal:2")
+        self.assertEqual(processed["owner_id"], "2")
+
+        from api.crm_change_gate import audio_due
+
+        with_files = related_history_bundle("2", {**today, "FILES": [{"id": "88"}]}, old)
+        self.assertTrue(audio_due(
+            {"context": {"deal_id": "1", "activities": {"items": []}}, "customer_history": with_files},
+            "1",
+            now,
+        ))
+        old_only = related_history_bundle("2", old)
+        self.assertFalse(audio_due(
+            {"context": {"deal_id": "1", "activities": {"items": []}}, "customer_history": old_only},
+            "1",
+            now,
+        ))
 
 
 if __name__ == "__main__":

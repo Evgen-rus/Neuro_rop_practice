@@ -18,8 +18,8 @@ from bitrix.customer_history import (
     _parse_mirrored_message,
     build_normalized_communications,
     clean_text,
-    merge_activity_detail,
     parse_bitrix_datetime,
+    raw_activities_by_id,
     result_items,
 )
 from bitrix.deals.history_compaction import compact_history_section_coverage
@@ -124,22 +124,7 @@ def _event_coverage(
 
 
 def _raw_activities(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
-    for history in (bundle.get("activities_by_entity") or {}).values():
-        if not isinstance(history, dict):
-            continue
-        details = history.get("activity_details") if isinstance(history.get("activity_details"), dict) else {}
-        for activity in result_items(history.get("activities")):
-            merged = merge_activity_detail(activity, details)
-            activity_id = str(merged.get("ID") or "")
-            if activity_id:
-                rows[activity_id] = merged
-    for item in bundle.get("client_touchpoints") or []:
-        raw = item.get("raw") if isinstance(item, dict) and isinstance(item.get("raw"), dict) else {}
-        activity_id = str(item.get("id") or raw.get("ID") or "") if isinstance(item, dict) else ""
-        if activity_id and activity_id not in rows:
-            rows[activity_id] = raw
-    return rows
+    return raw_activities_by_id(bundle)
 
 
 def _raw_comments(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:

@@ -1303,6 +1303,80 @@ def merge_activity_detail(activity: dict[str, Any], details: dict[str, Any]) -> 
     return {**activity, **detail} if detail else dict(activity)
 
 
+def raw_activities_by_id(bundle: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """One CRM activity_id -> one merged raw activity from a saved customer-history bundle."""
+    rows: dict[str, dict[str, Any]] = {}
+    data = bundle if isinstance(bundle, dict) else {}
+    for history in (data.get("activities_by_entity") or {}).values():
+        if not isinstance(history, dict):
+            continue
+        details = history.get("activity_details") if isinstance(history.get("activity_details"), dict) else {}
+        for activity in result_items(history.get("activities")):
+            merged = merge_activity_detail(activity, details)
+            activity_id = str(merged.get("ID") or merged.get("id") or "").strip()
+            if activity_id:
+                rows.setdefault(activity_id, merged)
+    for item in data.get("client_touchpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        activity_id = str(item.get("id") or raw.get("ID") or "").strip()
+        if activity_id:
+            rows.setdefault(activity_id, raw or item)
+    return rows
+
+
+def client_day_scope_entity_keys(
+    bundle: dict[str, Any] | None,
+    *,
+    deal_id: str = "",
+    lead_id: str = "",
+) -> set[str]:
+    """Tracked deal, explicit source lead, and related deals already in this saved bundle.
+
+    Contact keys already stored in the same bundle keep existing mirror behaviour.
+    Other leads are not added: only the explicit LEAD_ID is in scope.
+    """
+    keys: set[str] = set()
+    if str(deal_id or "").strip():
+        keys.add(f"deal:{str(deal_id).strip()}")
+    if str(lead_id or "").strip():
+        keys.add(f"lead:{str(lead_id).strip()}")
+    data = bundle if isinstance(bundle, dict) else {}
+    for deal in data.get("related_deals") or []:
+        related_id = str(deal.get("id") or "").strip() if isinstance(deal, dict) else ""
+        if related_id:
+            keys.add(f"deal:{related_id}")
+    for collection in ("activities_by_entity", "timeline_comments_by_entity"):
+        mapping = data.get(collection)
+        if not isinstance(mapping, dict):
+            continue
+        for entity_key in mapping:
+            kind, _, entity_id = str(entity_key).partition(":")
+            if kind in {"deal", "contact"} and entity_id.strip():
+                keys.add(f"{kind}:{entity_id.strip()}")
+    contacts = data.get("contacts")
+    if isinstance(contacts, dict):
+        for contact_id in contacts:
+            if str(contact_id).strip():
+                keys.add(f"contact:{str(contact_id).strip()}")
+    return keys
+
+
+def event_in_client_day_scope(event: dict[str, Any], eligible_keys: set[str]) -> bool:
+    """Return whether a normalized event belongs to the tracked deal's client-day scope."""
+    if not eligible_keys:
+        return True
+    entity_keys = {str(value) for value in event.get("entity_keys") or [] if value}
+    if event.get("entity_key"):
+        entity_keys.add(str(event["entity_key"]))
+    if event.get("entity_type") and event.get("entity_id"):
+        entity_keys.add(f"{event['entity_type']}:{event['entity_id']}")
+    if not entity_keys:
+        return True
+    return bool(entity_keys & eligible_keys)
+
+
 def timeline_comment_items(history: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()

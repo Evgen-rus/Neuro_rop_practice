@@ -33,7 +33,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import BitrixReadOnlyClient, get_env_required, load_json, save_json
-from bitrix.customer_history import parse_bitrix_datetime
+from bitrix.customer_history import (
+    build_normalized_communications,
+    client_day_scope_entity_keys,
+    event_in_client_day_scope,
+    parse_bitrix_datetime,
+    raw_activities_by_id,
+)
 from bitrix.usage_trace import bitrix_trace_context
 from openai_api.audio.short_call import enrich_download_with_duration, enrich_manifest_calls
 from reliability.retry import DEFAULT_TRANSPORT_RETRY, run_with_retry
@@ -214,6 +220,71 @@ def call_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 owner_id=source_lead_id,
             )
         )
+    return sorted(rows, key=lambda item: (item.get("START_TIME") or item.get("CREATED") or "", int(item.get("ID") or 0)))
+
+
+def _source_activity_id(event: dict[str, Any]) -> str:
+    values = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
+    if values:
+        return str(values[0] or "").strip()
+    event_id = str(event.get("event_id") or "")
+    return event_id.split(":", 1)[1].strip() if event_id.startswith("crm_activity:") else ""
+
+
+def client_day_related_call_activities(
+    customer_history: dict[str, Any] | None,
+    *,
+    deal_id: str,
+    lead_id: str = "",
+    now: datetime | None = None,
+    skip_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Today's related-deal calls already in this tracked deal's customer-history contour."""
+    bundle = customer_history if isinstance(customer_history, dict) else {}
+    if not bundle or not str(deal_id or "").strip():
+        return []
+    current = now or datetime.now(MSK_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MSK_TZ)
+    current = current.astimezone(MSK_TZ)
+    current_date = current.date()
+    eligible = client_day_scope_entity_keys(bundle, deal_id=deal_id, lead_id=lead_id)
+    events = bundle.get("normalized_communications")
+    if not isinstance(events, list):
+        events = build_normalized_communications(bundle)
+    raw_by_id = raw_activities_by_id(bundle)
+    skip = {str(value) for value in (skip_ids or set()) if value}
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict) or str(event.get("channel") or "") != "call":
+            continue
+        if not event_in_client_day_scope(event, eligible):
+            continue
+        occurred = parse_bitrix_datetime(event.get("occurred_at"))
+        if occurred is None:
+            continue
+        localized = (occurred if occurred.tzinfo else occurred.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
+        if localized.date() != current_date or localized > current:
+            continue
+        activity_id = _source_activity_id(event)
+        if not activity_id or activity_id in skip or activity_id in seen:
+            continue
+        raw = raw_by_id.get(activity_id)
+        if not isinstance(raw, dict) or not is_call_activity(raw):
+            continue
+        owner_id = str(raw.get("OWNER_ID") or event.get("entity_id") or "")
+        owner_type = str(raw.get("OWNER_TYPE_ID") or "")
+        if owner_type == "2" and owner_id == str(deal_id):
+            continue
+        if owner_type == "1" and lead_id and owner_id == str(lead_id):
+            continue
+        row = dict(raw)
+        row["_source"] = "related_deal"
+        row["_owner_type_id"] = owner_type or "2"
+        row["_owner_id"] = owner_id
+        rows.append(row)
+        seen.add(activity_id)
     return sorted(rows, key=lambda item: (item.get("START_TIME") or item.get("CREATED") or "", int(item.get("ID") or 0)))
 
 
@@ -659,15 +730,28 @@ def audio_file_discovery_expired(activity: dict[str, Any], *, now: datetime | No
     return current.astimezone(MSK_TZ) - started_at.astimezone(MSK_TZ) > AUDIO_FILE_DISCOVERY_WINDOW
 
 
-def refresh_missing_call_files(client: BitrixReadOnlyClient, bundle: dict[str, Any]) -> dict[str, Any]:
+def refresh_missing_call_files(
+    client: BitrixReadOnlyClient,
+    bundle: dict[str, Any],
+    extra_activities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Independent FILES discovery; a provider can attach FILES without DATE_MODIFY.
 
     No history cursor is advanced by these targeted activity.get reads.
+    extra_activities are already-known related client-day calls; they are updated in place.
     """
     import copy
     result = copy.deepcopy(bundle)
     refreshed: dict[str, dict] = {}
-    for activity in call_activities(bundle):
+    queued: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for activity in [*call_activities(bundle), *(extra_activities or [])]:
+        activity_id = str(activity.get("ID") or "")
+        if not activity_id or activity_id in seen:
+            continue
+        seen.add(activity_id)
+        queued.append(activity)
+    for activity in queued:
         if activity.get("FILES") or audio_file_discovery_expired(activity):
             continue
         activity_id = str(activity.get("ID"))
@@ -685,6 +769,12 @@ def refresh_missing_call_files(client: BitrixReadOnlyClient, bundle: dict[str, A
                 activity.update(refreshed[activity_id])
                 container.setdefault("activity_details", {})[activity_id] = {
                     "ok": True, "response": {"result": dict(activity)}, "method": "crm.activity.get"}
+    for activity in extra_activities or []:
+        activity_id = str(activity.get("ID") or "")
+        if activity_id in refreshed:
+            activity.update(
+                {key: value for key, value in refreshed[activity_id].items() if not str(key).startswith("_")}
+            )
     return result
 
 
@@ -901,6 +991,18 @@ def build_manifest(
 ) -> dict[str, Any]:
     bundle = load_json(raw_path)
     calls = call_activities(bundle)
+    skip_ids = {str(item.get("ID") or "") for item in calls if item.get("ID")}
+    customer_history_path = raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json")
+    customer_history = load_json(customer_history_path) if customer_history_path.exists() else {}
+    lead_id = str((bundle.get("source_lead") or {}).get("lead_id") or "")
+    calls.extend(
+        client_day_related_call_activities(
+            customer_history,
+            deal_id=str(deal_id),
+            lead_id=lead_id,
+            skip_ids=skip_ids,
+        )
+    )
     existing_by_activity = existing_downloads_by_activity(existing_manifest)
     existing_transcriptions = existing_transcriptions_by_activity(existing_manifest)
     processed_calls = []
@@ -923,8 +1025,6 @@ def build_manifest(
                 missing_only=missing_only,
             )
         )
-    customer_history_path = raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json")
-    customer_history = load_json(customer_history_path) if customer_history_path.exists() else {}
     voices = max_voice_messages(customer_history, lookback_days=max_voice_lookback_days)
     for index, message in enumerate(voices, start=1):
         emit_progress(
@@ -1001,33 +1101,70 @@ def main() -> None:
         if args.recheck_only and not state:
             raise RuntimeError("Audio recheck requires saved context")
         before = load_json(raw_path)
-        refreshed = refresh_missing_call_files(client, before)
-        if refreshed != before:
+        payload = (state or {}).get("payload") or {}
+        customer = payload.get("customer_history") if isinstance(payload.get("customer_history"), dict) else None
+        customer_history_path = raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json")
+        if customer is None and customer_history_path.exists():
+            loaded = load_json(customer_history_path)
+            customer = loaded if isinstance(loaded, dict) else None
+        lead_id = str((before.get("source_lead") or {}).get("lead_id") or "")
+        related_calls = client_day_related_call_activities(
+            customer or {},
+            deal_id=str(deal_id),
+            lead_id=lead_id,
+        )
+        refreshed = refresh_missing_call_files(client, before, extra_activities=related_calls)
+        fresh_calls = {
+            str(row.get("ID")): row
+            for row in [*call_activities(refreshed), *related_calls]
+            if str(row.get("ID") or "")
+        }
+        customer_changed = False
+        if customer and fresh_calls:
+            from bitrix.customer_history import activity_details_from_list, build_history_sections, build_normalized_communications
+            from bitrix.internal_im_chat import append_internal_chat_events, internal_chat_events
+            for history in (customer.get("activities_by_entity") or {}).values():
+                if not isinstance(history, dict):
+                    continue
+                container = history.get("activities")
+                items = container.get("items", []) if isinstance(container, dict) else []
+                history_changed = False
+                for activity in items:
+                    update = fresh_calls.get(str(activity.get("ID")))
+                    if not update:
+                        continue
+                    payload_fields = {
+                        key: value for key, value in update.items() if not str(key).startswith("_")
+                    }
+                    if any(activity.get(key) != payload_fields.get(key) for key in payload_fields):
+                        activity.update(payload_fields)
+                        history_changed = True
+                if history_changed:
+                    history["activity_details"] = activity_details_from_list(items)
+                    customer_changed = True
+            if customer_changed:
+                customer.update(build_history_sections(customer))
+                for key, chats in (customer.get("internal_im_chats_by_entity") or {}).items():
+                    kind, entity_id = key.split(":", 1)
+                    append_internal_chat_events(
+                        customer,
+                        internal_chat_events(chats, source_entity_type=kind, source_entity_id=entity_id),
+                    )
+                customer["normalized_communications"] = build_normalized_communications(customer)
+        if refreshed != before or customer_changed:
             if state and state["payload"]["context"] != before:
                 raise RuntimeError("Newer CRM snapshot exists; retry audio from current context")
             if state:
-                from bitrix.customer_history import activity_details_from_list, build_history_sections, build_normalized_communications
-                from bitrix.internal_im_chat import append_internal_chat_events, internal_chat_events
                 payload = state["payload"]
-                payload["context"] = refreshed
-                customer = payload.get("customer_history")
-                if customer:
-                    fresh_calls = {str(row.get("ID")): row for row in call_activities(refreshed)}
-                    for history in customer.get("activities_by_entity", {}).values():
-                        for activity in history.get("activities", {}).get("items", []):
-                            update = fresh_calls.get(str(activity.get("ID")))
-                            if update:
-                                activity.update({key: value for key, value in update.items() if not key.startswith("_")})
-                        history["activity_details"] = activity_details_from_list(history.get("activities", {}).get("items", []))
-                    customer.update(build_history_sections(customer))
-                    for key, chats in customer.get("internal_im_chats_by_entity", {}).items():
-                        kind, entity_id = key.split(":", 1)
-                        append_internal_chat_events(customer, internal_chat_events(chats, source_entity_type=kind, source_entity_id=entity_id))
-                    customer["normalized_communications"] = build_normalized_communications(customer)
+                if refreshed != before:
+                    payload["context"] = refreshed
+                if customer_changed:
+                    payload["customer_history"] = customer
                 put_crm_sync_state(db_path, f"deal_context:{deal_id}", payload, expected_revision=state["revision"])
-                if customer:
-                    atomic_json(raw_path.with_name(f"deal_{deal_id}_customer_history_bundle.json"), customer)
-            atomic_json(raw_path, refreshed)
+            if customer_changed and customer:
+                atomic_json(customer_history_path, customer)
+            if refreshed != before:
+                atomic_json(raw_path, refreshed)
 
         manifest_path = audio_dir / f"deal_{deal_id}_call_audio_manifest.json"
         existing_manifest = load_existing_manifest(manifest_path)

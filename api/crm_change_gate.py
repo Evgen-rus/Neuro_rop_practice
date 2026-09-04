@@ -14,7 +14,8 @@ from typing import Any
 
 from bitrix.context_sync import OVERLAP, digest, due, parsed_at
 from bitrix.deals.download_deals_call_audio import (
-    audio_file_discovery_expired, call_activities, load_existing_manifest, should_recheck_recording,
+    audio_file_discovery_expired, call_activities, client_day_related_call_activities,
+    load_existing_manifest, should_recheck_recording,
 )
 from bitrix.usage_trace import bitrix_trace_context
 from setup import BASE_DIR, MSK_TZ
@@ -69,7 +70,20 @@ def time_signal(raw: dict, now: datetime) -> list[str]:
 def audio_due(payload: dict, deal_id: str, now: datetime, *, audio_root: Path = AUDIO_ROOT) -> bool:
     manifest = load_existing_manifest(audio_root / f"deal_{deal_id}_call_audio_manifest.json")
     rows = {str(row.get("activity_id")): row for row in manifest.get("calls", [])}
-    for activity in call_activities(payload.get("context") or {}):
+    context = payload.get("context") or {}
+    activities = list(call_activities(context))
+    skip_ids = {str(item.get("ID") or "") for item in activities if item.get("ID")}
+    lead_id = str((context.get("source_lead") or {}).get("lead_id") or "")
+    activities.extend(
+        client_day_related_call_activities(
+            payload.get("customer_history") or {},
+            deal_id=str(deal_id),
+            lead_id=lead_id,
+            now=now,
+            skip_ids=skip_ids,
+        )
+    )
+    for activity in activities:
         row = rows.get(str(activity.get("ID"))) or {}
         if should_recheck_recording(activity, now=now):
             return True  # includes already-transcribed recordings: check growth

@@ -24,7 +24,10 @@ from bitrix.customer_history import (
     build_normalized_communications,
     classify_call_outcome,
     clean_text,
+    client_day_scope_entity_keys,
     communication_activity_kind,
+    event_in_client_day_scope,
+    raw_activities_by_id,
 )
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.deals.communication_history import source_lead_id
@@ -620,6 +623,10 @@ def _today_communications(
             "text": text,
         })
     bundle = dict(communication_bundle or {})
+    for activity_id, activity in raw_activities_by_id(bundle).items():
+        if activity_id:
+            activities_by_id.setdefault(activity_id, activity)
+    eligible_keys = client_day_scope_entity_keys(bundle, deal_id=entity_id, lead_id=lead_id)
 
     def merge_rows(section: str, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = [dict(item) for item in bundle.get(section) or [] if isinstance(item, dict)]
@@ -660,6 +667,8 @@ def _today_communications(
             continue
         localized = (occurred if occurred.tzinfo else occurred.replace(tzinfo=MSK_TZ)).astimezone(MSK_TZ)
         if localized.date() != current_date or localized > current:
+            continue
+        if not event_in_client_day_scope(event, eligible_keys):
             continue
         source_id = _source_activity_id(event)
         raw = activities_by_id.get(source_id, {})
@@ -1085,9 +1094,7 @@ def refresh_deal_control(
             tasks=_open_bitrix_tasks(list(deal_activities.values()), current),
         )
         comments = today_comments.get(deal_id, [])
-        communication_bundle: dict[str, Any] = {}
-        if comments or lead_comments.get(lead_id):
-            communication_bundle = load_local_communication_bundle(deal_id)
+        communication_bundle = load_local_communication_bundle(deal_id)
         save_deal_control_communications_today(
             db_path,
             deal_id=deal_id,

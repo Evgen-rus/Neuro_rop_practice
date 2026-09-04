@@ -519,5 +519,116 @@ class NextActionRubricTests(unittest.TestCase):
         self.assertIn(DATA_COLLECTION_RULE, prompt)
 
 
+class ClientDayRelatedQualityTests(unittest.TestCase):
+    now = datetime(2026, 8, 18, 16, tzinfo=MSK_TZ)
+
+    def test_related_incoming_email_is_quality_evidence_and_outgoing_is_not(self) -> None:
+        from tests.test_deal_control import related_history_bundle
+
+        incoming = {
+            "ID": "rel-in", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y",
+            "DESCRIPTION": "Готовы согласовать объём и доставку.",
+            "START_TIME": "2026-08-18T13:00:00+03:00",
+        }
+        outgoing = {
+            "ID": "rel-out", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "2", "COMPLETED": "Y",
+            "DESCRIPTION": "Направляю условия поставки.",
+            "START_TIME": "2026-08-18T10:00:00+03:00",
+        }
+        context = build_daily_quality_context(
+            related_history_bundle("2", incoming, outgoing),
+            now=self.now,
+            deal_id="1",
+        )
+        by_id = {item["event_id"]: item for item in context["events"]}
+        self.assertIn("crm_activity:rel-in", by_id)
+        self.assertTrue(by_id["crm_activity:rel-in"]["quality_evidence"])
+        self.assertFalse(by_id["crm_activity:rel-out"]["quality_evidence"])
+
+    def test_related_messenger_follows_existing_evidence_rules(self) -> None:
+        from tests.test_deal_control import related_history_bundle
+
+        incoming = {
+            "ID": "msg-in", "OWNER_ID": "2", "TYPE_ID": "1", "PROVIDER_ID": "IMOPENLINES",
+            "DIRECTION": "1", "COMPLETED": "Y",
+            "DESCRIPTION": "Клиент подтвердил следующий шаг.",
+            "START_TIME": "2026-08-18T13:00:00+03:00",
+        }
+        outgoing = {
+            "ID": "msg-out", "OWNER_ID": "2", "TYPE_ID": "1", "PROVIDER_ID": "IMOPENLINES",
+            "DIRECTION": "2", "COMPLETED": "Y",
+            "DESCRIPTION": "Уточню комплектацию завтра.",
+            "START_TIME": "2026-08-18T13:10:00+03:00",
+        }
+        context = build_daily_quality_context(
+            related_history_bundle("2", incoming, outgoing),
+            now=self.now,
+            deal_id="1",
+        )
+        by_id = {item["event_id"]: item for item in context["events"]}
+        self.assertTrue(by_id["crm_activity:msg-in"]["quality_evidence"])
+        self.assertFalse(by_id["crm_activity:msg-out"]["quality_evidence"])
+
+    def test_related_call_enters_quality_after_transcript(self) -> None:
+        from tests.test_deal_control import related_history_bundle
+
+        call_text = "Менеджер согласовал с клиентом срок и следующий звонок завтра. " * 3
+        call = {
+            "ID": "rel-call", "OWNER_ID": "2", "OWNER_TYPE_ID": "2", "TYPE_ID": "2",
+            "PROVIDER_ID": "VOXIMPLANT_CALL", "DIRECTION": "2", "COMPLETED": "Y",
+            "START_TIME": "2026-08-18T11:00:00+03:00",
+            "END_TIME": "2026-08-18T11:04:00+03:00",
+            "FILES": [{"ID": "88"}],
+        }
+        with patch(
+            "openai_api.llm.deal_current_situation._transcripts_by_activity",
+            return_value={"rel-call": {"text": call_text}},
+        ):
+            context = build_daily_quality_context(
+                related_history_bundle("2", call),
+                now=self.now,
+                deal_id="1",
+            )
+        self.assertEqual([item["event_id"] for item in context["events"]], ["crm_activity:rel-call"])
+        self.assertTrue(context["events"][0]["quality_evidence"])
+
+    def test_unrelated_deal_stays_out_of_full_quality_scope(self) -> None:
+        from tests.test_deal_current_situation import _touchpoint
+
+        foreign = _touchpoint(
+            when="2026-08-18T13:00:00+03:00",
+            event_id="foreign",
+            event_type="email",
+            direction="1",
+            text="Чужой клиент ответил.",
+        )
+        foreign["entity_id"] = "999"
+        foreign["entity_key"] = "deal:999"
+        context = build_daily_quality_context(
+            {
+                "normalized_communications": [{
+                    "event_id": "crm_activity:foreign",
+                    "source_ids": ["foreign"],
+                    "channel": "email",
+                    "direction": "incoming",
+                    "participant_role": "client",
+                    "contact_class": "confirmed_contact",
+                    "occurred_at": "2026-08-18T13:00:00+03:00",
+                    "content": "Чужой клиент ответил.",
+                    "entity_type": "deal",
+                    "entity_id": "999",
+                    "entity_key": "deal:999",
+                    "entity_keys": ["deal:999"],
+                }],
+                "client_touchpoints": [foreign],
+            },
+            now=self.now,
+            deal_id="1",
+        )
+        self.assertEqual(context["events"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ from bitrix.customer_history import (
     classify_call_outcome,
     clean_text,
     communication_activity_kind,
+    raw_activities_by_id,
 )
 from bitrix.deals.communication_history import include_saved_source_lead_communications
 from openai_api.audio.transcript_context import transcript_items
@@ -105,30 +106,7 @@ def _evidence_id_for_event(event: dict[str, Any], kind: str | None) -> str:
 
 
 def _raw_activities(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
-    for history in (bundle.get("activities_by_entity") or {}).values():
-        if not isinstance(history, dict):
-            continue
-        activities = history.get("activities")
-        items: list[Any] = []
-        if isinstance(activities, dict) and isinstance(activities.get("items"), list):
-            items = activities["items"]
-        elif isinstance(activities, list):
-            items = activities
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            activity_id = str(item.get("ID") or item.get("id") or "").strip()
-            if activity_id:
-                rows.setdefault(activity_id, item)
-    for item in bundle.get("client_touchpoints") or []:
-        if not isinstance(item, dict):
-            continue
-        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
-        activity_id = str(item.get("id") or raw.get("ID") or "").strip()
-        if activity_id:
-            rows.setdefault(activity_id, raw or item)
-    return rows
+    return raw_activities_by_id(bundle)
 
 
 def _transcripts_by_activity(transcripts_dir: Path | None, deal_id: str) -> dict[str, dict[str, Any]]:

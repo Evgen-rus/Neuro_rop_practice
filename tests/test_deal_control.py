@@ -1722,3 +1722,237 @@ class DealControlTests(unittest.TestCase):
             metrics = get_deal_control_metrics(db_path)
             self.assertEqual(metrics["overall"]["stage_progressed"], 1)
             self.assertEqual(metrics["overall"]["deals_won"], 1)
+
+
+def related_history_bundle(related_deal_id: str, *activities: dict, comments: list[dict] | None = None) -> dict:
+    entity_key = f"deal:{related_deal_id}"
+    touchpoints = []
+    for activity in activities:
+        kind = {"2": "call", "4": "email"}.get(str(activity.get("TYPE_ID") or ""), "message")
+        touchpoints.append({
+            "when": activity.get("START_TIME"),
+            "category": "activity",
+            "event_type": kind,
+            "entity_type": "deal",
+            "entity_id": related_deal_id,
+            "entity_key": entity_key,
+            "id": str(activity.get("ID") or ""),
+            "subject": activity.get("SUBJECT") or "",
+            "text": activity.get("DESCRIPTION") or "",
+            "direction": activity.get("DIRECTION"),
+            "raw": activity,
+        })
+    history = {
+        "entity_type": "deal",
+        "entity_id": related_deal_id,
+        "activities": {"ok": True, "items": list(activities)},
+    }
+    if comments:
+        history["timeline_comments"] = [{"ok": True, "items": comments}]
+    return {
+        "related_deals": [{"id": related_deal_id}],
+        "activities_by_entity": {entity_key: history},
+        "client_touchpoints": touchpoints,
+        "internal_context": [
+            {
+                "when": item.get("CREATED"),
+                "category": "timeline_comment",
+                "event_type": "internal_comment",
+                "entity_type": "deal",
+                "entity_id": related_deal_id,
+                "entity_key": entity_key,
+                "id": str(item.get("ID") or ""),
+                "text": item.get("COMMENT") or "",
+            }
+            for item in comments or []
+        ],
+    }
+
+
+class ClientDayRelatedCommunicationsTests(unittest.TestCase):
+    now = datetime(2026, 7, 20, 16, tzinfo=MSK)
+
+    def test_related_call_uses_real_raw_without_root_comments(self):
+        related = {
+            "ID": "662009", "OWNER_ID": "2", "OWNER_TYPE_ID": "2", "TYPE_ID": "2",
+            "PROVIDER_ID": "VOXIMPLANT_CALL", "DIRECTION": "2", "COMPLETED": "Y",
+            "SUBJECT": "Разговор", "START_TIME": "2026-07-20T11:00:00+03:00",
+            "END_TIME": "2026-07-20T11:04:00+03:00", "FILES": [{"ID": "88"}],
+        }
+        result = _today_communications(
+            [],
+            self.now,
+            communication_bundle=related_history_bundle("2", related),
+            deal_id="1",
+        )
+        self.assertEqual([item["event_id"] for item in result["items"]], ["crm_activity:662009"])
+        item = result["items"][0]
+        self.assertEqual(item["call_outcome"], "connected")
+        self.assertNotEqual(item["call_outcome"], "unknown")
+        self.assertEqual(item["direction"], "outgoing")
+        self.assertEqual(item["status_label"], "Разговор")
+
+    def test_related_email_and_messenger_follow_existing_channel_rules(self):
+        incoming_email = {
+            "ID": "e-in", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Клиент подтвердил срок поставки.",
+            "START_TIME": "2026-07-20T10:00:00+03:00",
+        }
+        outgoing_email = {
+            "ID": "e-out", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "2", "COMPLETED": "Y", "DESCRIPTION": "Направляю условия.",
+            "START_TIME": "2026-07-20T10:10:00+03:00",
+        }
+        incoming_message = {
+            "ID": "m-in", "OWNER_ID": "2", "TYPE_ID": "1", "PROVIDER_ID": "IMOPENLINES",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Готовы согласовать объём.",
+            "START_TIME": "2026-07-20T10:20:00+03:00",
+        }
+        outgoing_message = {
+            "ID": "m-out", "OWNER_ID": "2", "TYPE_ID": "1", "PROVIDER_ID": "IMOPENLINES",
+            "DIRECTION": "2", "COMPLETED": "Y", "DESCRIPTION": "Уточню комплектацию.",
+            "START_TIME": "2026-07-20T10:30:00+03:00",
+        }
+        result = _today_communications(
+            [],
+            self.now,
+            communication_bundle=related_history_bundle(
+                "2", incoming_email, outgoing_email, incoming_message, outgoing_message,
+            ),
+            deal_id="1",
+        )
+        by_id = {item["event_id"]: item for item in result["items"]}
+        self.assertEqual(set(by_id), {
+            "crm_activity:e-in", "crm_activity:e-out", "crm_activity:m-in", "crm_activity:m-out",
+        })
+        self.assertEqual(by_id["crm_activity:e-in"]["channel"], "email")
+        self.assertTrue(by_id["crm_activity:e-in"]["quality_evidence"])
+        self.assertEqual(by_id["crm_activity:e-out"]["channel"], "email")
+        self.assertFalse(by_id["crm_activity:e-out"]["quality_evidence"])
+        self.assertTrue(by_id["crm_activity:m-in"]["quality_evidence"])
+        self.assertFalse(by_id["crm_activity:m-out"]["quality_evidence"])
+
+    def test_related_wazzup_mirror_and_crm_activity_dedup_once(self):
+        content = "Предложение подходит, можно продолжать."
+        when = "2026-07-20T11:06:09+03:00"
+        activity = {
+            "ID": "m-1", "OWNER_ID": "2", "TYPE_ID": "1", "PROVIDER_ID": "IMOPENLINES",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": content, "START_TIME": when,
+        }
+        comment = {
+            "ID": "c-1", "CREATED": when,
+            "COMMENT": f"[img]https://static.wazzup24.com/images/bitrix/whatsapp.png[/img] Лариса Петрова:\n{content}",
+        }
+        bundle = related_history_bundle("2", activity, comments=[comment])
+        bundle["contacts"] = {"7": {"ok": True, "response": {"result": {
+            "ID": "7", "NAME": "Лариса", "LAST_NAME": "Петрова",
+        }}}}
+        result = _today_communications([], self.now, communication_bundle=bundle, deal_id="1")
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["channel"], "whatsapp")
+        self.assertTrue(result["items"][0]["quality_evidence"])
+
+    def test_same_activity_through_several_entity_keys_is_one_row(self):
+        activity = {
+            "ID": "dup-1", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Клиент ответил по срокам.",
+            "START_TIME": "2026-07-20T12:00:00+03:00",
+        }
+        bundle = related_history_bundle("2", activity)
+        bundle["activities_by_entity"]["contact:7"] = {
+            "entity_type": "contact",
+            "entity_id": "7",
+            "activities": {"ok": True, "items": [activity]},
+        }
+        bundle["client_touchpoints"].append({
+            **bundle["client_touchpoints"][0],
+            "entity_type": "contact",
+            "entity_id": "7",
+            "entity_key": "contact:7",
+        })
+        bundle["contacts"] = {"7": {"ok": True, "response": {"result": {"ID": "7", "NAME": "Лариса"}}}}
+        result = _today_communications([], self.now, communication_bundle=bundle, deal_id="1")
+        self.assertEqual([item["event_id"] for item in result["items"]], ["crm_activity:dup-1"])
+
+    def test_two_root_deals_can_see_the_same_client_event_once_each(self):
+        activity = {
+            "ID": "shared", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Клиент подтвердил следующий шаг.",
+            "START_TIME": "2026-07-20T12:00:00+03:00",
+        }
+        first = _today_communications(
+            [], self.now, communication_bundle=related_history_bundle("2", activity), deal_id="1",
+        )
+        second = _today_communications(
+            [], self.now, communication_bundle=related_history_bundle("2", activity), deal_id="3",
+        )
+        self.assertEqual([item["event_id"] for item in first["items"]], ["crm_activity:shared"])
+        self.assertEqual([item["event_id"] for item in second["items"]], ["crm_activity:shared"])
+
+    def test_unrelated_deal_is_kept_out_of_client_day_scope(self):
+        related = {
+            "ID": "own", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Свой клиент ответил.",
+            "START_TIME": "2026-07-20T12:00:00+03:00",
+        }
+        foreign = {
+            "ID": "foreign", "OWNER_ID": "999", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Чужой клиент ответил.",
+            "START_TIME": "2026-07-20T12:05:00+03:00",
+        }
+        bundle = related_history_bundle("2", related)
+        bundle["client_touchpoints"].append({
+            "when": foreign["START_TIME"],
+            "category": "activity",
+            "event_type": "email",
+            "entity_type": "deal",
+            "entity_id": "999",
+            "entity_key": "deal:999",
+            "id": "foreign",
+            "subject": "",
+            "text": foreign["DESCRIPTION"],
+            "direction": "1",
+            "raw": foreign,
+        })
+        result = _today_communications([], self.now, communication_bundle=bundle, deal_id="1")
+        self.assertEqual([item["event_id"] for item in result["items"]], ["crm_activity:own"])
+
+    def test_related_call_without_files_is_not_a_conversation(self):
+        related = {
+            "ID": "no-files", "OWNER_ID": "2", "OWNER_TYPE_ID": "2", "TYPE_ID": "2",
+            "DIRECTION": "2", "COMPLETED": "Y", "START_TIME": "2026-07-20T11:00:00+03:00",
+            "END_TIME": "2026-07-20T11:04:00+03:00",
+        }
+        result = _today_communications(
+            [], self.now, communication_bundle=related_history_bundle("2", related), deal_id="1",
+        )
+        self.assertEqual(result["items"][0]["call_outcome"], "no_answer")
+        self.assertIsNone(result["conversation_duration_seconds"])
+
+    def test_old_related_call_stays_out_of_today_and_refresh_loads_bundle_without_comments(self):
+        from api.daily_control import build_daily_control_snapshot
+
+        today_email = {
+            "ID": "e-today", "OWNER_ID": "2", "TYPE_ID": "4", "PROVIDER_ID": "CRM_EMAIL",
+            "DIRECTION": "1", "COMPLETED": "Y", "DESCRIPTION": "Клиент подтвердил условия.",
+            "START_TIME": "2026-07-20T10:00:00+03:00",
+        }
+        old_call = {
+            "ID": "old-call", "OWNER_ID": "2", "TYPE_ID": "2", "DIRECTION": "2", "COMPLETED": "Y",
+            "START_TIME": "2026-07-19T11:00:00+03:00", "FILES": [{"ID": "1"}],
+        }
+        client = FakeBitrixClient(initial={"101": deal("101", manager_id="10")}, activities={("2", "101"): []})
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            save_deal_control_scope(db_path, initial_deal_ids=["101"], manager_ids=["10"], pipeline_id="15")
+            with patch("api.deal_control.load_pipeline_stage_names", return_value={}), \
+                 patch("api.deal_control.load_local_communication_bundle", return_value=related_history_bundle("2", today_email, old_call)):
+                result = refresh_deal_control(db_path=db_path, client=client, now=self.now)
+            summary = result["deals"][0]["communications_today"]
+            self.assertEqual([item["event_id"] for item in summary["items"]], ["crm_activity:e-today"])
+            self.assertTrue(summary["items"][0]["quality_evidence"])
+            snapshot = build_daily_control_snapshot(result)
+            self.assertEqual(
+                [item["event_id"] for item in snapshot["deals"][0]["communications_today"]["items"]],
+                ["crm_activity:e-today"],
+            )

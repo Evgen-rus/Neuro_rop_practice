@@ -12,6 +12,8 @@ from bitrix.customer_history import (
     EXTERNAL_TEXT_CHANNELS,
     build_normalized_communications,
     clean_text,
+    client_day_scope_entity_keys,
+    event_in_client_day_scope,
     is_confirmed_client_reply,
 )
 from bitrix.deals.communication_history import include_source_lead_communications, source_lead_id
@@ -104,26 +106,11 @@ def build_daily_quality_context(
     events = bundle.get("normalized_communications")
     if not isinstance(events, list):
         events = build_normalized_communications(bundle)
-    eligible_entity_keys = {
-        key for key in (
-            f"deal:{deal_id}" if deal_id else "",
-            f"lead:{lead_id}" if lead_id else "",
-        ) if key
-    }
-
-    def in_explicit_scope(item: dict[str, Any]) -> bool:
-        if not item.get("entity_type") or not item.get("entity_id"):
-            return True
-        entity_keys = {
-            str(value) for value in item.get("entity_keys") or [] if value
-        }
-        if item.get("entity_key"):
-            entity_keys.add(str(item["entity_key"]))
-        return bool(entity_keys & eligible_entity_keys)
+    eligible_entity_keys = client_day_scope_entity_keys(bundle, deal_id=deal_id, lead_id=lead_id)
 
     scoped = [
         dict(item) for item in events
-        if isinstance(item, dict) and in_explicit_scope(item)
+        if isinstance(item, dict) and event_in_client_day_scope(item, eligible_entity_keys)
     ]
     activities = _raw_activities(bundle)
     scoped_completed = []
