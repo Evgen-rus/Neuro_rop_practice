@@ -512,6 +512,7 @@ def _init_db_unlocked(db_path: str | Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_daily_summary_items_run
                 ON daily_summary_items(run_id, selected DESC, id);
 
+            -- Historical Compact shadow tables: runtime no longer writes them.
             CREATE TABLE IF NOT EXISTS compact_shadow_runs (
                 id TEXT PRIMARY KEY,
                 entity_type TEXT NOT NULL,
@@ -5017,6 +5018,7 @@ def save_compact_shadow_run(
     cost_rub: float | None = None,
     error: str | None = None,
 ) -> None:
+    """Keep historical Compact rows readable and purgeable; production no longer writes them."""
     init_db(db_path)
     with connect(db_path) as conn:
         conn.execute(

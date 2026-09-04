@@ -35,10 +35,6 @@ ANALYSIS_REPAIR_MODEL = os.getenv("ANALYSIS_REPAIR_MODEL", "gpt-5.6-luna").strip
 ANALYSIS_REPAIR_REASONING_EFFORT = os.getenv("ANALYSIS_REPAIR_REASONING_EFFORT", "xhigh").strip() or "xhigh"
 ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS", "8000") or "8000")
 ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500") or "3500")
-# Compact attention_delta is an isolated shadow artifact. The cap includes
-# both visible JSON and reasoning tokens, so it leaves quality headroom while
-# remaining below the legacy analysis budget.
-ATTENTION_DELTA_MAX_OUTPUT_TOKENS = int(os.getenv("ATTENTION_DELTA_MAX_OUTPUT_TOKENS", "1600") or "1600")
 # Quick Help / «Дожим» JSON plus reasoning tokens. 4000 was too tight with
 # high reasoning: the model billed a full window and the answer never saved.
 QUICK_HELP_MAX_OUTPUT_TOKENS = int(os.getenv("QUICK_HELP_MAX_OUTPUT_TOKENS", "4000") or "4000")

@@ -16,7 +16,6 @@ from typing import Any, Callable
 from openai import OpenAI, OpenAIError
 
 from openai_api.config import (
-    ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
     ANALYSIS_REASONING_EFFORT,
@@ -781,7 +780,7 @@ def call_structured_output_json(
     schema_name: str,
     model: str = ANALYSIS_MODEL,
     reasoning_effort: str | None = None,
-    max_output_tokens: int = ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
+    max_output_tokens: int = ANALYSIS_MAX_OUTPUT_TOKENS,
     retry_callback: RetryCallback | None = None,
     log_title: str = "structured output prompt",
     call_type: str | None = None,

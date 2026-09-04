@@ -32,23 +32,3 @@ Open local `benchmarks/results/benchmark_results.json` and set each score to `pa
 ## Deliberate paid-run guard
 
 A case may additionally declare a local `legacy_command` list. Executing it requires both `--execute-legacy` and `--allow-paid-api`; this repository stage does not use that mode.
-
-## Compact attention-delta shadow
-
-The isolated shadow runner reuses the input-file paths recorded inside an existing local legacy `*_analysis.json`. It never replaces that analysis, its prompt, its report, SQLite state, or UI data.
-
-```powershell
-# Verifies one local case and writes only ignored shadow prompt telemetry.
-.\venv\Scripts\python.exe .\benchmarks\run_attention_delta_shadow.py --manifest .\benchmarks\local\cases.json --case-id deal-01
-
-# Calls OpenAI only after an explicit acknowledgement; do not run without approval.
-.\venv\Scripts\python.exe .\benchmarks\run_attention_delta_shadow.py --manifest .\benchmarks\local\cases.json --case-id deal-01 --allow-api
-```
-
-After an API run, generate a comparison sheet for manual review:
-
-```powershell
-.\venv\Scripts\python.exe .\benchmarks\compare_attention_delta.py --manifest .\benchmarks\local\cases.json
-```
-
-`ATTENTION_DELTA_MAX_OUTPUT_TOKENS` is an isolated compact-output cap; it includes reasoning and visible JSON. Its final value will be chosen only after benchmarking, targeting p95 actual usage plus a 25–30% safety margin. The runner's preflight price is deliberately a no-cache worst-case estimate using this cap, not a prediction of actual spend.

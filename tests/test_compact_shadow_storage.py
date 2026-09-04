@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import gc
+import importlib
 import tempfile
 import unittest
 from pathlib import Path
 
-from api.compact_shadow import _evidence_source, _snapshot_hash
 from storage.rop_db import (
     get_compact_shadow_feedback,
     get_compact_shadow_run,
@@ -90,18 +90,29 @@ class CompactShadowStorageTests(unittest.TestCase):
             self.assertEqual(get_compact_shadow_feedback(db, "run-1")["comment"], None)
             gc.collect()
 
-    def test_evidence_lookup_requires_exact_typed_source_id(self) -> None:
-        inputs = {
-            "history_text": "source=lead:42 type=call id=1234 result=busy",
-            "transcript_text": "### Call: activity_id=call-1\n\n```text\nПерезвоните позже\n```",
-        }
-        self.assertIsNone(_evidence_source(inputs, "123"))
-        self.assertEqual(_evidence_source(inputs, "call-1")["source_type"], "transcript")
 
-    def test_snapshot_hash_changes_with_sent_context(self) -> None:
-        base = {"entity_type": "lead", "entity_id": "42", "history_text": "A", "transcript_text": "B", "diagnostics_text": "", "stage_policy": {}}
-        changed = {**base, "history_text": "C"}
-        self.assertNotEqual(_snapshot_hash(base), _snapshot_hash(changed))
+class CompactRuntimeRemovedTests(unittest.TestCase):
+    def test_compact_llm_modules_are_not_importable(self) -> None:
+        for module_name in (
+            "api.compact_shadow",
+            "openai_api.llm.attention_delta",
+            "openai_api.llm.attention_delta_knowledge",
+            "openai_api.llm.attention_delta_report",
+            "openai_api.llm.deal_attention_playbooks",
+            "openai_api.llm.lead_playbook_resolver",
+            "openai_api.llm.evidence_coverage",
+            "benchmarks.run_attention_delta_shadow",
+            "benchmarks.compare_attention_delta",
+            "benchmarks.replay_attention_delta_postprocessing",
+        ):
+            with self.assertRaises(ModuleNotFoundError):
+                importlib.import_module(module_name)
+
+    def test_http_app_has_no_compact_routes(self) -> None:
+        from api.app import app
+
+        paths = {getattr(route, "path", "") for route in app.routes}
+        self.assertFalse(any("compact" in path for path in paths))
 
 
 if __name__ == "__main__":

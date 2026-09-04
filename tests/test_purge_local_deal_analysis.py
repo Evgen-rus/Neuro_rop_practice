@@ -16,6 +16,8 @@ from storage.rop_db import (
     list_deal_control_tasks,
     purge_local_deal_analysis_state,
     save_analysis_run,
+    save_compact_shadow_feedback,
+    save_compact_shadow_run,
     save_deal_incremental_v2_run,
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
@@ -167,6 +169,56 @@ class PurgeLocalDealAnalysisTests(unittest.TestCase):
                 )
                 self.assertIsNone(
                     conn.execute("SELECT 1 FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+                )
+
+    def test_purge_removes_legacy_compact_shadow_rows_without_foreign_key_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            init_db(db_path)
+            save_compact_shadow_run(
+                db_path,
+                run_id="compact-deal-1",
+                entity_type="deal",
+                entity_id="100",
+                snapshot_hash="snapshot",
+                status="completed",
+                started_at="2031-02-03T10:00:00+03:00",
+            )
+            save_compact_shadow_feedback(
+                db_path,
+                compact_run_id="compact-deal-1",
+                entity_type="deal",
+                entity_id="100",
+                snapshot_hash="snapshot",
+                model="test-model",
+                raw_playbook="raw",
+                final_playbook="final",
+                feedback_result="correct",
+            )
+            save_compact_shadow_run(
+                db_path,
+                run_id="compact-lead-1",
+                entity_type="lead",
+                entity_id="200",
+                snapshot_hash="lead-snapshot",
+                status="completed",
+                started_at="2031-02-03T10:00:00+03:00",
+            )
+            preview = deal_analysis_purge_counts(db_path)
+            self.assertEqual(preview["compact_shadow_runs"], 1)
+            self.assertEqual(preview["compact_shadow_feedback"], 1)
+
+            deleted = purge_local_deal_analysis_state(db_path)
+
+            self.assertEqual(deleted["compact_shadow_runs"], 1)
+            self.assertEqual(deleted["compact_shadow_feedback"], 1)
+            with connect(db_path) as conn:
+                self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM compact_shadow_runs WHERE id = ?", ("compact-deal-1",)).fetchone()
+                )
+                self.assertIsNotNone(
+                    conn.execute("SELECT 1 FROM compact_shadow_runs WHERE id = ?", ("compact-lead-1",)).fetchone()
                 )
 
     def test_apply_moves_only_analysis_and_creates_restorable_backup(self) -> None:
