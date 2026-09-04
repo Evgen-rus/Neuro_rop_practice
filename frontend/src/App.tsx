@@ -57,6 +57,7 @@ import {
   type AuthUser,
   type CompactReview,
 } from './api'
+import { clearStoredDealControlView } from './dealControlStartView'
 
 type Tab = 'summary' | 'dashboard' | 'manual' | 'history' | 'deals'
 
@@ -560,6 +561,7 @@ function AuthenticatedApp() {
     try {
       await logout()
     } finally {
+      clearStoredDealControlView(user?.id)
       setUser(null)
       setPassword('')
     }

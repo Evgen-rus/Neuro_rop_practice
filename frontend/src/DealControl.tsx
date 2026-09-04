@@ -112,8 +112,14 @@ import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
 import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
+import {
+  initialDealControlFilters,
+  readStoredDealControlView,
+  resolveDealControlView,
+  writeStoredDealControlView,
+  type DealControlView,
+} from './dealControlStartView'
 
-type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'shadow' | 'team' | 'manager'
 type TimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
 const EXECUTION_LABELS: Record<DealControlTask['crm_execution_status'], string> = {
@@ -481,7 +487,8 @@ function AutomaticAnalysisStatus({
 }
 
 export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; onLogout?: () => Promise<void>; user: AuthUser }) {
-  const defaultView: DealControlView = user.role === 'manager' ? 'dashboard' : user.role === 'rop' ? 'rop' : 'dashboard'
+  const startView = resolveDealControlView(user.role, readStoredDealControlView(user.id))
+  const startFilters = initialDealControlFilters(user.role, startView, user.manager_id)
   const [data, setData] = useState<DealControlDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null)
@@ -489,14 +496,14 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [syncStatus, setSyncStatus] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [view, setView] = useState<DealControlView>(defaultView)
+  const [view, setView] = useState<DealControlView>(startView)
   const [selectedId, setSelectedId] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
-  const [managerFilter, setManagerFilter] = useState('')
+  const [managerFilter, setManagerFilter] = useState(startFilters.managerFilter)
   const [stageFilter, setStageFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [search, setSearch] = useState('')
-  const [timeView, setTimeView] = useState<TimeView>('all')
+  const [timeView, setTimeView] = useState<TimeView>(startFilters.timeView)
   const [leftWidth, setLeftWidth] = useState(65)
   const [dragging, setDragging] = useState(false)
   const layoutRef = useRef<HTMLDivElement | null>(null)
@@ -509,6 +516,10 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const canOpenRopView = user.role === 'admin' || user.role === 'rop'
   const canOpenManagerView = user.role === 'admin' || user.role === 'rop' || user.role === 'manager'
   const managerViewOwnTasks = user.role === 'manager'
+
+  useEffect(() => {
+    writeStoredDealControlView(user.id, view)
+  }, [user.id, view])
 
   function openDashboard() {
     setView('dashboard')
