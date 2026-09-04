@@ -294,11 +294,7 @@ class ValidatedAnalysisRetryTests(unittest.TestCase):
 
 
 class FullSectionRepairTests(unittest.TestCase):
-    def test_full_and_v2_share_contract_without_daily_checklist(self):
-        from openai_api.llm.deal_incremental_v2 import run_incremental_v2
-        from openai_api.llm.deal_semantic_state import bootstrap_semantic_state
-        from openai_api.llm.deal_semantic_dependencies import resolve_affected_sections
-
+    def test_full_contract_drops_retired_daily_checklist(self):
         legacy = deepcopy(self.good)
         legacy["daily_checklist_update"] = {"add": [{"text": "legacy marker"}]}
         legacy["manager_action_block"]["manager_checklist"] = ["legacy marker"]
@@ -307,37 +303,11 @@ class FullSectionRepairTests(unittest.TestCase):
         validate_deal_analysis(normalized)
         self.assertNotIn("daily_checklist_update", normalized)
         self.assertNotIn("manager_checklist", normalized["manager_action_block"])
-
-        state = bootstrap_semantic_state(self.good, deal_id="42", source_analysis_run_id=1,
-                                         source_fingerprint="old", evidence_coverage={})
-        delta = [{"evidence_id": "call:2", "kind": "call_transcript", "delta_kind": "new_evidence", "text": "test"}]
-        affected = resolve_affected_sections([], delta)
-        self.assertNotIn("daily_checklist_update", affected)
-        materialized = {key: deepcopy(legacy.get(key, {})) for key in affected}
-        responses = iter([
-            {"changed_domains": [], "change_reasons": {}, "semantic_state": state},
-            {"sections": materialized},
-        ])
-
-        def caller(prompt, **kwargs):
-            for retired in ("manager_checklist", "daily_checklist_update", "CURRENT_DAILY_MANAGER_CHECKLIST", "legacy marker"):
-                self.assertNotIn(retired, prompt)
-            response = next(responses)
-            kwargs["normalizer"](response)
-            kwargs["validator"](response)
-            return response, {}
-
-        with patch("openai_api.llm.deal_incremental_v2.call_validated_analysis_json", side_effect=caller):
-            result = run_incremental_v2(
-                deal_id="42", previous_analysis=legacy, previous_semantic_state=state,
-                evidence_delta=delta, next_evidence_coverage={}, crm_delta={}, stage_policy={},
-                prior_recommendation=None, source_fingerprint="new", model="test-model", compact_policy_text="test rules",
-            )
-        validate_deal_analysis(result.analysis)
-        self.assertNotIn("daily_checklist_update", result.analysis)
-        self.assertNotIn("manager_checklist", result.analysis["manager_action_block"])
+        prompt = deal_prompt("7", "history", "transcript", "diagnostics", [], {})
+        for retired in ("manager_checklist", "daily_checklist_update", "CURRENT_DAILY_MANAGER_CHECKLIST", "legacy marker"):
+            self.assertNotIn(retired, prompt)
+        self.assertIn("competitor_defense_checklist", prompt)
         self.assertIn("manager_checklist", legacy["manager_action_block"])
-        self.assertIn("competitor_defense_checklist", result.analysis)
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

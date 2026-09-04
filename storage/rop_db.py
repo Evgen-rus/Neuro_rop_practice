@@ -2287,7 +2287,7 @@ def save_analysis_run(
 
 
 def get_analysis_run_evidence_ids(db_path: str | Path, analysis_run_id: int) -> list[str] | None:
-    """Return the privacy-safe evidence id list recorded for a full/incremental analysis.
+    """Return the privacy-safe evidence id list recorded for an analysis run.
 
     ``None`` means the run predates evidence provenance and its coverage must
     not be guessed.

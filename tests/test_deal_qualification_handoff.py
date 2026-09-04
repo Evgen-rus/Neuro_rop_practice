@@ -42,15 +42,12 @@ class DealQualificationAndHandoffTests(unittest.TestCase):
         self.assertEqual(old_all_calls_prefix, new_prior_calls_prefix)
         self.assertEqual(len(deal_prompt_cache_markers(new_text)), 3)
 
-    def test_full_and_incremental_prompts_exclude_retired_fields(self) -> None:
-        legacy = {"manager_action_block": {"manager_checklist": ["legacy marker"]}, "daily_checklist_update": {"add": []}}
-        for incremental_context in (None, {"previous_analysis": legacy}):
-            prompt = build_prompt("7", "history", "transcript", "diagnostics", [], {}, incremental_context=incremental_context)
-            for retired in ("manager_checklist", "daily_checklist_update", "CURRENT_DAILY_MANAGER_CHECKLIST", "legacy marker"):
-                self.assertNotIn(retired, prompt)
-            self.assertIn("manager_action_block", prompt)
-            self.assertIn("competitor_defense_checklist", prompt)
-        self.assertIn("manager_checklist", legacy["manager_action_block"])
+    def test_full_prompt_excludes_retired_fields(self) -> None:
+        prompt = build_prompt("7", "history", "transcript", "diagnostics", [], {})
+        for retired in ("manager_checklist", "daily_checklist_update", "CURRENT_DAILY_MANAGER_CHECKLIST", "legacy marker"):
+            self.assertNotIn(retired, prompt)
+        self.assertIn("manager_action_block", prompt)
+        self.assertIn("competitor_defense_checklist", prompt)
 
 
     def test_deal_prompt_requires_qualification_assessment(self) -> None:

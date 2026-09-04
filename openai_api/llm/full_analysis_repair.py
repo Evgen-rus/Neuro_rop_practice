@@ -16,8 +16,7 @@ class SectionRepairError(ValueError):
     pass
 
 
-# V2 maps changed evidence domains, not validator paths. Reuse its domain sets,
-# but never its transient/new-evidence recompute rules for a correction.
+# Domain sets used to expand a local FULL repair beyond the failing section.
 DEAL_REPAIR_DOMAINS = {
     "qualification_assessment": ("qualification",),
     "payment_blocker": ("payment_state",),

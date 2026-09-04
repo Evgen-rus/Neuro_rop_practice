@@ -1,4 +1,4 @@
-"""Business-evidence identity for Incremental Deal Analysis V2.
+"""Business-evidence identity for deal analysis provenance.
 
 The identity is CRM activity based. File paths and mtimes are intentionally not
 part of it, so aggregate and individual transcript representations converge on

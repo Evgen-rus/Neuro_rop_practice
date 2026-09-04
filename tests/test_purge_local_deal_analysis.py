@@ -15,8 +15,11 @@ from storage.rop_db import (
     init_db,
     list_deal_control_tasks,
     purge_local_deal_analysis_state,
+    save_analysis_run,
+    save_deal_incremental_v2_run,
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
+    save_deal_semantic_checkpoint,
     save_ui_report,
     upsert_deal_control_deal,
     upsert_entity_state,
@@ -119,6 +122,52 @@ class PurgeLocalDealAnalysisTests(unittest.TestCase):
                 self.assertIsNone(conn.execute("SELECT 1 FROM entity_state WHERE entity_type = 'deal'").fetchone())
                 self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertFalse(any(deal_analysis_purge_counts(db_path).values()))
+
+    def test_purge_removes_legacy_incremental_v2_rows_without_foreign_key_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "rop.sqlite"
+            init_db(db_path)
+            run_id = save_analysis_run(
+                db_path,
+                entity_type="deal",
+                entity_id="100",
+                status="FULL_LLM_ANALYSIS",
+            )
+            checkpoint_id = save_deal_semantic_checkpoint(
+                db_path,
+                entity_id="100",
+                schema_version="deal-semantic-state-v1",
+                source_analysis_run_id=run_id,
+                source_fingerprint="fp",
+                semantic_state={"schema_version": "deal-semantic-state-v1"},
+                mode="shadow",
+                baseline_snapshot={"entity_type": "deal"},
+            )
+            v2_run_id = save_deal_incremental_v2_run(
+                db_path,
+                entity_id="100",
+                mode="shadow",
+                source_analysis_run_id=run_id,
+            )
+            preview = deal_analysis_purge_counts(db_path)
+            self.assertEqual(preview["deal_semantic_checkpoints"], 1)
+            self.assertEqual(preview["deal_incremental_v2_runs"], 1)
+
+            deleted = purge_local_deal_analysis_state(db_path)
+
+            self.assertEqual(deleted["deal_semantic_checkpoints"], 1)
+            self.assertEqual(deleted["deal_incremental_v2_runs"], 1)
+            with connect(db_path) as conn:
+                self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM deal_semantic_checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
+                )
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM deal_incremental_v2_runs WHERE id = ?", (v2_run_id,)).fetchone()
+                )
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM analysis_runs WHERE id = ?", (run_id,)).fetchone()
+                )
 
     def test_apply_moves_only_analysis_and_creates_restorable_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

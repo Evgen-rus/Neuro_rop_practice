@@ -21,9 +21,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from openai_api.config import (
     ATTENTION_DELTA_MAX_OUTPUT_TOKENS,
     ANALYSIS_MODEL,
-    CONTEXT_MEMORY_OPTIMIZATION_ENABLED,
-    CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK,
-    CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE,
     USD_RUB_RATE,
 )
 from openai_api.llm.attention_delta import (
@@ -385,11 +382,6 @@ def run_shadow_case(case: dict[str, Any], *, output_root: Path, allow_api: bool,
         "upper_estimated_cost": prepared["upper_estimated_cost"],
         "ready_for_api": prepared["ready_for_api"],
         "not_ready_reasons": prepared["not_ready_reasons"],
-        "feature_flags": {
-            "context_memory_optimization_enabled": CONTEXT_MEMORY_OPTIMIZATION_ENABLED,
-            "context_memory_optimization_shadow_mode": CONTEXT_MEMORY_OPTIMIZATION_SHADOW_MODE,
-            "context_memory_optimization_force_full_fallback": CONTEXT_MEMORY_OPTIMIZATION_FORCE_FULL_FALLBACK,
-        },
         "legacy_analysis_path": inputs["legacy_analysis_path"],
         "input_files": {
             "history": inputs["history_path"],

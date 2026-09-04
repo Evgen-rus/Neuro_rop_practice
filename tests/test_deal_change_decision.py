@@ -41,7 +41,7 @@ class DealChangeDecisionTests(unittest.TestCase):
                      "quality_evidence": True, "text": "Согласуем сроки поставки завтра."},
                 ]})
                 diff = compare_snapshots(empty, current)
-                self.assertEqual(decision(diff, current).status, INCREMENTAL_LLM_ANALYSIS)
+                self.assertEqual(decision(diff, current).status, FULL_LLM_ANALYSIS)
                 self.assertNotIn("daily_quality_evidence_changed", compare_snapshots(current, current)["changes"])
                 self.assertNotIn("daily_quality_evidence_changed", compare_snapshots(current, empty)["changes"])
                 revised = {**current, "daily_quality_events": {event_id: "revised-body"}}
@@ -63,7 +63,7 @@ class DealChangeDecisionTests(unittest.TestCase):
         })
         same_day_diff = compare_snapshots(previous, same_day)
         self.assertIn("daily_quality_evidence_removed", same_day_diff["changes"])
-        self.assertEqual(decision(same_day_diff, same_day).status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(decision(same_day_diff, same_day).status, FULL_LLM_ANALYSIS)
         self.assertNotIn(
             "daily_quality_evidence_removed",
             compare_snapshots(previous, rollover)["changes"],
@@ -120,8 +120,8 @@ class DealChangeDecisionTests(unittest.TestCase):
             {"changes": ["new_activity", "new_email"], "details": {"new_activity_ids": ["2"]}},
             snapshot(activities=[{"id": "2", "kind": "email", "direction": "1"}]),
         )
-        self.assertEqual(transcript.status, INCREMENTAL_LLM_ANALYSIS)
-        self.assertEqual(message.status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(transcript.status, FULL_LLM_ANALYSIS)
+        self.assertEqual(message.status, FULL_LLM_ANALYSIS)
 
     def test_canonical_client_reply_triggers_llm_and_legacy_snapshot_bootstraps(self):
         from openai_api.change_detection.snapshot import build_deal_snapshot, compare_snapshots
@@ -143,7 +143,7 @@ class DealChangeDecisionTests(unittest.TestCase):
         diff = compare_snapshots(empty, current)
         self.assertEqual(diff["changes"], ["new_client_reply"])
         self.assertEqual(diff["details"]["new_client_reply_event_ids"], ["crm_mirror:reply"])
-        self.assertEqual(decision(diff, current).status, INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(decision(diff, current).status, FULL_LLM_ANALYSIS)
         self.assertNotIn("Да", str(current))
         duplicate_binding = build_deal_snapshot(
             raw,

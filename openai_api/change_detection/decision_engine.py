@@ -351,30 +351,6 @@ def deal_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str,
     return sorted(set(hard))
 
 
-def deal_incremental_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
-    """Return meaningful changes that can use a proven previous-analysis baseline."""
-    hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard & {
-        "transcript_changed",
-        "new_client_reply",
-        "new_inbound_customer_message",
-        "daily_quality_evidence_changed",
-        "daily_quality_evidence_removed",
-    })
-
-
-def deal_direct_full_analysis_changes(diff: dict[str, Any], current_snapshot: dict[str, Any]) -> list[str]:
-    """Return hard changes that remain unsafe for the V1 incremental path."""
-    hard = set(deal_full_analysis_changes(diff, current_snapshot))
-    return sorted(hard - {
-        "transcript_changed",
-        "new_client_reply",
-        "new_inbound_customer_message",
-        "daily_quality_evidence_changed",
-        "daily_quality_evidence_removed",
-    })
-
-
 def lead_soft_diff_triggers(diff: dict[str, Any]) -> list[dict[str, Any]]:
     triggers = soft_diff_triggers(diff)
     changes = set(diff.get("changes") or [])
@@ -403,20 +379,11 @@ def decide_deal_processing(
     previous_fingerprint = previous_state.get("current_fingerprint")
     changed = previous_fingerprint != fingerprint
     semantic_changes = set(diff.get("changes") or [])
-    direct_full_changes = deal_direct_full_analysis_changes(diff, current_snapshot)
-    if changed and direct_full_changes:
+    hard_changes = deal_full_analysis_changes(diff, current_snapshot)
+    if changed and hard_changes:
         return ProcessingDecision(
             status=FULL_LLM_ANALYSIS,
-            reasons=[f"Обнаружены hard-изменения для прямого FULL: {', '.join(direct_full_changes)}."],
-            triggers=[],
-            diff=diff,
-        )
-
-    incremental_changes = deal_incremental_analysis_changes(diff, current_snapshot)
-    if changed and incremental_changes:
-        return ProcessingDecision(
-            status=INCREMENTAL_LLM_ANALYSIS,
-            reasons=[f"Обнаружены новые evidence для incremental-анализа: {', '.join(incremental_changes)}."],
+            reasons=[f"Обнаружены hard-изменения для прямого FULL: {', '.join(hard_changes)}."],
             triggers=[],
             diff=diff,
         )

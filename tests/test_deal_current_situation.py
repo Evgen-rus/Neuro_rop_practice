@@ -20,9 +20,7 @@ from openai_api.llm.deal_current_situation import (
     is_substantive_client_content,
     load_deal_current_situation_context,
 )
-from openai_api.llm.deal_incremental_v2 import build_materialization_prompt
 from openai_api.llm.deal_manager_situation import build_situation_prompt
-from openai_api.llm.deal_semantic_dependencies import resolve_affected_sections
 from openai_api.llm.llm_client import prompt_prefix_before
 
 
@@ -479,64 +477,6 @@ class CurrentSituationPromptAndV2Tests(unittest.TestCase):
         self.assertIn("не заменяют предыдущий содержательный якорь", prompt)
         self.assertEqual(DEAL_PROMPT_CACHE_KEY, "neuro-rop:full-deal:v3")
         self.assertEqual(deal_prompt_cache_markers("text"), ["## ID СДЕЛКИ", HISTORY_SECTION_MARKER])
-
-    def test_v2_recomputes_brief_on_new_client_evidence_but_not_on_manager_only(self) -> None:
-        inbound = resolve_affected_sections(
-            [],
-            [{"evidence_id": "email:9", "kind": "inbound_email", "delta_kind": "new_evidence"}],
-        )
-        self.assertIn("deal_control_brief", inbound)
-        inbound_message = resolve_affected_sections(
-            [],
-            [{"evidence_id": "message:9", "kind": "inbound_message", "delta_kind": "new_evidence"}],
-        )
-        self.assertIn("deal_control_brief", inbound_message)
-        manager_only = resolve_affected_sections(
-            [],
-            [{"evidence_id": "task:3", "kind": "crm_task", "delta_kind": "new_evidence"}],
-        )
-        self.assertNotIn("deal_control_brief", manager_only)
-
-    def test_v2_materialization_keeps_client_anchor_when_brief_is_recomputed(self) -> None:
-        situation = {
-            "available": True,
-            "last_substantive_client_contact": {
-                "occurred_at": "2026-08-24T15:00:00+03:00",
-                "channel": "whatsapp",
-                "content": "Рассматриваем Китай",
-            },
-            "manager_actions_after_contact": [{"kind": "outgoing_message", "occurred_at": "2026-08-25T11:00:00+03:00"}],
-            "call_attempts_after_contact": 0,
-            "outgoing_messages_after_contact": 1,
-            "outgoing_emails_after_contact": 0,
-            "has_newer_client_response": False,
-        }
-        prompt = build_materialization_prompt(
-            previous_analysis={"deal_control_brief": {"current_situation": "старое"}},
-            semantic_state={},
-            evidence_delta=[{"evidence_id": "email:9", "kind": "inbound_email"}],
-            affected_sections=["deal_control_brief"],
-            stage_policy={},
-            prior_recommendation=None,
-            compact_policy_text="POLICY",
-            current_situation_context=situation,
-        )
-        self.assertIn("CURRENT_SITUATION_CONTEXT", prompt)
-        self.assertIn("Рассматриваем Китай", prompt)
-        self.assertIn("не являются новой позицией клиента", prompt)
-        self.assertGreater(prompt.find("## CURRENT_SITUATION_CONTEXT"), prompt.find("## PRIOR_NEURO_ROP_RECOMMENDATION"))
-
-        other = build_materialization_prompt(
-            previous_analysis={"main_risk": {"risk_level": "low"}},
-            semantic_state={},
-            evidence_delta=[{"evidence_id": "call:1"}],
-            affected_sections=["main_risk"],
-            stage_policy={},
-            prior_recommendation=None,
-            compact_policy_text="POLICY",
-            current_situation_context=situation,
-        )
-        self.assertNotIn("CURRENT_SITUATION_CONTEXT", other)
 
     def test_manager_situation_refinement_cannot_invent_client_position(self) -> None:
         prompt = build_situation_prompt(
