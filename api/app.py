@@ -977,7 +977,10 @@ def learning_shadow_run_get(run_id: int) -> dict[str, Any]:
 @app.get("/api/deal-control")
 def deal_control_dashboard() -> dict[str, Any]:
     user = auth_current_user()
-    return scoped_dashboard(build_deal_control_dashboard(db_path=DEFAULT_DB_PATH), user)
+    return scoped_dashboard(
+        build_deal_control_dashboard(db_path=DEFAULT_DB_PATH, viewer=user),
+        user,
+    )
 
 
 @app.get("/api/deal-control/deals/{deal_id}/comments")
@@ -1050,10 +1053,10 @@ def deal_control_scope_add_managers(body: DealControlManagersRequest) -> dict[st
 
 @app.post("/api/deal-control/sync")
 def deal_control_sync() -> dict[str, Any]:
-    _require_roles("admin", "rop")
+    user = _require_roles("admin", "rop")
     try:
-        dashboard = refresh_deal_control(db_path=DEFAULT_DB_PATH)
-        return scoped_dashboard(dashboard, auth_current_user())
+        dashboard = refresh_deal_control(db_path=DEFAULT_DB_PATH, viewer=user)
+        return scoped_dashboard(dashboard, user)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001 - surface a read-only CRM problem in the local UI

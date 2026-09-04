@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -190,7 +191,37 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaratio
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
+_init_db_lock = threading.Lock()
+_initialized_db_paths: set[str] = set()
+
+
+def _resolved_db_key(db_path: str | Path) -> str:
+    return str(Path(db_path).expanduser().resolve())
+
+
+def reset_init_db_cache() -> None:
+    """Forget which databases already ran schema init in this process.
+
+    Tests that rebuild the same file path after a schema fixture need this.
+    Production callers should not need it: a process restart picks up new
+    migrations, and the first ``init_db`` of a path still runs the full script.
+    """
+    with _init_db_lock:
+        _initialized_db_paths.clear()
+
+
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
+    key = _resolved_db_key(db_path)
+    if key in _initialized_db_paths:
+        return
+    with _init_db_lock:
+        if key in _initialized_db_paths:
+            return
+        _init_db_unlocked(db_path)
+        _initialized_db_paths.add(key)
+
+
+def _init_db_unlocked(db_path: str | Path) -> None:
     with connect(db_path) as conn:
         conn.executescript(
             """
@@ -1120,6 +1151,10 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_ui_reports_share_token "
             "ON ui_reports(share_token) WHERE share_token IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ui_reports_entity_latest "
+            "ON ui_reports(entity_type, entity_id, id DESC)"
         )
         _ensure_column(conn, "daily_summary_runs", "completed_at", "TEXT")
         _ensure_column(conn, "daily_summary_runs", "actual_cost_json", "TEXT")
@@ -2052,6 +2087,72 @@ def get_entity_state(db_path: str | Path, entity_type: str, entity_id: str) -> d
             (entity_type, str(entity_id)),
         ).fetchone()
     return _row_to_state(row)
+
+
+def list_latest_ui_reports(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Load the newest UI report with JSON for each entity id in one query."""
+    init_db(db_path)
+    ids = list(dict.fromkeys(str(item) for item in entity_ids if str(item)))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT r.*
+            FROM ui_reports AS r
+            INNER JOIN (
+                SELECT entity_id, MAX(id) AS max_id
+                FROM ui_reports
+                WHERE entity_type = ?
+                  AND report_json IS NOT NULL
+                  AND entity_id IN ({placeholders})
+                GROUP BY entity_id
+            ) AS latest ON latest.max_id = r.id
+            """,
+            (str(entity_type), *ids),
+        ).fetchall()
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        report = _row_to_ui_report(row)
+        if report is not None:
+            result[str(report.get("entity_id") or "")] = report
+    return result
+
+
+def list_entity_analysis_check_fields(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Load analysis-check scalars without snapshot/analysis JSON."""
+    init_db(db_path)
+    ids = list(dict.fromkeys(str(item) for item in entity_ids if str(item)))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT entity_id, last_analysis_status, updated_at
+            FROM entity_state
+            WHERE entity_type = ? AND entity_id IN ({placeholders})
+            """,
+            (str(entity_type), *ids),
+        ).fetchall()
+    return {
+        str(row["entity_id"]): {
+            "last_analysis_status": row["last_analysis_status"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    }
 
 
 def upsert_entity_state(
@@ -3303,6 +3404,49 @@ def get_latest_deal_manager_situation_review(
     return _row_to_deal_manager_situation_review(row)
 
 
+def list_latest_deal_manager_situation_reviews_for_reports(
+    db_path: str | Path,
+    *,
+    pairs: list[tuple[str, int]],
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Load the newest review for each (deal_id, source_report_id) pair."""
+    init_db(db_path)
+    wanted = {
+        (str(deal_id), int(source_report_id))
+        for deal_id, source_report_id in pairs
+        if str(deal_id) and source_report_id is not None
+    }
+    if not wanted:
+        return {}
+    deal_ids = list(dict.fromkeys(deal_id for deal_id, _ in wanted))
+    placeholders = ",".join("?" for _ in deal_ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM deal_manager_situation_reviews
+            WHERE deal_id IN ({placeholders})
+            """,
+            deal_ids,
+        ).fetchall()
+    best: dict[tuple[str, int], sqlite3.Row] = {}
+    for row in rows:
+        key = (str(row["deal_id"]), int(row["source_report_id"]))
+        if key not in wanted:
+            continue
+        current = best.get(key)
+        if current is None or (int(row["revision"] or 0), int(row["id"] or 0)) > (
+            int(current["revision"] or 0),
+            int(current["id"] or 0),
+        ):
+            best[key] = row
+    result: dict[tuple[str, int], dict[str, Any]] = {}
+    for key, row in best.items():
+        review = _row_to_deal_manager_situation_review(row)
+        if review is not None:
+            result[key] = review
+    return result
+
+
 def next_deal_manager_situation_revision(
     db_path: str | Path,
     *,
@@ -3612,25 +3756,16 @@ def get_deal_manager_situation_review_history(
     )
 
 
-def get_deal_manager_situation_state(
-    db_path: str | Path,
+def project_deal_manager_situation_state(
     *,
     deal_id: str,
+    report: dict[str, Any] | None,
+    review: dict[str, Any] | None,
     business_date: date | datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Project the current manager-situation state without mutating history."""
+    """Project manager-situation state from already loaded report/review rows."""
     current_business_date = _moscow_business_date(business_date)
-    report = get_latest_ui_report(db_path, entity_type="deal", entity_id=str(deal_id))
-    source_report_id = int(report["id"]) if report is not None else None
-    review = (
-        get_latest_deal_manager_situation_review(
-            db_path,
-            deal_id=str(deal_id),
-            source_report_id=source_report_id,
-        )
-        if source_report_id is not None
-        else None
-    )
+    source_report_id = int(report["id"]) if report is not None and report.get("id") is not None else None
     status = "pending"
     is_current = False
     review_business_date = str(review.get("business_date") or "") if review is not None else ""
@@ -3652,6 +3787,32 @@ def get_deal_manager_situation_state(
         "last_confirmation_business_date": review_business_date or None,
         "is_current": is_current,
     }
+
+
+def get_deal_manager_situation_state(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    business_date: date | datetime | str | None = None,
+) -> dict[str, Any]:
+    """Project the current manager-situation state without mutating history."""
+    report = get_latest_ui_report(db_path, entity_type="deal", entity_id=str(deal_id))
+    source_report_id = int(report["id"]) if report is not None else None
+    review = (
+        get_latest_deal_manager_situation_review(
+            db_path,
+            deal_id=str(deal_id),
+            source_report_id=source_report_id,
+        )
+        if source_report_id is not None
+        else None
+    )
+    return project_deal_manager_situation_state(
+        deal_id=str(deal_id),
+        report=report,
+        review=review,
+        business_date=business_date,
+    )
 
 
 def _normalize_quick_help_mode(value: Any, *, content: dict[str, Any] | None = None) -> str:
@@ -6040,6 +6201,34 @@ def get_deal_daily_quality_state(
             (str(deal_id), str(business_date)),
         ).fetchone()
     return _row_to_daily_quality_state(row)
+
+
+def list_deal_daily_quality_states(
+    db_path: str | Path,
+    *,
+    deal_ids: list[str],
+    business_date: str,
+) -> dict[str, dict[str, Any]]:
+    """Load same-day quality rows for many deals without per-deal getters."""
+    init_db(db_path)
+    ids = list(dict.fromkeys(str(item) for item in deal_ids if str(item)))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM deal_daily_quality_state
+            WHERE business_date = ? AND deal_id IN ({placeholders})
+            """,
+            (str(business_date), *ids),
+        ).fetchall()
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        value = _row_to_daily_quality_state(row)
+        if value is not None:
+            result[str(value.get("deal_id") or row["deal_id"])] = value
+    return result
 
 
 def merge_deal_daily_quality_state(

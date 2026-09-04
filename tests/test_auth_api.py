@@ -129,6 +129,28 @@ class DealAuthorizationTests(unittest.TestCase):
         self.assertEqual(projected["scope"]["initial_deal_ids"], ["101"])
         self.assertEqual(projected["scope"]["manager_ids"], ["10"])
 
+    def test_rop_dashboard_reads_team_scope_once(self) -> None:
+        rop = _user("rop", user_id=2)
+        dashboard = {
+            "deals": [_deal("101", "10"), _deal("202", "77"), _deal("303", "10")],
+            "summary": {"active_deals": 3, "portfolio_amount": 3000},
+            "scope": {"initial_deal_ids": ["101", "202", "303"], "manager_ids": ["10", "77"]},
+        }
+        with patch.object(
+            access.storage,
+            "get_deal_control_scope",
+            return_value={"manager_ids": ["10"]},
+            create=True,
+        ) as scope, patch.object(
+            access.storage,
+            "get_deal_control_metrics",
+            return_value={"overall": {"tasks": 0}, "with_guidance": {}, "without_guidance": {}, "cancelled_tasks": 0},
+            create=True,
+        ):
+            projected = access.scoped_dashboard(dashboard, rop)
+        self.assertEqual(scope.call_count, 1)
+        self.assertEqual([row["deal_id"] for row in projected["deals"]], ["101", "303"])
+
     def test_rop_can_run_analysis_only_for_configured_team(self) -> None:
         rop = _user("rop", user_id=2)
         team_deal = _deal("101", "10")

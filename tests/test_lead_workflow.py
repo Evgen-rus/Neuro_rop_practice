@@ -16,6 +16,7 @@ from storage.rop_db import (
     get_ui_report,
     init_db,
     list_rop_decisions,
+    reset_init_db_cache,
     save_rop_decision,
     save_ui_report,
     upsert_candidate_review_state,
@@ -371,6 +372,7 @@ class LeadWorkflowApiTests(unittest.TestCase):
                     ("2026-07-22-reactivate-lead-no-attention",),
                 )
 
+            reset_init_db_cache()
             init_db(db_path)
 
             workflow = get_lead_workflow_state(db_path, "99")

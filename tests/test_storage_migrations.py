@@ -122,6 +122,10 @@ class StorageMigrationTests(unittest.TestCase):
                     row[1]
                     for row in conn.execute("PRAGMA index_list(manager_trajectory_events)")
                 }
+                report_indexes = {
+                    row[1]
+                    for row in conn.execute("PRAGMA index_list(ui_reports)")
+                }
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             finally:
                 conn.close()
@@ -130,6 +134,7 @@ class StorageMigrationTests(unittest.TestCase):
             self.assertIn("payload_json", event_columns)
             self.assertIn("idx_manager_trajectory_entity_time", indexes)
             self.assertIn("idx_manager_trajectory_manager_time", indexes)
+            self.assertIn("idx_ui_reports_entity_latest", report_indexes)
             self.assertIn("automatic_analysis_runs", tables)
             self.assertIn("automatic_analysis_items", tables)
             self.assertTrue({"sync_mode", "sync_reasons_json"} <= automatic_item_columns)

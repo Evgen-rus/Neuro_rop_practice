@@ -49,13 +49,17 @@ from storage.rop_db import (
     get_deal_control_metrics,
     get_deal_control_deal,
     get_deal_daily_quality_state,
-    get_entity_state,
     get_latest_deal_manager_situation_review,
     get_latest_ui_report,
     list_deal_control_bitrix_task_states,
     list_deal_control_deals,
     list_deal_control_task_history,
     list_deal_control_tasks,
+    list_deal_daily_quality_states,
+    list_entity_analysis_check_fields,
+    list_latest_deal_manager_situation_reviews_for_reports,
+    list_latest_ui_reports,
+    project_deal_manager_situation_state,
     record_deal_control_task_event,
     add_deal_control_manager_ids,
     save_deal_control_scope,
@@ -938,11 +942,22 @@ def _fetch_initial_deals(client: Any, deal_ids: list[str]) -> tuple[list[dict[st
     return rows, errors
 
 
-def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any | None = None, now: datetime | None = None) -> dict[str, Any]:
+def refresh_deal_control(
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    client: Any | None = None,
+    now: datetime | None = None,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Synchronise the configured deal portfolio using only Bitrix read calls."""
     scope = get_deal_control_scope(db_path)
     if not scope["configured"]:
-        return build_deal_control_dashboard(db_path=db_path, now=now, sync_message="Сначала настройте локальную выборку сделок.")
+        return build_deal_control_dashboard(
+            db_path=db_path,
+            now=now,
+            viewer=viewer,
+            sync_message="Сначала настройте локальную выборку сделок.",
+        )
     crm = client or make_client()
     current = now or datetime.now(MSK_TZ)
     stage_names = load_pipeline_stage_names()
@@ -1157,11 +1172,28 @@ def refresh_deal_control(*, db_path: str | Path = DEFAULT_DB_PATH, client: Any |
                 payload={"from_stage": baseline_stage, "to_stage": current_stage, "semantic": semantic},
             )
     message = "CRM обновлена" if not errors else "CRM обновлена с ограничениями"
-    return build_deal_control_dashboard(db_path=db_path, now=current, sync_message=message, sync_errors=errors)
+    return build_deal_control_dashboard(
+        db_path=db_path,
+        now=current,
+        viewer=viewer,
+        sync_message=message,
+        sync_errors=errors,
+    )
 
 
-def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
-    report = get_latest_ui_report(db_path, entity_type="deal", entity_id=deal_id)
+_MISSING = object()
+
+
+def _analysis_coaching(
+    db_path: str | Path,
+    deal_id: str,
+    *,
+    report: Any = _MISSING,
+    analysis_check: dict[str, Any] | None = None,
+    review: Any = _MISSING,
+) -> dict[str, Any]:
+    if report is _MISSING:
+        report = get_latest_ui_report(db_path, entity_type="deal", entity_id=deal_id)
     analysis = unwrap_analysis_payload(report.get("report_json") if report else None)
     rop = analysis.get("rop_manager_message_block") if isinstance(analysis.get("rop_manager_message_block"), dict) else {}
     money = analysis.get("money_path_diagnosis") if isinstance(analysis.get("money_path_diagnosis"), dict) else {}
@@ -1224,7 +1256,7 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
             ],
             2,
         )
-    check = _analysis_check_fields(db_path, deal_id)
+    check = analysis_check if analysis_check is not None else _analysis_check_fields(db_path, deal_id)
     coaching = {
         "report_id": report.get("id") if report else None,
         "analysis_created_at": report.get("created_at") if report else None,
@@ -1256,11 +1288,12 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
     }
     if report is None or report.get("id") is None:
         return coaching
-    review = get_latest_deal_manager_situation_review(
-        db_path,
-        deal_id=str(deal_id),
-        source_report_id=int(report["id"]),
-    )
+    if review is _MISSING:
+        review = get_latest_deal_manager_situation_review(
+            db_path,
+            deal_id=str(deal_id),
+            source_report_id=int(report["id"]),
+        )
     refined = review.get("refined_coaching") if review is not None else None
     if not isinstance(refined, dict):
         return coaching
@@ -1271,17 +1304,25 @@ def _analysis_coaching(db_path: str | Path, deal_id: str) -> dict[str, Any]:
     return coaching
 
 
-def _analysis_check_fields(db_path: str | Path, deal_id: str) -> dict[str, Any]:
-    """Last change-aware pass: entity_state.updated_at, not the UI-report created_at."""
-    state = get_entity_state(db_path, "deal", str(deal_id))
-    if not isinstance(state, dict):
+def _analysis_check_from_entity_fields(fields: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(fields, dict):
         return {"analysis_checked_at": None, "analysis_check_status": None}
-    status = compact_decision_status(str(state.get("last_analysis_status") or ""))
-    checked_at = str(state.get("updated_at") or "").strip()
+    status = compact_decision_status(str(fields.get("last_analysis_status") or ""))
+    checked_at = str(fields.get("updated_at") or "").strip()
     return {
         "analysis_checked_at": checked_at or None,
         "analysis_check_status": status or None,
     }
+
+
+def _analysis_check_fields(db_path: str | Path, deal_id: str) -> dict[str, Any]:
+    """Last change-aware pass: entity_state.updated_at, not the UI-report created_at."""
+    fields = list_entity_analysis_check_fields(
+        db_path,
+        entity_type="deal",
+        entity_ids=[str(deal_id)],
+    ).get(str(deal_id))
+    return _analysis_check_from_entity_fields(fields)
 
 
 def _pipeline_names() -> dict[str, str]:
@@ -1301,6 +1342,11 @@ def _project_deal_control_item(
     deal_tasks: list[dict[str, Any]],
     bitrix_states: dict[str, dict[str, Any]],
     events: list[dict[str, Any]],
+    report: Any = _MISSING,
+    analysis_check: dict[str, Any] | None = None,
+    situation_review: Any = _MISSING,
+    daily_quality_state: Any = _MISSING,
+    manager_situation: Any = _MISSING,
 ) -> dict[str, Any]:
     """Project one deal the same way as the dashboard row, without the rest of the portfolio."""
     from api.daily_control import project_deal_review_card, project_report_day_scope
@@ -1380,16 +1426,27 @@ def _project_deal_control_item(
     ))
     deal["bitrix_tasks"] = bitrix_tasks
     deal["primary_bitrix_task"] = bitrix_tasks[0] if bitrix_tasks else None
-    deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]))
-    deal["daily_quality_state"] = get_deal_daily_quality_state(
-        db_path,
-        deal_id=str(deal["deal_id"]),
-        business_date=current_date,
-    )
-    deal["manager_situation"] = get_deal_manager_situation_state(
-        db_path,
-        deal_id=str(deal["deal_id"]),
-    )
+    coaching_kwargs: dict[str, Any] = {}
+    if report is not _MISSING:
+        coaching_kwargs["report"] = report
+        coaching_kwargs["review"] = None if situation_review is _MISSING else situation_review
+        coaching_kwargs["analysis_check"] = analysis_check
+    deal["coaching"] = _analysis_coaching(db_path, str(deal["deal_id"]), **coaching_kwargs)
+    if daily_quality_state is _MISSING:
+        deal["daily_quality_state"] = get_deal_daily_quality_state(
+            db_path,
+            deal_id=str(deal["deal_id"]),
+            business_date=current_date,
+        )
+    else:
+        deal["daily_quality_state"] = daily_quality_state
+    if manager_situation is _MISSING:
+        deal["manager_situation"] = get_deal_manager_situation_state(
+            db_path,
+            deal_id=str(deal["deal_id"]),
+        )
+    else:
+        deal["manager_situation"] = manager_situation
     deal["review"] = project_deal_review_card(deal, now=current)
     return deal
 
@@ -1440,8 +1497,14 @@ def _has_refined_value(value: Any) -> bool:
     return True
 
 
-def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: datetime | None = None,
-                                 sync_message: str | None = None, sync_errors: list[str] | None = None) -> dict[str, Any]:
+def build_deal_control_dashboard(
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+    sync_message: str | None = None,
+    sync_errors: list[str] | None = None,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     from api.deal_task_day import day_events
 
     current = now or datetime.now(MSK_TZ)
@@ -1449,6 +1512,10 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     for event in day_events(db_path, current):
         events_by_deal.setdefault(str(event.get("entity_id")), []).append(event)
     deals = list_deal_control_deals(db_path)
+    if viewer is not None:
+        from api.access import deals_visible_for_dashboard
+
+        deals = deals_visible_for_dashboard(deals, viewer)
     pipeline_names = _pipeline_names()
     active_deal_ids = [str(deal["deal_id"]) for deal in deals]
     all_tasks = list_deal_control_tasks(db_path, deal_ids=active_deal_ids) if active_deal_ids else []
@@ -1459,18 +1526,56 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     tasks_by_deal: dict[str, list[dict[str, Any]]] = {}
     for task in all_tasks:
         tasks_by_deal.setdefault(str(task["deal_id"]), []).append(task)
+    reports_by_deal = list_latest_ui_reports(
+        db_path,
+        entity_type="deal",
+        entity_ids=active_deal_ids,
+    ) if active_deal_ids else {}
+    checks_by_deal = list_entity_analysis_check_fields(
+        db_path,
+        entity_type="deal",
+        entity_ids=active_deal_ids,
+    ) if active_deal_ids else {}
+    review_pairs = [
+        (deal_id, int(report["id"]))
+        for deal_id, report in reports_by_deal.items()
+        if isinstance(report, dict) and report.get("id") is not None
+    ]
+    reviews_by_pair = list_latest_deal_manager_situation_reviews_for_reports(
+        db_path,
+        pairs=review_pairs,
+    ) if review_pairs else {}
+    current_date = current.astimezone(MSK_TZ).date().isoformat()
+    quality_by_deal = list_deal_daily_quality_states(
+        db_path,
+        deal_ids=active_deal_ids,
+        business_date=current_date,
+    ) if active_deal_ids else {}
     items = []
     projected_primary_tasks: list[dict[str, Any]] = []
     missing = 0
     for deal in deals:
+        deal_id = str(deal["deal_id"])
+        report = reports_by_deal.get(deal_id)
+        source_report_id = int(report["id"]) if isinstance(report, dict) and report.get("id") is not None else None
+        review = reviews_by_pair.get((deal_id, source_report_id)) if source_report_id is not None else None
         projected = _project_deal_control_item(
             deal,
             db_path=db_path,
             current=current,
             pipeline_names=pipeline_names,
-            deal_tasks=tasks_by_deal.get(str(deal["deal_id"]), []),
+            deal_tasks=tasks_by_deal.get(deal_id, []),
             bitrix_states=bitrix_states,
-            events=events_by_deal.get(str(deal["deal_id"]), []),
+            events=events_by_deal.get(deal_id, []),
+            report=report,
+            analysis_check=_analysis_check_from_entity_fields(checks_by_deal.get(deal_id)),
+            situation_review=review,
+            daily_quality_state=quality_by_deal.get(deal_id),
+            manager_situation=project_deal_manager_situation_state(
+                deal_id=deal_id,
+                report=report,
+                review=review,
+            ),
         )
         if projected["primary_bitrix_task"] is not None:
             projected_primary_tasks.append(projected["primary_bitrix_task"])
@@ -1502,6 +1607,12 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
     plan_today = missing + overdue + today
     probability_values = [int(item["probability"]) for item in deals if item.get("probability") is not None]
     total_amount = sum(float(str(item.get("amount") or "0").replace(",", ".") or 0) for item in deals if str(item.get("amount") or "").replace(",", ".").replace(".", "", 1).isdigit())
+    viewer_role = str((viewer or {}).get("role") or "")
+    outcome_metrics = (
+        get_deal_control_metrics(db_path)
+        if viewer is None or viewer_role == "admin"
+        else {}
+    )
     return {
         "scope": get_deal_control_scope(db_path),
         "generated_at": current.isoformat(timespec="seconds"),
@@ -1514,7 +1625,7 @@ def build_deal_control_dashboard(*, db_path: str | Path = DEFAULT_DB_PATH, now: 
             "tasks_missing": missing, "tasks_plan_today": plan_today,
             "average_probability": round(sum(probability_values) / len(probability_values)) if probability_values else None,
         },
-        "outcome_metrics": get_deal_control_metrics(db_path),
+        "outcome_metrics": outcome_metrics,
         "deals": items,
     }
 

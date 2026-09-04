@@ -95,14 +95,36 @@ def rop_team_manager_ids() -> set[str]:
     return _rop_team_manager_ids()
 
 
-def deal_access(user: dict[str, Any], deal: dict[str, Any]) -> DealAccess:
+def deals_visible_for_dashboard(deals: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep only deals the authenticated viewer may see, using the same rules as ``deal_access``."""
+    role = str(user.get("role") or "")
+    if role == "admin":
+        return list(deals)
+    if role == "rop":
+        team_ids = _rop_team_manager_ids()
+        return [row for row in deals if str(row.get("manager_id") or "") in team_ids]
+    if role == "manager":
+        manager_id = str(user.get("manager_id") or "")
+        if not manager_id:
+            return []
+        return [row for row in deals if str(row.get("manager_id") or "") == manager_id]
+    return []
+
+
+def deal_access(
+    user: dict[str, Any],
+    deal: dict[str, Any],
+    *,
+    team_manager_ids: set[str] | None = None,
+) -> DealAccess:
     role = str(user.get("role") or "")
     ownership, is_own = _ownership(user, deal)
     if role == "admin":
         can_open = can_edit = can_run_paid_ai = True
     elif role == "rop":
         # РОП и заместитель работают с Дожимом и прочим платным AI по сделкам команды.
-        in_team = str(deal.get("manager_id") or "") in _rop_team_manager_ids()
+        team_ids = team_manager_ids if team_manager_ids is not None else _rop_team_manager_ids()
+        in_team = str(deal.get("manager_id") or "") in team_ids
         can_open = can_edit = can_run_paid_ai = in_team
     else:
         can_open = can_edit = is_own
@@ -137,8 +159,14 @@ def deal_flags(access: DealAccess) -> dict[str, Any]:
     }
 
 
-def project_deal_row(deal: dict[str, Any], user: dict[str, Any], *, full: bool = True) -> dict[str, Any]:
-    access = deal_access(user, deal)
+def project_deal_row(
+    deal: dict[str, Any],
+    user: dict[str, Any],
+    *,
+    full: bool = True,
+    access: DealAccess | None = None,
+) -> dict[str, Any]:
+    access = access if access is not None else deal_access(user, deal)
     if not access.can_open:
         row = {key: deal.get(key) for key in _LIGHTWEIGHT_DEAL_FIELDS}
         row["manager_name"] = _manager_name(deal)
@@ -151,7 +179,13 @@ def project_deal_row(deal: dict[str, Any], user: dict[str, Any], *, full: bool =
     return row
 
 
-def _project_scope(scope_value: Any, user: dict[str, Any], deals: list[dict[str, Any]]) -> dict[str, Any]:
+def _project_scope(
+    scope_value: Any,
+    user: dict[str, Any],
+    deals: list[dict[str, Any]],
+    *,
+    team_manager_ids: set[str] | None = None,
+) -> dict[str, Any]:
     scope = dict(scope_value) if isinstance(scope_value, dict) else {}
     role = str(user.get("role") or "")
     visible_ids = {str(row.get("deal_id") or "") for row in deals}
@@ -165,7 +199,7 @@ def _project_scope(scope_value: Any, user: dict[str, Any], deals: list[dict[str,
     initial_ids = scope.get("initial_deal_ids") if isinstance(scope.get("initial_deal_ids"), list) else []
     scope["initial_deal_ids"] = [str(value) for value in initial_ids if str(value) in allowed_initial_ids]
     if role == "rop":
-        scope["manager_ids"] = sorted(_rop_team_manager_ids())
+        scope["manager_ids"] = sorted(team_manager_ids if team_manager_ids is not None else _rop_team_manager_ids())
     elif role == "manager":
         manager_id = str(user.get("manager_id") or "")
         scope["manager_ids"] = [manager_id] if manager_id else []
@@ -177,13 +211,18 @@ def scoped_dashboard(dashboard: dict[str, Any], user: dict[str, Any]) -> dict[st
 
     source_deals = [row for row in dashboard.get("deals") or [] if isinstance(row, dict)]
     role = str(user.get("role") or "")
+    team_ids = _rop_team_manager_ids() if role == "rop" else None
     if role == "admin":
         deals = [project_deal_row(row, user, full=True) for row in source_deals]
     elif role == "rop":
-        team_source = [row for row in source_deals if deal_access(user, row).can_open]
-        deals = [project_deal_row(row, user, full=True) for row in team_source]
+        deals = []
+        for row in source_deals:
+            access_row = deal_access(user, row, team_manager_ids=team_ids)
+            if not access_row.can_open:
+                continue
+            deals.append(project_deal_row(row, user, full=True, access=access_row))
         dashboard = {**dashboard, "summary": _team_summary(dashboard.get("summary"), deals)}
-        dashboard["outcome_metrics"] = team_metrics()
+        dashboard["outcome_metrics"] = team_metrics(manager_ids=team_ids)
     elif role == "manager":
         owned_source = [row for row in source_deals if deal_access(user, row).is_own]
         owned = [project_deal_row(row, user, full=True) for row in owned_source]
@@ -220,7 +259,12 @@ def scoped_dashboard(dashboard: dict[str, Any], user: dict[str, Any]) -> dict[st
         dashboard = {**dashboard, "summary": summary, "outcome_metrics": summary_metrics}
     else:
         raise HTTPException(status_code=403, detail="Forbidden")
-    dashboard["scope"] = _project_scope(dashboard.get("scope"), user, deals)
+    dashboard["scope"] = _project_scope(
+        dashboard.get("scope"),
+        user,
+        deals,
+        team_manager_ids=team_ids,
+    )
     dashboard["deals"] = deals
     return dashboard
 
@@ -252,16 +296,16 @@ def _team_summary(summary_value: Any, deals: list[dict[str, Any]]) -> dict[str, 
     return summary
 
 
-def team_metrics() -> dict[str, Any]:
+def team_metrics(*, manager_ids: set[str] | None = None) -> dict[str, Any]:
     function = getattr(storage, "get_deal_control_metrics", None)
     if not callable(function):
         return {}
-    manager_ids = _rop_team_manager_ids()
-    if not manager_ids:
+    resolved_ids = manager_ids if manager_ids is not None else _rop_team_manager_ids()
+    if not resolved_ids:
         return {}
     collected = [
         function(storage.DEFAULT_DB_PATH, manager_id=manager_id)
-        for manager_id in sorted(manager_ids)
+        for manager_id in sorted(resolved_ids)
     ]
     result: dict[str, Any] = {}
     for key in ("overall", "with_guidance", "without_guidance"):
@@ -303,7 +347,7 @@ def scoped_deal_metrics(user: dict[str, Any], manager_id: str | None = None) -> 
             if str(manager_id) not in team_ids:
                 raise HTTPException(status_code=403, detail="Manager is outside the ROP team scope")
             return function(storage.DEFAULT_DB_PATH, manager_id=str(manager_id))
-        return team_metrics()
+        return team_metrics(manager_ids=team_ids)
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
