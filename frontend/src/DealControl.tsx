@@ -2409,15 +2409,15 @@ function ManagerSituationActions(props: {
           <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
           <div className="dc-manager-input-methods">
             <section className="dc-manager-input-card">
-              <span className="dc-manager-input-icon" aria-hidden="true">🎙</span>
+              <span className="dc-manager-input-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="8.5" y="3" width="7" height="12" rx="3.5" stroke="currentColor" strokeWidth="1.8"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg></span>
               <div className="dc-manager-input-copy"><strong>Короткая голосовая заметка</strong><small>Надиктуйте дополнительный контекст</small></div>
               <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onContext(appendVoiceText(props.context, text))} />
             </section>
             <section className="dc-manager-input-card dc-manager-audio-card">
-              <span className="dc-manager-input-icon" aria-hidden="true">🎧</span>
+              <span className="dc-manager-input-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 13v-1a8 8 0 0 1 16 0v1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="M4 13.5c0-1.1.9-2 2-2h1v7H6a2 2 0 0 1-2-2v-3ZM20 13.5c0-1.1-.9-2-2-2h-1v7h1a2 2 0 0 0 2-2v-3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></svg></span>
               <div className="dc-manager-input-copy"><strong>Запись разговора</strong><small>MP3, M4A, WAV · до 90 МБ / 90 минут</small></div>
               <label className={`dc-manager-audio-upload${audioBusy ? ' disabled' : ''}`}>
-                <span>Выбрать файл</span>
+                <span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 3.5h7l4 4V20H7V3.5Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><path d="M14 3.5v4h4M10 12h5M10 15h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>Выбрать файл</span>
                 <input
                   type="file"
                   accept="audio/aac,audio/flac,audio/mp4,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,.m4a"
@@ -3755,7 +3755,7 @@ function ManagerVoiceInput({ dealId, disabled, onTranscribe, onTranscript }: {
   return <div className="dc-manager-voice-control">
     {recording
       ? <><button type="button" className="dc-manager-voice-button recording" onClick={stopRecording} disabled={disabled}>■ Остановить {String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}</button><button type="button" className="dc-manager-voice-cancel" onClick={cancelRecording} disabled={disabled}>Отмена</button></>
-      : <button type="button" className="dc-manager-voice-button" onClick={() => void startRecording()} disabled={disabled || transcribing} title="Записать голосом">{transcribing ? <><span className="dc-spinner" />Распознаём…</> : '🎙 Говорить'}</button>}
+      : <button type="button" className="dc-manager-voice-button" onClick={() => void startRecording()} disabled={disabled || transcribing} title="Записать голосом">{transcribing ? <><span className="dc-spinner" />Распознаём…</> : <><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8.5" y="3" width="7" height="12" rx="3.5" stroke="currentColor" strokeWidth="1.8"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>Говорить</>}</button>}
     {error ? <small className="dc-manager-voice-error" role="alert">{error}</small> : null}
   </div>
 }
