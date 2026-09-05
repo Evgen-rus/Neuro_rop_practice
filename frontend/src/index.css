@@ -6909,7 +6909,7 @@ ul.facts.bad li:before {
   line-height: 1.5;
 }
 
-.dc-manager-context-modal > .dc-manager-voice-field { display: grid; gap: 12px; }
+.dc-manager-context-modal > .dc-manager-voice-field { display: grid; width: 100%; justify-content: stretch; gap: 12px; }
 .dc-manager-input-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .dc-manager-input-card {
   display: grid;
@@ -7065,7 +7065,7 @@ ul.facts.bad li:before {
 .dc-manager-markdown { margin-top: 0; }
 .dc-manager-markdown > pre { max-height: 360px; margin: 5px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.dc-manager-context-modal { display: grid; width: min(900px, 96vw); max-height: 94vh; gap: 18px; padding: 24px 28px; overflow: auto; border-radius: 17px; }
+.dc-manager-context-modal { display: grid; width: min(820px, 96vw); max-height: 94vh; gap: 18px; padding: 24px 28px; overflow: auto; border-radius: 17px; }
 .dc-manager-context-modal > div { margin-top: 0; }
 .dc-manager-context-modal textarea { min-height: 180px; padding: 14px 16px; border-radius: 11px; font-size: 14px; line-height: 1.5; }
 .dc-manager-context-modal .dc-manager-voice-button,
@@ -7078,7 +7078,7 @@ ul.facts.bad li:before {
 .dc-manager-context-modal .dc-manager-audio-attachment { padding: 13px 15px; border-radius: 12px; }
 .dc-manager-context-modal .dc-manager-audio-attachment strong { font-size: 14px; }
 .dc-manager-context-modal .dc-manager-audio-attachment details p { font-size: 13px; line-height: 1.5; }
-.dc-manager-modal-heading { display: flex; justify-content: space-between; gap: 16px; }
+.dc-manager-context-modal > .dc-manager-modal-heading { display: flex; width: 100%; justify-content: space-between; gap: 16px; }
 .dc-manager-modal-heading > div:first-child { display: flex; gap: 14px; }
 .dc-manager-modal-heading h2 { margin: 0 0 4px; font-size: 22px; line-height: 1.2; }
 .dc-manager-modal-heading p { max-width: 680px; margin: 0; font-size: 12px; line-height: 1.45; }
