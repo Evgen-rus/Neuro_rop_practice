@@ -9283,6 +9283,7 @@ ul.facts.bad li:before {
   white-space: nowrap;
 }
 .dc-comment-preview-text b { margin: 0; color: #1768f2; font-size: 9.5px; white-space: nowrap; }
+.dc-comment-preview-text p.worklog { color: #254c70; font-weight: 600; }
 .dc-comment-preview-footer {
   display: flex;
   min-width: 0;

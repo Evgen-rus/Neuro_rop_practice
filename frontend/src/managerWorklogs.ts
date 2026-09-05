@@ -22,6 +22,14 @@ export function sortedWorklogEntries(entries: ManagerWorklogEntry[]): ManagerWor
   )
 }
 
+export function managerWorklogPreview(projection?: ManagerWorklogsProjection) {
+  const worklogs = visibleManagerWorklogs(projection)
+  return {
+    entries: sortedWorklogEntries(worklogs.flatMap((worklog) => worklog.entries || [])),
+    entryCount: worklogs.reduce((total, worklog) => total + worklog.entry_count, 0),
+  }
+}
+
 export function commentsWithoutWorklogs(
   comments: DealTimelineComment[],
   worklogs: ManagerWorklog[],

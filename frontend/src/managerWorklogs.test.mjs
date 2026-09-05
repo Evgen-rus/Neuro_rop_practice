@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
   commentsWithoutWorklogs,
+  managerWorklogPreview,
   sortedWorklogEntries,
   toggleExpandedWorklog,
   visibleManagerWorklogs,
@@ -57,6 +58,19 @@ test('worklogs and their entries are sorted by internal recency', () => {
     visibleManagerWorklogs({ available: true, count: 2, items: [newer, changedLater] }).map((item) => item.comment_id),
     ['changed-later', 'newer'],
   )
+})
+
+test('compact preview puts newest worklog entries first', () => {
+  const older = worklog('older', '2026-09-03')
+  older.entries = [{ entry_date: '2026-09-03', date_raw: '03.09', text: 'older', year_inferred: true }]
+  older.entry_count = 1
+  const newer = worklog('newer', '2026-09-04')
+  newer.entries = [{ entry_date: '2026-09-04', date_raw: '04.09', text: 'newer', year_inferred: true }]
+  newer.entry_count = 1
+
+  const preview = managerWorklogPreview({ available: true, count: 2, items: [older, newer] })
+  assert.deepEqual(preview.entries.map((entry) => entry.text), ['newer', 'older'])
+  assert.equal(preview.entryCount, 2)
 })
 
 test('empty projection stays hidden and expansion state is independent', () => {

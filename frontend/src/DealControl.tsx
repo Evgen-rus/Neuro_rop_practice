@@ -111,6 +111,7 @@ import { LearningShadow } from './LearningShadow'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import {
   commentsWithoutWorklogs,
+  managerWorklogPreview,
   sortedWorklogEntries,
   toggleExpandedWorklog,
   visibleManagerWorklogs,
@@ -1332,6 +1333,8 @@ function TaskTable({
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
         const preview = deal.manager_comments_preview
+        const worklogPreview = managerWorklogPreview(deal.manager_worklogs)
+        const hasPreviewRows = Boolean(worklogPreview.entries.length || preview?.items?.length)
         return <article
           className={['dc-task-row', 'dc-rop-task-row', rowTone, reviewStripeClass(deal), selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')}
           style={{ gridTemplateColumns }}
@@ -1347,11 +1350,14 @@ function TaskTable({
             <BitrixDealIdLink dealId={deal.deal_id} />
           </div>
           <div className="dc-manager-comments-cell">
-            <div className={`dc-comment-preview ${preview?.items?.length ? 'has-comments' : ''}`}>
-              {preview?.available === false ? <span className="dc-comment-preview-empty">Комментарии недоступны</span> : preview?.items?.length ? <>
-                <div className="dc-comment-preview-text">{preview.items.map((item) => <p key={item.id}><b>{shortDateOnly(item.created_at)}</b> {item.text}</p>)}</div>
+            <div className={`dc-comment-preview ${hasPreviewRows ? 'has-comments' : ''}`}>
+              {!worklogPreview.entries.length && preview?.available === false ? <span className="dc-comment-preview-empty">Комментарии недоступны</span> : hasPreviewRows ? <>
+                <div className="dc-comment-preview-text">
+                  {worklogPreview.entries.slice(0, 3).map((entry, index) => <p className="worklog" key={`${entry.entry_date}:${index}`}><b>{shortDateOnly(entry.entry_date)}</b> {entry.text}</p>)}
+                  {preview?.items?.map((item) => <p key={item.id}><b>{shortDateOnly(item.created_at)}</b> {item.text}</p>)}
+                </div>
                 <div className="dc-comment-preview-footer">
-                  <span>{preview.count == null ? '—' : `${preview.count} записей`}</span>
+                  <span>{worklogPreview.entries.length ? `Журнал · ${worklogPreview.entryCount} записей` : preview?.count == null ? '—' : `${preview.count} записей`}</span>
                   <button type="button" onClick={(event) => { event.stopPropagation(); onOpenComments(deal.deal_id) }}>Показать полностью</button>
                 </div>
               </> : <span className="dc-comment-preview-empty">Комментариев нет</span>}
