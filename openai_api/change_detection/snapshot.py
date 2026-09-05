@@ -195,8 +195,15 @@ def normalize_deal_activities_only(bundle: dict[str, Any]) -> list[dict[str, Any
 
 def normalize_timeline_comments(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     comments: list[dict[str, Any]] = []
+    worklog_ids = {
+        str(item.get("comment_id") or "")
+        for item in bundle.get("manager_worklogs") or []
+        if isinstance(item, dict)
+    }
     for attempt in bundle.get("timeline_comments") or []:
         for item in result_items(attempt):
+            if str(item.get("ID") or "") in worklog_ids:
+                continue
             text = item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION")
             files = normalize_files(item.get("FILES"))
             comments.append(
@@ -212,6 +219,22 @@ def normalize_timeline_comments(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     return sorted(comments, key=lambda item: (item["created"], item["id"]))
+
+
+def normalize_manager_worklogs(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(
+        (
+            {
+                "id": str(item.get("comment_id") or ""),
+                "content_hash": str(item.get("content_hash") or ""),
+                "latest_entry_date": item.get("latest_entry_date"),
+                "entry_count": len(item.get("entries") or []),
+            }
+            for item in bundle.get("manager_worklogs") or []
+            if isinstance(item, dict) and item.get("comment_id")
+        ),
+        key=lambda item: item["id"],
+    )
 
 
 def normalize_product_rows(bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -398,6 +421,7 @@ def build_deal_snapshot(
         include_source_lead=True,
     )
     comments = normalize_timeline_comments(raw_bundle)
+    manager_worklogs = normalize_manager_worklogs(raw_bundle)
     product_rows = normalize_product_rows(raw_bundle)
     invoices = normalize_invoice_attempts(raw_bundle)
     file_refs = normalize_file_refs(raw_bundle)
@@ -438,6 +462,7 @@ def build_deal_snapshot(
         },
         "activities": activities,
         "timeline_comments": comments,
+        "manager_worklogs": manager_worklogs,
         "commercial": {
             "structured_sources_enabled": raw_bundle.get("structured_commercial_sources_enabled", True),
             "product_rows_hash": stable_hash(product_rows),
@@ -695,6 +720,21 @@ def compare_snapshots(previous: dict[str, Any] | None, current: dict[str, Any]) 
     if updated_comment_ids:
         changes.append("comment_updated")
         details["updated_comment_ids"] = updated_comment_ids
+
+    previous_worklogs = map_by_id(previous.get("manager_worklogs", []) or [])
+    current_worklogs = map_by_id(current.get("manager_worklogs", []) or [])
+    new_worklog_ids = sorted(set(current_worklogs) - set(previous_worklogs))
+    changed_worklog_ids = [
+        item_id
+        for item_id in sorted(set(previous_worklogs) & set(current_worklogs))
+        if previous_worklogs[item_id].get("content_hash") != current_worklogs[item_id].get("content_hash")
+    ]
+    if new_worklog_ids:
+        changes.append("manager_worklog_added")
+        details["manager_worklog_added_ids"] = new_worklog_ids
+    if changed_worklog_ids:
+        changes.append("manager_worklog_changed")
+        details["manager_worklog_changed_ids"] = changed_worklog_ids
 
     if current.get("operational_context_fingerprint") and current.get("operational_context_fingerprint") != previous.get("operational_context_fingerprint"):
         changes.append("operational_context_changed")

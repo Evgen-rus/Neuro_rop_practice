@@ -31,6 +31,7 @@ from bitrix.customer_history import (
 )
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.deals.communication_history import source_lead_id
+from bitrix.manager_worklog import parse_manager_worklogs
 from bitrix.workspace import (
     DEFAULT_AUDIO_MANIFEST_DIR,
     DEFAULT_LEAD_AUDIO_MANIFEST_DIR,
@@ -59,6 +60,7 @@ from storage.rop_db import (
     list_deal_control_task_history,
     list_deal_control_tasks,
     list_deal_daily_quality_states,
+    list_deal_manager_worklogs,
     list_entity_analysis_check_fields,
     list_latest_deal_manager_situation_reviews_for_reports,
     list_latest_ui_reports,
@@ -69,6 +71,7 @@ from storage.rop_db import (
     save_deal_control_bitrix_tasks,
     save_deal_control_communications_today,
     save_deal_control_manager_comments_preview,
+    save_deal_manager_worklog,
     save_deal_control_task_crm_fact,
     save_deal_control_task_crm_sync,
     save_deal_control_task_outcome,
@@ -402,6 +405,20 @@ def _comment_preview_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _comment_preview_with_worklogs(items: list[dict[str, Any]], *, count: int | None, synced_at: datetime) -> dict[str, Any]:
+    worklogs = parse_manager_worklogs(items)
+    worklog_ids = {str(item.get("comment_id") or "") for item in worklogs}
+    comments = [item for item in items if str(item.get("id") or "") not in worklog_ids]
+    comments.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+    return {
+        "available": True,
+        "count": count if count is not None else len(comments),
+        "items": comments[:2],
+        "synced_at": synced_at.isoformat(timespec="seconds"),
+        "_worklogs": worklogs,
+    }
+
+
 def _fetch_manager_comment_previews(
     client: Any,
     deal_ids: list[str],
@@ -440,14 +457,12 @@ def _fetch_manager_comment_previews(
             raw = (response.get("response") or {}).get("result")
             items = raw if isinstance(raw, list) else list(raw.values()) if isinstance(raw, dict) else []
             normalized = [_comment_preview_item(item) for item in items if isinstance(item, dict)]
-            normalized.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
             total = response.get("total")
-            empty[deal_id] = {
-                "available": True,
-                "count": int(total) if str(total or "").isdigit() else len(normalized),
-                "items": normalized[:2],
-                "synced_at": synced_at.isoformat(timespec="seconds"),
-            }
+            empty[deal_id] = _comment_preview_with_worklogs(
+                normalized,
+                count=int(total) if str(total or "").isdigit() else len(normalized),
+                synced_at=synced_at,
+            )
         return empty
 
     for deal_id, method, payload in requests:
@@ -458,13 +473,7 @@ def _fetch_manager_comment_previews(
         if not isinstance(response, dict) or not response.get("ok"):
             continue
         normalized = [_comment_preview_item(item) for item in response.get("items") or [] if isinstance(item, dict)]
-        normalized.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
-        empty[deal_id] = {
-            "available": True,
-            "count": len(normalized),
-            "items": normalized[:2],
-            "synced_at": synced_at.isoformat(timespec="seconds"),
-        }
+        empty[deal_id] = _comment_preview_with_worklogs(normalized, count=len(normalized), synced_at=synced_at)
     return empty
 
 
@@ -1053,15 +1062,27 @@ def refresh_deal_control(
         )
     for deal_item in deals:
         deal_id = str(deal_item["deal_id"])
+        preview = dict(comment_previews.get(deal_id) or {
+            "available": False,
+            "count": None,
+            "items": [],
+            "synced_at": current.isoformat(timespec="seconds"),
+        })
+        for worklog in preview.pop("_worklogs", []):
+            save_deal_manager_worklog(
+                db_path,
+                deal_id=deal_id,
+                worklog=worklog,
+                manager_id=deal_item.get("manager_id"),
+                detected_at=current.isoformat(timespec="seconds"),
+            )
+        known_worklogs = list_deal_manager_worklogs(db_path, deal_id=deal_id)
+        if preview.get("available") and isinstance(preview.get("count"), int):
+            preview["count"] = max(0, preview["count"] - len(known_worklogs))
         save_deal_control_manager_comments_preview(
             db_path,
             deal_id=deal_id,
-            preview=comment_previews.get(deal_id) or {
-                "available": False,
-                "count": None,
-                "items": [],
-                "synced_at": current.isoformat(timespec="seconds"),
-            },
+            preview=preview,
         )
         open_items, open_error = open_task_activities.get(("deal", deal_id), ([], "open tasks unavailable"))
         completed_items, completed_error = completed_today_activities.get(
@@ -1454,6 +1475,12 @@ def _project_deal_control_item(
         )
     else:
         deal["manager_situation"] = manager_situation
+    worklogs = list_deal_manager_worklogs(db_path, deal_id=str(deal["deal_id"]))
+    deal["manager_worklogs"] = {
+        "available": bool(worklogs) or bool((deal.get("manager_comments_preview") or {}).get("available")),
+        "count": len(worklogs),
+        "items": worklogs,
+    }
     deal["review"] = project_deal_review_card(deal, now=current)
     return deal
 

@@ -38,6 +38,8 @@ DEFAULT_WORKSPACE_ROOT = BASE_DIR / "reports" / "rop_assistant" / "deals"
 
 logger = get_logger(__file__)
 STAGE_HISTORY_DAY_LIMIT = 20
+MANAGER_WORKLOG_ENTRY_LIMIT = 12
+MANAGER_WORKLOG_CHAR_LIMIT = 4000
 
 
 def load_deal_report_module() -> Any:
@@ -437,12 +439,19 @@ def all_activities(bundle: dict[str, Any]) -> list[dict[str, Any]]:
 def timeline_comments(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     seen = set()
+    worklog_ids = {
+        str(item.get("comment_id") or "")
+        for item in bundle.get("manager_worklogs") or []
+        if isinstance(item, dict)
+    }
     for source, attempts in (
         ("deal", bundle.get("timeline_comments") or []),
         ("source_lead", (bundle.get("source_lead") or {}).get("timeline_comments") or []),
     ):
         for attempt in attempts:
             for item in result_items(attempt):
+                if source == "deal" and str(item.get("ID") or "") in worklog_ids:
+                    continue
                 identity = (
                     str(item.get("ID") or ""),
                     str(item.get("CREATED") or item.get("DATE_CREATE") or ""),
@@ -574,6 +583,36 @@ def comments_section(comments: list[dict[str, Any]], limit: int = 10) -> list[st
             f"comment_id={item.get('ID') or '-'} author={item.get('AUTHOR_ID') or '-'}: {text}"
         )
     return rows or ["- Значимые комментарии не найдены."]
+
+
+def manager_worklogs_section(worklogs: list[dict[str, Any]]) -> list[str]:
+    entries = [
+        entry
+        for worklog in worklogs
+        if isinstance(worklog, dict)
+        for entry in worklog.get("entries") or []
+        if isinstance(entry, dict) and entry.get("entry_date") and entry.get("text")
+    ]
+    entries.sort(key=lambda item: str(item.get("entry_date") or ""), reverse=True)
+    rows: list[str] = []
+    used = 0
+    for entry in entries[:MANAGER_WORKLOG_ENTRY_LIMIT]:
+        row = f"- {entry['entry_date']} — {clean_text(entry['text'], 700)}"
+        if rows and used + len(row) > MANAGER_WORKLOG_CHAR_LIMIT:
+            break
+        rows.append(row)
+        used += len(row)
+    if not rows:
+        return []
+    return [
+        "## Внутренний рабочий журнал менеджера",
+        "",
+        "ВАЖНО: это внутренние записи менеджера, а не дословные слова клиента. "
+        "При конфликте приоритет у звонка, письма или сообщения клиента.",
+        "",
+        *rows,
+        "",
+    ]
 
 
 def need_summary(comments: list[dict[str, Any]], emails: list[dict[str, Any]]) -> list[str]:
@@ -736,6 +775,7 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
     contacts = contact_rows(bundle)
     activities = all_activities(bundle)
     comments = timeline_comments(bundle)
+    worklogs = [item for item in bundle.get("manager_worklogs") or [] if isinstance(item, dict)]
     calls = [item for item in activities if activity_type(item) == "call"]
     emails = [item for item in activities if activity_type(item) == "email"]
     messages = [item for item in activities if activity_type(item) == "message"]
@@ -794,6 +834,7 @@ def build_llm_context(bundle: dict[str, Any], workspace_root: Path) -> str:
             "",
             next_step,
             "",
+            *manager_worklogs_section(worklogs),
             "## 4. Комментарии менеджера / ключевые факты",
             "",
             *comments_section(comments),

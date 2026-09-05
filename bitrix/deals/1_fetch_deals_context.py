@@ -21,12 +21,18 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.client import BitrixReadOnlyClient, as_list, get_env_required, load_json, save_json
 from bitrix.deals.communication_history import include_source_lead_communications
+from bitrix.manager_worklog import parse_manager_worklogs
 from bitrix.usage_trace import bitrix_trace_context
 from bitrix.context_sync import (
     ContextReadClient, atomic_json, dialog_delta, has_failed_source, retain_failed_sources,
     operational_context_fingerprint, retained_response, source_since, timeline_delta,
 )
-from storage.rop_db import DEFAULT_DB_PATH, get_crm_sync_state, put_crm_sync_state
+from storage.rop_db import (
+    DEFAULT_DB_PATH,
+    get_crm_sync_state,
+    put_crm_sync_state,
+    save_deal_manager_worklog,
+)
 from progress_events import retry_progress_callback
 from bitrix.customer_history import (
     DEFAULT_HISTORY_DAYS,
@@ -517,6 +523,7 @@ def fetch_deal_bundle(
         known=old_timeline.get("items"),
     )
     timeline_comments = [retained_response(timeline_comments[0], old_timeline, sync_started_at)]
+    manager_worklogs = parse_manager_worklogs(timeline_comments[0].get("items") or [])
     source_lead = fetch_source_lead_context(
         client,
         deal.get("LEAD_ID"),
@@ -567,6 +574,7 @@ def fetch_deal_bundle(
         "activities": activities,
         "activity_details": activity_details,
         "timeline_comments": timeline_comments,
+        "manager_worklogs": manager_worklogs,
         "source_lead": source_lead,
     }
 
@@ -599,6 +607,7 @@ def fetch_deal_bundle(
         "bitrix_open_task_ids": open_task_ids,
         "bitrix_task_chats": bitrix_task_chats,
         "timeline_comments": timeline_comments,
+        "manager_worklogs": manager_worklogs,
         "invoice_attempts": [],
         "file_and_recording_refs": extract_refs(references_source),
         "sync": {
@@ -687,6 +696,14 @@ def main() -> None:
         failed = has_failed_source(bundle) or has_failed_source(customer_history)
         bundle = retain_failed_sources(bundle, previous_bundle)
         customer_history = retain_failed_sources(customer_history, previous_customer_history)
+        for worklog in bundle.get("manager_worklogs") or []:
+            save_deal_manager_worklog(
+                args.db_path,
+                deal_id=str(deal_id),
+                worklog=worklog,
+                manager_id=deal.get("ASSIGNED_BY_ID"),
+                detected_at=bundle["generated_at"],
+            )
         bundle["operational_context_fingerprint"] = operational_context_fingerprint(bundle, customer_history)
         bundle["sync"]["retry_required"] = failed
         failures = int((previous_bundle or {}).get("sync", {}).get("failure_streak") or 0) + 1 if failed else 0

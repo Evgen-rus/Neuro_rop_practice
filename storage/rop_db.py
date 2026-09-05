@@ -100,6 +100,7 @@ MANAGER_TRAJECTORY_EVENT_TYPES = frozenset({
     "crm_activity_planned",
     "crm_task_history_observed",
     "crm_timeline_comment_observed",
+    "manager_worklog_changed",
     "crm_stage_history_observed",
     "crm_business_field_changed",
     "deal_stage_changed",
@@ -583,6 +584,24 @@ def _init_db_unlocked(db_path: str | Path) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS deal_manager_worklogs (
+                deal_id TEXT NOT NULL,
+                comment_id TEXT NOT NULL,
+                bitrix_created_at TEXT,
+                author_id TEXT,
+                text TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                parsed_json TEXT NOT NULL,
+                latest_entry_date TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_changed_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                PRIMARY KEY(deal_id, comment_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_deal_manager_worklogs_recency
+                ON deal_manager_worklogs(deal_id, latest_entry_date DESC, last_changed_at DESC);
 
             CREATE TABLE IF NOT EXISTS deal_daily_quality_state (
                 deal_id TEXT NOT NULL,
@@ -6579,6 +6598,116 @@ def save_deal_control_manager_comments_preview(
         row = conn.execute("SELECT * FROM deal_control_deals WHERE deal_id = ?", (str(deal_id),)).fetchone()
     result = _row_to_deal_control_deal(row)
     assert result is not None
+    return result
+
+
+def save_deal_manager_worklog(
+    db_path: str | Path,
+    *,
+    deal_id: str,
+    worklog: dict[str, Any],
+    manager_id: str | None = None,
+    detected_at: str | None = None,
+) -> dict[str, Any]:
+    """Save current parsed worklog state and report a real content edit once."""
+    comment_id = str(worklog.get("comment_id") or "").strip()
+    content_hash = str(worklog.get("content_hash") or "").strip()
+    if not str(deal_id).strip() or not comment_id or not content_hash:
+        raise ValueError("deal_id, comment_id и content_hash обязательны")
+    observed_at = detected_at or utcish_now()
+    init_db(db_path)
+    with connect(db_path) as conn:
+        previous = conn.execute(
+            "SELECT * FROM deal_manager_worklogs WHERE deal_id = ? AND comment_id = ?",
+            (str(deal_id), comment_id),
+        ).fetchone()
+        previous_hash = str(previous["content_hash"]) if previous is not None else None
+        changed = previous is not None and previous_hash != content_hash
+        first_seen_at = str(previous["first_seen_at"]) if previous is not None else observed_at
+        last_changed_at = observed_at if previous is None or changed else str(previous["last_changed_at"])
+        conn.execute(
+            """
+            INSERT INTO deal_manager_worklogs (
+                deal_id, comment_id, bitrix_created_at, author_id, text, content_hash,
+                parsed_json, latest_entry_date, first_seen_at, last_changed_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deal_id, comment_id) DO UPDATE SET
+                bitrix_created_at = excluded.bitrix_created_at,
+                author_id = excluded.author_id,
+                text = excluded.text,
+                content_hash = excluded.content_hash,
+                parsed_json = excluded.parsed_json,
+                latest_entry_date = excluded.latest_entry_date,
+                last_changed_at = excluded.last_changed_at,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (
+                str(deal_id),
+                comment_id,
+                worklog.get("bitrix_created_at"),
+                worklog.get("author_id"),
+                str(worklog.get("text") or ""),
+                content_hash,
+                dumps_json(worklog),
+                worklog.get("latest_entry_date"),
+                first_seen_at,
+                last_changed_at,
+                observed_at,
+            ),
+        )
+        if changed:
+            _insert_manager_trajectory_event(
+                conn,
+                entity_type="deal",
+                entity_id=str(deal_id),
+                manager_id=manager_id,
+                event_type="manager_worklog_changed",
+                source="bitrix_manager_worklog",
+                source_event_key=f"manager_worklog:{deal_id}:{comment_id}:{observed_at}:{content_hash}",
+                occurred_at=observed_at,
+                payload={
+                    "comment_id": comment_id,
+                    "latest_entry_date": worklog.get("latest_entry_date"),
+                    "previous_hash": previous_hash,
+                    "current_hash": content_hash,
+                    "detected_at": observed_at,
+                },
+            )
+        row = conn.execute(
+            "SELECT * FROM deal_manager_worklogs WHERE deal_id = ? AND comment_id = ?",
+            (str(deal_id), comment_id),
+        ).fetchone()
+    assert row is not None
+    result = dict(row)
+    result["parsed"] = loads_json(result.pop("parsed_json"), {})
+    result["created"] = previous is None
+    result["changed"] = changed
+    result["previous_hash"] = previous_hash
+    return result
+
+
+def list_deal_manager_worklogs(db_path: str | Path, *, deal_id: str) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM deal_manager_worklogs
+            WHERE deal_id = ?
+            ORDER BY COALESCE(latest_entry_date, '') DESC, last_changed_at DESC,
+                     COALESCE(bitrix_created_at, '') DESC, comment_id DESC
+            """,
+            (str(deal_id),),
+        ).fetchall()
+    result = []
+    for row in rows:
+        value = dict(row)
+        parsed = loads_json(value.pop("parsed_json"), {})
+        result.append({
+            **(parsed if isinstance(parsed, dict) else {}),
+            "first_seen_at": value["first_seen_at"],
+            "last_changed_at": value["last_changed_at"],
+            "last_seen_at": value["last_seen_at"],
+        })
     return result
 
 
