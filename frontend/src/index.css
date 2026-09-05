@@ -6930,6 +6930,18 @@ ul.facts.bad li:before {
 .dc-manager-voice-button:disabled,
 .dc-manager-voice-cancel:disabled { cursor: not-allowed; opacity: .55; }
 .dc-manager-voice-error { flex-basis: 100%; color: #b82f2f; font-size: 10px; line-height: 1.4; }
+.dc-manager-audio-upload { display: inline-flex; width: fit-content; cursor: pointer; color: #366da6; font-size: 11px; font-weight: 700; }
+.dc-manager-audio-upload.disabled { cursor: wait; opacity: .55; }
+.dc-manager-audio-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.dc-manager-audio-attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 9px 10px; border: 1px solid #cbdced; border-radius: 9px; background: #f5f9fd; }
+.dc-manager-audio-attachment > div { display: grid; min-width: 0; gap: 2px; }
+.dc-manager-audio-attachment strong { overflow: hidden; color: #294d70; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.dc-manager-audio-attachment small { color: #657b91; font-size: 10px; }
+.dc-manager-audio-attachment > button { grid-column: 2; grid-row: 1; border: 0; background: none; color: #708397; cursor: pointer; font-size: 18px; }
+.dc-manager-audio-attachment details { grid-column: 1 / -1; font-size: 10px; }
+.dc-manager-audio-attachment summary { width: fit-content; cursor: pointer; color: #356fa9; }
+.dc-manager-audio-attachment details p { max-height: 180px; overflow: auto; margin: 6px 0 0; padding: 8px; border-radius: 6px; background: #fff; color: #42576c; white-space: pre-wrap; }
+.dc-manager-audio-attachment.error { border-color: #efb8b8; background: #fff5f5; }
 .dc-manager-field-footer { display: flex; justify-content: space-between; gap: 8px; min-height: 16px; }
 .dc-manager-error { margin: 8px 0 0; color: #b82f2f; font-size: 11px; line-height: 1.45; }
 

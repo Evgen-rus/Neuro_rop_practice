@@ -351,6 +351,7 @@ class DealManagerSituationJob:
     job_id: str
     deal_id: str
     context: str
+    manual_audio_attachment: dict[str, Any] | None = None
     status: str = "queued"
     stage: str = "queued"
     detail: str = "Подготавливаем уточнение ситуации"
@@ -365,6 +366,18 @@ _SITUATION_JOBS: dict[str, DealManagerSituationJob] = {}
 _SITUATION_LOCK = threading.Lock()
 
 
+def _public_situation_job(job: DealManagerSituationJob) -> dict[str, Any]:
+    payload = asdict(job)
+    attachment = payload.pop("manual_audio_attachment", None)
+    if isinstance(attachment, dict):
+        payload["manual_audio"] = {
+            "source_kind": "manual_audio",
+            "provisional": True,
+            "file_name": attachment.get("file_name"),
+        }
+    return payload
+
+
 def _touch(job: DealManagerSituationJob, *, stage: str, detail: str, percent: int) -> None:
     with _SITUATION_LOCK:
         job.stage = stage
@@ -376,7 +389,7 @@ def _touch(job: DealManagerSituationJob, *, stage: str, detail: str, percent: in
 def get_situation_job(job_id: str) -> dict[str, Any] | None:
     with _SITUATION_LOCK:
         job = _SITUATION_JOBS.get(str(job_id))
-        return asdict(job) if job else None
+        return _public_situation_job(job) if job else None
 
 
 def _run_situation_job(job_id: str, db_path: str | Path) -> None:
@@ -398,6 +411,7 @@ def _run_situation_job(job_id: str, db_path: str | Path) -> None:
             current_bitrix_task=context["current_bitrix_task"],
             previous_manager_projection=previous,
             manager_context=job.context,
+            manual_audio_attachment=job.manual_audio_attachment,
         )
         _touch(job, stage="saving", detail="Сохраняем только полный проверенный результат", percent=88)
         saved = _storage_call(
@@ -419,6 +433,9 @@ def _run_situation_job(job_id: str, db_path: str | Path) -> None:
             job.status = "error"
             job.error = public_situation_error(error)
         _touch(job, stage="error", detail="Не удалось уточнить ситуацию", percent=100)
+    finally:
+        with _SITUATION_LOCK:
+            job.manual_audio_attachment = None
 
 
 def start_situation_refine_job(
@@ -427,12 +444,16 @@ def start_situation_refine_job(
     deal_id: str,
     context: str,
     confirm_paid: bool,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not confirm_paid:
         raise ValueError("Подтвердите платный AI-вызов для уточнения ситуации")
     normalized_context = str(context or "").strip()
-    if not 1 <= len(normalized_context) <= 4000:
-        raise ValueError("Контекст менеджера должен содержать от 1 до 4000 знаков")
+    transcript = str((manual_audio_attachment or {}).get("transcript") or "").strip()
+    if not normalized_context and not transcript:
+        raise ValueError("Добавьте текст или готовую расшифровку аудио")
+    if len(normalized_context) > 4000:
+        raise ValueError("Контекст менеджера должен содержать не более 4000 знаков")
     loaded = load_manager_screen_context(
         db_path,
         str(deal_id),
@@ -448,15 +469,16 @@ def start_situation_refine_job(
             None,
         )
         if existing is not None:
-            return asdict(existing)
+            return _public_situation_job(existing)
         job_id = uuid.uuid4().hex
         job = DealManagerSituationJob(
             job_id=job_id,
             deal_id=str(deal_id),
             context=normalized_context,
+            manual_audio_attachment=manual_audio_attachment,
             situation_id=loaded["situation_id"],
         )
         _SITUATION_JOBS[job_id] = job
     thread = threading.Thread(target=_run_situation_job, args=(job_id, db_path), daemon=True)
     thread.start()
-    return asdict(job)
+    return _public_situation_job(job)

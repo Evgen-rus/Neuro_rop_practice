@@ -5,6 +5,7 @@
 import asyncio
 import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -66,6 +67,7 @@ async def transcribe_file_async(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     entity_type: str | None = None,
     entity_id: str | None = None,
+    log_source_file: bool = True,
 ) -> str:
     """
     Асинхронно транскрибирует аудиофайл.
@@ -76,20 +78,21 @@ async def transcribe_file_async(
     в итоговом тексте порядок сохраняется.
     """
     logger.info(f"Открываю файл для транскрибации: {filepath}")
-    log_model_file_payload(
-        logger,
-        title="source audio selected for transcription",
-        model=TRANSCRIPTION_MODEL,
-        path=filepath,
-        metadata={"stage": "before_ffmpeg_conversion"},
-        preview_text=False,
-    )
+    if log_source_file:
+        log_model_file_payload(
+            logger,
+            title="source audio selected for transcription",
+            model=TRANSCRIPTION_MODEL,
+            path=filepath,
+            metadata={"stage": "before_ffmpeg_conversion"},
+            preview_text=False,
+        )
 
     base_name = os.path.splitext(os.path.basename(filepath))[0]
 
     # 1. Конвертируем исходный файл в WAV (16 кГц, моно) с помощью ffmpeg
     #    Это нужно, чтобы дальше удобно резать аудио по сэмплам через soundfile.
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=PROJECT_ROOT) as tmp_wav:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
         tmp_wav_path = tmp_wav.name
 
     ffmpeg_cmd = [
@@ -108,151 +111,148 @@ async def transcribe_file_async(
 
     logger.info(f"Конвертирую аудио в WAV через ffmpeg: {' '.join(ffmpeg_cmd)}")
     try:
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Ошибка при конвертации аудио через ffmpeg: {e}")
-        raise RuntimeError(
-            "Не удалось конвертировать аудио через ffmpeg. "
-            "Убедитесь, что ffmpeg установлен и доступен в PATH."
-        ) from e
+        try:
+            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Ошибка при конвертации аудио через ffmpeg: {e}")
+            raise RuntimeError(
+                "Не удалось конвертировать аудио через ffmpeg. "
+                "Убедитесь, что ffmpeg установлен и доступен в PATH."
+            ) from e
 
-    try:
-        # 2. Читаем сконвертированный WAV через soundfile
-        data, samplerate = sf.read(tmp_wav_path, dtype="int16")
-    except Exception as e:
-        logger.error(f"Ошибка при чтении сконвертированного WAV: {e}")
-        # В любом случае удалим временный файл
+        try:
+            with sf.SoundFile(tmp_wav_path) as audio_file:
+                samplerate = int(audio_file.samplerate)
+                total_samples = int(audio_file.frames)
+        except Exception as e:
+            logger.error(f"Ошибка при чтении сконвертированного WAV: {e}")
+            raise
+
+        duration_sec = total_samples / float(samplerate)
+        logger.info(f"Длительность аудио после конвертации: {duration_sec:.2f} секунд")
+
+        samples_per_chunk = SAFE_CHUNK_SECONDS * samplerate
+        overlap_samples = min(
+            max(0, int(chunk_overlap_seconds * samplerate)),
+            max(0, samples_per_chunk - 1),
+        )
+        chunk_stride = samples_per_chunk - overlap_samples
+
+        if duration_sec <= SAFE_CHUNK_SECONDS:
+            logger.info("Аудио короче безопасного лимита, отправляю одним куском")
+
+        texts: list[tuple[int, str]] = []
+
+        # Шаг меньше размера сегмента ровно на overlap: так стык не теряется,
+        # включая длительности около точного кратного SAFE_CHUNK_SECONDS.
+        total_chunks = max(1, 1 + math.ceil(max(0, total_samples - samples_per_chunk) / chunk_stride))
+        semaphore = asyncio.Semaphore(max(1, max_segment_concurrency))
+
+        def read_chunk(start_sample: int, end_sample: int) -> np.ndarray:
+            with sf.SoundFile(tmp_wav_path) as audio_file:
+                audio_file.seek(start_sample)
+                return np.asarray(audio_file.read(end_sample - start_sample, dtype="int16"))
+
+        async def process_chunk(idx: int, start_sample: int, end_sample: int) -> None:
+            async with semaphore:
+                chunk_data = await asyncio.to_thread(read_chunk, start_sample, end_sample)
+                if chunk_data.size == 0:
+                    logger.warning(f"Сегмент {idx + 1} пустой, пропускаю")
+                    return
+
+                chunk_duration_sec = (end_sample - start_sample) / float(samplerate)
+                start_time_sec = start_sample / float(samplerate)
+                end_time_sec = end_sample / float(samplerate)
+
+                logger.info(
+                    f"Готовлю сегмент {idx + 1}/{total_chunks}: "
+                    f"{start_time_sec:.1f}–{end_time_sec:.1f} сек "
+                    f"({chunk_duration_sec:.1f} сек)"
+                )
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "status": "segment",
+                            "current": idx + 1,
+                            "total": total_chunks,
+                            "attempt": 1,
+                            "max_attempts": 3,
+                        }
+                    )
+
+                # OpenAI получает только один безопасный сегмент в памяти.
+                buffer = io.BytesIO()
+                sf.write(buffer, chunk_data, samplerate, format="WAV", subtype="PCM_16")
+                wav_bytes = buffer.getvalue()
+
+                if not wav_bytes:
+                    logger.warning(f"Сегмент {idx + 1} пустой после записи в WAV, пропускаю")
+                    return
+
+                segment_file_name = f"{base_name}_part_{idx + 1}.wav"
+                logger.info(
+                    f"Отправляю сегмент {idx + 1}/{total_chunks} в модель: {segment_file_name}"
+                )
+
+                try:
+                    segment_attempt = 1
+
+                    def segment_retry_callback(event: dict[str, Any]) -> None:
+                        nonlocal segment_attempt
+                        if isinstance(event.get("attempt"), int):
+                            segment_attempt = max(segment_attempt, int(event["attempt"]))
+                        if progress_callback is not None:
+                            progress_callback({**event, "current": idx + 1, "total": total_chunks})
+
+                    segment_text = await transcribe_voice(
+                        wav_bytes,
+                        file_name=segment_file_name,
+                        language="ru",
+                        retry_callback=segment_retry_callback,
+                    )
+                    _record_transcription_spend(
+                        duration_seconds=chunk_duration_sec,
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        attempt=segment_attempt,
+                    )
+                except Exception as e:  # noqa: BLE001 — дожидаемся остальных сегментов
+                    logger.error(f"Ошибка при транскрибации сегмента {idx + 1}: {e}")
+                    return
+
+                header = (
+                    f"[Сегмент {idx + 1}/{total_chunks} "
+                    f"({start_time_sec:.1f}–{end_time_sec:.1f} сек)]"
+                )
+                texts.append((idx, f"{header}\n{segment_text}"))
+
+        tasks = []
+        for idx in range(total_chunks):
+            start_sample = idx * chunk_stride
+            end_sample = min(start_sample + samples_per_chunk, total_samples)
+            tasks.append(asyncio.create_task(process_chunk(idx, start_sample, end_sample)))
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        if len(texts) != total_chunks:
+            logger.error(
+                "Получено сегментов: %s из %s. Некоторых сегментов нет в ответе.",
+                len(texts),
+                total_chunks,
+            )
+            raise ValueError("Не удалось получить текст всех сегментов")
+
+        if not texts:
+            raise ValueError("Не удалось получить текст ни из одного сегмента")
+
+        texts.sort(key=lambda item: item[0])
+        return "\n\n".join([item[1] for item in texts])
+    finally:
         try:
             os.remove(tmp_wav_path)
-        except Exception:
+        except OSError:
             pass
-        raise
-
-    # Удаляем временный файл после чтения, он больше не нужен
-    try:
-        os.remove(tmp_wav_path)
-    except Exception:
-        # Не критично, если удалить не удалось
-        pass
-
-    # Приводим данные к numpy-массиву (на случай, если это уже не ndarray)
-    data = np.asarray(data)
-
-    total_samples = data.shape[0]
-    duration_sec = total_samples / float(samplerate)
-    logger.info(f"Длительность аудио после конвертации: {duration_sec:.2f} секунд")
-
-    samples_per_chunk = SAFE_CHUNK_SECONDS * samplerate
-    overlap_samples = max(0, int(chunk_overlap_seconds * samplerate))
-
-    if duration_sec <= SAFE_CHUNK_SECONDS:
-        logger.info("Аудио короче безопасного лимита, отправляю одним куском")
-
-    texts: list[tuple[int, str]] = []
-
-    # Считаем количество сегментов
-    total_chunks = max(1, (total_samples + samples_per_chunk - 1) // samples_per_chunk)
-    semaphore = asyncio.Semaphore(max(1, max_segment_concurrency))
-
-    async def process_chunk(idx: int, start_sample: int, end_sample: int) -> None:
-        chunk_data = data[start_sample:end_sample]
-        if chunk_data.size == 0:
-            logger.warning(f"Сегмент {idx + 1} пустой, пропускаю")
-            return
-
-        chunk_duration_sec = (end_sample - start_sample) / float(samplerate)
-        start_time_sec = start_sample / float(samplerate)
-        end_time_sec = end_sample / float(samplerate)
-
-        logger.info(
-            f"Готовлю сегмент {idx + 1}/{total_chunks}: "
-            f"{start_time_sec:.1f}–{end_time_sec:.1f} сек "
-            f"({chunk_duration_sec:.1f} сек)"
-        )
-        if progress_callback is not None:
-            progress_callback(
-                {
-                    "status": "segment",
-                    "current": idx + 1,
-                    "total": total_chunks,
-                    "attempt": 1,
-                    "max_attempts": 3,
-                }
-            )
-
-        # 3. Пишем сегмент во временный WAV в память (байтовый поток)
-        buffer = io.BytesIO()
-        sf.write(buffer, chunk_data, samplerate, format="WAV", subtype="PCM_16")
-        buffer.seek(0)
-        wav_bytes = buffer.read()
-
-        if not wav_bytes:
-            logger.warning(f"Сегмент {idx + 1} пустой после записи в WAV, пропускаю")
-            return
-
-        segment_file_name = f"{base_name}_part_{idx + 1}.wav"
-        logger.info(
-            f"Отправляю сегмент {idx + 1}/{total_chunks} в модель: {segment_file_name}"
-        )
-
-        try:
-            async with semaphore:
-                segment_attempt = 1
-
-                def segment_retry_callback(event: dict[str, Any]) -> None:
-                    nonlocal segment_attempt
-                    if isinstance(event.get("attempt"), int):
-                        segment_attempt = max(segment_attempt, int(event["attempt"]))
-                    if progress_callback is not None:
-                        progress_callback({**event, "current": idx + 1, "total": total_chunks})
-
-                segment_text = await transcribe_voice(
-                    wav_bytes,
-                    file_name=segment_file_name,
-                    language="ru",
-                    retry_callback=segment_retry_callback,
-                )
-            _record_transcription_spend(
-                duration_seconds=chunk_duration_sec,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                attempt=segment_attempt,
-            )
-        except Exception as e:  # noqa: BLE001 — хотим залогировать и продолжить другие сегменты
-            logger.error(f"Ошибка при транскрибации сегмента {idx + 1}: {e}")
-            return
-
-        header = (
-            f"[Сегмент {idx + 1}/{total_chunks} "
-            f"({start_time_sec:.1f}–{end_time_sec:.1f} сек)]"
-        )
-        texts.append((idx, f"{header}\n{segment_text}"))
-
-    tasks = []
-    for idx in range(total_chunks):
-        start_sample = max(0, idx * samples_per_chunk - overlap_samples if idx > 0 else 0)
-        end_sample = min(start_sample + samples_per_chunk, total_samples)
-        tasks.append(asyncio.create_task(process_chunk(idx, start_sample, end_sample)))
-
-    # Дожидаемся всех сегментов
-    if tasks:
-        await asyncio.gather(*tasks)
-
-    if len(texts) != total_chunks:
-        logger.error(
-            "Получено сегментов: %s из %s. Некоторых сегментов нет в ответе.",
-            len(texts),
-            total_chunks,
-        )
-        raise ValueError("Не удалось получить текст всех сегментов")
-
-    if not texts:
-        raise ValueError("Не удалось получить текст ни из одного сегмента")
-
-    # Сохраняем порядок согласно исходной нумерации сегментов
-    texts.sort(key=lambda item: item[0])
-    full_text = "\n\n".join([item[1] for item in texts])
-    return full_text
 
 
 def get_audio_duration_seconds(filepath: str | Path) -> float | None:

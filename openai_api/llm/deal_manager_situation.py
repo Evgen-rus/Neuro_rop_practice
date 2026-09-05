@@ -342,6 +342,7 @@ def build_situation_prompt(
     current_bitrix_task: dict[str, Any] | None,
     previous_manager_projection: dict[str, Any],
     manager_context: str,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> str:
     context = str(manager_context or "").strip()[:MAX_MANAGER_CONTEXT_CHARS]
     return "\n\n".join(
@@ -357,6 +358,9 @@ def build_situation_prompt(
             "но не должен превращать слова менеджера в подтверждённую новую позицию клиента без client evidence.\n"
             "- Если контекст менеджера расходится с анализом, явно отрази неопределённость и вынеси вопрос в facts_to_clarify.\n"
             "- Не объявляй звонок контактом и не утверждай, что сделка продвинулась без подтверждённого клиентского факта.\n"
+            "- MANUAL_AUDIO_CONTEXT приложен пользователем вручную, может позже появиться в CRM и пока не подтверждён CRM. "
+            "Используй содержание как provisional context, но не считай его новым звонком, KPI, CRM-коммуникацией или доказанным движением сделки. "
+            "При конфликте приоритет имеет CRM evidence.\n"
             "- client_communication_profile используй только когда status tentative или supported: адаптируй тон и структуру, но не меняй факты, цель контакта или следующий шаг. При insufficient_evidence не угадывай DISC.\n"
             "- Не повторяй уже известные факты как вопросы. Основной текст и сценарии пиши без плейсхолдеров.\n"
             "- Верни только полный объект по JSON-схеме. Пиши спокойно, прямо и по-русски.",
@@ -365,6 +369,7 @@ def build_situation_prompt(
             _section("CURRENT_BITRIX_TASK", current_bitrix_task),
             _section("PREVIOUS_MANAGER_PROJECTION", previous_manager_projection),
             _section("NEW_MANAGER_CONTEXT", context),
+            _section("MANUAL_AUDIO_CONTEXT", manual_audio_attachment),
         ]
     )
 
@@ -376,6 +381,7 @@ def generate_deal_manager_situation(
     current_bitrix_task: dict[str, Any] | None,
     previous_manager_projection: dict[str, Any],
     manager_context: str,
+    manual_audio_attachment: dict[str, Any] | None = None,
     model: str = MANAGER_MODEL,
     reasoning_effort: str = MANAGER_REASONING_EFFORT,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -385,6 +391,7 @@ def generate_deal_manager_situation(
         current_bitrix_task=current_bitrix_task,
         previous_manager_projection=previous_manager_projection,
         manager_context=manager_context,
+        manual_audio_attachment=manual_audio_attachment,
     )
     result, metadata = call_structured_output_json(
         prompt,

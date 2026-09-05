@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { canRefineManagerSituation, readyManagerAudioJobId } from './managerAudio'
 import {
   ApiError,
   confirmManagerSituation,
@@ -16,6 +17,7 @@ import {
   fetchManagerCompanionJob,
   fetchManagerQuickHelpJob,
   fetchManagerSituationJob,
+  fetchManagerUploadedAudioJob,
   fetchReportMarkdown,
   fetchReportAnalysisTrace,
   fetchJob,
@@ -31,6 +33,7 @@ import {
   startManagerSituationRefinement,
   syncDealControl,
   transcribeManagerVoice,
+  transcribeManagerUploadedAudio,
   updateDealControlDeal,
   updateDealContextLeverPriority,
   type DealControlDashboard,
@@ -64,6 +67,7 @@ import {
   type ManagerDiscProfile,
   type ManagerSituationJob,
   type ManagerSituationState,
+  type ManagerUploadedAudioJob,
   type ManagerWorklog,
   type ReportAnalysisTrace,
   isCallScriptContent,
@@ -1650,6 +1654,7 @@ function DealDetail(props: {
   const [situationError, setSituationError] = useState('')
   const [situationJob, setSituationJob] = useState<ManagerSituationJob | null>(null)
   const [situationConfirming, setSituationConfirming] = useState(false)
+  const [situationAudioJob, setSituationAudioJob] = useState<ManagerUploadedAudioJob | null>(null)
   const pendingSituationContextRef = useRef('')
   const [savedContextForBitrix, setSavedContextForBitrix] = useState('')
   const [contextCopyFailed, setContextCopyFailed] = useState(false)
@@ -1695,6 +1700,7 @@ function DealDetail(props: {
     setSituationError('')
     setSituationJob(null)
     setSituationConfirming(false)
+    setSituationAudioJob(null)
     setQuickHelpDraft(readDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId))
     setQuickHelpError('')
     setQuickHelpJob(null)
@@ -1756,6 +1762,7 @@ function DealDetail(props: {
     setSituationModalOpen(false)
     setSituationContext('')
     setSituationError('')
+    setSituationAudioJob(null)
   }, [])
   useEffect(() => {
     if (!managerScreen || !situationJobId || !['queued', 'running'].includes(situationJobStatus || '')) return
@@ -1786,6 +1793,29 @@ function DealDetail(props: {
       window.clearInterval(timer)
     }
   }, [activeDealId, managerScreen, markContextSaved, reloadDetail, situationJobId, situationJobStatus])
+
+  const situationAudioJobId = situationAudioJob?.job_id
+  const situationAudioJobStatus = situationAudioJob?.status
+  useEffect(() => {
+    if (!situationAudioJobId || !['queued', 'running'].includes(situationAudioJobStatus || '')) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const next = await fetchManagerUploadedAudioJob(situationAudioJobId)
+        if (!cancelled && next.deal_id === activeDealId) setSituationAudioJob(next)
+      } catch (reason) {
+        if (!cancelled) setSituationAudioJob((current) => current ? {
+          ...current,
+          status: 'error',
+          stage: 'error',
+          error: reason instanceof Error ? reason.message : String(reason),
+        } : current)
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 1200)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [activeDealId, situationAudioJobId, situationAudioJobStatus])
 
   const quickHelpJobId = quickHelpJob?.job_id
   const quickHelpJobStatus = quickHelpJob?.status
@@ -1850,23 +1880,47 @@ function DealDetail(props: {
   async function refineSituation() {
     if (!props.deal) return
     const context = situationContext.trim()
-    if (context.length < 1 || context.length > 4000) {
-      setSituationError('Добавь контекст от 1 до 4000 символов.')
+    const readyAudioJobId = readyManagerAudioJobId(situationAudioJob)
+    if (!canRefineManagerSituation(context, situationAudioJob) || context.length > 4000) {
+      setSituationError('Добавь текст или дождись расшифровки аудио. Текст — не более 4000 символов.')
       return
     }
     if (situationJob && ['queued', 'running'].includes(situationJob.status)) return
     setSituationError('')
     pendingSituationContextRef.current = context
     try {
-      const started = await startManagerSituationRefinement(props.deal.deal_id, context, true)
+      const started = await startManagerSituationRefinement(
+        props.deal.deal_id,
+        context,
+        true,
+        readyAudioJobId,
+      )
       setSituationJob(started)
       if (started.status === 'error') setSituationError(started.error || 'Не удалось пересобрать текущую ситуацию')
       if (started.status === 'done') {
         markContextSaved(context)
+        setSituationAudioJob(null)
         await props.onReload(props.deal.deal_id)
       }
     } catch (reason) {
       setSituationError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  async function uploadSituationAudio(file: File) {
+    if (!props.deal) return
+    setSituationError('')
+    setSituationAudioJob({
+      job_id: '', deal_id: props.deal.deal_id, file_name: file.name, size_bytes: file.size,
+      duration_seconds: 0, status: 'uploading', stage: 'uploading', detail: 'Загружаем…', current: 0, total: 0,
+    })
+    try {
+      setSituationAudioJob(await transcribeManagerUploadedAudio(props.deal.deal_id, file, true))
+    } catch (reason) {
+      setSituationAudioJob((current) => current ? {
+        ...current, status: 'error', stage: 'error',
+        error: reason instanceof Error ? reason.message : String(reason),
+      } : current)
     }
   }
 
@@ -2070,6 +2124,7 @@ function DealDetail(props: {
       situationError={situationError}
       situationJob={situationJob}
       situationConfirming={situationConfirming}
+      situationAudioJob={situationAudioJob}
       savedContextForBitrix={savedContextForBitrix}
       contextCopyFailed={contextCopyFailed}
       contextPersistUsed={contextPersistUsed}
@@ -2097,6 +2152,8 @@ function DealDetail(props: {
       onCompleteCommunication={(quickHelpId) => void completeAssistantCommunication(quickHelpId)}
       onCopy={props.onCopy}
       onTranscribe={transcribeVoice}
+      onUploadAudio={uploadSituationAudio}
+      onRemoveAudio={() => setSituationAudioJob(null)}
       asked={askedByDeal[deal.deal_id] || [false, false]}
       onToggleAsked={toggleAsked}
     /> : <RopDealScreen
@@ -2119,6 +2176,7 @@ type ManagerDealScreenProps = {
   situationError: string
   situationJob: ManagerSituationJob | null
   situationConfirming: boolean
+  situationAudioJob: ManagerUploadedAudioJob | null
   savedContextForBitrix: string
   contextCopyFailed: boolean
   contextPersistUsed: boolean
@@ -2146,6 +2204,8 @@ type ManagerDealScreenProps = {
   onCompleteCommunication: (quickHelpId: number) => void
   onCopy: (text: string, label: string) => Promise<void>
   onTranscribe: (audio: Blob) => Promise<string>
+  onUploadAudio: (audio: File) => Promise<void>
+  onRemoveAudio: () => void
   asked: [boolean, boolean]
   onToggleAsked: (index: 0 | 1) => void
 }
@@ -2161,6 +2221,7 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       error={props.situationError}
       job={props.situationJob}
       confirming={props.situationConfirming}
+      audioJob={props.situationAudioJob}
       savedContext={props.savedContextForBitrix}
       copyFailed={props.contextCopyFailed}
       persistUsed={props.contextPersistUsed}
@@ -2172,6 +2233,8 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
       onPersistToBitrix={props.onPersistContextToBitrix}
       onCopySavedContext={props.onCopySavedContext}
       onTranscribe={props.onTranscribe}
+      onUploadAudio={props.onUploadAudio}
+      onRemoveAudio={props.onRemoveAudio}
     /> : null}
     {confirmed ? <>
       <ManagerQuickHelp
@@ -2245,6 +2308,7 @@ function ManagerSituationActions(props: {
   error: string
   job: ManagerSituationJob | null
   confirming: boolean
+  audioJob: ManagerUploadedAudioJob | null
   savedContext: string
   copyFailed: boolean
   persistUsed: boolean
@@ -2256,9 +2320,12 @@ function ManagerSituationActions(props: {
   onPersistToBitrix: () => void
   onCopySavedContext: () => void
   onTranscribe: (audio: Blob) => Promise<string>
+  onUploadAudio: (audio: File) => Promise<void>
+  onRemoveAudio: () => void
 }) {
   const confirmed = managerSituationIsConfirmed(props.situation)
   const busy = Boolean(props.job && ['queued', 'running'].includes(props.job.status))
+  const audioBusy = Boolean(props.audioJob && ['uploading', 'queued', 'running'].includes(props.audioJob.status))
   const confirming = props.confirming
   const needsReview = props.situation.is_current && props.situation.state === 'refined'
   const stateLabel = confirmed
@@ -2340,9 +2407,27 @@ function ManagerSituationActions(props: {
             aria-label="Контекст менеджера"
           />
           <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onContext(appendVoiceText(props.context, text))} />
+          <label className={`dc-manager-audio-upload${audioBusy ? ' disabled' : ''}`}>
+            <span>🎧 Прикрепить запись разговора</span>
+            <input
+              type="file"
+              accept="audio/aac,audio/flac,audio/mp4,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,.m4a"
+              disabled={busy || audioBusy}
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file) void props.onUploadAudio(file)
+              }}
+            />
+          </label>
+          {props.audioJob ? <div className={`dc-manager-audio-attachment ${props.audioJob.status}`} role="status" aria-live="polite">
+            <div><strong>🎧 {props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.status === 'done' ? ' ✓' : ''}</small></div>
+            {props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}
+            <button type="button" onClick={props.onRemoveAudio} disabled={audioBusy} aria-label="Убрать аудиозапись">×</button>
+          </div> : null}
         </div>
         <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
-        <div><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || props.context.trim().length < 1 || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
+        <div><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || audioBusy || !canRefineManagerSituation(props.context, props.audioJob) || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
       </section>
     </div>, document.body) : null}
   </>

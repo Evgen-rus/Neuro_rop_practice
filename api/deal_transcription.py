@@ -22,17 +22,30 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
+import re
 import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 
 from openai_api.audio.audio_handler import transcribe_voice
+from openai_api.audio.transcribe_core import get_audio_duration_seconds, transcribe_file_async
 from openai_api.spend_diary import record_transcription_spend
 
 
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_AUDIO_DURATION_SECONDS = 5 * 60
 READ_CHUNK_BYTES = 1024 * 1024
+MAX_UPLOADED_AUDIO_BYTES = 90 * 1024 * 1024
+MAX_UPLOADED_AUDIO_DURATION_SECONDS = 90 * 60
 
 _CONTENT_TYPE_SUFFIXES = {
     "audio/aac": ".aac",
@@ -225,3 +238,208 @@ async def transcribe_manager_voice(
         return {"text": str(text)}
     finally:
         await audio.close()
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _safe_upload_name(value: str | None, suffix: str) -> str:
+    name = str(value or "recording").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return (name or f"recording{suffix}")[:160]
+
+
+@dataclass
+class UploadedAudioJob:
+    job_id: str
+    deal_id: str
+    file_name: str
+    temp_path: str
+    size_bytes: int
+    duration_seconds: float
+    status: str = "queued"
+    stage: str = "queued"
+    detail: str = "Аудио загружено"
+    current: int = 0
+    total: int = 0
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+    transcript: str | None = None
+    error: str | None = None
+    expires_at: float = field(default_factory=lambda: time.time() + 3600)
+
+
+_UPLOADED_AUDIO_JOBS: dict[str, UploadedAudioJob] = {}
+_UPLOADED_AUDIO_LOCK = threading.Lock()
+_UPLOADED_AUDIO_DEALS: set[str] = set()
+
+
+def _public_uploaded_audio_job(job: UploadedAudioJob) -> dict[str, Any]:
+    payload = asdict(job)
+    payload.pop("temp_path", None)
+    payload.pop("expires_at", None)
+    transcript = payload.pop("transcript", None)
+    if job.status == "done" and transcript:
+        payload["attachment"] = {
+            "kind": "manual_audio",
+            "source_kind": "manual_audio",
+            "provisional": True,
+            "crm_evidence": False,
+            "communication_event": False,
+            "file_name": job.file_name,
+            "transcript": transcript,
+            "attached_at": job.created_at,
+            "duration_seconds": job.duration_seconds,
+        }
+    return payload
+
+
+def get_uploaded_audio_job(job_id: str) -> dict[str, Any] | None:
+    with _UPLOADED_AUDIO_LOCK:
+        now = time.time()
+        for key in [key for key, item in _UPLOADED_AUDIO_JOBS.items() if item.status in {"done", "error"} and item.expires_at < now]:
+            _UPLOADED_AUDIO_JOBS.pop(key, None)
+        job = _UPLOADED_AUDIO_JOBS.get(str(job_id))
+        return _public_uploaded_audio_job(job) if job else None
+
+
+def get_uploaded_audio_attachment(job_id: str, *, deal_id: str) -> dict[str, Any]:
+    job = get_uploaded_audio_job(job_id)
+    if job is None or str(job.get("deal_id")) != str(deal_id):
+        raise AudioTranscriptionRequestError("Аудиовложение не найдено")
+    if job.get("status") != "done" or not isinstance(job.get("attachment"), dict):
+        raise AudioTranscriptionRequestError("Дождитесь завершения транскрибации аудио")
+    return dict(job["attachment"])
+
+
+def _touch_uploaded_audio_job(job: UploadedAudioJob, **values: Any) -> None:
+    with _UPLOADED_AUDIO_LOCK:
+        for key, value in values.items():
+            setattr(job, key, value)
+        job.updated_at = _now()
+
+
+def _run_uploaded_audio_job(job_id: str) -> None:
+    with _UPLOADED_AUDIO_LOCK:
+        job = _UPLOADED_AUDIO_JOBS[job_id]
+        job.status = "running"
+        job.stage = "transcribing"
+        job.detail = "Транскрибируем аудио…"
+        job.updated_at = _now()
+
+    def progress(event: dict[str, Any]) -> None:
+        current = int(event.get("current") or 1)
+        total = int(event.get("total") or 1)
+        detail = f"Транскрибируем аудио… {current}/{total}"
+        if event.get("status") == "retry_wait":
+            detail = f"Повторяем транскрибацию… {current}/{total}"
+        _touch_uploaded_audio_job(job, current=current, total=total, detail=detail)
+
+    try:
+        text = asyncio.run(
+            transcribe_file_async(
+                job.temp_path,
+                max_segment_concurrency=1,
+                progress_callback=progress,
+                entity_type="deal",
+                entity_id=job.deal_id,
+                log_source_file=False,
+            )
+        )
+        text = re.sub(r"(?m)^\[Сегмент \d+/\d+ [^\]]+\]\r?\n", "", text).strip()
+        if not text:
+            raise ValueError("Транскрибация не вернула текст")
+        _touch_uploaded_audio_job(
+            job,
+            status="done",
+            stage="done",
+            detail="Расшифровано",
+            transcript=text,
+            expires_at=time.time() + 3600,
+        )
+    except Exception:  # noqa: BLE001 - provider details stay out of job responses
+        _touch_uploaded_audio_job(
+            job,
+            status="error",
+            stage="error",
+            detail="Не удалось расшифровать аудио",
+            error="Транскрибация не выполнена. Проверьте файл и попробуйте ещё раз.",
+            expires_at=time.time() + 3600,
+        )
+    finally:
+        try:
+            os.remove(job.temp_path)
+        except OSError:
+            pass
+        with _UPLOADED_AUDIO_LOCK:
+            job.temp_path = ""
+            _UPLOADED_AUDIO_DEALS.discard(job.deal_id)
+
+
+def _start_uploaded_audio_thread(job_id: str) -> None:
+    threading.Thread(target=_run_uploaded_audio_job, args=(job_id,), daemon=True).start()
+
+
+async def start_uploaded_audio_job(
+    *,
+    audio: UploadFile,
+    deal_id: str,
+    confirm_paid: bool,
+) -> dict[str, Any]:
+    normalized_deal_id = str(deal_id or "").strip()
+    if not normalized_deal_id:
+        raise AudioTranscriptionRequestError("Не указан deal_id")
+    if not confirm_paid:
+        raise AudioTranscriptionRequestError("Подтвердите платную транскрибацию")
+    normalized_type = _base_content_type(audio.content_type)
+    suffix = _CONTENT_TYPE_SUFFIXES.get(normalized_type)
+    if suffix is None:
+        raise AudioTranscriptionRequestError("Неподдерживаемый тип аудио")
+    with _UPLOADED_AUDIO_LOCK:
+        if normalized_deal_id in _UPLOADED_AUDIO_DEALS:
+            raise AudioTranscriptionRequestError("Для сделки уже расшифровывается аудио")
+        _UPLOADED_AUDIO_DEALS.add(normalized_deal_id)
+
+    temp_path = ""
+    size_bytes = 0
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as target:
+            temp_path = target.name
+            while True:
+                chunk = await audio.read(READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                size_bytes += len(chunk)
+                if size_bytes > MAX_UPLOADED_AUDIO_BYTES:
+                    raise AudioTranscriptionRequestError("Размер аудио не должен превышать 90 МБ")
+                target.write(chunk)
+        if size_bytes < 1:
+            raise AudioTranscriptionRequestError("Аудио не передано")
+        duration = await asyncio.to_thread(get_audio_duration_seconds, temp_path)
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            raise AudioTranscriptionRequestError("Не удалось определить длительность аудио")
+        if duration > MAX_UPLOADED_AUDIO_DURATION_SECONDS:
+            raise AudioTranscriptionRequestError("Запись не должна быть длиннее 90 минут")
+
+        job = UploadedAudioJob(
+            job_id=uuid.uuid4().hex,
+            deal_id=normalized_deal_id,
+            file_name=_safe_upload_name(audio.filename, suffix),
+            temp_path=temp_path,
+            size_bytes=size_bytes,
+            duration_seconds=round(float(duration), 1),
+        )
+        with _UPLOADED_AUDIO_LOCK:
+            _UPLOADED_AUDIO_JOBS[job.job_id] = job
+        _start_uploaded_audio_thread(job.job_id)
+        temp_path = ""
+        return _public_uploaded_audio_job(job)
+    finally:
+        await audio.close()
+        if temp_path:
+            try:
+                Path(temp_path).unlink()
+            except OSError:
+                pass
+            with _UPLOADED_AUDIO_LOCK:
+                _UPLOADED_AUDIO_DEALS.discard(normalized_deal_id)

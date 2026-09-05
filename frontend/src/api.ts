@@ -1186,6 +1186,33 @@ export type ManagerSituationJob = {
   error?: string | null
 }
 
+export type ManagerManualAudioAttachment = {
+  kind: 'manual_audio'
+  source_kind: 'manual_audio'
+  provisional: true
+  crm_evidence: false
+  communication_event: false
+  file_name: string
+  transcript: string
+  attached_at: string
+  duration_seconds: number
+}
+
+export type ManagerUploadedAudioJob = {
+  job_id: string
+  deal_id: string
+  file_name: string
+  size_bytes: number
+  duration_seconds: number
+  status: 'uploading' | 'queued' | 'running' | 'done' | 'error'
+  stage: 'uploading' | 'queued' | 'transcribing' | 'done' | 'error'
+  detail: string
+  current: number
+  total: number
+  attachment?: ManagerManualAudioAttachment
+  error?: string | null
+}
+
 type ManagerQuickHelpCommonContent = {
   situation_summary: string
   next_action: string
@@ -1818,10 +1845,15 @@ export function confirmManagerSituation(dealId: string) {
   })
 }
 
-export function startManagerSituationRefinement(dealId: string, context: string, confirmPaid = true) {
+export function startManagerSituationRefinement(
+  dealId: string,
+  context: string,
+  confirmPaid = true,
+  manualAudioJobId?: string,
+) {
   return api<ManagerSituationJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/situation/refine`, {
     method: 'POST',
-    body: JSON.stringify({ context, confirm_paid: confirmPaid }),
+    body: JSON.stringify({ context, confirm_paid: confirmPaid, manual_audio_job_id: manualAudioJobId || null }),
   })
 }
 
@@ -2149,6 +2181,20 @@ export async function transcribeManagerVoice(
     method: 'POST',
     body,
   })
+}
+
+export async function transcribeManagerUploadedAudio(dealId: string, audio: File, confirmPaid = true) {
+  const body = new FormData()
+  body.append('audio', audio, audio.name)
+  body.append('deal_id', dealId)
+  body.append('confirm_paid', String(confirmPaid))
+  return api<ManagerUploadedAudioJob>('/api/deal-control/audio/transcribe', { method: 'POST', body })
+}
+
+export function fetchManagerUploadedAudioJob(jobId: string) {
+  return api<ManagerUploadedAudioJob>(
+    `/api/deal-control/audio/transcription-jobs/${encodeURIComponent(jobId)}`,
+  )
 }
 
 export async function fetchManagerAssistantWorkspace(dealId: string) {

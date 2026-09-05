@@ -135,7 +135,13 @@ from api.deal_manager_situation import (
     get_situation_job,
     start_situation_refine_job,
 )
-from api.deal_transcription import AudioTranscriptionRequestError, transcribe_manager_voice
+from api.deal_transcription import (
+    AudioTranscriptionRequestError,
+    get_uploaded_audio_attachment,
+    get_uploaded_audio_job,
+    start_uploaded_audio_job,
+    transcribe_manager_voice,
+)
 from api.daytime_cycle import (
     daytime_cycle_status,
     resume_automatic_analysis_runs,
@@ -323,7 +329,8 @@ class DealTaskGuidanceRequest(BaseModel):
 
 
 class DealManagerSituationRefineRequest(BaseModel):
-    context: str = Field(min_length=1, max_length=4000)
+    context: str = Field(default="", max_length=4000)
+    manual_audio_job_id: str | None = Field(default=None, max_length=64)
     confirm_paid: bool = False
 
 
@@ -1237,11 +1244,17 @@ def deal_manager_situation_refine(
 ) -> dict[str, Any]:
     require_deal(deal_id, action="paid_ai")
     try:
+        manual_audio = (
+            get_uploaded_audio_attachment(body.manual_audio_job_id, deal_id=deal_id)
+            if body.manual_audio_job_id
+            else None
+        )
         return start_situation_refine_job(
             db_path=DEFAULT_DB_PATH,
             deal_id=deal_id,
             context=body.context,
             confirm_paid=body.confirm_paid,
+            manual_audio_attachment=manual_audio,
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур ситуации сделки ещё не подключён") from error
@@ -1822,6 +1835,38 @@ async def deal_manager_voice_transcribe(
         raise
     except Exception as error:  # noqa: BLE001 - provider details stay out of HTTP/log output
         raise HTTPException(status_code=502, detail="Транскрибация не выполнена") from error
+
+
+@app.post("/api/deal-control/audio/transcribe")
+async def deal_manager_audio_transcribe(request: Request) -> dict[str, Any]:
+    try:
+        form = await request.form()
+        audio = form.get("audio")
+        if audio is None or not hasattr(audio, "read"):
+            raise AudioTranscriptionRequestError("Аудио не передано")
+        deal_id = str(form.get("deal_id") or "").strip()
+        require_deal(deal_id, action="paid_ai")
+        confirm_paid = str(form.get("confirm_paid") or "").strip().lower() == "true"
+        return await start_uploaded_audio_job(
+            audio=audio,
+            deal_id=deal_id,
+            confirm_paid=confirm_paid,
+        )
+    except AudioTranscriptionRequestError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001 - provider details stay private
+        raise HTTPException(status_code=502, detail="Не удалось принять аудиофайл") from error
+
+
+@app.get("/api/deal-control/audio/transcription-jobs/{job_id}")
+def deal_manager_audio_transcription_job_get(job_id: str) -> dict[str, Any]:
+    job = get_uploaded_audio_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Задание транскрибации не найдено")
+    require_deal(str(job["deal_id"]), action="open")
+    return job
 
 
 @app.get("/api/pipelines")
