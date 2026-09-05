@@ -2397,37 +2397,47 @@ function ManagerSituationActions(props: {
     </section>
     {props.modalOpen ? createPortal(<div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onCloseModal() }}>
       <section className="dc-modal dc-manager-context-modal" aria-labelledby="manager-context-title">
-        <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Дополнить текущую ситуацию</h2><p>Напиши, что произошло, что уже предпринимал и какой важный контекст не попал в CRM. Это пояснение менеджера, а не доказательство ответа клиента.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
+        <div className="dc-manager-modal-heading"><div><span className="dc-manager-modal-icon">✦</span><div><h2 id="manager-context-title">Дополнить текущую ситуацию</h2><p>Добавьте то, чего нет в CRM: что уже сделал менеджер, где застрял и что изменилось после последнего контакта.</p></div></div><button className="dc-manager-modal-close" onClick={props.onCloseModal} aria-label="Закрыть">×</button></div>
         <div className="dc-manager-voice-field">
           <textarea
             value={props.context}
             maxLength={4000}
             onChange={(event) => props.onContext(event.target.value)}
-            placeholder="Что уже пробовал менеджер, где застрял, что изменилось после последнего контакта?"
+            placeholder="Например: клиент согласовал бюджет, но ждёт финальное решение директора…"
             aria-label="Контекст менеджера"
           />
-          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onContext(appendVoiceText(props.context, text))} />
-          <label className={`dc-manager-audio-upload${audioBusy ? ' disabled' : ''}`}>
-            <span>🎧 Прикрепить запись разговора</span>
-            <input
-              type="file"
-              accept="audio/aac,audio/flac,audio/mp4,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,.m4a"
-              disabled={busy || audioBusy}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (file) void props.onUploadAudio(file)
-              }}
-            />
-          </label>
+          <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
+          <div className="dc-manager-input-methods">
+            <section className="dc-manager-input-card">
+              <span className="dc-manager-input-icon" aria-hidden="true">🎙</span>
+              <div className="dc-manager-input-copy"><strong>Короткая голосовая заметка</strong><small>Надиктуйте дополнительный контекст</small></div>
+              <ManagerVoiceInput dealId={props.deal.deal_id} disabled={busy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onContext(appendVoiceText(props.context, text))} />
+            </section>
+            <section className="dc-manager-input-card dc-manager-audio-card">
+              <span className="dc-manager-input-icon" aria-hidden="true">🎧</span>
+              <div className="dc-manager-input-copy"><strong>Запись разговора</strong><small>MP3, M4A, WAV · до 90 МБ / 90 минут</small></div>
+              <label className={`dc-manager-audio-upload${audioBusy ? ' disabled' : ''}`}>
+                <span>Выбрать файл</span>
+                <input
+                  type="file"
+                  accept="audio/aac,audio/flac,audio/mp4,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,.m4a"
+                  disabled={busy || audioBusy}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (file) void props.onUploadAudio(file)
+                  }}
+                />
+              </label>
+            </section>
+          </div>
           {props.audioJob ? <div className={`dc-manager-audio-attachment ${props.audioJob.status}`} role="status" aria-live="polite">
             <div><strong>🎧 {props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.status === 'done' ? ' ✓' : ''}</small></div>
             {props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}
             <button type="button" onClick={props.onRemoveAudio} disabled={audioBusy} aria-label="Убрать аудиозапись">×</button>
           </div> : null}
         </div>
-        <div className="dc-manager-field-footer"><small>{props.context.length}/4000</small>{props.error ? <small className="dc-manager-error">{props.error}</small> : null}</div>
-        <div><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || audioBusy || !canRefineManagerSituation(props.context, props.audioJob) || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
+        <div className="dc-manager-modal-actions"><button className="dc-button" disabled={busy} onClick={props.onCloseModal}>Отмена</button><button className="dc-button primary" disabled={busy || audioBusy || !canRefineManagerSituation(props.context, props.audioJob) || props.context.length > 4000} onClick={props.onRefine}>{busy ? <><span className="dc-spinner" />Пересобираем…</> : 'Пересобрать ситуацию'}</button></div>
       </section>
     </div>, document.body) : null}
   </>

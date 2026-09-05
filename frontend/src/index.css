@@ -6909,7 +6909,23 @@ ul.facts.bad li:before {
   line-height: 1.5;
 }
 
-.dc-manager-voice-field { display: grid; gap: 7px; }
+.dc-manager-voice-field { display: grid; gap: 12px; }
+.dc-manager-input-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.dc-manager-input-card {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px 14px;
+  align-items: center;
+  min-height: 142px;
+  padding: 18px;
+  border: 1px solid #d4e1ef;
+  border-radius: 14px;
+  background: #f9fbfe;
+}
+.dc-manager-input-icon { display: grid; width: 52px; height: 52px; grid-row: 1 / span 2; place-items: center; border-radius: 50%; background: #e8f1ff; font-size: 25px; }
+.dc-manager-input-copy { display: grid; gap: 4px; min-width: 0; }
+.dc-manager-input-copy strong { color: #142844; font-size: 16px; line-height: 1.25; }
+.dc-manager-input-copy small { color: #687d96; font-size: 12px; line-height: 1.35; }
 .dc-manager-voice-control { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-height: 30px; }
 .dc-manager-voice-button,
 .dc-manager-voice-cancel {
@@ -6930,7 +6946,8 @@ ul.facts.bad li:before {
 .dc-manager-voice-button:disabled,
 .dc-manager-voice-cancel:disabled { cursor: not-allowed; opacity: .55; }
 .dc-manager-voice-error { flex-basis: 100%; color: #b82f2f; font-size: 10px; line-height: 1.4; }
-.dc-manager-audio-upload { display: inline-flex; width: fit-content; cursor: pointer; color: #366da6; font-size: 11px; font-weight: 700; }
+.dc-manager-audio-upload { display: inline-flex; width: fit-content; min-height: 42px; align-items: center; justify-content: center; padding: 8px 15px; border: 1px solid #7faef0; border-radius: 9px; cursor: pointer; color: #1768f2; background: #fff; font-size: 13px; font-weight: 800; }
+.dc-manager-audio-upload:hover { border-color: #1768f2; background: #f2f7ff; }
 .dc-manager-audio-upload.disabled { cursor: wait; opacity: .55; }
 .dc-manager-audio-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .dc-manager-audio-attachment { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 9px 10px; border: 1px solid #cbdced; border-radius: 9px; background: #f5f9fd; }
@@ -7043,14 +7060,35 @@ ul.facts.bad li:before {
 .dc-manager-markdown { margin-top: 0; }
 .dc-manager-markdown > pre { max-height: 360px; margin: 5px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.dc-manager-context-modal { width: min(620px, 94vw); }
-.dc-manager-modal-heading { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 13px; }
-.dc-manager-modal-heading > div:first-child { display: flex; gap: 10px; }
-.dc-manager-modal-heading h2 { margin: 0 0 4px; }
-.dc-manager-modal-heading p { margin: 0; line-height: 1.45; }
-.dc-manager-modal-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #1768f2; background: #eaf2ff; }
-.dc-manager-modal-close { width: 28px; height: 28px; border: 0; border-radius: 7px; color: #61738c; background: transparent; cursor: pointer; font-size: 22px; line-height: 1; }
+.dc-manager-context-modal { display: grid; width: min(980px, 96vw); max-height: 94vh; gap: 20px; padding: 30px; overflow: auto; border-radius: 20px; }
+.dc-manager-context-modal > div { margin-top: 0; }
+.dc-manager-context-modal textarea { min-height: 220px; padding: 16px 18px; border-radius: 13px; font-size: 16px; line-height: 1.55; }
+.dc-manager-context-modal .dc-manager-voice-button,
+.dc-manager-context-modal .dc-manager-voice-cancel { min-height: 42px; padding: 8px 15px; font-size: 13px; }
+.dc-manager-context-modal .dc-manager-voice-error { font-size: 12px; }
+.dc-manager-context-modal .dc-manager-field-footer { flex-direction: row-reverse; gap: 12px; min-height: 20px; }
+.dc-manager-context-modal .dc-manager-field-footer small,
+.dc-manager-context-modal .dc-manager-audio-attachment small,
+.dc-manager-context-modal .dc-manager-audio-attachment details { font-size: 12px; }
+.dc-manager-context-modal .dc-manager-audio-attachment { padding: 13px 15px; border-radius: 12px; }
+.dc-manager-context-modal .dc-manager-audio-attachment strong { font-size: 14px; }
+.dc-manager-context-modal .dc-manager-audio-attachment details p { font-size: 13px; line-height: 1.5; }
+.dc-manager-modal-heading { display: flex; justify-content: space-between; gap: 18px; }
+.dc-manager-modal-heading > div:first-child { display: flex; gap: 16px; }
+.dc-manager-modal-heading h2 { margin: 0 0 6px; font-size: 25px; line-height: 1.2; }
+.dc-manager-modal-heading p { max-width: 720px; margin: 0; font-size: 14px; line-height: 1.5; }
+.dc-manager-modal-icon { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; border-radius: 13px; color: #1768f2; background: #eaf2ff; font-size: 21px; }
+.dc-manager-modal-close { width: 38px; height: 38px; border: 0; border-radius: 9px; color: #61738c; background: transparent; cursor: pointer; font-size: 28px; line-height: 1; }
 .dc-manager-modal-close:hover { background: #f0f4f8; }
+.dc-manager-modal-actions { padding-top: 20px; border-top: 1px solid #e0e8f1; }
+.dc-manager-modal-actions .dc-button { min-height: 48px; padding: 10px 20px; border-radius: 11px; font-size: 15px; }
+
+@media (max-width: 760px) {
+  .dc-manager-context-modal { width: min(620px, 96vw); padding: 20px; }
+  .dc-manager-modal-heading h2 { font-size: 21px; }
+  .dc-manager-context-modal textarea { min-height: 170px; }
+  .dc-manager-input-methods { grid-template-columns: 1fr; }
+}
 
 .dc-manager-assistant-open { width: 100%; margin-top: 4px; }
 
