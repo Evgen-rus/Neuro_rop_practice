@@ -9456,6 +9456,22 @@ ul.facts.bad li:before {
 .dc-attachment-actions details a { padding: 6px 8px; border-radius: 5px; color: #3d5067; font-size: 9px; text-decoration: none; }
 .dc-attachment-actions details a:hover { background: #f3f7fb; }
 .dc-attachments-archive { display: inline-block; margin-top: 7px; color: #63778e; font-size: 9px; }
+.dc-manager-worklogs { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid #dce5ee; background: #f7fbff; }
+.dc-manager-worklogs > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #52677f; font-size: 10.5px; }
+.dc-manager-worklogs > header span { color: #8695a7; font-size: 9.5px; }
+.dc-manager-worklog-card { padding: 11px 12px; border: 1px solid #cbdceb; border-radius: 10px; background: #fff; }
+.dc-manager-worklog-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dc-manager-worklog-card > header div { display: grid; gap: 5px; }
+.dc-manager-worklog-card > header span { width: fit-content; padding: 2px 6px; border-radius: 999px; color: #32638e; background: #e8f2fb; font-size: 8.5px; font-weight: 700; }
+.dc-manager-worklog-card > header strong { color: #233c56; font-size: 12px; }
+.dc-manager-worklog-card > header p { margin: 0; color: #526b84; font-size: 10.5px; white-space: nowrap; }
+.dc-manager-worklog-card > header p strong { color: #1768b2; font-size: inherit; }
+.dc-manager-worklog-entries { display: grid; gap: 6px; margin-top: 10px; }
+.dc-manager-worklog-entries > div { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 9px; align-items: start; }
+.dc-manager-worklog-entries time { color: #2d6798; font-size: 10.5px; font-weight: 700; }
+.dc-manager-worklog-entries p { margin: 0; color: #2d4055; font-size: 12px; line-height: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dc-manager-worklog-card > button { margin-top: 9px; padding: 0; border: 0; color: #1768b2; background: transparent; font-size: 10.5px; font-weight: 700; cursor: pointer; }
+.dc-manager-worklog-card > small { display: block; margin-top: 8px; color: #8594a5; font-size: 9.5px; }
 .dc-comments-pane-head { padding: 16px 20px 11px; }
 .dc-comments-pane-head h3 { margin: 0; color: #1e334c; font-size: 13.5px; line-height: 18px; }
 .dc-comments-pane-head p { margin: 4px 0 0; color: #728399; font-size: 11.5px; }

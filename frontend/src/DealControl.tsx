@@ -64,6 +64,7 @@ import {
   type ManagerDiscProfile,
   type ManagerSituationJob,
   type ManagerSituationState,
+  type ManagerWorklog,
   type ReportAnalysisTrace,
   isCallScriptContent,
   isNeuroRopTask,
@@ -108,6 +109,12 @@ import { DailyControl } from './DailyControl'
 import { ManagerTrajectory } from './ManagerTrajectory'
 import { LearningShadow } from './LearningShadow'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
+import {
+  commentsWithoutWorklogs,
+  sortedWorklogEntries,
+  toggleExpandedWorklog,
+  visibleManagerWorklogs,
+} from './managerWorklogs'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import { PromptLabWorkspace } from './PromptLab'
@@ -1382,6 +1389,37 @@ function fileKind(file: DealCommentFile) {
   return extension && extension.length <= 4 ? extension : 'FILE'
 }
 
+function worklogDate(value?: string | null) {
+  return value ? formatMoscowDateTime(value, { day: '2-digit', month: '2-digit' }) || '—' : '—'
+}
+
+function ManagerWorklogCard({
+  worklog,
+  expanded,
+  onToggle,
+}: {
+  worklog: ManagerWorklog
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const entries = sortedWorklogEntries(worklog.entries || [])
+  const visibleEntries = expanded ? entries : entries.slice(0, 3)
+  return <article className="dc-manager-worklog-card">
+    <header>
+      <div><span>Рабочий журнал</span><strong>Рабочий журнал менеджера</strong></div>
+      <p>Актуально по <strong>{worklogDate(worklog.latest_entry_date)}</strong></p>
+    </header>
+    <div className="dc-manager-worklog-entries">
+      {visibleEntries.map((entry, index) => <div key={`${entry.entry_date}:${index}`}>
+        <time>{worklogDate(entry.entry_date)}</time>
+        <p>{entry.text}</p>
+      </div>)}
+    </div>
+    {entries.length > 3 ? <button type="button" aria-expanded={expanded} onClick={onToggle}>{expanded ? 'Свернуть' : 'Показать весь журнал'}</button> : null}
+    {worklog.bitrix_created_at ? <small>Комментарий создан в Bitrix: {worklogDate(worklog.bitrix_created_at)}</small> : null}
+  </article>
+}
+
 function DealCommentsModal({
   deal,
   onClose,
@@ -1402,7 +1440,9 @@ function DealCommentsModal({
   const [previewFile, setPreviewFile] = useState<DealCommentFile | null>(null)
   const [asked, setAsked] = useState<[boolean, boolean]>([false, false])
   const [copyNotice, setCopyNotice] = useState('')
+  const [expandedWorklogs, setExpandedWorklogs] = useState<Set<string>>(() => new Set())
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const worklogs = useMemo(() => visibleManagerWorklogs(deal?.manager_worklogs), [deal?.manager_worklogs])
 
   useEffect(() => {
     if (!dealId) return
@@ -1426,6 +1466,8 @@ function DealCommentsModal({
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [dealId, reloadKey])
+
+  useEffect(() => setExpandedWorklogs(new Set()), [dealId])
 
   const retryComments = () => {
     dealCommentsCache.delete(dealId)
@@ -1461,7 +1503,7 @@ function DealCommentsModal({
 
   const commentGroups = useMemo(() => {
     const groups: Array<{ label: string; comments: DealCommentsPayload['comments'] }> = []
-    for (const comment of payload?.comments || []) {
+    for (const comment of commentsWithoutWorklogs(payload?.comments || [], worklogs)) {
       const label = comment.created_at
         ? (formatMoscowDateTime(comment.created_at, { month: 'long', year: 'numeric' }) || 'БЕЗ ДАТЫ').toLocaleUpperCase('ru')
         : 'БЕЗ ДАТЫ'
@@ -1470,7 +1512,7 @@ function DealCommentsModal({
       else groups.push({ label, comments: [comment] })
     }
     return groups
-  }, [payload])
+  }, [payload, worklogs])
 
   if (!deal) return null
   const copyScript = async () => {
@@ -1503,6 +1545,18 @@ function DealCommentsModal({
               </div> : <p className="dc-comments-state">Прикреплённых файлов нет.</p>}
               {payload?.archive_url ? <a className="dc-attachments-archive" href={payload.archive_url} target="_blank" rel="noreferrer">Скачать все файлы одним архивом</a> : null}
             </section>
+            {worklogs.length ? <section className="dc-manager-worklogs" aria-label="Рабочий журнал менеджера">
+              <header><strong>РАБОЧИЙ ЖУРНАЛ МЕНЕДЖЕРА</strong><span>{worklogs.length}</span></header>
+              {worklogs.map((worklog, index) => {
+                const key = `${worklog.comment_id || index}:${worklog.content_hash}`
+                return <ManagerWorklogCard
+                  key={key}
+                  worklog={worklog}
+                  expanded={expandedWorklogs.has(key)}
+                  onToggle={() => setExpandedWorklogs((current) => toggleExpandedWorklog(current, key))}
+                />
+              })}
+            </section> : null}
             <header className="dc-comments-pane-head"><h3>Комментарии менеджера</h3><p>История комментариев из Bitrix</p></header>
             <div className="dc-comments-list">
               <div className="dc-comments-table-head"><span>Дата</span><span>Комментарий</span></div>

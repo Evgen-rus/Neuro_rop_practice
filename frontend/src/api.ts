@@ -747,6 +747,34 @@ export type DealManagerCommentsPreview = {
   synced_at?: string | null
 }
 
+export type ManagerWorklogEntry = {
+  entry_date: string
+  date_raw: string
+  text: string
+  year_inferred: boolean
+}
+
+export type ManagerWorklog = {
+  is_worklog: true
+  comment_id?: string | null
+  bitrix_created_at?: string | null
+  author_id?: string | null
+  text: string
+  content_hash: string
+  entries: ManagerWorklogEntry[]
+  entry_count: number
+  latest_entry_date: string
+  first_seen_at: string
+  last_changed_at: string
+  last_seen_at: string
+}
+
+export type ManagerWorklogsProjection = {
+  available: boolean
+  count: number
+  items: ManagerWorklog[]
+}
+
 export type DealCommentFile = {
   id: string
   comment_id?: string | null
@@ -997,6 +1025,7 @@ export type DealControlDeal = {
   bitrix_tasks: DealControlBitrixTask[]
   communications_today: DealControlCommunicationsToday
   manager_comments_preview?: DealManagerCommentsPreview
+  manager_worklogs?: ManagerWorklogsProjection
   primary_bitrix_task?: DealControlBitrixTask | null
   tasks: DealControlTask[]
   current_task?: DealControlTask | null
@@ -1683,6 +1712,7 @@ function normalizeDealControlDeal(deal: DealControlDeal): DealControlDeal {
       count: null,
       items: [],
     }),
+    manager_worklogs: foreignProjection ? undefined : deal.manager_worklogs,
     tasks: foreignProjection ? [] : (Array.isArray(deal.tasks) ? deal.tasks : []),
     current_task: foreignProjection ? null : (deal.current_task || null),
     manager_situation: foreignProjection ? null : (deal.manager_situation || null),
