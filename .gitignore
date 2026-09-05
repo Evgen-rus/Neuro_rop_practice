@@ -90,6 +90,7 @@ Docs/*
 !Docs/manager_trajectory_v3_plan.md
 !Docs/bitrix_incremental_sync_runbook.md
 !Docs/full_analysis_repair_runbook.md
+!Docs/agent_workflow.md
 
 # Benchmark fixtures and results are local-only because they may reference
 # customer workspaces and generated ROP artifacts.
