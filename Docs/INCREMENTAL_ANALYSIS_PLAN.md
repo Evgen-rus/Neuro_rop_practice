@@ -1,562 +1,178 @@
-# План реализации инкрементального анализа сделок
+# План реализации настоящего инкрементального анализа сделок
 
-## Зачем это делаем
+## 1. Цель проекта
 
-Текущий production-анализ сделок работает хорошо по качеству.
+Текущий FULL-анализ сделок устраивает по качеству.
 
-Сейчас система фактически использует:
+Проблема — стоимость повторных анализов.
 
-* `FULL` — полноценный LLM-анализ;
-* `MINI`;
-* `SKIP`.
-
-Качество FULL устраивает пользователей, поэтому существующий FULL нельзя ломать или переписывать без необходимости.
-
-Главная проблема — стоимость.
-
-При повторном FULL-анализе модель снова получает большой объём уже известного контекста:
+При каждом новом FULL модель снова получает большой объём уже известного контекста:
 
 * историю сделки;
-* коммуникации;
-* звонки и транскрипты;
+* старые коммуникации;
+* старые звонки;
+* старые транскрипты;
 * CRM-контекст;
 * текущую ситуацию;
-* диагностику;
 * knowledge base;
-* другие связанные данные.
+* диагностику;
+* другие уже известные данные.
 
-Поэтому задача проекта:
+Главная цель:
 
-**сохранить качество текущего FULL, но перестать повторно отправлять модели неизменившуюся историю.**
+> сохранить качество существующего FULL, но перестать повторно отправлять модели неизменившуюся историю и evidence.
+
+Экономия должна достигаться не за счёт ослабления анализа, а за счёт уменьшения повторяющегося input context.
 
 ---
 
-# Целевая архитектура
+# 2. Целевая модель
 
-В конечном варианте должно быть только два основных LLM-режима.
+В конечной системе есть два платных LLM-режима:
 
-## 1. FULL
+## INITIAL_FULL / FULL_REBUILD
+
+Полный анализ.
 
 Используется:
 
-* при первом анализе сделки;
-* при отсутствии надёжного предыдущего состояния;
-* как редкий аварийный `FULL_REBUILD`.
+* при первом анализе;
+* если нет trusted previous analysis;
+* если baseline повреждён или несовместим;
+* если incremental невозможно безопасно выполнить;
+* как fallback после невалидного incremental.
 
-Первый FULL должен максимально переиспользовать текущий production-анализатор, потому что его качество уже проверено.
+## INCREMENTAL
 
-## 2. INCREMENTAL
+Основной режим для последующих значимых изменений.
 
-Используется для последующих значимых изменений сделки.
-
-Вместо полной истории модель получает примерно:
+Вместо полной старой истории модель получает:
 
 ```text
-previous trusted analysis
+PREVIOUS TRUSTED COMPLETE ANALYSIS
 +
-semantic delta
+CRM SEMANTIC DELTA
 +
-актуальные изменившиеся CRM facts
+NEW / REVISED CLIENT EVIDENCE
 +
-новые или изменённые транскрипты/коммуникации
+NEW / REVISED TRANSCRIPTS
 +
-релевантную knowledge base
-```
-
-На выходе INCREMENTAL должен формировать **полный актуальный analysis JSON**, а не набор патчей.
-
-Для UI, API и БД результат FULL и INCREMENTAL должен выглядеть одинаково.
-
----
-
-# Главный принцип реализации
-
-Нельзя начинать с LLM.
-
-Сначала необходимо доказать, что мы правильно понимаем изменения данных Bitrix.
-
-Предыдущие попытки incremental были недостаточно надёжными именно потому, что LLM-часть начинала строиться раньше, чем был полностью решён слой:
-
-```text
-Bitrix raw data
-→ canonical state
-→ merge
-→ semantic delta
-```
-
-Поэтому реализация идёт строго по этапам ниже.
-
----
-
-# ЭТАП 1. Исследование реального поведения Bitrix
-
-## Цель
-
-Понять, как реальные сущности Bitrix меняются между последовательными запросами.
-
-Нельзя строить правила только по документации API.
-
-Нужно исследовать реальные production-like данные.
-
-## Что уже есть
-
-В проекте уже существуют:
-
-* incremental fetch;
-* overlap при выборке;
-* merge записей по ID;
-* snapshots;
-* change detection;
-* нормализация части сущностей;
-* периодическая reconciliation.
-
-Эти механизмы нужно переиспользовать и проверить, а не писать заново вслепую.
-
-## Что исследуем
-
-Минимально:
-
-* deal;
-* activity;
-* call;
-* email;
-* messenger message;
-* task;
-* timeline comment;
-* stage history;
-* files/recordings;
-* transcript.
-
-Голосовые сообщения мессенджеров пока отдельная задача и в этот этап не входят.
-
-## Особое внимание — изменяемые сущности
-
-Пример звонка:
-
-```text
-T1:
-activity ID = 123
-звонок только появился
-длительность/END_TIME/recording ещё неполные
-
-T2:
-activity ID = 123
-звонок завершился
-обновился END_TIME
-
-T3:
-activity ID = 123
-появилась запись
-
-T4:
-activity ID = 123
-появилась транскрипция
-```
-
-Это НЕ четыре события.
-
-Это одна сущность с несколькими ревизиями.
-
-Система должна уметь это понимать.
-
-## Отдельно исследовать шум
-
-Например:
-
-```text
-ID тот же
-контент тот же
-бизнес-поля те же
-LAST_UPDATED изменился
-```
-
-Такое изменение потенциально должно считаться техническим шумом, а не новым бизнес-событием.
-
-У сделки похожая проблема уже частично учтена: `DATE_MODIFY` не должен автоматически означать бизнес-изменение.
-
-Нужно определить аналогичные шумные поля для остальных сущностей.
-
----
-
-# ЭТАП 1.1. Экспериментальный сбор слепков
-
-Создать отдельный диагностический режим/скрипт.
-
-Он не должен менять production analysis flow.
-
-Его задача — несколько часов собирать последовательные состояния выбранных сделок.
-
-Например:
-
-```text
-snapshot_001
-snapshot_002
-snapshot_003
-...
-```
-
-Для каждой итерации сохранять:
-
-* время получения;
-* raw Bitrix response;
-* canonical representation;
-* previous state;
-* current state;
-* raw diff;
-* semantic diff;
-* идентификатор сущности;
-* тип сущности.
-
-Данные готовятся прежде всего **для анализа агентом**, а не для человека.
-
-Красивый UI и человекочитаемые отчёты не нужны.
-
----
-
-# ЭТАП 1.2. Набор практических сценариев
-
-Во время эксперимента желательно специально создать разные события.
-
-## Звонок
-
-Проверить состояния:
-
-1. сразу после начала/создания;
-2. через несколько секунд;
-3. после завершения;
-4. после появления записи;
-5. после появления транскрипции;
-6. ещё один запрос без каких-либо действий.
-
-## Messenger
-
-1. новое входящее сообщение;
-2. исходящее сообщение;
-3. повторная загрузка без изменений.
-
-## Email
-
-То же самое.
-
-## Task
-
-Проверить:
-
-* создание;
-* смену deadline;
-* выполнение;
-* повторную загрузку без изменений.
-
-## Deal
-
-Проверить:
-
-* изменение стадии;
-* изменение суммы;
-* изменение ответственного;
-* изменение только технического времени модификации.
-
-## Timeline
-
-Проверить:
-
-* новый комментарий;
-* если возможно — изменение существующего;
-* повторную загрузку без изменений.
-
----
-
-# Результат ЭТАПА 1
-
-Должен появиться машинно-читаемый отчёт примерно такого смысла:
-
-```text
-ENTITY: crm.activity
-STABLE_ID: ID
-
-FIELD: LAST_UPDATED
-behavior: volatile
-semantic_importance: none
-
-FIELD: END_TIME
-behavior: mutable
-semantic_importance: meaningful
-
-FIELD: FILES
-behavior: late_filling
-semantic_importance: meaningful
-
-FIELD: SUBJECT
-behavior: mostly_stable
-semantic_importance: potentially_meaningful
-```
-
-Также нужен список обнаруженных реальных сценариев:
-
-```text
-same ID + only LAST_UPDATED changed
-same ID + END_TIME changed
-same ID + recording appeared
-same ID + content changed
-new ID appeared
-old entity temporarily disappeared
-...
-```
-
-До получения этого результата к новому LLM incremental не переходить.
-
----
-
-# ЭТАП 2. Каноническая модель состояния сделки
-
-Начинается только после завершения ЭТАПА 1.
-
-## Цель
-
-Иметь одно полное актуальное состояние сделки.
-
-Концепция:
-
-```text
-previous canonical state
+CURRENT REQUIRED CRM FACTS
 +
-fresh Bitrix delta with overlap
-=
-new canonical state
+RELEVANT KNOWLEDGE / POLICY
 ```
 
-## Первый запуск
-
-При первом анализе сделки получить полное состояние за выбранное окно истории.
-
-Предварительный ориентир:
+На выходе INCREMENTAL обязан вернуть:
 
 ```text
-60 дней
+полный актуальный analysis JSON
 ```
 
-Период можно изменить после эксперимента.
+а не patch/diff.
 
-## Последующие запуски
+Внешний контракт должен сохраняться:
 
-Не загружать всю историю заново без необходимости.
+```text
+FULL output schema
+==
+INCREMENTAL output schema
+```
 
-Использовать:
-
-* watermark/cursor;
-* overlap;
-* периодическую reconciliation;
-* merge по стабильному ID.
+UI, API, reports и downstream logic не должны зависеть от режима анализа.
 
 ---
 
-# ЭТАП 2.1. Stable identity
+# 3. Главный архитектурный принцип
 
-Для каждой сущности определить надёжный ключ.
+Нельзя строить LLM incremental поверх ненадёжной инкрементальности данных.
 
-Пример:
+Целевая цепочка:
 
 ```text
-activity → activity.ID
-timeline → comment.ID
-message → message.ID
-task → task.ID
+BITRIX / TRANSCRIPTS / CLIENT EVIDENCE
+        ↓
+CURRENT CANONICAL / EVIDENCE STATE
+        ↓
+COMPARE WITH LAST TRUSTED ANALYSIS BASELINE
+        ↓
+CRM + EVIDENCE + TRANSCRIPT DELTA
+        ↓
+FULL / MINI / SKIP / INCREMENTAL DECISION
+        ↓
+LLM
+        ↓
+VALIDATION
+        ↓
+PERSISTENCE
+        ↓
+NEW TRUSTED ANALYSIS BASELINE
 ```
 
-Если одного ID недостаточно — определить составной identity.
+Главный invariant:
 
-Нельзя использовать timestamp как основной identity, если Bitrix способен его менять.
+> Ни одно изменение, которого ещё не видел последний успешный trusted analysis, не должно потеряться из будущего incremental input.
 
 ---
 
-# ЭТАП 2.2. Revision
+# 4. Текущее production-состояние
 
-Одна сущность может менять содержимое.
-
-Нужно различать:
+На текущем `main` pipeline сделок примерно:
 
 ```text
-identity
+Bitrix / workspace
+→ snapshot
+→ compare_snapshots
+→ decision engine
+→ FIRST_FULL / FULL / MINI / SKIP
 ```
 
-и
+Существуют статусы:
 
 ```text
-revision
+FIRST_FULL_ANALYSIS
+FULL_LLM_ANALYSIS
+INCREMENTAL_LLM_ANALYSIS
+MINI_RECOMMENDATION_NO_LLM
+SKIPPED_NO_CHANGES
+ERROR
 ```
 
-Пример:
+Но настоящий INCREMENTAL сейчас ещё не активен.
+
+Текущий `decide_deal_processing()`:
 
 ```text
-activity:123 revision 1
-activity:123 revision 2
+hard meaningful changes
+→ FULL_LLM_ANALYSIS
+
+soft/control changes
+→ MINI_RECOMMENDATION_NO_LLM
+
+нет meaningful changes
+→ SKIPPED_NO_CHANGES
 ```
 
-В итоговом canonical state хранится актуальная версия.
+`INCREMENTAL_LLM_ANALYSIS` как константа существует, но текущий deal decision engine сам этот режим фактически не выбирает.
 
-Историю ревизий можно сохранять только там, где она нужна для диагностики.
+Кроме того, в `analyze_deal_if_changed.py` остаётся защитная ветка:
+
+```text
+INCREMENTAL_LLM_ANALYSIS
+→ FULL_LLM_ANALYSIS
+```
+
+Поэтому будущая реализация требует **двух отдельных изменений**:
+
+1. настоящий incremental analyzer;
+2. routing/decision policy, которая сможет безопасно выбирать его.
+
+Недостаточно просто удалить conversion `INCREMENTAL → FULL`.
 
 ---
 
-# ЭТАП 2.3. Fingerprints
+# 5. Существующий FULL — эталон качества
 
-Желательно иметь минимум два fingerprint.
-
-## RAW fingerprint
-
-Показывает:
-
-> Bitrix технически вернул другой объект.
-
-## SEMANTIC fingerprint
-
-Показывает:
-
-> для бизнеса/анализа содержимое реально изменилось.
-
-Например изменение только:
-
-```text
-LAST_UPDATED
-```
-
-может менять raw fingerprint, но не semantic fingerprint.
-
----
-
-# Результат ЭТАПА 2
-
-На любом запуске система должна быть способна получить:
-
-```text
-canonical_state_before
-canonical_state_after
-```
-
-Причём `canonical_state_after` является **полным текущим состоянием**, а не только свежей выборкой API.
-
----
-
-# ЭТАП 3. Semantic Delta Engine
-
-Только после стабильного canonical state.
-
-## Для каждой сущности классификация
-
-```text
-NEW
-UPDATED_MEANINGFUL
-UPDATED_NOISE
-REMOVED
-UNCHANGED
-```
-
-## NEW
-
-Появился новый stable identity.
-
-## UPDATED_MEANINGFUL
-
-ID прежний, но изменились бизнес-значимые данные.
-
-Примеры:
-
-* звонок завершился;
-* появилась запись;
-* изменилась содержательная информация;
-* задача выполнена;
-* изменился deadline;
-* клиентское сообщение действительно изменилось.
-
-## UPDATED_NOISE
-
-Изменились только технические данные.
-
-Пример:
-
-```text
-LAST_UPDATED changed
-```
-
-без изменения содержимого.
-
-## REMOVED
-
-Сущность действительно исчезла.
-
-Но перед классификацией нужно убедиться, что это не:
-
-* ошибка API;
-* неполная страница;
-* временный сбой;
-* ограничение incremental fetch.
-
-## UNCHANGED
-
-Никаких semantic changes.
-
----
-
-# ЭТАП 3.1. Delta contract
-
-На выходе должен появляться стабильный машинный формат.
-
-Например:
-
-```json
-{
-  "entity_id": "deal:18507",
-  "changes": [
-    {
-      "entity_type": "activity",
-      "entity_id": "12345",
-      "change_type": "UPDATED_MEANINGFUL",
-      "changed_fields": [
-        "END_TIME",
-        "FILES"
-      ],
-      "before": {},
-      "after": {}
-    }
-  ]
-}
-```
-
-Это пример принципа, не обязательная финальная schema.
-
----
-
-# ЭТАП 3.2. Тесты на реальные данные
-
-Именно здесь нужно сделать сильный test suite.
-
-Не только synthetic fixtures.
-
-Использовать сохранённые реальные пары слепков из ЭТАПА 1.
-
-Тесты должны доказывать:
-
-```text
-одинаковый ID + технический timestamp → NOISE
-
-одинаковый ID + новая запись звонка → MEANINGFUL
-
-новый message ID → NEW
-
-повторный fetch без изменений → UNCHANGED
-
-неполный Bitrix response → не считать массовым REMOVED
-```
-
-Пока эти тесты нестабильны — LLM incremental не делать.
-
----
-
-# ЭТАП 4. Зафиксировать FULL как эталон качества
-
-Текущий FULL уже работает в production и устраивает по качеству.
-
-Поэтому его не переписываем.
+Текущий FULL не переписывать без необходимости.
 
 Он становится:
 
@@ -574,80 +190,776 @@ FULL_REBUILD
 
 Первый анализ сделки.
 
-Получает полный контекст.
-
-Создаёт полный analysis JSON.
-
-Этот результат становится первым:
-
-```text
-trusted analysis state
-```
+Получает полный требуемый контекст и создаёт первый complete trusted analysis.
 
 ## FULL_REBUILD
 
 Редкий fallback.
 
-Используется только если incremental state нельзя надёжно обновить.
+Допустимые причины:
 
-Причины должны быть явными.
+```text
+trusted analysis missing
+trusted baseline missing
+canonical integrity failure
+evidence coverage untrusted
+schema/version incompatibility
+incremental validation failure
+incremental execution failure
+unresolved contradiction
+```
+
+Большое количество изменений само по себе не является причиной FULL_REBUILD.
+
+---
+
+# 6. Этап 1 / 1.5 — COMPLETE
+
+Реальное поведение Bitrix исследовано отдельным audit.
+
+Источники:
+
+```text
+Docs/final_audit.json
+Docs/final_audit_stage_1_5.json
+Docs/BITRIX_INCREMENTAL_AUDIT.md
+```
+
+Подтверждено:
+
+* Bitrix ID стабилен в наблюдавшихся сущностях;
+* новый ID = новая сущность;
+* тот же ID = revision;
+* merge по ID не создавал дублей;
+* накопленный incremental и финальный FULL сошлись по набору объектов;
+* activity может дозаполняться после создания;
+* timeline comment может измениться при том же ID;
+* task deadline/status могут меняться при том же ID;
+* `DATE_MODIFY` сделки может меняться без semantic change;
+* `LAST_UPDATED` полезен как revision/cursor signal, но не semantic факт сам по себе.
+
+---
+
+# 7. FILES — доказанное правило
+
+Audit 1.5 показал:
+
+```text
+FILES = [
+    {
+        id,
+        url
+    }
+]
+```
+
+У старых email менялся только query token `_efd`.
+
+При этом:
+
+```text
+file id
+количество файлов
+порядок
+```
+
+оставались стабильными.
+
+Поэтому:
+
+```text
+FILES[].id
+```
+
+является canonical semantic identity файла.
+
+Запрещено использовать в canonical fingerprints:
+
+```text
+FILES[].url
+_efd
+auth
+temporary token
+```
+
+Для звонка наблюдалась замена recording:
+
+```text
+1012207
+→
+1012215
+```
+
+при том же activity ID.
+
+Это:
+
+```text
+revision существующего звонка
+```
+
+а не новый звонок.
+
+---
+
+# 8. CALL lifecycle — доказанное правило
+
+Наблюдался один activity ID на нескольких стадиях:
+
+```text
+COMPLETED N → Y
+STATUS 1 → 2
+LAST_UPDATED changed
+```
+
+Activity ID и ORIGIN_ID остались теми же.
+
+Для другого answered call позднее сменился recording file ID, и `LAST_UPDATED` также изменился.
+
+Следовательно наблюдавшийся production cursor способен увидеть такие late revisions.
+
+Canonical identity звонка:
+
+```text
+activity:<Bitrix activity ID>
+```
+
+Recording file ID не является identity звонка.
+
+---
+
+# 9. crm.activity.list — canonical source
+
+Audit показал:
+
+```text
+crm.activity.get
+```
+
+не является более полным источником.
+
+В частности `COMMUNICATIONS` присутствовали в list и отсутствовали в get.
+
+Поэтому activity canonical source v1:
+
+```text
+crm.activity.list
+```
+
+`activity.get` может использоваться как дополнительный технический механизм, но не заменяет list.
+
+---
+
+# 10. Неизвестные Bitrix-сценарии
+
+Пока не доказаны:
+
+* empty FILES → первый recording;
+* confirmed deletion activity;
+* non-VOXIMPLANT providers;
+* новый attachment у уже существующего email;
+* `name/size/type` FILES на других порталах;
+* некоторые hash-based messenger mirrors.
+
+Они не блокируют v1.
+
+Поведение должно оставаться консервативным.
+
+Особенно:
+
+```text
+объект отсутствует в incremental response
+!=
+REMOVED
+```
+
+---
+
+# 11. Этап 2A — COMPLETE
+
+Canonical State Contract утверждён:
+
+```text
+Docs/CANONICAL_STATE_SPEC.md
+Docs/canonical_state_schema_draft.json
+Docs/canonical_state_test_matrix.json
+```
+
+Canonical State является отдельным Bitrix data layer.
+
+Он не заменяет:
+
+* LLM analysis;
+* `entity_memory`;
+* FULL/MINI/SKIP state;
+* analysis provenance;
+* evidence coverage.
+
+---
+
+# 12. Canonical identity
+
+Основное правило:
+
+```text
+canonical_key =
+entity_type + ":" + Bitrix ID
+```
+
+Примеры:
+
+```text
+deal:18733
+activity:663125
+task:49769
+timeline_comment:2910619
+```
+
+Subtype:
+
+```text
+call
+email
+message
+task
+```
+
+не входит в identity.
+
+---
+
+# 13. Canonical fingerprints
+
+Используются два fingerprint.
+
+## semantic_fingerprint
+
+```text
+hash(semantic)
+```
+
+Меняется только при изменении business meaning.
+
+## raw_fingerprint
+
+```text
+hash(
+    semantic
+    +
+    revision-relevant metadata
+)
+```
+
+Revision metadata может включать:
+
+```text
+LAST_UPDATED
+DATE_MODIFY
+MODIFY_BY_ID
+```
+
+Не входят ни в один fingerprint:
+
+```text
+observed_at
+fetch timestamp
+local normalization timestamp
+FILES URL
+_efd
+auth/token
+transport metadata
+```
+
+---
+
+# 14. Canonical delta v1
+
+Типы:
+
+```text
+NEW
+UPDATED_MEANINGFUL
+UPDATED_TECHNICAL
+```
+
+`UNCHANGED` обычно не emit.
+
+Пока отсутствуют:
+
+```text
+REMOVED
+REMOVED_UNCONFIRMED
+```
+
+Примеры:
+
+```text
+новый email ID
+→ NEW
+
+тот же call ID, COMPLETED N→Y
+→ UPDATED_MEANINGFUL
+
+тот же call ID, recording file changed
+→ UPDATED_MEANINGFUL
+
+только LAST_UPDATED
+→ UPDATED_TECHNICAL
+
+только DATE_MODIFY
+→ UPDATED_TECHNICAL
+```
+
+---
+
+# 15. CURRENT STEP — 2B
+
+```text
+CURRENT STEP = 2B
+```
+
+## Privacy-safe fixtures + tests
+
+Источник:
+
+```text
+Docs/canonical_state_test_matrix.json
+```
+
+Тесты T01–T18.
+
+Fixtures не должны содержать customer PII.
+
+Не коммитить:
+
+* полный raw Bitrix bundle;
+* SUBJECT;
+* DESCRIPTION;
+* COMMENT;
+* `COMMUNICATIONS.VALUE`;
+* реальные phone/email;
+* настоящие auth/_efd tokens.
+
+Использовать минимальные synthetic fixtures, воспроизводящие структуру реальных audit cases.
+
+---
+
+# 16. Этап 2C — minimal canonical engine
+
+После 2B.
+
+Минимальные чистые функции:
+
+```text
+canonical_key
+activity_subtype
+normalize_file_ids
+
+project_activity
+project_deal
+project_task
+project_timeline_comment
+project_im_message
+
+fingerprints
+merge
+diff
+```
+
+На этом этапе запрещено:
+
+```text
+LLM
+decision engine wiring
+snapshot.py replacement
+DB migration
+entity_state modification
+production integration
+```
+
+---
+
+# 17. Этап 2D — mandatory replay
+
+Unit tests недостаточно.
+
+До перехода к LLM необходимо replay сохранённых audit-сценариев.
+
+Минимально проверить:
+
+```text
+A/B FILES _efd
+→ delta EMPTY
+
+call completion
+→ same ID + meaningful revision
+
+recording replacement
+→ same call + meaningful revision
+
+email 662983
+→ NEW
+→ later revision
+
+timeline 2910619
+→ same identity + revision
+
+tasks
+→ deadline/status revisions
+
+C_018 accumulated incremental
+vs
+Z FULL
+→ same canonical state
+```
+
+Только после успешного replay canonical layer считается proven.
+
+---
+
+# 18. Критически важно: CURRENT STATE ≠ TRUSTED ANALYSIS BASELINE
+
+Current canonical state и state, который последний successful LLM реально видел, — разные вещи.
+
+Это обязательный архитектурный invariant.
+
+Опасный сценарий:
+
+```text
+FULL A success
+        ↓
+Bitrix change X
+        ↓
+canonical обновился
+        ↓
+MINI / SKIP / LLM error
+        ↓
+Bitrix change Y
+```
+
+Если следующий LLM получит только:
+
+```text
+previous fetch → current fetch
+```
+
+он может увидеть Y и потерять X.
+
+Поэтому нужны два логических состояния:
+
+```text
+CURRENT CANONICAL STATE
+```
+
+и
+
+```text
+LAST TRUSTED ANALYSIS BASELINE
+```
+
+Либо эквивалентный механизм:
+
+```text
+PENDING UNANALYZED DELTA
+```
+
+---
+
+# 19. Trusted baseline продвигается только после успешного анализа
+
+Baseline нельзя обновлять просто после Bitrix fetch.
+
+Он продвигается только после:
+
+```text
+LLM SUCCESS
++
+VALIDATION SUCCESS
++
+PERSISTENCE SUCCESS
+```
+
+Если:
+
+```text
+incremental error
+validation failed
+persistence failed
+```
+
+baseline остаётся прежним.
+
+Current canonical state при этом может продолжать обновляться.
+
+Следующий LLM должен получить **все изменения относительно последнего trusted baseline**, а не только последнего fetch.
+
+---
+
+# 20. MINI / SKIP и baseline
+
+MINI и SKIP не означают автоматически:
+
+```text
+LLM видел это изменение
+```
+
+Поэтому нужно чётко разделять:
+
+```text
+canonical state advanced
+```
+
+и:
+
+```text
+trusted LLM baseline advanced
+```
+
+Если событие было классифицировано как не требующее LLM, routing layer должен явно определить, должно ли оно считаться covered для будущего анализа.
+
+По умолчанию нельзя молча считать его увиденным LLM.
+
+---
+
+# 21. Evidence / transcript delta — отдельный слой
+
+Canonical state знает identity/hashes бизнес-событий.
+
+Но будущему LLM нужны реальные тексты новых evidence.
+
+В репозитории уже существует полезный фундамент:
+
+```text
+openai_api/llm/deal_evidence.py
+```
+
+В нём используются identity:
+
+```text
+call:<activity_id>
+email:<activity_id>
+message:<activity_id>
+```
+
+и:
+
+```text
+content_hash
+revision
+evidence coverage
+evidence_ids_included
+```
+
+Эти primitives нужно переиспользовать, если они проходят тесты.
+
+Не возрождать старую сложную V1/V2 incremental architecture.
+
+---
+
+# 22. Evidence identity
+
+Для звонка:
+
+```text
+call:<activity_id>
+```
+
+Для входящего email:
+
+```text
+email:<activity_id>
+```
+
+Для входящего message:
+
+```text
+message:<activity_id>
+```
+
+Filename, filesystem path и mtime не являются business identity evidence.
+
+---
+
+# 23. Evidence revision
+
+Если:
+
+```text
+evidence_id тот же
+content_hash тот же
+```
+
+→ evidence уже известно, повторно не отправлять.
+
+Если:
+
+```text
+evidence_id тот же
+content_hash изменился
+```
+
+→ revision.
+
+Передать новое содержимое LLM.
+
+Если:
+
+```text
+evidence_id новый
+```
+
+→ NEW EVIDENCE.
+
+---
+
+# 24. Transcript delta
+
+Особенно важно для стоимости.
+
+Старые неизменившиеся транскрипты не должны каждый раз возвращаться в prompt.
+
+Правила:
+
+```text
+new call transcript
+→ send
+
+same call + changed transcript content_hash
+→ send revision
+
+same call + same content_hash
+→ don't send
+```
+
+Activity ID связывает:
+
+```text
+CRM call
+↔
+transcript evidence
+```
+
+---
+
+# 25. Evidence coverage последнего trusted analysis
+
+Недостаточно знать:
+
+```text
+evidence когда-то существовал
+```
+
+Нужно знать:
+
+```text
+какую revision/content_hash
+последний trusted analysis реально получил
+```
+
+То есть baseline должен отражать actual LLM coverage.
+
+Не считать evidence covered только потому, что оно лежит локально.
+
+---
+
+# 26. Этап 3 — CRM + evidence delta
+
+После canonical replay.
+
+Нужно получить два логических delta:
+
+```text
+CRM SEMANTIC DELTA
+```
+
+и
+
+```text
+CLIENT EVIDENCE / TRANSCRIPT DELTA
+```
+
+CRM delta строится относительно baseline состояния, соответствующего последнему trusted LLM analysis.
+
+Evidence delta строится относительно trusted evidence coverage.
+
+---
+
+# 27. UPDATED_TECHNICAL и LLM
+
+`UPDATED_TECHNICAL` нужен для диагностики/cursor/reconciliation.
+
+Обычно его не требуется передавать LLM.
 
 Например:
 
 ```text
-missing previous analysis
-corrupt state
-schema incompatibility
-validation failed
-unresolved contradiction
-delta integrity failure
+LAST_UPDATED changed
+semantic unchanged
 ```
 
-Не делать FULL только потому, что изменений много.
+не должен увеличивать платный prompt.
 
 ---
 
-# ЭТАП 5. Новый LLM INCREMENTAL
+# 28. Этап 4 — Trusted analysis contract
 
-Только после завершения ЭТАПОВ 1–4.
+Перед созданием incremental analyzer определить минимальные условия trusted baseline.
 
-Не создавать:
+Например:
 
 ```text
-V1
-V2
-V3
+previous complete analysis exists
+last analysis run successful
+analysis schema valid
+schema/prompt version compatible
+baseline reference/fingerprint known
+evidence coverage trustworthy
 ```
 
-Название режима:
+Не создавать новый сложный semantic checkpoint framework.
+
+Максимально переиспользовать текущий persisted complete analysis и provenance.
+
+---
+
+# 29. Этап 5 — настоящий INCREMENTAL LLM
+
+Вход:
 
 ```text
-INCREMENTAL
-```
+PREVIOUS TRUSTED COMPLETE ANALYSIS
 
-## Вход
+CRM SEMANTIC DELTA
 
-Ориентировочно:
-
-```text
-PREVIOUS TRUSTED ANALYSIS
-
-SEMANTIC DELTA
-
-CURRENT CHANGED CRM FACTS
-
-NEW/REVISED COMMUNICATIONS
+NEW/REVISED CLIENT EVIDENCE
 
 NEW/REVISED TRANSCRIPTS
 
-RELEVANT KNOWLEDGE
+CURRENT REQUIRED CRM FACTS
 
 CURRENT STAGE POLICY
+
+RELEVANT KNOWLEDGE
 ```
 
-Важно:
+Не отправлять повторно:
 
-предыдущий analysis используется не как безусловная истина, а как предыдущее понимание, которое новая информация может:
+```text
+old unchanged history
+old unchanged emails
+old unchanged messages
+old unchanged transcripts
+```
+
+---
+
+# 30. Previous analysis — не абсолютная истина
+
+Incremental prompt должен явно объяснять:
+
+> Previous analysis — это предыдущее проверенное понимание сделки, а не immutable truth.
+
+Новая evidence может:
 
 ```text
 preserve
@@ -655,93 +967,283 @@ revise
 invalidate
 ```
 
+старые выводы.
+
+Модель должна уметь:
+
+* сохранять старые факты, если они всё ещё актуальны;
+* пересматривать устаревшие выводы;
+* разрешать contradictions;
+* обновлять risk/next action/qualification;
+* не придумывать evidence.
+
 ---
 
-# ЭТАП 5.1. Полный output
+# 31. Incremental output
 
-Incremental не должен возвращать:
+Output всегда полный.
+
+Не:
 
 ```text
 patch
 diff
-только изменённые sections
+changed sections only
 ```
 
-Он должен вернуть такой же полный analysis JSON, как FULL.
-
-Пример:
+А:
 
 ```text
-FULL output schema
+complete current analysis JSON
+```
+
+После normalizer/validator:
+
+```text
+FULL schema
 ==
-INCREMENTAL output schema
+INCREMENTAL schema
 ```
-
-Это критически важно для:
-
-* UI;
-* API;
-* storage;
-* history;
-* downstream logic.
 
 ---
 
-# ЭТАП 5.2. Semantic State
+# 32. Knowledge Base
 
-Не создавать отдельную сложную semantic-state архитектуру заранее.
+Не урезать KB без доказанной необходимости.
 
-Сначала использовать наиболее простую модель:
+Основная экономия должна идти от исключения старой evidence/history.
+
+На первом incremental MVP допустимо передавать тот же небольшой набор обязательных rules/policies, если его стоимость невелика.
+
+Relevant retrieval/section selection можно оптимизировать позже.
+
+---
+
+# 33. Validation
+
+Incremental проходит существующий production validator.
+
+Не создавать отдельный слабый validator.
+
+Проверяются те же обязательные поля и ограничения, что и для FULL.
+
+---
+
+# 34. Fallback
+
+Если incremental:
 
 ```text
-previous valid analysis
-+
-delta
-→
-updated complete analysis
+invalid
+incomplete
+schema incompatible
+execution error
+unsafe baseline
+unresolved contradiction
 ```
 
-Если после практических тестов окажется, что отдельный structured semantic state действительно нужен, добавить его позже.
+→ выполнить один:
 
-Не вводить его только ради архитектурной красоты.
+```text
+FULL_REBUILD
+```
+
+Без бесконечной цепочки paid retries.
+
+Причина fallback обязательно логируется.
+
+Успешный FULL_REBUILD становится новым trusted baseline.
 
 ---
 
-# ЭТАП 6. Сравнение FULL vs INCREMENTAL
+# 35. Decision policy
 
-Перед production rollout новый режим должен пройти сравнение с текущим FULL.
+Routing подключается только после готового incremental analyzer.
 
-## Методика
+Целевая логика примерно:
 
-Берём сохранённое состояние сделки:
+```text
+нет trusted baseline
+→ INITIAL_FULL
+
+нет meaningful изменений
+→ MINI / SKIP по текущей логике
+
+meaningful analyzable change
++ trusted baseline
+→ INCREMENTAL_LLM_ANALYSIS
+
+incremental unsafe
+→ FULL_REBUILD
+
+--force-llm
+→ FULL
+```
+
+Важно:
+
+не каждое `UPDATED_MEANINGFUL` автоматически требует LLM.
+
+Нужно сохранить существующее разделение business importance / hard / soft / MINI.
+
+---
+
+# 36. analyze_deal_if_changed.py
+
+Текущую защиту:
+
+```text
+INCREMENTAL_LLM_ANALYSIS
+→ FULL_LLM_ANALYSIS
+```
+
+не удалять заранее.
+
+Удалять/заменять её только после:
+
+```text
+canonical tests green
+audit replay green
+evidence delta tests green
+incremental analyzer tests green
+validation/fallback tests green
+```
+
+---
+
+# 37. Persistence
+
+По возможности переиспользовать существующий successful persistence path:
+
+```text
+save_analysis_run
+update_entity_memory
+upsert_entity_state
+analysis provenance
+evidence_ids_included
+```
+
+FULL и INCREMENTAL должны иметь максимально общий final persistence flow.
+
+Новая DB architecture допускается только если текущего storage объективно недостаточно.
+
+---
+
+# 38. Transactional invariant
+
+Новый trusted baseline можно сохранить только после полного успешного цикла:
+
+```text
+LLM
+↓
+validation
+↓
+files/state persistence
+↓
+analysis run persisted
+↓
+baseline advancement
+```
+
+Нельзя сначала продвинуть baseline, а потом пытаться сохранить analysis.
+
+---
+
+# 39. Observability
+
+Для каждого paid analysis желательно сохранять:
+
+```text
+analysis_mode
+
+decision_reason
+
+baseline_run_id
+baseline_fingerprint
+
+canonical_from_fingerprint
+canonical_to_fingerprint
+
+changed_entity_count
+change types
+
+evidence_delta_count
+transcript_delta_count
+
+input_tokens
+cached_tokens
+output_tokens
+
+cost_usd
+cost_rub
+
+model
+prompt_version
+
+validation_result
+
+fallback
+fallback_reason
+```
+
+Только реальные usage metrics API.
+
+Ничего не вычислять «на глаз», если метрики доступны напрямую.
+
+---
+
+# 40. Главная cost metric
+
+Сравнивать:
+
+```text
+FULL input tokens
+vs
+INCREMENTAL input tokens
+```
+
+и:
+
+```text
+FULL cost
+vs
+INCREMENTAL cost
+```
+
+на одинаковых реальных состояниях сделки.
+
+Не задавать заранее искусственный процент экономии.
+
+Цель:
+
+```text
+значительно меньше input
+при сопоставимом business-quality output
+```
+
+---
+
+# 41. Этап 6 — FULL vs INCREMENTAL evaluation
+
+Метод:
 
 ```text
 STATE A
-```
-
-Запускаем FULL.
-
-Получаем:
-
-```text
+↓
+FULL(A)
+↓
 ANALYSIS A
-```
 
-Затем добавляем реальные новые Bitrix events:
-
-```text
 STATE B
 ```
 
-Делаем два анализа.
-
-### Контроль
+Контроль:
 
 ```text
-FULL(STATE B)
+FULL(B)
 ```
 
-### Эксперимент
+Эксперимент:
 
 ```text
 INCREMENTAL(
@@ -750,193 +1252,274 @@ INCREMENTAL(
 )
 ```
 
-После этого сравниваем результаты.
-
 ---
 
-# Что сравнивать
+# 42. Что сравнивать
 
-Не требовать идентичного текста.
+Не буквальный текст.
 
-Сравнивать бизнес-смысл.
+Сравнивать business meaning:
 
-Минимально:
-
-* current deal state;
+* deal state;
 * main risk;
 * qualification;
 * new event;
 * what changed;
-* next action;
-* manager recommendation;
-* ROP recommendation;
+* manager next action;
+* ROP action;
 * payment blocker;
 * commitments;
 * source conflicts;
-* key facts;
+* critical facts;
 * communication quality;
 * contradictions;
-* hallucinations.
+* hallucinations;
+* lost important facts.
 
 ---
 
-# Дополнительно измерять
+# 43. Multi-step drift test
 
-Для каждого запуска сохранять:
+Одного A→B сравнения недостаточно.
+
+Нужно проверить:
 
 ```text
-mode
-reason
-input tokens
-cached tokens
-output tokens
-cost RUB/USD
-delta size
-number of changed entities
-fallback yes/no
-fallback reason
-validation result
+FULL A
+→ INCREMENTAL B
+→ INCREMENTAL C
+→ INCREMENTAL D
+→ INCREMENTAL E
 ```
 
----
+Затем сравнить:
 
-# Критерий успешности
+```text
+INCREMENTAL CHAIN(E)
+```
 
-Incremental можно считать готовым только если одновременно выполняется:
+с:
 
-## Качество
+```text
+FRESH FULL(E)
+```
 
-Результат по ключевым бизнес-выводам сопоставим с FULL.
-
-## Стоимость
-
-Input существенно меньше FULL.
-
-## Надёжность
-
-Большинство обычных повторных анализов не переходит в FULL_REBUILD.
-
-## Данные
-
-Нет ложных новых событий из-за технических Bitrix updates.
-
-## Совместимость
-
-UI/API/DB получают тот же финальный analysis contract.
+Это защита от постепенного telephone-game drift.
 
 ---
 
-# Production rollout
+# 44. Periodic FULL rebuild
 
-После локальных тестов:
+Не вводить заранее фиксированный rebuild:
+
+```text
+каждые N запусков
+```
+
+без данных.
+
+Если multi-step evaluation покажет накопление drift — определить rebuild policy экспериментально.
+
+---
+
+# 45. Production rollout
+
+Только после локальных сравнений.
 
 ## Шаг 1
 
-Включить на небольшой группе сделок.
+Небольшая выборка сделок.
 
 ## Шаг 2
 
 Логировать:
 
 ```text
-FULL / INCREMENTAL
-reason
+FULL
+INCREMENTAL
+fallback
 cost
 validation
-fallback
 ```
 
 ## Шаг 3
 
-Проверить реальные результаты РОПом.
+Сравнивать реальные выводы РОПом.
 
 ## Шаг 4
 
-Постепенно расширить.
+Расширять постепенно.
 
-Не делать сложный permanent shadow framework.
-
-Для rollout достаточно простой временной диагностики.
+Не создавать permanent shadow framework.
 
 ---
 
-# Что сейчас НЕ делаем
+# 46. Совместимость
 
-До завершения исследования Bitrix:
-
-* не пишем новый LLM incremental;
-* не меняем FULL prompt;
-* не оптимизируем JSON;
-* не строим semantic state;
-* не создаём V3;
-* не делаем новый shadow framework;
-* не меняем production API/UI;
-* не делаем destructive DB migrations.
-
----
-
-# Текущий следующий шаг
-
-## СЕЙЧАС ВЫПОЛНЯЕТСЯ ТОЛЬКО ЭТАП 1
-
-Нужно:
-
-1. изучить существующие механизмы Bitrix sync/snapshot/merge;
-2. сделать безопасный диагностический сбор последовательных слепков;
-3. несколько часов собирать реальные изменения;
-4. специально провести разные сценарии;
-5. получить машинно-читаемую историю ревизий;
-6. проанализировать шумные и значимые поля;
-7. подготовить итоговый отчёт для проектирования canonical state.
-
-После этого:
-
-**STOP.**
-
-Не переходить автоматически к реализации нового incremental.
-
-Сначала результаты ЭТАПА 1 должны быть проанализированы и на их основании утверждены правила ЭТАПОВ 2–3.
-
----
-
-# Основная архитектурная цепочка
-
-Вся система должна в итоге строиться именно в таком порядке:
+Не менять внешний contract:
 
 ```text
-BITRIX
-   ↓
-RAW DATA
-   ↓
-CANONICAL STATE
-   ↓
-SEMANTIC DELTA
-   ↓
-FULL / INCREMENTAL DECISION
-   ↓
-LLM
-   ↓
-VALIDATION
-   ↓
-NEW TRUSTED ANALYSIS
+analysis JSON
+API
+UI
+reports
 ```
 
-Если слой:
+Для пользователя FULL и INCREMENTAL должны давать один продуктовый результат.
 
-```text
-CANONICAL STATE → SEMANTIC DELTA
-```
-
-не доказан как надёжный, переходить к LLM incremental нельзя.
+Mode может присутствовать только как диагностическая metadata.
 
 ---
 
-# Главный принцип проекта
+# 47. Не делать
 
-Мы не пытаемся сделать анализ дешевле за счёт урезания качества.
+Не создавать:
 
-Мы хотим оставить качество текущего FULL, но перестать каждый раз заново объяснять модели то, что она уже знает.
+```text
+Incremental V2
+Incremental V3
+Incremental V4
+```
 
-Поэтому:
+Не строить:
 
-**сначала идеальная инкрементальность данных, потом инкрементальность LLM.**
+```text
+сложный semantic checkpoint framework
+event sourcing
+CQRS
+новый permanent shadow framework
+```
+
+Не делать migrations без необходимости.
+
+Не переписывать существующий FULL.
+
+Не ослаблять validation.
+
+Не оптимизировать JSON ради нескольких токенов раньше основной экономии.
+
+---
+
+# 48. Актуальный roadmap
+
+## COMPLETE
+
+```text
+Stage 1
+Bitrix behavior audit
+
+Stage 1.5
+FILES + CALL lifecycle + list/get audit
+
+Stage 2A
+Canonical State Contract
+```
+
+## CURRENT
+
+```text
+Stage 2B
+privacy-safe fixtures + tests
+```
+
+## NEXT
+
+```text
+Stage 2C
+minimal canonical engine
+
+Stage 2D
+audit replay
+
+Stage 3
+CRM semantic delta
++
+evidence/transcript delta
+
+Stage 4
+trusted baseline contract
+
+Stage 5
+incremental analyzer
+
+Stage 5.1
+decision routing
+
+Stage 6
+FULL vs INCREMENTAL evaluation
++
+multi-step drift evaluation
+
+Stage 7
+controlled production rollout
+```
+
+---
+
+# 49. Ключевой критерий готовности
+
+Настоящий INCREMENTAL можно считать успешным только если одновременно выполняются:
+
+## DATA CORRECTNESS
+
+Новые/revised Bitrix/evidence данные не теряются.
+
+## QUALITY
+
+Business conclusions сопоставимы с свежим FULL.
+
+## COST
+
+Input context и стоимость существенно ниже повторного FULL.
+
+## RELIABILITY
+
+Обычные обновления не превращаются постоянно в FULL_REBUILD.
+
+## COMPATIBILITY
+
+UI/API/report contract не меняется.
+
+---
+
+# 50. Главный принцип проекта
+
+Мы не делаем более дешёвый «обрезанный анализ».
+
+Мы делаем тот же качественный актуальный анализ, но модель больше не получает каждый раз всю старую историю.
+
+Формула:
+
+```text
+FIRST FULL
+=
+всё необходимое
+
+NEXT ANALYSIS
+=
+previous trusted understanding
++
+только то, что действительно изменилось
+```
+
+Главный технический invariant:
+
+> Current state может двигаться постоянно, но trusted analysis baseline двигается только после успешного валидированного и сохранённого LLM analysis.
+
+Главный продуктовый принцип:
+
+> Сначала надёжная инкрементальность данных, затем инкрементальность LLM.
+
+---
+
+# CURRENT STATUS
+
+```text
+STAGE_1_BITRIX_AUDIT = COMPLETE
+STAGE_1_5_FILES_CALL_AUDIT = COMPLETE
+STAGE_2A_CANONICAL_SPEC = COMPLETE
+
+CURRENT_STEP = 2B
+
+NEXT_STEP = PRIVACY_SAFE_FIXTURES_AND_TESTS
+```

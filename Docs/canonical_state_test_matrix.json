@@ -136,7 +136,7 @@
       "fixture": "F_EMAIL_662983 later COMPLETED/STATUS/LAST_UPDATED",
       "input": "same ID after status fill-in",
       "expected_canonical": "still activity:662983; one entity",
-      "expected_delta": "UPDATED_MEANINGFUL; not NEW; changed_semantic_fields includes completed and/or status",
+      "expected_delta": "UPDATED_MEANINGFUL; not NEW; changed_semantic_fields [completed, status]; changed_metadata_fields [last_updated]",
       "invariant": "I3"
     },
     {
@@ -151,10 +151,10 @@
     {
       "id": "T11",
       "name": "task deadline change",
-      "fixture": "F_TASK_49769 and/or F_TASK_ACTIVITY_627763",
-      "input": "deadline/DEADLINE changes; ID same",
-      "expected_canonical": "same task:49769 or activity:627763",
-      "expected_delta": "UPDATED_MEANINGFUL; changed_semantic_fields includes deadline",
+      "fixture": "F_TASK_49769 and F_TASK_ACTIVITY_627763",
+      "input": "for both namespaces deadline/DEADLINE changes while each ID stays the same",
+      "expected_canonical": "keys remain task:49769 and activity:627763",
+      "expected_delta": "both entities UPDATED_MEANINGFUL; each changed_semantic_fields [deadline]; neither is NEW",
       "invariant": "I3"
     },
     {
@@ -171,8 +171,8 @@
       "name": "incomplete incremental response does not delete",
       "fixture": "state with activities A,B,C; incremental batch only B updated",
       "input": "successful incremental list that omits A and C",
-      "expected_canonical": "A,B,C all remain; B maybe revised",
-      "expected_delta": "no REMOVED; A and C have no entries",
+      "expected_canonical": "A,B,C all remain; B is replaced by its revised projection",
+      "expected_delta": "one UPDATED_MEANINGFUL entry for B; A and C have no entries; no REMOVED",
       "invariant": "I4"
     },
     {
@@ -180,7 +180,7 @@
       "name": "failed source keeps previous state",
       "fixture": "good state then activities ok=false empty items",
       "input": "merge(S, failed_batch)",
-      "expected_canonical": "entities identical to S; source_status.activities failed/stale",
+      "expected_canonical": "entities identical to S; source_status.activities failed",
       "expected_delta": "no entity NEW/UPDATED from the failed source; no wipe",
       "invariant": "I5"
     },
@@ -197,9 +197,9 @@
       "id": "T16",
       "name": "list vs get must not become canonical source",
       "fixture": "stage 1.5 email 627981 list has COMMUNICATIONS, get omits them",
-      "input": "normalize(list_item) vs normalize(get_item)",
-      "expected_canonical": "engine consumes list; get-only fixture is not a merge input",
-      "expected_delta": "n/a — guard test that activity source is crm.activity.list",
+      "input": "project_activity(list_item, source=crm.activity.list) succeeds; project_activity(get_item, source=crm.activity.get) raises ValueError",
+      "expected_canonical": "list projection has key activity:627981; get-only projection is rejected",
+      "expected_delta": "no merge is attempted for the rejected get-only input",
       "invariant": "activity source rule"
     },
     {
@@ -208,7 +208,7 @@
       "fixture": "F_CALL_663125",
       "input": "same ID across in-progress and completed",
       "expected_canonical": "key remains activity:663125; subtype remains call",
-      "expected_delta": "not a new key",
+      "expected_delta": "one UPDATED_MEANINGFUL entry for activity:663125; no NEW entry; state contains one entity",
       "invariant": "identity = entity_type + Bitrix ID"
     },
     {

@@ -2,10 +2,8 @@
   "schema_id": "canonical_bitrix_state",
   "schema_version": "1",
   "not_a_versioning_framework": true,
-  "owner_scope": {
-    "entity_type": "deal",
-    "entity_id": "18733"
-  },
+  "descriptor_note": "This outer JSON describes the contract; merge_canonical_state returns the bare document object below.",
+  "supported_owner_types": ["deal"],
   "document": {
     "schema_id": "canonical_bitrix_state",
     "schema_version": "1",
@@ -15,11 +13,11 @@
     },
     "observed_at": "ISO-8601 Europe/Moscow or Bitrix offset",
     "source_status": {
-      "activities": "ok|failed|stale",
-      "timeline_comments": "ok|failed|stale",
-      "tasks": "ok|failed|stale",
-      "im_messages": "ok|failed|stale",
-      "deal": "ok|failed|stale"
+      "activities": "ok|failed",
+      "timeline_comments": "ok|failed",
+      "tasks": "ok|failed",
+      "im_messages": "ok|failed",
+      "deal": "ok|failed"
     },
     "entities": {
       "<canonical_key>": {
@@ -45,7 +43,13 @@
   "fingerprint_contract": {
     "semantic_fingerprint": "sha256(canonical_json(semantic))",
     "raw_fingerprint": "sha256(canonical_json({semantic, revision_relevant_metadata}))",
-    "revision_relevant_metadata": ["LAST_UPDATED", "DATE_MODIFY", "MODIFY_BY_ID", "other proven cursor/revision fields"],
+    "revision_relevant_metadata": {
+      "activity": ["last_updated", "created", "author_id", "editor_id"],
+      "deal": ["date_modify", "modify_by_id", "date_create"],
+      "task": ["changed_date"],
+      "timeline_comment": [],
+      "im_message": []
+    },
     "excluded_from_all_fingerprints": ["observed_at", "fetch time", "FILES[].url", "_efd", "auth", "transport tokens", "local acquisition timestamps"]
   },
   "entity_semantic_shapes": {
@@ -127,7 +131,24 @@
       "modify_by_id": "string",
       "date_create": "string",
       "source": "crm.deal.get"
+    },
+    "task": {
+      "changed_date": "string",
+      "source": "tasks.task.get"
     }
+  },
+  "merge_contract": {
+    "result": "bare document plus delta",
+    "full_and_incremental": "upsert-only; absence never removes an entity in v1",
+    "source_status_to_entity_type": {
+      "deal": "deal",
+      "activities": "activity",
+      "tasks": "task",
+      "timeline_comments": "timeline_comment",
+      "im_messages": "im_message"
+    },
+    "failed_source": "ignore incoming entities of that type, retain previous entities, set status failed",
+    "changed_field_order": "ascending field name"
   },
   "delta": {
     "from_semantic_fingerprint": "sha256|null",
@@ -144,8 +165,8 @@
         "changed_metadata_fields": ["last_updated"],
         "before": "semantic object or null for NEW",
         "after": "semantic object",
-        "before_metadata": "optional metadata object",
-        "after_metadata": "optional metadata object"
+        "before_metadata": "metadata object or null for NEW",
+        "after_metadata": "metadata object"
       }
     ],
     "omitted": {

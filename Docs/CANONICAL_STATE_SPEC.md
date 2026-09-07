@@ -51,7 +51,7 @@ LLM на этом шаге нет. Canonical Bitrix State ≠ LLM Analysis ≠ F
 
 ## 2. Архитектурный принцип — максимально просто
 
-Один документ состояния на карточку (deal или lead):
+Один документ состояния на сделку. Stage 2B/2C v1 — **deal-only**; lead требует отдельного контракта и тестов, а не неявного расширения этого schema:
 
 ```text
 canonical_state.json  =  owner + map[canonical_key → current entity]
@@ -343,6 +343,10 @@ Canonical **не** говорит «надо вызывать LLM».
 - не делать обязательным per-activity;
 - не подменять list.
 
+Public gate v1 однозначен: `project_activity(..., source="crm.activity.list")` разрешён, любое другое значение `source`, включая `crm.activity.get`, вызывает `ValueError`.
+
+`activity_subtype` сначала использует `TYPE_ID` (`2 → call`, `4 → email`, `6 → task`), затем fallback по `PROVIDER_ID`/`PROVIDER_TYPE_ID` (`CALL`/`TELPHIN`, `EMAIL`, `IM`/`OPENLINE`/`CHAT`/`WAZZUP`/`TELEGRAM`/`WHATSAPP`/`MAX`, `TASK`/`TODO`), иначе `other`. `PROVIDER_GROUP_ID` не читается и не хранится.
+
 ---
 
 ## 11. Merge algorithm
@@ -354,18 +358,20 @@ merge(state, batch) → (state', delta)
 ```
 
 1. Если `state` пустой и batch успешен → все ключи **NEW** (первый FULL = Canonical State 1).
-2. Если источник в batch `ok=false` → entities этого источника **не трогать**; выставить `source_status=failed/stale`; delta без wipe (I5). Совпадает по духу с `retain_failed_sources`.
+2. Если источник в batch `ok=false` → entities этого источника **не трогать**; выставить `source_status=failed`; delta без wipe (I5). Совпадает по духу с `retain_failed_sources`.
 3. Для каждого успешного entity в batch:
    - ключа не было → insert, NEW;
    - ключ был, semantic_fp тот же, raw_fp другой → replace metadata, UPDATED_TECHNICAL;
    - ключ был, semantic_fp тот же, raw_fp тот же → нет entry (идемпотентность I2);
    - ключ был, semantic_fp другой → replace целиком, UPDATED_MEANINGFUL.
 4. Ключи, которых нет в успешном incremental batch, **оставить** (I4). Не REMOVED.
-5. FULL reconciliation (`force_full`): replace entities этого источника целиком **пришедшим множеством**, но удаление по-прежнему **не подтверждено audit-ом**. Даже на FULL v1 **не эмитит REMOVED**. Расхождение «было в каноне, нет в FULL» — отдельный future `ABSENT_ON_FULL_UNCONFIRMED` только в лог/debug, не в delta contract. Проще и безопаснее: v1 FULL тоже только upsert по ID (как сейчас `merge_items_by_id` на incremental). Для сходимости I8 на deal 18733 этого достаточно: Z не терял ID.
+5. FULL batch в v1 использует тот же upsert по ID. Он не заменяет множество source-entities, не удаляет отсутствующие ключи и не эмитит `REMOVED`. Расхождение «было в каноне, нет в FULL» остаётся только future diagnostic `ABSENT_ON_FULL_UNCONFIRMED`, вне delta contract. Для сходимости I8 на deal 18733 upsert достаточен: Z не терял ID.
 6. Пересчитать агрегатные fingerprint документа.
 7. `communications_index` пересобрать из текущих keys.
 
 Порядок API не влияет: fingerprint считается по отсортированным ключам и отсортированным `file_ids`.
+
+Связь status с entity type фиксирована: `deal → deal`, `activities → activity`, `tasks → task`, `timeline_comments → timeline_comment`, `im_messages → im_message`. Entities источника со статусом `failed` игнорируются, даже если ошибочный batch содержит rows.
 
 ---
 
@@ -402,8 +408,9 @@ UPDATED_TECHNICAL
 
 Правила:
 
-- **NEW**: `before=null`, `after=semantic`; metadata after можно положить.
-- **UPDATED_***: оба semantic; так видно, *что* стало. Correctness важнее токенов.
+- **NEW**: `before=null`, `after=semantic`, `before_metadata=null`, `after_metadata=metadata`.
+- **UPDATED_***: оба semantic и оба metadata обязательны; так видно, *что* стало.
+- `changed_semantic_fields` и `changed_metadata_fields` всегда отсортированы по имени поля.
 - Тела писем/комментариев в delta нет — только hashes. Текст остаётся в raw workspace; будущий LLM incremental читает raw по `key`.
 - Агрегат: `from_semantic_fingerprint` / `to_semantic_fingerprint` (и raw аналоги).
 
@@ -415,12 +422,19 @@ UPDATED_TECHNICAL
 
 Два SHA-256 hex.
 
-**raw_fingerprint** entity: hash semantic-проекции вместе только с revision-relevant metadata (`LAST_UPDATED`, `DATE_MODIFY`, `MODIFY_BY_ID` и аналогичными доказанными cursor/revision полями).
+**raw_fingerprint** entity: hash semantic-проекции вместе только с фиксированным v1-набором revision-relevant metadata:
+
+- activity: `last_updated`, `created`, `author_id`, `editor_id`;
+- deal: `date_modify`, `modify_by_id`, `date_create`;
+- task: `changed_date`;
+- timeline comment / IM message: `{}` (их время/автор уже semantic).
 
 ```text
 semantic_fingerprint = sha256(canonical_json(semantic))
 raw_fingerprint      = sha256(canonical_json({semantic, revision_relevant_metadata}))
 ```
+
+Имена ключей wrapper — буквально `semantic` и `revision_relevant_metadata`. `source` хранится для provenance, но в fingerprint не входит.
 
 Из обоих fingerprint безусловно исключены `observed_at`, время fetch, локальные timestamps получения/нормализации, `FILES[].url`, `_efd`, `auth` и token-параметры. T02: metadata тот же, semantic тот же → оба fingerprint те же, delta пустая. Это **правильно**: `_efd` не revision.
 
