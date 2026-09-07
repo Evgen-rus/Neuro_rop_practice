@@ -1,0 +1,162 @@
+{
+  "schema_id": "canonical_bitrix_state",
+  "schema_version": "1",
+  "not_a_versioning_framework": true,
+  "owner_scope": {
+    "entity_type": "deal",
+    "entity_id": "18733"
+  },
+  "document": {
+    "schema_id": "canonical_bitrix_state",
+    "schema_version": "1",
+    "owner": {
+      "entity_type": "deal",
+      "entity_id": "string"
+    },
+    "observed_at": "ISO-8601 Europe/Moscow or Bitrix offset",
+    "source_status": {
+      "activities": "ok|failed|stale",
+      "timeline_comments": "ok|failed|stale",
+      "tasks": "ok|failed|stale",
+      "im_messages": "ok|failed|stale",
+      "deal": "ok|failed|stale"
+    },
+    "entities": {
+      "<canonical_key>": {
+        "key": "activity:663125",
+        "entity_type": "deal|activity|task|timeline_comment|im_message",
+        "subtype": "call|email|message|task|other|null",
+        "source_id": "663125",
+        "semantic": {},
+        "metadata": {},
+        "semantic_fingerprint": "sha256-hex",
+        "raw_fingerprint": "sha256-hex"
+      }
+    },
+    "semantic_fingerprint": "sha256 of sorted {key: entity.semantic_fingerprint}",
+    "raw_fingerprint": "sha256 of sorted {key: entity.raw_fingerprint}",
+    "derived": {
+      "communications_index": {
+        "crm_activity:663125": "activity:663125",
+        "crm_timeline_comment:2910619": "timeline_comment:2910619"
+      }
+    }
+  },
+  "fingerprint_contract": {
+    "semantic_fingerprint": "sha256(canonical_json(semantic))",
+    "raw_fingerprint": "sha256(canonical_json({semantic, revision_relevant_metadata}))",
+    "revision_relevant_metadata": ["LAST_UPDATED", "DATE_MODIFY", "MODIFY_BY_ID", "other proven cursor/revision fields"],
+    "excluded_from_all_fingerprints": ["observed_at", "fetch time", "FILES[].url", "_efd", "auth", "transport tokens", "local acquisition timestamps"]
+  },
+  "entity_semantic_shapes": {
+    "deal": {
+      "id": "string",
+      "title_hash": "sha256|null",
+      "stage_id": "string",
+      "category_id": "string",
+      "opportunity": "string",
+      "currency_id": "string",
+      "assigned_by_id": "string",
+      "closed": "string",
+      "moved_time": "string",
+      "moved_by_id": "string",
+      "lead_id": "string",
+      "contact_id": "string",
+      "company_id": "string"
+    },
+    "activity": {
+      "kind": "call|email|message|task|other",
+      "type_id": "string",
+      "provider_id": "string",
+      "provider_type_id": "string",
+      "origin_id": "string",
+      "subject_hash": "sha256|null",
+      "description_hash": "sha256|null",
+      "start_time": "string",
+      "end_time": "string",
+      "deadline": "string",
+      "completed": "string",
+      "status": "string",
+      "direction": "string",
+      "responsible_id": "string",
+      "owner_type_id": "string",
+      "owner_id": "string",
+      "missed_call": "bool|null",
+      "file_ids": ["string"],
+      "communications": [
+        {
+          "entity_type_id": "string",
+          "entity_id": "string"
+        }
+      ]
+    },
+    "task": {
+      "id": "string",
+      "status": "string",
+      "deadline": "string",
+      "closed_date": "string",
+      "responsible_id": "string",
+      "title_hash": "sha256|null",
+      "description_hash": "sha256|null"
+    },
+    "timeline_comment": {
+      "id": "string",
+      "created": "string",
+      "author_id": "string",
+      "comment_hash": "sha256|null",
+      "file_ids": ["string"]
+    },
+    "im_message": {
+      "id": "string",
+      "dialog_id": "string",
+      "date": "string",
+      "author_id": "string",
+      "text_hash": "sha256|null"
+    }
+  },
+  "entity_metadata_shapes": {
+    "activity": {
+      "last_updated": "string",
+      "created": "string",
+      "author_id": "string",
+      "editor_id": "string",
+      "source": "crm.activity.list"
+    },
+    "deal": {
+      "date_modify": "string",
+      "modify_by_id": "string",
+      "date_create": "string",
+      "source": "crm.deal.get"
+    }
+  },
+  "delta": {
+    "from_semantic_fingerprint": "sha256|null",
+    "to_semantic_fingerprint": "sha256",
+    "from_raw_fingerprint": "sha256|null",
+    "to_raw_fingerprint": "sha256",
+    "entries": [
+      {
+        "key": "activity:663125",
+        "entity_type": "activity",
+        "subtype": "call",
+        "change_type": "NEW|UPDATED_MEANINGFUL|UPDATED_TECHNICAL",
+        "changed_semantic_fields": ["completed", "status"],
+        "changed_metadata_fields": ["last_updated"],
+        "before": "semantic object or null for NEW",
+        "after": "semantic object",
+        "before_metadata": "optional metadata object",
+        "after_metadata": "optional metadata object"
+      }
+    ],
+    "omitted": {
+      "unchanged_count": 0,
+      "note": "UNCHANGED is a classification, not a default emitted row"
+    }
+  },
+  "forbidden": {
+    "change_types": ["REMOVED", "REMOVED_UNCONFIRMED"],
+    "fingerprint_fields": ["observed_at", "fetch time", "FILES[].url", "_efd", "auth", "transport tokens", "local acquisition timestamps"],
+    "semantic_fields": ["FILES[].url", "_efd", "auth", "DATE_MODIFY", "LAST_UPDATED as sole semantic signal", "PROVIDER_GROUP_ID"],
+    "sources": ["crm.activity.get as sole activity source"]
+  }
+}

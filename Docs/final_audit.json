@@ -1,0 +1,4131 @@
+{
+  "experiment": {
+    "deal_id": "18733",
+    "audit_root": "/var/tmp/neuro_rop_bitrix_audit",
+    "db_path": "/var/tmp/neuro_rop_bitrix_audit/audit.sqlite",
+    "interval_seconds": 240,
+    "write_guard": "BITRIX_DENY_WRITE_METHODS=1",
+    "production_code_unchanged": true,
+    "snapshot_count": 21
+  },
+  "snapshot_sequence": [
+    {
+      "id": "snapshot_A_full",
+      "generated_at": "2026-09-07T10:12:07+03:00",
+      "sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T10:11:55+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T10:12:10+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 33,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_A_full/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_B_full_no_intentional_changes",
+      "generated_at": "2026-09-07T10:26:19+03:00",
+      "sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T10:26:06+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": true,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T10:26:19+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": true
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 29,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_B_full_no_intentional_changes/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_001_incremental",
+      "generated_at": "2026-09-07T10:30:33+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:11:06+03:00",
+        "activity_cursor": "2026-09-07T10:30:25+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:11:19+03:00",
+        "activity_cursor": "2026-09-07T10:30:34+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_001_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_002_incremental",
+      "generated_at": "2026-09-07T10:34:46+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:15:25+03:00",
+        "activity_cursor": "2026-09-07T10:34:40+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:15:34+03:00",
+        "activity_cursor": "2026-09-07T10:34:47+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_002_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_003_incremental",
+      "generated_at": "2026-09-07T10:39:04+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:19:40+03:00",
+        "activity_cursor": "2026-09-07T10:38:54+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:19:47+03:00",
+        "activity_cursor": "2026-09-07T10:39:05+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_003_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_004_incremental",
+      "generated_at": "2026-09-07T10:43:19+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:23:54+03:00",
+        "activity_cursor": "2026-09-07T10:43:12+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:24:05+03:00",
+        "activity_cursor": "2026-09-07T10:43:20+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_004_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_005_incremental",
+      "generated_at": "2026-09-07T10:47:32+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:28:12+03:00",
+        "activity_cursor": "2026-09-07T10:47:26+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:28:20+03:00",
+        "activity_cursor": "2026-09-07T10:47:33+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_005_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_006_incremental",
+      "generated_at": "2026-09-07T10:51:44+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:32:26+03:00",
+        "activity_cursor": "2026-09-07T10:51:39+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:32:33+03:00",
+        "activity_cursor": "2026-09-07T10:51:45+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 134,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 471,
+      "operational_context_fingerprint": "3a6e0a4389da84f2d8d6dd0d7624fbb3272b7161d5a1e6d407148fa73a324c7c",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_006_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_007_incremental",
+      "generated_at": "2026-09-07T10:55:55+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:36:39+03:00",
+        "activity_cursor": "2026-09-07T10:55:49+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:36:45+03:00",
+        "activity_cursor": "2026-09-07T10:55:55+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 135,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 473,
+      "operational_context_fingerprint": "2850b6aa7f7ab2c54ce8e3f2f16ed4448a05836b0ee3a7f07bf6c27a19c477de",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_007_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_008_incremental",
+      "generated_at": "2026-09-07T11:00:14+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:40:49+03:00",
+        "activity_cursor": "2026-09-07T11:00:00+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:40:55+03:00",
+        "activity_cursor": "2026-09-07T11:00:15+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 135,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 473,
+      "operational_context_fingerprint": "2850b6aa7f7ab2c54ce8e3f2f16ed4448a05836b0ee3a7f07bf6c27a19c477de",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_008_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_009_incremental",
+      "generated_at": "2026-09-07T11:04:26+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:45:00+03:00",
+        "activity_cursor": "2026-09-07T11:04:20+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:45:15+03:00",
+        "activity_cursor": "2026-09-07T11:04:28+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 135,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 473,
+      "operational_context_fingerprint": "2850b6aa7f7ab2c54ce8e3f2f16ed4448a05836b0ee3a7f07bf6c27a19c477de",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_009_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_010_incremental",
+      "generated_at": "2026-09-07T11:08:40+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:49:20+03:00",
+        "activity_cursor": "2026-09-07T11:08:34+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:49:28+03:00",
+        "activity_cursor": "2026-09-07T11:08:41+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 476,
+      "operational_context_fingerprint": "6df90ef02f521d5331ff8dc06fd1125fa398f7aff790baaf92b1558d072c7e50",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_010_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_011_incremental",
+      "generated_at": "2026-09-07T11:12:52+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:53:34+03:00",
+        "activity_cursor": "2026-09-07T11:12:47+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:53:41+03:00",
+        "activity_cursor": "2026-09-07T11:12:53+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_011_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_012_incremental",
+      "generated_at": "2026-09-07T11:17:06+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:57:47+03:00",
+        "activity_cursor": "2026-09-07T11:17:00+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T10:57:53+03:00",
+        "activity_cursor": "2026-09-07T11:17:07+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_012_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_013_incremental",
+      "generated_at": "2026-09-07T11:21:22+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:02:00+03:00",
+        "activity_cursor": "2026-09-07T11:21:13+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:02:07+03:00",
+        "activity_cursor": "2026-09-07T11:21:22+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_013_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_014_incremental",
+      "generated_at": "2026-09-07T11:25:34+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:06:13+03:00",
+        "activity_cursor": "2026-09-07T11:25:28+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:06:22+03:00",
+        "activity_cursor": "2026-09-07T11:25:34+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_014_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_015_incremental",
+      "generated_at": "2026-09-07T11:29:43+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:10:28+03:00",
+        "activity_cursor": "2026-09-07T11:29:38+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:10:34+03:00",
+        "activity_cursor": "2026-09-07T11:29:44+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_015_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_016_incremental",
+      "generated_at": "2026-09-07T11:33:54+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:14:38+03:00",
+        "activity_cursor": "2026-09-07T11:33:48+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:14:44+03:00",
+        "activity_cursor": "2026-09-07T11:33:55+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_016_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_017_incremental",
+      "generated_at": "2026-09-07T11:38:11+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:18:48+03:00",
+        "activity_cursor": "2026-09-07T11:38:02+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:18:55+03:00",
+        "activity_cursor": "2026-09-07T11:38:11+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_017_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_C_018_incremental",
+      "generated_at": "2026-09-07T11:42:27+03:00",
+      "sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:23:02+03:00",
+        "activity_cursor": "2026-09-07T11:42:18+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "incremental",
+        "updated_after": "2026-09-07T11:23:11+03:00",
+        "activity_cursor": "2026-09-07T11:42:27+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": false
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 21,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_C_018_incremental/deal_18733_context.json"
+    },
+    {
+      "id": "snapshot_Z_final_full",
+      "generated_at": "2026-09-07T11:46:46+03:00",
+      "sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T11:46:35+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": true,
+        "retry_required": false,
+        "failure_streak": 0,
+        "retry_at": null
+      },
+      "history_sync": {
+        "mode": "full",
+        "updated_after": null,
+        "activity_cursor": "2026-09-07T11:46:46+03:00",
+        "activity_sync_ok": true,
+        "automatic_full_reconciliation": true
+      },
+      "activity_count": 136,
+      "timeline_count": 2,
+      "task_count": 2,
+      "entity_count": 477,
+      "operational_context_fingerprint": "edd0f7c40f35452efb2fdd760660c5aba10b1f7b0da8d3d4065dbd4368bf91f9",
+      "bitrix_calls": 29,
+      "raw_dir": "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_Z_final_full/deal_18733_context.json"
+    }
+  ],
+  "bitrix_methods_observed": [
+    {
+      "method": "crm.activity.list",
+      "count": 90
+    },
+    {
+      "method": "crm.timeline.comment.list",
+      "count": 84
+    },
+    {
+      "method": "im.dialog.messages.get",
+      "count": 51
+    },
+    {
+      "method": "batch",
+      "count": 42
+    },
+    {
+      "method": "crm.contact.get",
+      "count": 42
+    },
+    {
+      "method": "crm.deal.list",
+      "count": 42
+    },
+    {
+      "method": "batch:tasks.task.get",
+      "count": 21
+    },
+    {
+      "method": "batch:user.get",
+      "count": 21
+    },
+    {
+      "method": "crm.company.get",
+      "count": 21
+    },
+    {
+      "method": "crm.deal.contact.items.get",
+      "count": 21
+    },
+    {
+      "method": "crm.deal.get",
+      "count": 21
+    },
+    {
+      "method": "crm.lead.get",
+      "count": 21
+    },
+    {
+      "method": "crm.stagehistory.list",
+      "count": 21
+    },
+    {
+      "method": "im.search.chat.list",
+      "count": 9
+    },
+    {
+      "method": "crm.activity.fields",
+      "count": 1
+    },
+    {
+      "method": "crm.company.fields",
+      "count": 1
+    },
+    {
+      "method": "crm.contact.fields",
+      "count": 1
+    },
+    {
+      "method": "crm.deal.fields",
+      "count": 1
+    }
+  ],
+  "entity_types": {
+    "deal": {
+      "baseline_count": 1,
+      "ids_sample": [
+        "18733"
+      ]
+    },
+    "task": {
+      "baseline_count": 5,
+      "ids_sample": [
+        "627763",
+        "644481",
+        "631047",
+        "49769",
+        "52545"
+      ]
+    },
+    "email": {
+      "baseline_count": 46,
+      "ids_sample": [
+        "627931",
+        "627981",
+        "628023",
+        "628169",
+        "628171",
+        "628179",
+        "630979",
+        "630983"
+      ]
+    },
+    "call": {
+      "baseline_count": 85,
+      "ids_sample": [
+        "628905",
+        "630089",
+        "630977",
+        "631041",
+        "631197",
+        "631585",
+        "631605",
+        "632685"
+      ]
+    },
+    "timeline_comment": {
+      "baseline_count": 2,
+      "ids_sample": [
+        "2916989",
+        "2910619"
+      ]
+    },
+    "im_message": {
+      "baseline_count": 197,
+      "ids_sample": [
+        "4212765",
+        "4209679",
+        "4209379",
+        "4205777",
+        "4205773",
+        "4205771",
+        "4204441",
+        "4203813"
+      ]
+    },
+    "communication": {
+      "baseline_count": 135,
+      "ids_sample": [
+        "crm_activity:627755",
+        "crm_timeline_comment:2906031",
+        "crm_timeline_comment:2910619",
+        "crm_activity:627931",
+        "crm_activity:627981",
+        "crm_activity:628023",
+        "crm_activity:628169",
+        "crm_activity:628171"
+      ]
+    }
+  },
+  "stable_identity_findings": {
+    "activity_ids_stable_across_all_snapshots": false,
+    "ids_only_in_later_snapshots": [
+      "communication:crm_activity:662983",
+      "communication:crm_activity:662995",
+      "email:662983",
+      "email:662995",
+      "im_message:4214659",
+      "im_message:4214687"
+    ],
+    "ids_missing_later": []
+  },
+  "revision_histories": {
+    "communication:crm_timeline_comment:2910619": {
+      "entity_type": "communication",
+      "stable_id": "crm_timeline_comment:2910619",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "event_id": "crm_timeline_comment:2910619",
+            "channel": "internal_comment",
+            "direction": "internal",
+            "occurred_at": "2026-07-23T11:20:29+03:00",
+            "source_ids": [
+              "2910619"
+            ],
+            "content_hash": "fb26c570bb063cffcd992ecdfd7551f4afb860708b5ed7237fc257946cf2ba78",
+            "entity_key": "deal:18733"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:08:40+03:00",
+          "last_source_snapshot": "snapshot_C_010_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_011_incremental",
+          "first_seen_at": "2026-09-07T11:12:52+03:00",
+          "payload": {
+            "event_id": "crm_timeline_comment:2910619",
+            "channel": "internal_comment",
+            "direction": "internal",
+            "occurred_at": "2026-07-23T11:20:29+03:00",
+            "source_ids": [
+              "2910619"
+            ],
+            "content_hash": "591bef55eba380dbbd60a17f4ad072174a59c29c4611d674184e8aebedd069d3",
+            "entity_key": "deal:18733"
+          },
+          "fields_changed_from_previous": [
+            "content_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    },
+    "deal:18733": {
+      "entity_type": "deal",
+      "stable_id": "18733",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "18733",
+            "TITLE": "Нурбек | ИП Идоленко Р.В. (СППК \"Алатау-Агро\")✅",
+            "STAGE_ID": "C15:UC_IYS2AL",
+            "CATEGORY_ID": "15",
+            "OPPORTUNITY": "650000.00",
+            "CURRENCY_ID": "RUB",
+            "ASSIGNED_BY_ID": "1421",
+            "DATE_CREATE": "2026-07-23T11:22:03+03:00",
+            "DATE_MODIFY": "2026-09-01T09:09:32+03:00",
+            "MOVED_TIME": "2026-09-01T09:09:31+03:00",
+            "MOVED_BY_ID": "1421",
+            "CLOSED": "N",
+            "CLOSEDATE": "2026-07-30T03:00:00+03:00",
+            "BEGINDATE": "2026-07-23T03:00:00+03:00",
+            "LEAD_ID": "231151",
+            "CONTACT_ID": "36731",
+            "COMPANY_ID": "15725",
+            "PROBABILITY": null,
+            "MODIFY_BY_ID": "109"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:29:43+03:00",
+          "last_source_snapshot": "snapshot_C_015_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_016_incremental",
+          "first_seen_at": "2026-09-07T11:33:54+03:00",
+          "payload": {
+            "ID": "18733",
+            "TITLE": "Нурбек | ИП Идоленко Р.В. (СППК \"Алатау-Агро\")✅",
+            "STAGE_ID": "C15:UC_IYS2AL",
+            "CATEGORY_ID": "15",
+            "OPPORTUNITY": "650000.00",
+            "CURRENCY_ID": "RUB",
+            "ASSIGNED_BY_ID": "1421",
+            "DATE_CREATE": "2026-07-23T11:22:03+03:00",
+            "DATE_MODIFY": "2026-09-07T11:30:29+03:00",
+            "MOVED_TIME": "2026-09-01T09:09:31+03:00",
+            "MOVED_BY_ID": "1421",
+            "CLOSED": "N",
+            "CLOSEDATE": "2026-07-30T03:00:00+03:00",
+            "BEGINDATE": "2026-07-23T03:00:00+03:00",
+            "LEAD_ID": "231151",
+            "CONTACT_ID": "36731",
+            "COMPANY_ID": "15725",
+            "PROBABILITY": null,
+            "MODIFY_BY_ID": "45"
+          },
+          "fields_changed_from_previous": [
+            "DATE_MODIFY",
+            "MODIFY_BY_ID"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    },
+    "email:627981": {
+      "entity_type": "email",
+      "stable_id": "627981",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "627981",
+            "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+            "START_TIME": "2026-07-23T13:13:40+03:00",
+            "END_TIME": "2026-07-23T18:00:00+03:00",
+            "CREATED": "2026-07-23T13:14:02+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+            "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "0cb56001e10a710b657567499558fda522e94a97a5df5cc591eab3e6eb3ad8f9",
+            "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "627981",
+            "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+            "START_TIME": "2026-07-23T13:13:40+03:00",
+            "END_TIME": "2026-07-23T18:00:00+03:00",
+            "CREATED": "2026-07-23T13:14:02+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+            "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "e697a001eb9a637e0b069229cf5b608db1981840bcf39e0986134de5c44b150e",
+            "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "627981",
+            "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+            "START_TIME": "2026-07-23T13:13:40+03:00",
+            "END_TIME": "2026-07-23T18:00:00+03:00",
+            "CREATED": "2026-07-23T13:14:02+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+            "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "8eb6f2d1aa321d64dcf96c6c8b1a6afb9542de673b15e191e3e0f9b3426665e6",
+            "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:630983": {
+      "entity_type": "email",
+      "stable_id": "630983",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "630983",
+            "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+            "START_TIME": "2026-07-28T09:38:21+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:38:37+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "5b311dffa02dc4c5ff1e3f176226f811df8bfab2da313062982cd32bfeabb940",
+            "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "630983",
+            "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+            "START_TIME": "2026-07-28T09:38:21+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:38:37+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "a70b0cf38085e670c38624e49f218abe80b44cf62c29d9c3aee82b257e8f91e9",
+            "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "630983",
+            "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+            "START_TIME": "2026-07-28T09:38:21+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:38:37+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "54bb5208132e9c6428d441dfeb6cd66b19c64a472157641a7488932ba697ace5",
+            "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:631011": {
+      "entity_type": "email",
+      "stable_id": "631011",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "631011",
+            "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+            "START_TIME": "2026-07-28T09:43:57+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:44:52+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "2eaf7bc33b8c75797508811bf18002e5be9bfa0d3ea434a7fa67248842c1cd3c",
+            "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "631011",
+            "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+            "START_TIME": "2026-07-28T09:43:57+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:44:52+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "d1782ed35fec4c86ee5588d6f65b480fa8a7415b2e6a7ce7866de3a3abc4dcbd",
+            "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "631011",
+            "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+            "START_TIME": "2026-07-28T09:43:57+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:44:52+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "81045ee14767eb5f6e2f79d81164de8343d1a5b53c63a441b1dca0c72ee8a1c0",
+            "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:631037": {
+      "entity_type": "email",
+      "stable_id": "631037",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "631037",
+            "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+            "START_TIME": "2026-07-28T09:49:17+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:49:51+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+            "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "474ea0e5547a3ab23fc7318db5c7478419463993ea09e2b3be36ee89bc6eabb8",
+            "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "631037",
+            "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+            "START_TIME": "2026-07-28T09:49:17+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:49:51+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+            "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "77b0775d682517c63099495ba174499638545c7c825947396adfdcd9fe8903bd",
+            "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "631037",
+            "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+            "START_TIME": "2026-07-28T09:49:17+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T09:49:51+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+            "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+            "files_present": true,
+            "files_count": 4,
+            "files_hash": "27fc47e7fc84f4dfacf2a72f6252fdb1503743d0975fa5c86bcad32cf944a094",
+            "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:631185": {
+      "entity_type": "email",
+      "stable_id": "631185",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "631185",
+            "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+            "START_TIME": "2026-07-28T10:46:42+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T10:47:29+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "0cbfb25260d61f477c57b9dc313721664b130b49073e5ed6c5c06f0bc08f7ecb",
+            "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "631185",
+            "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+            "START_TIME": "2026-07-28T10:46:42+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T10:47:29+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "1cb06ad238a51ea6047daf2c2e5ff9da86d15ec68938f65c7df27520ee368645",
+            "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "631185",
+            "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+            "START_TIME": "2026-07-28T10:46:42+03:00",
+            "END_TIME": "2026-07-28T18:00:00+03:00",
+            "CREATED": "2026-07-28T10:47:29+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+            "files_present": true,
+            "files_count": 6,
+            "files_hash": "215d07e05a7e9643f1e865eb2653cfbbfd5034d9d79c427fc89f56f317440ed7",
+            "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:631589": {
+      "entity_type": "email",
+      "stable_id": "631589",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "631589",
+            "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+            "START_TIME": "2026-07-28T13:08:38+03:00",
+            "END_TIME": "2026-07-28T13:08:38+03:00",
+            "CREATED": "2026-07-28T13:08:39+03:00",
+            "DEADLINE": "2026-07-28T13:08:38+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+            "files_present": true,
+            "files_count": 2,
+            "files_hash": "431e2b5593ecfa9a9e1088413b36d23e083d93b645ec43ab0638f39f71aa2227",
+            "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "631589",
+            "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+            "START_TIME": "2026-07-28T13:08:38+03:00",
+            "END_TIME": "2026-07-28T13:08:38+03:00",
+            "CREATED": "2026-07-28T13:08:39+03:00",
+            "DEADLINE": "2026-07-28T13:08:38+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+            "files_present": true,
+            "files_count": 2,
+            "files_hash": "89e54eafd2a318c89886352ee0e49b6a13108fe86b35cd71985ec1989d4375ac",
+            "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "631589",
+            "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+            "START_TIME": "2026-07-28T13:08:38+03:00",
+            "END_TIME": "2026-07-28T13:08:38+03:00",
+            "CREATED": "2026-07-28T13:08:39+03:00",
+            "DEADLINE": "2026-07-28T13:08:38+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+            "files_present": true,
+            "files_count": 2,
+            "files_hash": "46056407c2fcf03facfeffe28ed6127081cff834300fb8d0d0fa321c6ce9ed7e",
+            "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:632203": {
+      "entity_type": "email",
+      "stable_id": "632203",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "632203",
+            "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+            "START_TIME": "2026-07-28T17:05:23+03:00",
+            "END_TIME": "2026-07-28T17:05:23+03:00",
+            "CREATED": "2026-07-28T17:05:23+03:00",
+            "DEADLINE": "2026-07-28T17:05:23+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "4714293a7c6497c2bdbf433789a79069578e968a9bd51555324a2559c6b474f8",
+            "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "632203",
+            "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+            "START_TIME": "2026-07-28T17:05:23+03:00",
+            "END_TIME": "2026-07-28T17:05:23+03:00",
+            "CREATED": "2026-07-28T17:05:23+03:00",
+            "DEADLINE": "2026-07-28T17:05:23+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "f17af7cfc5a17fa67128a35dce9d0dc7e694cd01b372d33d2f84f49bcf6ed3ed",
+            "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "632203",
+            "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+            "START_TIME": "2026-07-28T17:05:23+03:00",
+            "END_TIME": "2026-07-28T17:05:23+03:00",
+            "CREATED": "2026-07-28T17:05:23+03:00",
+            "DEADLINE": "2026-07-28T17:05:23+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "84e235d9c76a7661cddc41e46bb21a910d2e15ff363ecb4fb7f12a36ca6e8d08",
+            "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:641109": {
+      "entity_type": "email",
+      "stable_id": "641109",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "641109",
+            "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+            "START_TIME": "2026-08-07T06:23:57+03:00",
+            "END_TIME": "2026-08-07T18:00:00+03:00",
+            "CREATED": "2026-08-07T06:29:47+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "6ac3102fb2238ba395fc33365eea814394f026fb8599cf598d3539b4b8990b3c",
+            "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "641109",
+            "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+            "START_TIME": "2026-08-07T06:23:57+03:00",
+            "END_TIME": "2026-08-07T18:00:00+03:00",
+            "CREATED": "2026-08-07T06:29:47+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "4f722811bbe937e2db5f5b8726c0f74c6eea1a6a2cffdf63aba113a699ee3076",
+            "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "641109",
+            "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+            "START_TIME": "2026-08-07T06:23:57+03:00",
+            "END_TIME": "2026-08-07T18:00:00+03:00",
+            "CREATED": "2026-08-07T06:29:47+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "b40e30efe3cf7137e42a072bda86601db081963746c919e2eb05674dc86df158",
+            "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:641253": {
+      "entity_type": "email",
+      "stable_id": "641253",
+      "revision_count": 3,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "641253",
+            "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+            "START_TIME": "2026-08-07T10:33:05+03:00",
+            "END_TIME": "2026-08-07T10:33:05+03:00",
+            "CREATED": "2026-08-07T10:33:06+03:00",
+            "DEADLINE": "2026-08-07T10:33:05+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "d82d772bfb0e0afc20bd414beb8f585115660da7c6cf4ec7eea065d582b7dd9f",
+            "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ]
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_B_full_no_intentional_changes",
+          "first_seen_at": "2026-09-07T10:26:19+03:00",
+          "payload": {
+            "ID": "641253",
+            "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+            "START_TIME": "2026-08-07T10:33:05+03:00",
+            "END_TIME": "2026-08-07T10:33:05+03:00",
+            "CREATED": "2026-08-07T10:33:06+03:00",
+            "DEADLINE": "2026-08-07T10:33:05+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "9c74e04d67a1b404944f16ed261ee032b16c1f3da7f6623d252e3e7daf3d5eec",
+            "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ],
+          "last_seen_at": "2026-09-07T11:42:27+03:00",
+          "last_source_snapshot": "snapshot_C_018_incremental"
+        },
+        {
+          "revision": "revision_003",
+          "source_snapshot": "snapshot_Z_final_full",
+          "first_seen_at": "2026-09-07T11:46:46+03:00",
+          "payload": {
+            "ID": "641253",
+            "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+            "START_TIME": "2026-08-07T10:33:05+03:00",
+            "END_TIME": "2026-08-07T10:33:05+03:00",
+            "CREATED": "2026-08-07T10:33:06+03:00",
+            "DEADLINE": "2026-08-07T10:33:05+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "2",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+            "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "467ecc3a463d4f2aa7fcd401b745cc22bb8a2d6366b5fbb1981f7ff8c1dc1139",
+            "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+          },
+          "fields_changed_from_previous": [
+            "files_hash"
+          ]
+        }
+      ]
+    },
+    "email:662983": {
+      "entity_type": "email",
+      "stable_id": "662983",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_C_007_incremental",
+          "first_seen_at": "2026-09-07T10:55:55+03:00",
+          "payload": {
+            "ID": "662983",
+            "LAST_UPDATED": "2026-09-07T10:52:32+03:00",
+            "START_TIME": "2026-09-07T10:52:01+03:00",
+            "END_TIME": "2026-09-07T18:00:00+03:00",
+            "CREATED": "2026-09-07T10:52:32+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "N",
+            "STATUS": "1",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "93a6a08571cb71aff093d8dac53b7d215c8c841f7c70487954fc13ef424b02ad",
+            "description_hash": "5c92f377f9cc629149a36c1144d43762b7066533fdac76fa1694eda0e3780be7",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "5ce29647f7b4eb8988b5dbe152a595b5e7a1dfc18a9442c203e7e6be0c3cf912",
+            "communications_hash": "6a049e2996035f6fbeb72338215ff25b953455532b28fa34aaeda0890324b8fe"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:04:26+03:00",
+          "last_source_snapshot": "snapshot_C_009_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_010_incremental",
+          "first_seen_at": "2026-09-07T11:08:40+03:00",
+          "payload": {
+            "ID": "662983",
+            "LAST_UPDATED": "2026-09-07T11:06:14+03:00",
+            "START_TIME": "2026-09-07T10:52:01+03:00",
+            "END_TIME": "2026-09-07T18:00:00+03:00",
+            "CREATED": "2026-09-07T10:52:32+03:00",
+            "DEADLINE": "9999-12-31T00:00:00+03:00",
+            "COMPLETED": "Y",
+            "STATUS": "2",
+            "PROVIDER_ID": "CRM_EMAIL",
+            "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "1",
+            "TYPE_ID": "4",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "93a6a08571cb71aff093d8dac53b7d215c8c841f7c70487954fc13ef424b02ad",
+            "description_hash": "5c92f377f9cc629149a36c1144d43762b7066533fdac76fa1694eda0e3780be7",
+            "files_present": true,
+            "files_count": 1,
+            "files_hash": "5ce29647f7b4eb8988b5dbe152a595b5e7a1dfc18a9442c203e7e6be0c3cf912",
+            "communications_hash": "6a049e2996035f6fbeb72338215ff25b953455532b28fa34aaeda0890324b8fe"
+          },
+          "fields_changed_from_previous": [
+            "COMPLETED",
+            "LAST_UPDATED",
+            "STATUS"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    },
+    "task:49769": {
+      "entity_type": "task",
+      "stable_id": "49769",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "id": "49769",
+            "status": "2",
+            "title": "CRM: получить оплату по счету",
+            "deadline": "2026-09-07T15:05:00+07:00",
+            "closedDate": null,
+            "changedDate": "2026-09-04T15:45:22+07:00",
+            "createdDate": "2026-07-23T15:22:17+07:00",
+            "responsibleId": "1421",
+            "chatId": 145805
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:08:40+03:00",
+          "last_source_snapshot": "snapshot_C_010_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_011_incremental",
+          "first_seen_at": "2026-09-07T11:12:52+03:00",
+          "payload": {
+            "id": "49769",
+            "status": "2",
+            "title": "CRM: получить оплату по счету",
+            "deadline": "2026-09-07T16:05:00+07:00",
+            "closedDate": null,
+            "changedDate": "2026-09-07T15:08:52+07:00",
+            "createdDate": "2026-07-23T15:22:17+07:00",
+            "responsibleId": "1421",
+            "chatId": 145805
+          },
+          "fields_changed_from_previous": [
+            "changedDate",
+            "deadline"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    },
+    "task:627763": {
+      "entity_type": "task",
+      "stable_id": "627763",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "627763",
+            "LAST_UPDATED": "2026-09-04T11:45:22+03:00",
+            "START_TIME": "",
+            "END_TIME": "2026-09-07T11:05:00+03:00",
+            "CREATED": "2026-07-23T11:22:33+03:00",
+            "DEADLINE": "2026-09-07T11:05:00+03:00",
+            "COMPLETED": "N",
+            "STATUS": "1",
+            "PROVIDER_ID": "CRM_TASKS_TASK",
+            "PROVIDER_TYPE_ID": "TASKS_TASK",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "0",
+            "TYPE_ID": "6",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "1f2950a9d20ed717d80f5e41c0710c3a702bbdeb7c4f6458abca107aee6dae5d",
+            "description_hash": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+            "files_present": false,
+            "files_count": 0,
+            "files_hash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "communications_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:08:40+03:00",
+          "last_source_snapshot": "snapshot_C_010_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_011_incremental",
+          "first_seen_at": "2026-09-07T11:12:52+03:00",
+          "payload": {
+            "ID": "627763",
+            "LAST_UPDATED": "2026-09-07T11:08:53+03:00",
+            "START_TIME": "",
+            "END_TIME": "2026-09-07T12:05:00+03:00",
+            "CREATED": "2026-07-23T11:22:33+03:00",
+            "DEADLINE": "2026-09-07T12:05:00+03:00",
+            "COMPLETED": "N",
+            "STATUS": "1",
+            "PROVIDER_ID": "CRM_TASKS_TASK",
+            "PROVIDER_TYPE_ID": "TASKS_TASK",
+            "PROVIDER_GROUP_ID": null,
+            "ORIGIN_ID": null,
+            "DIRECTION": "0",
+            "TYPE_ID": "6",
+            "RESPONSIBLE_ID": "1421",
+            "AUTHOR_ID": "1421",
+            "EDITOR_ID": "1421",
+            "subject_hash": "1f2950a9d20ed717d80f5e41c0710c3a702bbdeb7c4f6458abca107aee6dae5d",
+            "description_hash": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+            "files_present": false,
+            "files_count": 0,
+            "files_hash": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "communications_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          "fields_changed_from_previous": [
+            "DEADLINE",
+            "END_TIME",
+            "LAST_UPDATED"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    },
+    "timeline_comment:2910619": {
+      "entity_type": "timeline_comment",
+      "stable_id": "2910619",
+      "revision_count": 2,
+      "revisions": [
+        {
+          "revision": "revision_001",
+          "source_snapshot": "snapshot_A_full",
+          "first_seen_at": "2026-09-07T10:12:07+03:00",
+          "payload": {
+            "ID": "2910619",
+            "CREATED": "2026-07-23T11:20:29+03:00",
+            "AUTHOR_ID": "1421",
+            "ENTITY_ID": 18733,
+            "ENTITY_TYPE": "deal",
+            "comment_hash": "23d6cc91aab81213a8025ce400956b7a431f5daab2f592b3a75e941f30ed2433",
+            "comment_len": 7794
+          },
+          "fields_changed_from_previous": [
+            "NEW"
+          ],
+          "last_seen_at": "2026-09-07T11:08:40+03:00",
+          "last_source_snapshot": "snapshot_C_010_incremental"
+        },
+        {
+          "revision": "revision_002",
+          "source_snapshot": "snapshot_C_011_incremental",
+          "first_seen_at": "2026-09-07T11:12:52+03:00",
+          "payload": {
+            "ID": "2910619",
+            "CREATED": "2026-07-23T11:20:29+03:00",
+            "AUTHOR_ID": "1421",
+            "ENTITY_ID": 18733,
+            "ENTITY_TYPE": "deal",
+            "comment_hash": "1841b883786631c8e17f3160fe44f97ecc01f447b52d0a4906d9fcb1b06020bc",
+            "comment_len": 7820
+          },
+          "fields_changed_from_previous": [
+            "comment_hash",
+            "comment_len"
+          ],
+          "last_seen_at": "2026-09-07T11:46:46+03:00",
+          "last_source_snapshot": "snapshot_Z_final_full"
+        }
+      ]
+    }
+  },
+  "prior_risks": [
+    {
+      "id": 1,
+      "risk": "LAST_UPDATED activity входит в semantic fingerprint",
+      "verdict": "NOT_OBSERVED_IN_A_B",
+      "evidence": {
+        "a_to_b_last_updated_fields": [],
+        "operational_fingerprint_changed_A_B": false
+      }
+    },
+    {
+      "id": 2,
+      "risk": "Поздняя recording может не попасть в incremental",
+      "verdict": "NOT_OBSERVED",
+      "evidence": {
+        "call_ids_with_files_revision": []
+      }
+    },
+    {
+      "id": 3,
+      "risk": "crm.activity.list может вернуть менее полный объект, чем get",
+      "verdict": "NOT_TESTED",
+      "evidence": "Аудио path с activity.get в этом эксперименте не запускался"
+    },
+    {
+      "id": 4,
+      "risk": "15-minute overlap может быть недостаточным для delayed updates",
+      "verdict": "INCONCLUSIVE_NO_OLD_UPDATE_CAUGHT",
+      "evidence": {
+        "incremental_vs_full_activity_like_changes": 0
+      }
+    },
+    {
+      "id": 5,
+      "risk": "Старые activity вне overlap зависят от reconciliation",
+      "verdict": "NO_MISSING_IDS_C_VS_Z",
+      "evidence": {
+        "object_ids_missing_in_incremental": [],
+        "c_vs_z_change_count": 9,
+        "c_vs_z_kind": "same 9 email files_hash UNCERTAIN as A->B FULL reread noise"
+      }
+    },
+    {
+      "id": 6,
+      "risk": "Messenger mirror identity потенциально нестабилен",
+      "verdict": "HAS_COMMUNICATION_REVISIONS",
+      "evidence": {
+        "communication_ids_with_revisions": 1
+      }
+    },
+    {
+      "id": 7,
+      "risk": "Technical timestamps могут попадать в operational_context_fingerprint",
+      "verdict": "NOT_OBSERVED_IN_A_B",
+      "evidence": {
+        "fingerprint_changed_A_B": false
+      }
+    },
+    {
+      "id": 8,
+      "risk": "Closed task может перестать перечитываться",
+      "verdict": "NOT_OBSERVED_CLOSE_DURING_WINDOW",
+      "evidence": {
+        "closed_task_histories": []
+      }
+    },
+    {
+      "id": 9,
+      "risk": "Timeline old edit может обнаруживаться только через reconciliation",
+      "verdict": "COMMENT_CHANGED_DURING_WINDOW",
+      "evidence": {
+        "timeline_comments_with_revisions": [
+          "2910619"
+        ]
+      }
+    }
+  ],
+  "fields": {
+    "a_to_b_changed_field_counts": {
+      "email.files_hash": 9
+    },
+    "later_updated_candidate_field_counts": {
+      "email.COMPLETED": 1,
+      "email.LAST_UPDATED": 1,
+      "email.STATUS": 1,
+      "communication.content_hash": 1,
+      "task.DEADLINE": 1,
+      "task.END_TIME": 1,
+      "task.LAST_UPDATED": 1
+    }
+  },
+  "technical_noise_candidates": {
+    "email.files_hash": 9
+  },
+  "meaningful_change_candidates": {
+    "email.COMPLETED": 1,
+    "email.LAST_UPDATED": 1,
+    "email.STATUS": 1,
+    "communication.content_hash": 1,
+    "task.DEADLINE": 1,
+    "task.END_TIME": 1,
+    "task.LAST_UPDATED": 1
+  },
+  "late_filling_candidates": [],
+  "merge_findings": {
+    "duplicate_activity_ids_in_any_snapshot": [],
+    "note": "No duplicate Bitrix activity IDs in any snapshot. New emails 662983/662995 merged as updates to the same ID after FIRST appearance; 662983 later changed COMPLETED/STATUS/LAST_UPDATED without creating a second ID."
+  },
+  "incremental_vs_final_full": {
+    "from": "snapshot_C_018_incremental",
+    "to": "snapshot_Z_final_full",
+    "from_generated_at": "2026-09-07T11:42:27+03:00",
+    "to_generated_at": "2026-09-07T11:46:46+03:00",
+    "left_only": [],
+    "right_only": [],
+    "changes": [
+      {
+        "entity_type": "email",
+        "stable_id": "627981",
+        "key": "email:627981",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "627981",
+          "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+          "START_TIME": "2026-07-23T13:13:40+03:00",
+          "END_TIME": "2026-07-23T18:00:00+03:00",
+          "CREATED": "2026-07-23T13:14:02+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+          "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "e697a001eb9a637e0b069229cf5b608db1981840bcf39e0986134de5c44b150e",
+          "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+        },
+        "after": {
+          "ID": "627981",
+          "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+          "START_TIME": "2026-07-23T13:13:40+03:00",
+          "END_TIME": "2026-07-23T18:00:00+03:00",
+          "CREATED": "2026-07-23T13:14:02+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+          "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "8eb6f2d1aa321d64dcf96c6c8b1a6afb9542de673b15e191e3e0f9b3426665e6",
+          "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "630983",
+        "key": "email:630983",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "630983",
+          "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+          "START_TIME": "2026-07-28T09:38:21+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:38:37+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "a70b0cf38085e670c38624e49f218abe80b44cf62c29d9c3aee82b257e8f91e9",
+          "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+        },
+        "after": {
+          "ID": "630983",
+          "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+          "START_TIME": "2026-07-28T09:38:21+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:38:37+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "54bb5208132e9c6428d441dfeb6cd66b19c64a472157641a7488932ba697ace5",
+          "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631011",
+        "key": "email:631011",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631011",
+          "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+          "START_TIME": "2026-07-28T09:43:57+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:44:52+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "d1782ed35fec4c86ee5588d6f65b480fa8a7415b2e6a7ce7866de3a3abc4dcbd",
+          "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+        },
+        "after": {
+          "ID": "631011",
+          "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+          "START_TIME": "2026-07-28T09:43:57+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:44:52+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "81045ee14767eb5f6e2f79d81164de8343d1a5b53c63a441b1dca0c72ee8a1c0",
+          "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631037",
+        "key": "email:631037",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631037",
+          "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+          "START_TIME": "2026-07-28T09:49:17+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:49:51+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+          "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "77b0775d682517c63099495ba174499638545c7c825947396adfdcd9fe8903bd",
+          "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+        },
+        "after": {
+          "ID": "631037",
+          "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+          "START_TIME": "2026-07-28T09:49:17+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:49:51+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+          "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "27fc47e7fc84f4dfacf2a72f6252fdb1503743d0975fa5c86bcad32cf944a094",
+          "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631185",
+        "key": "email:631185",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631185",
+          "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+          "START_TIME": "2026-07-28T10:46:42+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T10:47:29+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "1cb06ad238a51ea6047daf2c2e5ff9da86d15ec68938f65c7df27520ee368645",
+          "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+        },
+        "after": {
+          "ID": "631185",
+          "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+          "START_TIME": "2026-07-28T10:46:42+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T10:47:29+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "215d07e05a7e9643f1e865eb2653cfbbfd5034d9d79c427fc89f56f317440ed7",
+          "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631589",
+        "key": "email:631589",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631589",
+          "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+          "START_TIME": "2026-07-28T13:08:38+03:00",
+          "END_TIME": "2026-07-28T13:08:38+03:00",
+          "CREATED": "2026-07-28T13:08:39+03:00",
+          "DEADLINE": "2026-07-28T13:08:38+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+          "files_present": true,
+          "files_count": 2,
+          "files_hash": "89e54eafd2a318c89886352ee0e49b6a13108fe86b35cd71985ec1989d4375ac",
+          "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+        },
+        "after": {
+          "ID": "631589",
+          "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+          "START_TIME": "2026-07-28T13:08:38+03:00",
+          "END_TIME": "2026-07-28T13:08:38+03:00",
+          "CREATED": "2026-07-28T13:08:39+03:00",
+          "DEADLINE": "2026-07-28T13:08:38+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+          "files_present": true,
+          "files_count": 2,
+          "files_hash": "46056407c2fcf03facfeffe28ed6127081cff834300fb8d0d0fa321c6ce9ed7e",
+          "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "632203",
+        "key": "email:632203",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "632203",
+          "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+          "START_TIME": "2026-07-28T17:05:23+03:00",
+          "END_TIME": "2026-07-28T17:05:23+03:00",
+          "CREATED": "2026-07-28T17:05:23+03:00",
+          "DEADLINE": "2026-07-28T17:05:23+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "f17af7cfc5a17fa67128a35dce9d0dc7e694cd01b372d33d2f84f49bcf6ed3ed",
+          "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+        },
+        "after": {
+          "ID": "632203",
+          "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+          "START_TIME": "2026-07-28T17:05:23+03:00",
+          "END_TIME": "2026-07-28T17:05:23+03:00",
+          "CREATED": "2026-07-28T17:05:23+03:00",
+          "DEADLINE": "2026-07-28T17:05:23+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "84e235d9c76a7661cddc41e46bb21a910d2e15ff363ecb4fb7f12a36ca6e8d08",
+          "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "641109",
+        "key": "email:641109",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "641109",
+          "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+          "START_TIME": "2026-08-07T06:23:57+03:00",
+          "END_TIME": "2026-08-07T18:00:00+03:00",
+          "CREATED": "2026-08-07T06:29:47+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "4f722811bbe937e2db5f5b8726c0f74c6eea1a6a2cffdf63aba113a699ee3076",
+          "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+        },
+        "after": {
+          "ID": "641109",
+          "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+          "START_TIME": "2026-08-07T06:23:57+03:00",
+          "END_TIME": "2026-08-07T18:00:00+03:00",
+          "CREATED": "2026-08-07T06:29:47+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "b40e30efe3cf7137e42a072bda86601db081963746c919e2eb05674dc86df158",
+          "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "641253",
+        "key": "email:641253",
+        "label": "UNCERTAIN",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "641253",
+          "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+          "START_TIME": "2026-08-07T10:33:05+03:00",
+          "END_TIME": "2026-08-07T10:33:05+03:00",
+          "CREATED": "2026-08-07T10:33:06+03:00",
+          "DEADLINE": "2026-08-07T10:33:05+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "9c74e04d67a1b404944f16ed261ee032b16c1f3da7f6623d252e3e7daf3d5eec",
+          "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+        },
+        "after": {
+          "ID": "641253",
+          "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+          "START_TIME": "2026-08-07T10:33:05+03:00",
+          "END_TIME": "2026-08-07T10:33:05+03:00",
+          "CREATED": "2026-08-07T10:33:06+03:00",
+          "DEADLINE": "2026-08-07T10:33:05+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "467ecc3a463d4f2aa7fcd401b745cc22bb8a2d6366b5fbb1981f7ff8c1dc1139",
+          "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+        }
+      }
+    ],
+    "fingerprint_changed": false
+  },
+  "missed_by_incremental": [],
+  "false_new_candidates": [
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "627981",
+      "key": "email:627981",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "627981",
+        "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+        "START_TIME": "2026-07-23T13:13:40+03:00",
+        "END_TIME": "2026-07-23T18:00:00+03:00",
+        "CREATED": "2026-07-23T13:14:02+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+        "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+        "files_present": true,
+        "files_count": 6,
+        "files_hash": "0cb56001e10a710b657567499558fda522e94a97a5df5cc591eab3e6eb3ad8f9",
+        "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+      },
+      "after": {
+        "ID": "627981",
+        "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+        "START_TIME": "2026-07-23T13:13:40+03:00",
+        "END_TIME": "2026-07-23T18:00:00+03:00",
+        "CREATED": "2026-07-23T13:14:02+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+        "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+        "files_present": true,
+        "files_count": 6,
+        "files_hash": "e697a001eb9a637e0b069229cf5b608db1981840bcf39e0986134de5c44b150e",
+        "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "630983",
+      "key": "email:630983",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "630983",
+        "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+        "START_TIME": "2026-07-28T09:38:21+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:38:37+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "5b311dffa02dc4c5ff1e3f176226f811df8bfab2da313062982cd32bfeabb940",
+        "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+      },
+      "after": {
+        "ID": "630983",
+        "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+        "START_TIME": "2026-07-28T09:38:21+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:38:37+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "a70b0cf38085e670c38624e49f218abe80b44cf62c29d9c3aee82b257e8f91e9",
+        "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "631011",
+      "key": "email:631011",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "631011",
+        "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+        "START_TIME": "2026-07-28T09:43:57+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:44:52+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "2eaf7bc33b8c75797508811bf18002e5be9bfa0d3ea434a7fa67248842c1cd3c",
+        "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+      },
+      "after": {
+        "ID": "631011",
+        "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+        "START_TIME": "2026-07-28T09:43:57+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:44:52+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "d1782ed35fec4c86ee5588d6f65b480fa8a7415b2e6a7ce7866de3a3abc4dcbd",
+        "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "631037",
+      "key": "email:631037",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "631037",
+        "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+        "START_TIME": "2026-07-28T09:49:17+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:49:51+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+        "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "474ea0e5547a3ab23fc7318db5c7478419463993ea09e2b3be36ee89bc6eabb8",
+        "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+      },
+      "after": {
+        "ID": "631037",
+        "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+        "START_TIME": "2026-07-28T09:49:17+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T09:49:51+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+        "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+        "files_present": true,
+        "files_count": 4,
+        "files_hash": "77b0775d682517c63099495ba174499638545c7c825947396adfdcd9fe8903bd",
+        "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "631185",
+      "key": "email:631185",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "631185",
+        "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+        "START_TIME": "2026-07-28T10:46:42+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T10:47:29+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+        "files_present": true,
+        "files_count": 6,
+        "files_hash": "0cbfb25260d61f477c57b9dc313721664b130b49073e5ed6c5c06f0bc08f7ecb",
+        "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+      },
+      "after": {
+        "ID": "631185",
+        "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+        "START_TIME": "2026-07-28T10:46:42+03:00",
+        "END_TIME": "2026-07-28T18:00:00+03:00",
+        "CREATED": "2026-07-28T10:47:29+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+        "files_present": true,
+        "files_count": 6,
+        "files_hash": "1cb06ad238a51ea6047daf2c2e5ff9da86d15ec68938f65c7df27520ee368645",
+        "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "631589",
+      "key": "email:631589",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "631589",
+        "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+        "START_TIME": "2026-07-28T13:08:38+03:00",
+        "END_TIME": "2026-07-28T13:08:38+03:00",
+        "CREATED": "2026-07-28T13:08:39+03:00",
+        "DEADLINE": "2026-07-28T13:08:38+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+        "files_present": true,
+        "files_count": 2,
+        "files_hash": "431e2b5593ecfa9a9e1088413b36d23e083d93b645ec43ab0638f39f71aa2227",
+        "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+      },
+      "after": {
+        "ID": "631589",
+        "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+        "START_TIME": "2026-07-28T13:08:38+03:00",
+        "END_TIME": "2026-07-28T13:08:38+03:00",
+        "CREATED": "2026-07-28T13:08:39+03:00",
+        "DEADLINE": "2026-07-28T13:08:38+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+        "files_present": true,
+        "files_count": 2,
+        "files_hash": "89e54eafd2a318c89886352ee0e49b6a13108fe86b35cd71985ec1989d4375ac",
+        "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "632203",
+      "key": "email:632203",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "632203",
+        "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+        "START_TIME": "2026-07-28T17:05:23+03:00",
+        "END_TIME": "2026-07-28T17:05:23+03:00",
+        "CREATED": "2026-07-28T17:05:23+03:00",
+        "DEADLINE": "2026-07-28T17:05:23+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "4714293a7c6497c2bdbf433789a79069578e968a9bd51555324a2559c6b474f8",
+        "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+      },
+      "after": {
+        "ID": "632203",
+        "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+        "START_TIME": "2026-07-28T17:05:23+03:00",
+        "END_TIME": "2026-07-28T17:05:23+03:00",
+        "CREATED": "2026-07-28T17:05:23+03:00",
+        "DEADLINE": "2026-07-28T17:05:23+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "f17af7cfc5a17fa67128a35dce9d0dc7e694cd01b372d33d2f84f49bcf6ed3ed",
+        "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "641109",
+      "key": "email:641109",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "641109",
+        "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+        "START_TIME": "2026-08-07T06:23:57+03:00",
+        "END_TIME": "2026-08-07T18:00:00+03:00",
+        "CREATED": "2026-08-07T06:29:47+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "6ac3102fb2238ba395fc33365eea814394f026fb8599cf598d3539b4b8990b3c",
+        "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+      },
+      "after": {
+        "ID": "641109",
+        "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+        "START_TIME": "2026-08-07T06:23:57+03:00",
+        "END_TIME": "2026-08-07T18:00:00+03:00",
+        "CREATED": "2026-08-07T06:29:47+03:00",
+        "DEADLINE": "9999-12-31T00:00:00+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "1",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "4f722811bbe937e2db5f5b8726c0f74c6eea1a6a2cffdf63aba113a699ee3076",
+        "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+      }
+    },
+    {
+      "why": "A->B no intentional business action, current fingerprint would likely move",
+      "entity_type": "email",
+      "stable_id": "641253",
+      "key": "email:641253",
+      "label": "TECHNICAL_CANDIDATE",
+      "raw_changed": true,
+      "changed_fields": [
+        "files_hash"
+      ],
+      "before": {
+        "ID": "641253",
+        "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+        "START_TIME": "2026-08-07T10:33:05+03:00",
+        "END_TIME": "2026-08-07T10:33:05+03:00",
+        "CREATED": "2026-08-07T10:33:06+03:00",
+        "DEADLINE": "2026-08-07T10:33:05+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "d82d772bfb0e0afc20bd414beb8f585115660da7c6cf4ec7eea065d582b7dd9f",
+        "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+      },
+      "after": {
+        "ID": "641253",
+        "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+        "START_TIME": "2026-08-07T10:33:05+03:00",
+        "END_TIME": "2026-08-07T10:33:05+03:00",
+        "CREATED": "2026-08-07T10:33:06+03:00",
+        "DEADLINE": "2026-08-07T10:33:05+03:00",
+        "COMPLETED": "Y",
+        "STATUS": "2",
+        "PROVIDER_ID": "CRM_EMAIL",
+        "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+        "PROVIDER_GROUP_ID": null,
+        "ORIGIN_ID": null,
+        "DIRECTION": "2",
+        "TYPE_ID": "4",
+        "RESPONSIBLE_ID": "1421",
+        "AUTHOR_ID": "1421",
+        "EDITOR_ID": "1421",
+        "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+        "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+        "files_present": true,
+        "files_count": 1,
+        "files_hash": "9c74e04d67a1b404944f16ed261ee032b16c1f3da7f6623d252e3e7daf3d5eec",
+        "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+      }
+    }
+  ],
+  "unstable_identity_candidates": [
+    {
+      "key": "communication:crm_activity:662983",
+      "seen_in": [
+        "snapshot_C_007_incremental",
+        "snapshot_C_008_incremental",
+        "snapshot_C_009_incremental",
+        "snapshot_C_010_incremental",
+        "snapshot_C_011_incremental",
+        "snapshot_C_012_incremental",
+        "snapshot_C_013_incremental",
+        "snapshot_C_014_incremental",
+        "snapshot_C_015_incremental",
+        "snapshot_C_016_incremental",
+        "snapshot_C_017_incremental",
+        "snapshot_C_018_incremental",
+        "snapshot_Z_final_full"
+      ],
+      "reason": "communication event_id not present in every snapshot"
+    },
+    {
+      "key": "communication:crm_activity:662995",
+      "seen_in": [
+        "snapshot_C_010_incremental",
+        "snapshot_C_011_incremental",
+        "snapshot_C_012_incremental",
+        "snapshot_C_013_incremental",
+        "snapshot_C_014_incremental",
+        "snapshot_C_015_incremental",
+        "snapshot_C_016_incremental",
+        "snapshot_C_017_incremental",
+        "snapshot_C_018_incremental",
+        "snapshot_Z_final_full"
+      ],
+      "reason": "communication event_id not present in every snapshot"
+    }
+  ],
+  "api_failures": [],
+  "rate_limit_events": [],
+  "write_methods_observed": [],
+  "a_to_b": {
+    "from": "snapshot_A_full",
+    "to": "snapshot_B_full_no_intentional_changes",
+    "from_generated_at": "2026-09-07T10:12:07+03:00",
+    "to_generated_at": "2026-09-07T10:26:19+03:00",
+    "left_only": [],
+    "right_only": [],
+    "changes": [
+      {
+        "entity_type": "email",
+        "stable_id": "627981",
+        "key": "email:627981",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "627981",
+          "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+          "START_TIME": "2026-07-23T13:13:40+03:00",
+          "END_TIME": "2026-07-23T18:00:00+03:00",
+          "CREATED": "2026-07-23T13:14:02+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+          "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "0cb56001e10a710b657567499558fda522e94a97a5df5cc591eab3e6eb3ad8f9",
+          "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+        },
+        "after": {
+          "ID": "627981",
+          "LAST_UPDATED": "2026-07-23T13:39:49+03:00",
+          "START_TIME": "2026-07-23T13:13:40+03:00",
+          "END_TIME": "2026-07-23T18:00:00+03:00",
+          "CREATED": "2026-07-23T13:14:02+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "262fb70eaddc40a9cd1bbe4837704e1d78efd3983dcbc5280df0d7346c5c69d3",
+          "description_hash": "c04013487688851d75f85be95a8de4eed538e10a5c5bb945184ece8871da0ca5",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "e697a001eb9a637e0b069229cf5b608db1981840bcf39e0986134de5c44b150e",
+          "communications_hash": "af82f390e949bea4608fa283855869fd0ebdcae743934762566276247498f207"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "630983",
+        "key": "email:630983",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "630983",
+          "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+          "START_TIME": "2026-07-28T09:38:21+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:38:37+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "5b311dffa02dc4c5ff1e3f176226f811df8bfab2da313062982cd32bfeabb940",
+          "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+        },
+        "after": {
+          "ID": "630983",
+          "LAST_UPDATED": "2026-07-28T09:51:49+03:00",
+          "START_TIME": "2026-07-28T09:38:21+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:38:37+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "f6b13d77d3ae5cfbe59e74d954e622f68bda728bbf6fa51ad2ab03ff769cb1af",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "a70b0cf38085e670c38624e49f218abe80b44cf62c29d9c3aee82b257e8f91e9",
+          "communications_hash": "03396df1ff921c7e0faa49847967ce06acfbaaad3dafea5048e917042eb3bf59"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631011",
+        "key": "email:631011",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631011",
+          "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+          "START_TIME": "2026-07-28T09:43:57+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:44:52+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "2eaf7bc33b8c75797508811bf18002e5be9bfa0d3ea434a7fa67248842c1cd3c",
+          "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+        },
+        "after": {
+          "ID": "631011",
+          "LAST_UPDATED": "2026-07-28T09:53:47+03:00",
+          "START_TIME": "2026-07-28T09:43:57+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:44:52+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "6dfc98bcd7db2ea303a7cf5f283acb553c010bf24b3fadfba8042579b75d4302",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "d1782ed35fec4c86ee5588d6f65b480fa8a7415b2e6a7ce7866de3a3abc4dcbd",
+          "communications_hash": "076bdf9d2a70c57bd1656081e55bfd1fce8dd5d862cae0d6f78eb4bd5596f137"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631037",
+        "key": "email:631037",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631037",
+          "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+          "START_TIME": "2026-07-28T09:49:17+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:49:51+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+          "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "474ea0e5547a3ab23fc7318db5c7478419463993ea09e2b3be36ee89bc6eabb8",
+          "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+        },
+        "after": {
+          "ID": "631037",
+          "LAST_UPDATED": "2026-07-28T09:52:50+03:00",
+          "START_TIME": "2026-07-28T09:49:17+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T09:49:51+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "cb6ae7df41635664bbb87f49aff0a3f3011915e92e3f9828c3b7d582f2830b67",
+          "description_hash": "e50e3cabbce025e31492e4329c1533e8b9c3d78f320f6a665e4bcd58e9d0c713",
+          "files_present": true,
+          "files_count": 4,
+          "files_hash": "77b0775d682517c63099495ba174499638545c7c825947396adfdcd9fe8903bd",
+          "communications_hash": "84f092be59c6407c6d5ad00ae6c029e6c078c5d6cdd2262e2c807e3f5f58fcab"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631185",
+        "key": "email:631185",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631185",
+          "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+          "START_TIME": "2026-07-28T10:46:42+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T10:47:29+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "0cbfb25260d61f477c57b9dc313721664b130b49073e5ed6c5c06f0bc08f7ecb",
+          "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+        },
+        "after": {
+          "ID": "631185",
+          "LAST_UPDATED": "2026-07-28T10:54:07+03:00",
+          "START_TIME": "2026-07-28T10:46:42+03:00",
+          "END_TIME": "2026-07-28T18:00:00+03:00",
+          "CREATED": "2026-07-28T10:47:29+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "35c1238313b8f138ebb17f8922fd6700e52b773dfb171938f59f318cbf5f9e10",
+          "files_present": true,
+          "files_count": 6,
+          "files_hash": "1cb06ad238a51ea6047daf2c2e5ff9da86d15ec68938f65c7df27520ee368645",
+          "communications_hash": "e98fa16872587ea702b83ea8d7c26106ff4b349ff4434ca13f677bdc11af77e5"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "631589",
+        "key": "email:631589",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "631589",
+          "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+          "START_TIME": "2026-07-28T13:08:38+03:00",
+          "END_TIME": "2026-07-28T13:08:38+03:00",
+          "CREATED": "2026-07-28T13:08:39+03:00",
+          "DEADLINE": "2026-07-28T13:08:38+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+          "files_present": true,
+          "files_count": 2,
+          "files_hash": "431e2b5593ecfa9a9e1088413b36d23e083d93b645ec43ab0638f39f71aa2227",
+          "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+        },
+        "after": {
+          "ID": "631589",
+          "LAST_UPDATED": "2026-07-28T13:08:41+03:00",
+          "START_TIME": "2026-07-28T13:08:38+03:00",
+          "END_TIME": "2026-07-28T13:08:38+03:00",
+          "CREATED": "2026-07-28T13:08:39+03:00",
+          "DEADLINE": "2026-07-28T13:08:38+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "427e08cf6aae20a113e0e2e076e9b8edab861d8164c35c504be207d10b544861",
+          "files_present": true,
+          "files_count": 2,
+          "files_hash": "89e54eafd2a318c89886352ee0e49b6a13108fe86b35cd71985ec1989d4375ac",
+          "communications_hash": "1cb5ec3cfcd8dc378750658e39242a9287af6c8f7c4bbd39c69ae29727ea2251"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "632203",
+        "key": "email:632203",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "632203",
+          "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+          "START_TIME": "2026-07-28T17:05:23+03:00",
+          "END_TIME": "2026-07-28T17:05:23+03:00",
+          "CREATED": "2026-07-28T17:05:23+03:00",
+          "DEADLINE": "2026-07-28T17:05:23+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "4714293a7c6497c2bdbf433789a79069578e968a9bd51555324a2559c6b474f8",
+          "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+        },
+        "after": {
+          "ID": "632203",
+          "LAST_UPDATED": "2026-07-28T17:05:25+03:00",
+          "START_TIME": "2026-07-28T17:05:23+03:00",
+          "END_TIME": "2026-07-28T17:05:23+03:00",
+          "CREATED": "2026-07-28T17:05:23+03:00",
+          "DEADLINE": "2026-07-28T17:05:23+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "e8689448bb127cc175ca0a5ae09954fa7d9bf7ec7139b6564ffb03dd6cfd7934",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "f17af7cfc5a17fa67128a35dce9d0dc7e694cd01b372d33d2f84f49bcf6ed3ed",
+          "communications_hash": "2c34ebfa197c3c25dd2ce8db27a2ec075a4e576aaf65490623c2f6fcc0d35732"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "641109",
+        "key": "email:641109",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "641109",
+          "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+          "START_TIME": "2026-08-07T06:23:57+03:00",
+          "END_TIME": "2026-08-07T18:00:00+03:00",
+          "CREATED": "2026-08-07T06:29:47+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "6ac3102fb2238ba395fc33365eea814394f026fb8599cf598d3539b4b8990b3c",
+          "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+        },
+        "after": {
+          "ID": "641109",
+          "LAST_UPDATED": "2026-08-07T09:01:07+03:00",
+          "START_TIME": "2026-08-07T06:23:57+03:00",
+          "END_TIME": "2026-08-07T18:00:00+03:00",
+          "CREATED": "2026-08-07T06:29:47+03:00",
+          "DEADLINE": "9999-12-31T00:00:00+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "1",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "bdb37d0a8ac10fe89180f3bad03a009b0305e0295b77c6337ac29a754e85c51a",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "4f722811bbe937e2db5f5b8726c0f74c6eea1a6a2cffdf63aba113a699ee3076",
+          "communications_hash": "b2e76fb920df87fac7627c94225c056ab6137be1cedbb2124e8511260e42fcc3"
+        }
+      },
+      {
+        "entity_type": "email",
+        "stable_id": "641253",
+        "key": "email:641253",
+        "label": "TECHNICAL_CANDIDATE",
+        "raw_changed": true,
+        "changed_fields": [
+          "files_hash"
+        ],
+        "before": {
+          "ID": "641253",
+          "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+          "START_TIME": "2026-08-07T10:33:05+03:00",
+          "END_TIME": "2026-08-07T10:33:05+03:00",
+          "CREATED": "2026-08-07T10:33:06+03:00",
+          "DEADLINE": "2026-08-07T10:33:05+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "d82d772bfb0e0afc20bd414beb8f585115660da7c6cf4ec7eea065d582b7dd9f",
+          "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+        },
+        "after": {
+          "ID": "641253",
+          "LAST_UPDATED": "2026-08-07T10:33:09+03:00",
+          "START_TIME": "2026-08-07T10:33:05+03:00",
+          "END_TIME": "2026-08-07T10:33:05+03:00",
+          "CREATED": "2026-08-07T10:33:06+03:00",
+          "DEADLINE": "2026-08-07T10:33:05+03:00",
+          "COMPLETED": "Y",
+          "STATUS": "2",
+          "PROVIDER_ID": "CRM_EMAIL",
+          "PROVIDER_TYPE_ID": "EMAIL_COMPRESSED",
+          "PROVIDER_GROUP_ID": null,
+          "ORIGIN_ID": null,
+          "DIRECTION": "2",
+          "TYPE_ID": "4",
+          "RESPONSIBLE_ID": "1421",
+          "AUTHOR_ID": "1421",
+          "EDITOR_ID": "1421",
+          "subject_hash": "25194e8e6a1fb67d69afe3201d897725a7580dbec9afeb110ba459ece7454383",
+          "description_hash": "5804ea3743d16d1a4d0296a90a9bb0be8beedc52daa4118770b37c5608d2039c",
+          "files_present": true,
+          "files_count": 1,
+          "files_hash": "9c74e04d67a1b404944f16ed261ee032b16c1f3da7f6623d252e3e7daf3d5eec",
+          "communications_hash": "73af3b5acd1bb8420f49b11cb220dcb0c4a8a762b3431df0d4e9f73da8e79463"
+        }
+      }
+    ],
+    "fingerprint_changed": false
+  },
+  "sqlite": {
+    "state_keys": [
+      {
+        "state_key": "schema:dac4bf764912b52717e14f4dae8df46b91eedc8ae4dc641a9c3519b2838da1f8:crm.deal.fields:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "revision": 1,
+        "payload_bytes": 277908,
+        "updated_at": "2026-09-07T10:12:08+03:00"
+      },
+      {
+        "state_key": "schema:dac4bf764912b52717e14f4dae8df46b91eedc8ae4dc641a9c3519b2838da1f8:crm.activity.fields:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "revision": 1,
+        "payload_bytes": 7767,
+        "updated_at": "2026-09-07T10:12:08+03:00"
+      },
+      {
+        "state_key": "schema:dac4bf764912b52717e14f4dae8df46b91eedc8ae4dc641a9c3519b2838da1f8:crm.contact.fields:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "revision": 1,
+        "payload_bytes": 321532,
+        "updated_at": "2026-09-07T10:12:09+03:00"
+      },
+      {
+        "state_key": "schema:dac4bf764912b52717e14f4dae8df46b91eedc8ae4dc641a9c3519b2838da1f8:crm.company.fields:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "revision": 1,
+        "payload_bytes": 450901,
+        "updated_at": "2026-09-07T10:12:10+03:00"
+      },
+      {
+        "state_key": "deal_context:18733",
+        "revision": 21,
+        "payload_bytes": 12102010,
+        "updated_at": "2026-09-07T11:46:51+03:00"
+      }
+    ]
+  },
+  "unknowns": [
+    "Не поймали жизненный цикл одного звонка (создан → идёт → завершён → recording). На этой сделке за окно не было нового call ID.",
+    "crm.activity.get vs crm.activity.list не сравнивали: audio pipeline сознательно не запускался.",
+    "Почему у 9 старых email FILES/hash меняется на каждом FULL, но не на incremental merge — не разобрали байтово (порядок, URL, пустые элементы).",
+    "Не проверяли исчезновение сущности (API empty success vs delete).",
+    "Одна сделка, будний день ~1.5 часа; generalization на другие воронки/провайдеров нет.",
+    "2 новых im_message появились вместе с новыми email; не отделяли task-chat noise от клиентского messenger."
+  ],
+  "recommended_next_experiments": [
+    "Повторить на сделке с активным звонком Telphin в рабочее окно, чтобы увидеть FILES/END_TIME/COMPLETED по одному ID.",
+    "Точечно сравнить crm.activity.list item vs crm.activity.get для тех 9 email, у которых files_hash плывёт на FULL.",
+    "Нормализовать FILES (id-only, sort) и проверить, исчезнет ли A→B и C→Z files_hash шум.",
+    "Исключить DATE_MODIFY/MODIFY_BY_ID сделки из semantic hash; проверить, что C_016 тогда не даёт ложный FULL.",
+    "Отдельно прогнать правку старого timeline comment старше overlap+сутки, затем incremental vs reconciliation.",
+    "Не считать communication event_id нестабильным только потому, что событие NEW и появилось позже."
+  ],
+  "consecutive_diffs_index": [
+    {
+      "from": "snapshot_A_full",
+      "to": "snapshot_B_full_no_intentional_changes",
+      "change_count": 9,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_B_full_no_intentional_changes",
+      "to": "snapshot_C_001_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_001_incremental",
+      "to": "snapshot_C_002_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_002_incremental",
+      "to": "snapshot_C_003_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_003_incremental",
+      "to": "snapshot_C_004_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_004_incremental",
+      "to": "snapshot_C_005_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_005_incremental",
+      "to": "snapshot_C_006_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_006_incremental",
+      "to": "snapshot_C_007_incremental",
+      "change_count": 2,
+      "left_only": 0,
+      "right_only": 2,
+      "fingerprint_changed": true
+    },
+    {
+      "from": "snapshot_C_007_incremental",
+      "to": "snapshot_C_008_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_008_incremental",
+      "to": "snapshot_C_009_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_009_incremental",
+      "to": "snapshot_C_010_incremental",
+      "change_count": 4,
+      "left_only": 0,
+      "right_only": 3,
+      "fingerprint_changed": true
+    },
+    {
+      "from": "snapshot_C_010_incremental",
+      "to": "snapshot_C_011_incremental",
+      "change_count": 5,
+      "left_only": 0,
+      "right_only": 1,
+      "fingerprint_changed": true
+    },
+    {
+      "from": "snapshot_C_011_incremental",
+      "to": "snapshot_C_012_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_012_incremental",
+      "to": "snapshot_C_013_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_013_incremental",
+      "to": "snapshot_C_014_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_014_incremental",
+      "to": "snapshot_C_015_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_015_incremental",
+      "to": "snapshot_C_016_incremental",
+      "change_count": 1,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_016_incremental",
+      "to": "snapshot_C_017_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_017_incremental",
+      "to": "snapshot_C_018_incremental",
+      "change_count": 0,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    },
+    {
+      "from": "snapshot_C_018_incremental",
+      "to": "snapshot_Z_final_full",
+      "change_count": 9,
+      "left_only": 0,
+      "right_only": 0,
+      "fingerprint_changed": false
+    }
+  ],
+  "incremental_vs_final_full_summary": {
+    "missing_objects": 0,
+    "extra_objects": 0,
+    "fingerprint_changed": false,
+    "remaining_field_diffs": "9 emails files_hash only, same set as A->B"
+  }
+}

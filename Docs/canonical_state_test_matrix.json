@@ -1,0 +1,224 @@
+{
+  "schema_id": "canonical_bitrix_state_test_matrix",
+  "schema_version": "1",
+  "privacy": {
+    "do_not_commit": [
+      "/var/tmp/neuro_rop_bitrix_audit/raw/snapshot_* /deal_18733_context.json",
+      "SUBJECT",
+      "DESCRIPTION",
+      "COMMENT",
+      "COMMUNICATIONS[].VALUE",
+      "FILES[].url query tokens"
+    ],
+    "fixture_strategy": "synthetic objects with real Bitrix IDs and structural fields; text replaced by stable hashes or placeholder UTF-8; FILES urls use fake _efd of equal length"
+  },
+  "shared_fixtures": [
+    {
+      "id": "F_EMAIL_627981",
+      "source": "audit deal 18733 snapshots A/B/Z and stage 1.5 live rounds",
+      "keep": ["ID", "TYPE_ID", "PROVIDER_ID", "COMPLETED", "STATUS", "FILES[].id"],
+      "synthesize": ["SUBJECT", "DESCRIPTION"],
+      "files": [
+        {"id": "964461", "url_variant_a": "https://example.invalid/bitrix/tools/crm_show_file.php?fileId=964461&_efd=AAA", "url_variant_b": "https://example.invalid/bitrix/tools/crm_show_file.php?fileId=964461&_efd=BBB"}
+      ]
+    },
+    {
+      "id": "F_CALL_663125",
+      "source": "stage 1.5 T1-T5",
+      "keep": ["ID", "COMPLETED", "STATUS", "LAST_UPDATED", "START_TIME", "END_TIME", "ORIGIN_ID", "SETTINGS.MISSED_CALL"]
+    },
+    {
+      "id": "F_CALL_663127",
+      "source": "stage 1.5 recording replacement",
+      "keep": ["ID", "ORIGIN_ID", "LAST_UPDATED", "file_ids 1012207 then 1012215"]
+    },
+    {
+      "id": "F_EMAIL_662983",
+      "source": "audit C_007 then later COMPLETED/STATUS/LAST_UPDATED"
+    },
+    {
+      "id": "F_COMMENT_2910619",
+      "source": "audit C_011 timeline content change"
+    },
+    {
+      "id": "F_TASK_49769",
+      "source": "audit C_011 deadline/changedDate"
+    },
+    {
+      "id": "F_TASK_ACTIVITY_627763",
+      "source": "audit C_011 DEADLINE/END_TIME/LAST_UPDATED"
+    },
+    {
+      "id": "F_DEAL_18733",
+      "source": "audit C_016 DATE_MODIFY+MODIFY_BY_ID only"
+    },
+    {
+      "id": "F_ACCUM_C018_VS_Z",
+      "source": "audit C_018 vs Z object set; FILES urls differ but are excluded from canonical fingerprints"
+    }
+  ],
+  "tests": [
+    {
+      "id": "T01",
+      "name": "identical Bitrix payload at different observed_at",
+      "fixture": "F_EMAIL_627981 same payload and URL; observed_at=A then observed_at=B",
+      "input": "normalize(X, observed_at=A); merge(empty, X); normalize(X, observed_at=B); merge(result, X)",
+      "expected_canonical": "one entity activity:627981; semantic_fingerprint SAME; raw_fingerprint SAME",
+      "expected_delta": "first merge NEW; second merge entries empty (UNCHANGED, omitted)",
+      "invariant": "I1 I2 I11"
+    },
+    {
+      "id": "T02",
+      "name": "email FILES _efd token rotation",
+      "fixture": "F_EMAIL_627981 url_variant_a vs url_variant_b; same file ids",
+      "input": "two list payloads, only FILES[].url._efd differs",
+      "expected_canonical": "semantic_fingerprint SAME; raw_fingerprint SAME; file_ids identical",
+      "expected_delta": "entries EMPTY",
+      "invariant": "I7"
+    },
+    {
+      "id": "T03",
+      "name": "file order does not matter",
+      "fixture": "same ids [964461,964463] vs [964463,964461]",
+      "input": "normalize both",
+      "expected_canonical": "file_ids sorted; semantic_fingerprint SAME; raw_fingerprint SAME",
+      "expected_delta": "entries EMPTY",
+      "invariant": "I6 I7"
+    },
+    {
+      "id": "T04",
+      "name": "recording file replacement",
+      "fixture": "F_CALL_663127",
+      "input": "activity 663127 file_ids [1012207] then [1012215]; ORIGIN_ID same; LAST_UPDATED changed",
+      "expected_canonical": "same key activity:663127; subtype call; semantic_fingerprint changed; file_ids after=[1012215]",
+      "expected_delta": "UPDATED_MEANINGFUL; changed_semantic_fields includes file_ids; not NEW",
+      "invariant": "I3"
+    },
+    {
+      "id": "T05",
+      "name": "call completion",
+      "fixture": "F_CALL_663125 T1 vs T2",
+      "input": "COMPLETED N→Y, STATUS 1→2, LAST_UPDATED changed, FILES empty both, END_TIME unchanged",
+      "expected_canonical": "same key activity:663125; semantic changed on completed+status; missed_call true both",
+      "expected_delta": "UPDATED_MEANINGFUL; changed_semantic_fields [completed, status]; last_updated is metadata only",
+      "invariant": "I3"
+    },
+    {
+      "id": "T06",
+      "name": "only LAST_UPDATED changed",
+      "fixture": "synthetic from T2 of 663125 with LAST_UPDATED bumped and semantic fields copied",
+      "input": "semantic projection identical; metadata.last_updated different",
+      "expected_canonical": "semantic_fingerprint SAME; raw_fingerprint DIFFERENT",
+      "expected_delta": "UPDATED_TECHNICAL; changed_semantic_fields []; changed_metadata_fields [last_updated]",
+      "invariant": "LAST_UPDATED is cursor/metadata not semantic"
+    },
+    {
+      "id": "T07",
+      "name": "deal DATE_MODIFY only",
+      "fixture": "F_DEAL_18733 C_016",
+      "input": "DATE_MODIFY and MODIFY_BY_ID change; stage/amount/assigned unchanged",
+      "expected_canonical": "deal semantic_fingerprint SAME; raw_fingerprint DIFFERENT",
+      "expected_delta": "UPDATED_TECHNICAL on deal:18733; changed_semantic_fields []; changed_metadata_fields [date_modify, modify_by_id]",
+      "invariant": "deal metadata vs semantic split"
+    },
+    {
+      "id": "T08",
+      "name": "new email",
+      "fixture": "F_EMAIL_662983 first seen C_007",
+      "input": "merge previous state without 662983 with batch containing it",
+      "expected_canonical": "activity:662983 present; subtype email",
+      "expected_delta": "NEW; before null; after semantic; not revision",
+      "invariant": "new Bitrix ID is NEW"
+    },
+    {
+      "id": "T09",
+      "name": "email maturation",
+      "fixture": "F_EMAIL_662983 later COMPLETED/STATUS/LAST_UPDATED",
+      "input": "same ID after status fill-in",
+      "expected_canonical": "still activity:662983; one entity",
+      "expected_delta": "UPDATED_MEANINGFUL; not NEW; changed_semantic_fields includes completed and/or status",
+      "invariant": "I3"
+    },
+    {
+      "id": "T10",
+      "name": "timeline comment edit",
+      "fixture": "F_COMMENT_2910619",
+      "input": "same ID, comment_hash changes",
+      "expected_canonical": "timeline_comment:2910619; communications_index crm_timeline_comment:2910619 → same key",
+      "expected_delta": "UPDATED_MEANINGFUL; changed_semantic_fields [comment_hash]; not NEW",
+      "invariant": "communication identity is Bitrix ID"
+    },
+    {
+      "id": "T11",
+      "name": "task deadline change",
+      "fixture": "F_TASK_49769 and/or F_TASK_ACTIVITY_627763",
+      "input": "deadline/DEADLINE changes; ID same",
+      "expected_canonical": "same task:49769 or activity:627763",
+      "expected_delta": "UPDATED_MEANINGFUL; changed_semantic_fields includes deadline",
+      "invariant": "I3"
+    },
+    {
+      "id": "T12",
+      "name": "repeated incremental does not duplicate",
+      "fixture": "C_007 email plus second incremental that returns the same activity again (overlap)",
+      "input": "merge(S, X); merge(result, X)",
+      "expected_canonical": "still one activity:662983",
+      "expected_delta": "second pass entries empty",
+      "invariant": "I1 I2"
+    },
+    {
+      "id": "T13",
+      "name": "incomplete incremental response does not delete",
+      "fixture": "state with activities A,B,C; incremental batch only B updated",
+      "input": "successful incremental list that omits A and C",
+      "expected_canonical": "A,B,C all remain; B maybe revised",
+      "expected_delta": "no REMOVED; A and C have no entries",
+      "invariant": "I4"
+    },
+    {
+      "id": "T14",
+      "name": "failed source keeps previous state",
+      "fixture": "good state then activities ok=false empty items",
+      "input": "merge(S, failed_batch)",
+      "expected_canonical": "entities identical to S; source_status.activities failed/stale",
+      "expected_delta": "no entity NEW/UPDATED from the failed source; no wipe",
+      "invariant": "I5"
+    },
+    {
+      "id": "T15",
+      "name": "FULL vs accumulated incremental semantic convergence",
+      "fixture": "F_ACCUM_C018_VS_Z deal 18733",
+      "input": "build canonical from accumulated C_018 bundle and from Z FULL bundle",
+      "expected_canonical": "same entity keys; same aggregate semantic_fingerprint; same aggregate raw_fingerprint; email file_ids match",
+      "expected_delta": "compare(C018, Z) entries EMPTY when the real Bitrix state is identical",
+      "invariant": "I8"
+    },
+    {
+      "id": "T16",
+      "name": "list vs get must not become canonical source",
+      "fixture": "stage 1.5 email 627981 list has COMMUNICATIONS, get omits them",
+      "input": "normalize(list_item) vs normalize(get_item)",
+      "expected_canonical": "engine consumes list; get-only fixture is not a merge input",
+      "expected_delta": "n/a — guard test that activity source is crm.activity.list",
+      "invariant": "activity source rule"
+    },
+    {
+      "id": "T17",
+      "name": "subtype is not identity",
+      "fixture": "F_CALL_663125",
+      "input": "same ID across in-progress and completed",
+      "expected_canonical": "key remains activity:663125; subtype remains call",
+      "expected_delta": "not a new key",
+      "invariant": "identity = entity_type + Bitrix ID"
+    },
+    {
+      "id": "T18",
+      "name": "name/size/type on FILES ignored until proven",
+      "fixture": "synthetic FILES with extra name/size that later change while id stays",
+      "input": "normalize both",
+      "expected_canonical": "semantic_fingerprint SAME; raw_fingerprint SAME (file_ids only)",
+      "expected_delta": "entries EMPTY",
+      "invariant": "I7 extra-field freeze"
+    }
+  ]
+}

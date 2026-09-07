@@ -62,7 +62,6 @@ amo/tokens.json
 *.sqlite3
 
 # Local client data and generated reports
-Docs/
 reports/
 model_compare/
 !knowledge/
@@ -79,18 +78,8 @@ model_compare/
 downloads/
 tmp/
 
-# The optimization plan is intentionally versioned; all other local Docs files
-# remain excluded because they can contain client-specific runbooks or exports.
-!Docs/
-Docs/*
-!Docs/context_memory_optimization_plan.md
-!Docs/temporary_tunnel_runbook.md
-!Docs/github_actions_vps_cicd_guide.md
-!Docs/manager_trajectory_runbook.md
-!Docs/manager_trajectory_v3_plan.md
-!Docs/bitrix_incremental_sync_runbook.md
-!Docs/full_analysis_repair_runbook.md
-!Docs/agent_workflow.md
+# Client-specific documents stay local; files directly in Docs are versioned.
+Docs/практик_м_доки/
 
 # Benchmark fixtures and results are local-only because they may reference
 # customer workspaces and generated ROP artifacts.
