@@ -3159,19 +3159,21 @@ function ManagerAssistantModal(props: {
           /> : null}
           </>}
         </div>
-        {workspaceMode === 'lab' ? null : <footer className={view === 'answer' ? 'with-audio' : ''}>
-          {view === 'answer' && props.audioJob ? <div className={`dc-manager-audio-attachment ${props.audioJob.status}`}>
+        {workspaceMode === 'lab' ? null : <footer className="dc-manager-composer">
+          {view === 'answer' && props.audioJob ? <div className={`dc-manager-quick-help-audio ${props.audioJob.status}`}>
             <span aria-hidden="true">🎧</span>
             <div><strong>{props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.duration_seconds ? ` · ${Math.max(1, Math.round(props.audioJob.duration_seconds / 60))} мин` : ''}</small>{props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}</div>
             <button type="button" aria-label="Убрать запись разговора" disabled={busy} onClick={props.onRemoveAudio}>×</button>
           </div> : null}
-          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy || audioBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
-          {view === 'answer' ? <label className={`dc-manager-audio-upload ${audioBusy ? 'disabled' : ''}`}>
-            <span aria-hidden="true">🎧</span> Запись
-            <input type="file" accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,.mp3,.m4a,.wav" disabled={footerBusy || audioBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void props.onUploadAudio(file); event.target.value = '' }} />
-          </label> : null}
           <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={view === 'companion' ? 'Как переписать: короче, без даты, клиент сам наберёт…' : 'Уточните рычаг, тон или что уже пробовали...'} aria-label={view === 'companion' ? 'Уточнение сопроводительного текста' : 'Уточнение рекомендации'} />
-          <button className="dc-button primary" disabled={footerBusy || audioBusy || (!props.draft.trim() && !readyAudioJobId) || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy || audioBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
+          <div className={`dc-manager-composer-actions ${view === 'answer' ? '' : 'is-two'}`}>
+            <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy || audioBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+            {view === 'answer' ? <label className={`dc-manager-quick-help-upload ${audioBusy ? 'disabled' : ''}`}>
+              <span aria-hidden="true">📎</span> Выбрать файл
+              <input type="file" accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,.mp3,.m4a,.wav" disabled={footerBusy || audioBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void props.onUploadAudio(file); event.target.value = '' }} />
+            </label> : null}
+            <button className="dc-button primary" disabled={footerBusy || audioBusy || (!props.draft.trim() && !readyAudioJobId) || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy || audioBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
+          </div>
           {view === 'companion' && props.draft.trim() && !companionMessage ? <small className="dc-manager-error">Сначала сформируйте сопроводительный текст</small> : null}
           {props.error && visibleTurn && view !== 'companion' ? <small className="dc-manager-error">{props.error}</small> : null}
         </footer>}
