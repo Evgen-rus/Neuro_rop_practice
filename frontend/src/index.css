@@ -7380,12 +7380,27 @@ ul.facts.bad li:before {
 .dc-manager-companion .dc-button { justify-self: start; }
 
 .dc-manager-assistant-main > footer { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 11px 13px; border-top: 1px solid #d6e2ed; background: #fff; }
+.dc-manager-assistant-main > footer.with-audio { grid-template-columns: auto auto minmax(0, 1fr) auto; }
 .dc-manager-assistant-main > footer .dc-manager-voice-control { align-self: center; }
 .dc-manager-assistant-main > footer .dc-manager-voice-button { width: 38px; min-height: 38px; overflow: hidden; padding: 6px; font-size: 0; }
 .dc-manager-assistant-main > footer .dc-manager-voice-button::first-letter { font-size: 14px; }
 .dc-manager-assistant-main > footer textarea { min-height: 48px; max-height: 130px; resize: vertical; border: 1px solid #b9cde3; border-radius: 11px; padding: 9px 11px; color: #243f5f; font: inherit; font-size: 12.5px; line-height: 1.45; }
 .dc-manager-assistant-main > footer > .dc-button { min-width: 100px; min-height: 40px; }
 .dc-manager-assistant-main > footer > .dc-manager-error { position: absolute; right: 13px; bottom: 2px; margin: 0; transform: translateY(100%); }
+.dc-manager-audio-upload { display: inline-flex; min-height: 38px; align-items: center; gap: 6px; align-self: center; padding: 0 11px; border: 1px solid #9fc0ee; border-radius: 10px; color: #1768e5; background: #f7fbff; font-size: 11px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.dc-manager-audio-upload:hover { border-color: #1768e5; background: #eef6ff; }
+.dc-manager-audio-upload.disabled { opacity: .55; cursor: default; }
+.dc-manager-audio-upload input { display: none; }
+.dc-manager-audio-attachment { grid-column: 1 / -1; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid #cfe0f5; border-radius: 12px; background: linear-gradient(135deg, #f7fbff, #f3f7ff); }
+.dc-manager-audio-attachment > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: #e5f0ff; font-size: 17px; }
+.dc-manager-audio-attachment > div { min-width: 0; display: grid; gap: 2px; }
+.dc-manager-audio-attachment strong { overflow: hidden; color: #193654; font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.dc-manager-audio-attachment small { color: #6b8199; font-size: 9.5px; }
+.dc-manager-audio-attachment details { color: #1768e5; font-size: 9.5px; }
+.dc-manager-audio-attachment details summary { cursor: pointer; font-weight: 800; }
+.dc-manager-audio-attachment details p { max-height: 120px; margin: 6px 0 0; overflow: auto; color: #405a73; font-size: 10.5px; line-height: 1.45; white-space: pre-wrap; }
+.dc-manager-audio-attachment > button { width: 28px; height: 28px; border: 0; border-radius: 50%; color: #678099; background: #fff; cursor: pointer; font-size: 18px; }
+.dc-manager-audio-attachment.error { border-color: #efb8b8; background: #fff7f7; }
 
 .dc-communication-widget {
   margin: 0 0 11px;

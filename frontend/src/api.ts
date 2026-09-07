@@ -1866,10 +1866,11 @@ export function startManagerQuickHelp(
   question = '',
   confirmPaid = true,
   mode?: ManagerAssistantMode,
+  manualAudioJobId?: string,
 ) {
   return api<ManagerQuickHelpJob>(`/api/deal-control/deals/${encodeURIComponent(dealId)}/quick-help`, {
     method: 'POST',
-    body: JSON.stringify({ question, confirm_paid: confirmPaid, mode: mode ?? null }),
+    body: JSON.stringify({ question, confirm_paid: confirmPaid, mode: mode ?? null, manual_audio_job_id: manualAudioJobId || null }),
   })
 }
 

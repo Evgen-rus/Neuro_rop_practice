@@ -336,6 +336,7 @@ class DealManagerSituationRefineRequest(BaseModel):
 
 class DealManagerQuickHelpRequest(BaseModel):
     question: str = Field(default="", max_length=4000)
+    manual_audio_job_id: str | None = Field(default=None, max_length=64)
     mode: Literal["push", "reanimator"] | None = None
     confirm_paid: bool = False
 
@@ -1278,12 +1279,18 @@ def deal_manager_quick_help_start(
 ) -> dict[str, Any]:
     require_deal(deal_id, action="paid_ai")
     try:
+        manual_audio = (
+            get_uploaded_audio_attachment(body.manual_audio_job_id, deal_id=deal_id)
+            if body.manual_audio_job_id
+            else None
+        )
         return start_quick_help_job(
             db_path=DEFAULT_DB_PATH,
             deal_id=deal_id,
             question=body.question,
             mode=body.mode,
             confirm_paid=body.confirm_paid,
+            manual_audio_attachment=manual_audio,
         )
     except StorageContractUnavailable as error:
         raise HTTPException(status_code=503, detail="Контур quick help ещё не подключён") from error

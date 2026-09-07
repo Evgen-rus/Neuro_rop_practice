@@ -114,6 +114,7 @@ class DealManagerQuickHelpJob:
     saved_by_mode: dict[str, int] = field(default_factory=dict)
     reused: bool = False
     error: str | None = None
+    manual_audio_attachment: dict[str, Any] | None = None
 
 
 _QUICK_HELP_JOBS: dict[str, DealManagerQuickHelpJob] = {}
@@ -131,7 +132,13 @@ def _touch(job: DealManagerQuickHelpJob, *, stage: str, detail: str, percent: in
 def get_quick_help_job(job_id: str) -> dict[str, Any] | None:
     with _QUICK_HELP_LOCK:
         job = _QUICK_HELP_JOBS.get(str(job_id))
-        return asdict(job) if job else None
+        return _public_job(job) if job else None
+
+
+def _public_job(job: DealManagerQuickHelpJob) -> dict[str, Any]:
+    payload = asdict(job)
+    payload.pop("manual_audio_attachment", None)
+    return payload
 
 
 def _current_for_mode(db_path: str | Path, context: dict[str, Any], mode: str) -> dict[str, Any] | None:
@@ -159,6 +166,7 @@ def _save_mode_answer(
     question: str,
     origin: str,
     communication_pattern_context: dict[str, Any],
+    manual_audio_attachment: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     answer, metadata = generate_deal_manager_quick_help(
         question=question,
@@ -167,6 +175,7 @@ def _save_mode_answer(
         current_bitrix_task=context["current_bitrix_task"],
         situation_projection=context["situation_projection"],
         communication_pattern_context=communication_pattern_context,
+        manual_audio_attachment=manual_audio_attachment,
         mode=mode,
     )
     saved = _storage_call(
@@ -175,7 +184,7 @@ def _save_mode_answer(
         deal_id=job.deal_id,
         source_report_id=context["source_report_id"],
         situation_review_id=situation_id,
-        question=question,
+        question=question or f"Запись разговора: {str((manual_audio_attachment or {}).get('file_name') or 'аудиофайл')}",
         answer_json=answer,
         model_meta=_safe_model_meta(metadata),
         mode=mode,
@@ -232,7 +241,7 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
             label = "дожим" if mode == "push" else "реаниматор"
             brain_percent = 28 + index * 36
             _touch(job, stage="llm", detail=f"AI готовит {label}", percent=brain_percent)
-            question = job.question.strip() or AUTO_QUESTIONS[mode]
+            question = job.question.strip() if job.origin == "manager" else AUTO_QUESTIONS[mode]
             saved, _answer = _save_mode_answer(
                 db_path=db_path,
                 job=job,
@@ -242,6 +251,7 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
                 question=question,
                 origin=job.origin,
                 communication_pattern_context=communication_pattern_context,
+                manual_audio_attachment=job.manual_audio_attachment,
             )
             generated += 1
             saved_id = int(saved["id"]) if saved.get("id") is not None else None
@@ -257,6 +267,9 @@ def _run_quick_help_job(job_id: str, db_path: str | Path) -> None:
             job.status = "error"
             job.error = public_quick_help_error(error)
         _touch(job, stage="error", detail="Не удалось подготовить ответ", percent=100)
+    finally:
+        with _QUICK_HELP_LOCK:
+            job.manual_audio_attachment = None
 
 
 def start_quick_help_job(
@@ -266,13 +279,15 @@ def start_quick_help_job(
     question: str | None = None,
     confirm_paid: bool,
     mode: str | None = None,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_question = str(question or "").strip()
+    audio_transcript = str((manual_audio_attachment or {}).get("transcript") or "").strip()
     if normalized_question and not 1 <= len(normalized_question) <= MAX_QUESTION_CHARS:
         raise ValueError("Вопрос должен содержать от 1 до 4000 знаков")
     if mode is not None and mode not in ASSISTANT_MODES:
         raise ValueError("mode должен быть push или reanimator")
-    origin = "manager" if normalized_question else "auto"
+    origin = "manager" if normalized_question or audio_transcript else "auto"
     if mode is None:
         mode = "push"
     # Уточнение в чате всегда платное. Автогенерация может переиспользовать
@@ -306,7 +321,7 @@ def start_quick_help_job(
             )
             with _QUICK_HELP_LOCK:
                 _QUICK_HELP_JOBS[job.job_id] = job
-            return asdict(job)
+            return _public_job(job)
     if not confirm_paid:
         raise ValueError("Подтвердите платный AI-вызов для quick help")
     with _QUICK_HELP_LOCK:
@@ -319,7 +334,9 @@ def start_quick_help_job(
             None,
         )
         if existing is not None:
-            return asdict(existing)
+            if manual_audio_attachment:
+                raise ValueError("Дождитесь завершения текущего дожима и отправьте запись повторно")
+            return _public_job(existing)
         job_id = uuid.uuid4().hex
         job = DealManagerQuickHelpJob(
             job_id=job_id,
@@ -329,11 +346,12 @@ def start_quick_help_job(
             mode=mode,
             origin=origin,
             turn_id=None,
+            manual_audio_attachment=manual_audio_attachment,
         )
         _QUICK_HELP_JOBS[job_id] = job
     thread = threading.Thread(target=_run_quick_help_job, args=(job_id, db_path), daemon=True)
     thread.start()
-    return asdict(job)
+    return _public_job(job)
 
 
 def list_quick_help_history(

@@ -1662,6 +1662,8 @@ function DealDetail(props: {
   const [quickHelpDraft, setQuickHelpDraft] = useState('')
   const [quickHelpError, setQuickHelpError] = useState('')
   const [quickHelpJob, setQuickHelpJob] = useState<ManagerQuickHelpJob | null>(null)
+  const [quickHelpAudioJob, setQuickHelpAudioJob] = useState<ManagerUploadedAudioJob | null>(null)
+  const pendingQuickHelpAudioJobIdRef = useRef('')
   const [assistantWorkspace, setAssistantWorkspace] = useState<ManagerAssistantWorkspace | null>(null)
   const [assistantLoading, setAssistantLoading] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
@@ -1704,6 +1706,8 @@ function DealDetail(props: {
     setQuickHelpDraft(readDealDraft(MANAGER_QUICK_HELP_DRAFT_PREFIX, activeDealId))
     setQuickHelpError('')
     setQuickHelpJob(null)
+    setQuickHelpAudioJob(null)
+    pendingQuickHelpAudioJobIdRef.current = ''
     setAssistantWorkspace(null)
     setAssistantLoading(false)
     setAssistantOpen(false)
@@ -1817,6 +1821,29 @@ function DealDetail(props: {
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [activeDealId, situationAudioJobId, situationAudioJobStatus])
 
+  const quickHelpAudioJobId = quickHelpAudioJob?.job_id
+  const quickHelpAudioJobStatus = quickHelpAudioJob?.status
+  useEffect(() => {
+    if (!quickHelpAudioJobId || !['queued', 'running'].includes(quickHelpAudioJobStatus || '')) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const next = await fetchManagerUploadedAudioJob(quickHelpAudioJobId)
+        if (!cancelled && next.deal_id === activeDealId) setQuickHelpAudioJob(next)
+      } catch (reason) {
+        if (!cancelled) setQuickHelpAudioJob((current) => current ? {
+          ...current,
+          status: 'error',
+          stage: 'error',
+          error: reason instanceof Error ? reason.message : String(reason),
+        } : current)
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 1200)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [activeDealId, quickHelpAudioJobId, quickHelpAudioJobStatus])
+
   const quickHelpJobId = quickHelpJob?.job_id
   const quickHelpJobStatus = quickHelpJob?.status
   useEffect(() => {
@@ -1841,6 +1868,8 @@ function DealDetail(props: {
         if (next.status === 'done') {
           terminalHandled = true
           if (!cancelled) {
+            if (pendingQuickHelpAudioJobIdRef.current) setQuickHelpAudioJob(null)
+            pendingQuickHelpAudioJobIdRef.current = ''
             setQuickHelpError('')
             const knownId = freshQuickHelpIdFromJob(next)
             if (knownId) setFreshQuickHelpId(knownId)
@@ -1848,6 +1877,7 @@ function DealDetail(props: {
           }
         } else if (next.status === 'error') {
           terminalHandled = true
+          pendingQuickHelpAudioJobIdRef.current = ''
           setQuickHelpError(next.error || 'Не удалось получить помощь тренера')
         }
       } catch (reason) {
@@ -1942,7 +1972,7 @@ function DealDetail(props: {
     if (copied) props.onNotice('Контекст скопирован. Вставьте его в комментарий Bitrix.')
   }
 
-  async function requestQuickHelp(question: string, mode?: ManagerAssistantMode): Promise<boolean> {
+  async function requestQuickHelp(question: string, mode?: ManagerAssistantMode, manualAudioJobId?: string): Promise<boolean> {
     if (!props.deal) return false
     if (mode === 'reanimator') return false
     const normalized = question.trim()
@@ -1954,14 +1984,20 @@ function DealDetail(props: {
     setQuickHelpError('')
     setFreshQuickHelpId(null)
     try {
-      const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true, mode)
+      const started = await startManagerQuickHelp(props.deal.deal_id, normalized, true, mode, manualAudioJobId)
       setQuickHelpJob(started)
       const requestedMode = mode || 'push'
       const accepted = !started.mode || started.mode === requestedMode
       if (!accepted) return false
+      pendingQuickHelpAudioJobIdRef.current = manualAudioJobId || ''
       setQuickHelpDraft('')
-      if (started.status === 'error') setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
+      if (started.status === 'error') {
+        pendingQuickHelpAudioJobIdRef.current = ''
+        setQuickHelpError(started.error || 'Не удалось получить помощь тренера')
+      }
       if (started.status === 'done') {
+        if (manualAudioJobId) setQuickHelpAudioJob(null)
+        pendingQuickHelpAudioJobIdRef.current = ''
         const knownId = freshQuickHelpIdFromJob(started)
         if (knownId) setFreshQuickHelpId(knownId)
         const workspace = await loadAssistantWorkspace(true)
@@ -1972,8 +2008,26 @@ function DealDetail(props: {
       }
       return true
     } catch (reason) {
+      pendingQuickHelpAudioJobIdRef.current = ''
       setQuickHelpError(reason instanceof Error ? reason.message : String(reason))
       return true
+    }
+  }
+
+  async function uploadQuickHelpAudio(file: File) {
+    if (!props.deal) return
+    setQuickHelpError('')
+    setQuickHelpAudioJob({
+      job_id: '', deal_id: props.deal.deal_id, file_name: file.name, size_bytes: file.size,
+      duration_seconds: 0, status: 'uploading', stage: 'uploading', detail: 'Загружаем…', current: 0, total: 0,
+    })
+    try {
+      setQuickHelpAudioJob(await transcribeManagerUploadedAudio(props.deal.deal_id, file, true))
+    } catch (reason) {
+      setQuickHelpAudioJob((current) => current ? {
+        ...current, status: 'error', stage: 'error',
+        error: reason instanceof Error ? reason.message : String(reason),
+      } : current)
     }
   }
 
@@ -2131,6 +2185,7 @@ function DealDetail(props: {
       quickHelpDraft={quickHelpDraft}
       quickHelpError={quickHelpError}
       quickHelpJob={quickHelpJob}
+      quickHelpAudioJob={quickHelpAudioJob}
       assistantWorkspace={assistantWorkspace}
       assistantLoading={assistantLoading}
       assistantOpen={assistantOpen}
@@ -2144,6 +2199,8 @@ function DealDetail(props: {
       onCopySavedContext={() => void copySavedContextAgain()}
       onQuickHelpDraft={setQuickHelpDraft}
       onQuickHelp={requestQuickHelp}
+      onUploadQuickHelpAudio={uploadQuickHelpAudio}
+      onRemoveQuickHelpAudio={() => setQuickHelpAudioJob(null)}
       onOpenAssistant={() => void openAssistant()}
       onCloseAssistant={() => { setAssistantOpen(false); consumeFreshQuickHelp() }}
       freshQuickHelpId={freshQuickHelpId}
@@ -2183,6 +2240,7 @@ type ManagerDealScreenProps = {
   quickHelpDraft: string
   quickHelpError: string
   quickHelpJob: ManagerQuickHelpJob | null
+  quickHelpAudioJob: ManagerUploadedAudioJob | null
   assistantWorkspace: ManagerAssistantWorkspace | null
   assistantLoading: boolean
   assistantOpen: boolean
@@ -2195,7 +2253,9 @@ type ManagerDealScreenProps = {
   onPersistContextToBitrix: () => void
   onCopySavedContext: () => void
   onQuickHelpDraft: (value: string) => void
-  onQuickHelp: (question: string, mode?: ManagerAssistantMode) => Promise<boolean>
+  onQuickHelp: (question: string, mode?: ManagerAssistantMode, manualAudioJobId?: string) => Promise<boolean>
+  onUploadQuickHelpAudio: (audio: File) => Promise<void>
+  onRemoveQuickHelpAudio: () => void
   onOpenAssistant: () => void
   onCloseAssistant: () => void
   freshQuickHelpId: number | null
@@ -2260,8 +2320,11 @@ function ManagerDealScreen(props: ManagerDealScreenProps) {
         draft={props.quickHelpDraft}
         error={props.quickHelpError}
         job={props.quickHelpJob}
+        audioJob={props.quickHelpAudioJob}
         onDraft={props.onQuickHelpDraft}
         onRequest={props.onQuickHelp}
+        onUploadAudio={props.onUploadQuickHelpAudio}
+        onRemoveAudio={props.onRemoveQuickHelpAudio}
         onClose={props.onCloseAssistant}
         onEditSituation={() => { props.onCloseAssistant(); props.onOpenSituation() }}
         onCopy={props.onCopy}
@@ -2744,8 +2807,11 @@ function ManagerAssistantModal(props: {
   draft: string
   error: string
   job: ManagerQuickHelpJob | null
+  audioJob: ManagerUploadedAudioJob | null
   onDraft: (value: string) => void
-  onRequest: (question: string, mode?: ManagerAssistantMode) => Promise<boolean>
+  onRequest: (question: string, mode?: ManagerAssistantMode, manualAudioJobId?: string) => Promise<boolean>
+  onUploadAudio: (audio: File) => Promise<void>
+  onRemoveAudio: () => void
   onClose: () => void
   onEditSituation: () => void
   onCopy: (text: string, label: string) => Promise<void>
@@ -2797,6 +2863,8 @@ function ManagerAssistantModal(props: {
   const autoModePending = workspaceMode === 'work' && view === 'answer' && viewingLatest && !visibleEntry && !props.error
   const busy = jobBusy || lazyMode === assistantMode || autoModePending
   const footerBusy = view === 'companion' ? companionBusy : busy
+  const audioBusy = Boolean(props.audioJob && ['uploading', 'queued', 'running'].includes(props.audioJob.status))
+  const readyAudioJobId = view === 'answer' ? readyManagerAudioJobId(props.audioJob) : undefined
   const answerPane = assistantAnswerPane({
     hasTurn: Boolean(visibleTurn),
     busy,
@@ -2866,10 +2934,10 @@ function ManagerAssistantModal(props: {
       props.onDraft('')
       return
     }
-    if (busy || !props.draft.trim()) return
+    if (busy || audioBusy || (!props.draft.trim() && !readyAudioJobId)) return
     setView('answer')
     setHistoryOffset(0)
-    await props.onRequest(props.draft, assistantMode)
+    await props.onRequest(props.draft, assistantMode, readyAudioJobId)
   }
 
   function requestWorkspaceMode(next: 'work' | 'lab') {
@@ -3091,10 +3159,19 @@ function ManagerAssistantModal(props: {
           /> : null}
           </>}
         </div>
-        {workspaceMode === 'lab' ? null : <footer>
-          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+        {workspaceMode === 'lab' ? null : <footer className={view === 'answer' ? 'with-audio' : ''}>
+          {view === 'answer' && props.audioJob ? <div className={`dc-manager-audio-attachment ${props.audioJob.status}`}>
+            <span aria-hidden="true">🎧</span>
+            <div><strong>{props.audioJob.file_name}</strong><small>{props.audioJob.error || props.audioJob.detail}{props.audioJob.duration_seconds ? ` · ${Math.max(1, Math.round(props.audioJob.duration_seconds / 60))} мин` : ''}</small>{props.audioJob.attachment?.transcript ? <details><summary>Показать текст</summary><p>{props.audioJob.attachment.transcript}</p></details> : null}</div>
+            <button type="button" aria-label="Убрать запись разговора" disabled={busy} onClick={props.onRemoveAudio}>×</button>
+          </div> : null}
+          <ManagerVoiceInput dealId={props.deal.deal_id} disabled={footerBusy || audioBusy} onTranscribe={props.onTranscribe} onTranscript={(text) => props.onDraft(appendVoiceText(props.draft, text))} />
+          {view === 'answer' ? <label className={`dc-manager-audio-upload ${audioBusy ? 'disabled' : ''}`}>
+            <span aria-hidden="true">🎧</span> Запись
+            <input type="file" accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,.mp3,.m4a,.wav" disabled={footerBusy || audioBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void props.onUploadAudio(file); event.target.value = '' }} />
+          </label> : null}
           <textarea ref={inputRef} value={props.draft} maxLength={4000} onChange={(event) => props.onDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder={view === 'companion' ? 'Как переписать: короче, без даты, клиент сам наберёт…' : 'Уточните рычаг, тон или что уже пробовали...'} aria-label={view === 'companion' ? 'Уточнение сопроводительного текста' : 'Уточнение рекомендации'} />
-          <button className="dc-button primary" disabled={footerBusy || !props.draft.trim() || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
+          <button className="dc-button primary" disabled={footerBusy || audioBusy || (!props.draft.trim() && !readyAudioJobId) || (view === 'companion' && !companionMessage)} onClick={() => void send()}>{footerBusy || audioBusy ? <span className="dc-spinner" /> : view === 'companion' ? 'Переписать' : 'Отправить'}</button>
           {view === 'companion' && props.draft.trim() && !companionMessage ? <small className="dc-manager-error">Сначала сформируйте сопроводительный текст</small> : null}
           {props.error && visibleTurn && view !== 'companion' ? <small className="dc-manager-error">{props.error}</small> : null}
         </footer>}

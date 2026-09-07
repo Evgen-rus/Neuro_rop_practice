@@ -124,6 +124,17 @@ COMMUNICATION_CONTEXT = {
     "last_confirmed_contact": None,
     "recent_events": [],
 }
+MANUAL_AUDIO = {
+    "kind": "manual_audio",
+    "source_kind": "manual_audio",
+    "provisional": True,
+    "crm_evidence": False,
+    "communication_event": False,
+    "file_name": "conversation.m4a",
+    "transcript": "Клиент сказал, что согласовал бюджет и ждёт директора.",
+    "attached_at": "2026-08-03T12:00:00+03:00",
+    "duration_seconds": 120,
+}
 
 
 class ImmediateThread:
@@ -226,6 +237,26 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         self.assertTrue(call.call_args.args[0].startswith(prefixes[0]))
         self.assertIsNone(kwargs.get("stable_prefix"))
 
+    def test_manual_audio_is_provisional_and_excluded_from_cache_prefix(self) -> None:
+        with patch(
+            "openai_api.llm.deal_manager_quick_help.call_structured_output_json",
+            return_value=(ANSWER, {}),
+        ) as call:
+            generate_deal_manager_quick_help(
+                question="",
+                analysis_projection=CONTEXT["analysis_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                situation_projection=CONTEXT["situation_projection"],
+                communication_pattern_context=COMMUNICATION_CONTEXT,
+                manual_audio_attachment=MANUAL_AUDIO,
+            )
+        prompt = call.call_args.args[0]
+        self.assertIn("MANUAL_AUDIO_CONTEXT", prompt)
+        self.assertIn(MANUAL_AUDIO["transcript"], prompt)
+        self.assertIn("пока не подтверждён CRM", prompt)
+        self.assertNotIn(MANUAL_AUDIO["transcript"], call.call_args.kwargs["cache_prefixes"][1])
+
     def test_validation_rejects_missing_strategy_variant(self) -> None:
         invalid = {**ANSWER, "client_messages": {"primary": "Текст", "alternative": "Другой текст"}}
         with self.assertRaisesRegex(ValueError, "client_messages"):
@@ -326,6 +357,37 @@ class DealManagerQuickHelpTests(unittest.TestCase):
         communication_context = generate.call_args.kwargs["communication_pattern_context"]
         self.assertEqual(communication_context["window_days"], 30)
         self.assertEqual(communication_context["recent_events"], [])
+
+    def test_audio_only_quick_help_does_not_publish_or_persist_transcript(self) -> None:
+        saved_kwargs = {}
+
+        def save_call(name, db_path, **kwargs):
+            if name == "get_current_deal_manager_quick_help":
+                return None
+            if name == "save_deal_manager_quick_help":
+                saved_kwargs.update(kwargs)
+                return {"id": 32, "deal_id": "101"}
+            raise AssertionError(name)
+
+        with patch.object(quick_help, "load_manager_screen_context", return_value=CONTEXT), \
+             patch.object(quick_help, "_load_local_communications", return_value=[]), \
+             patch.object(quick_help, "generate_deal_manager_quick_help", return_value=(ANSWER, {})) as generate, \
+             patch.object(quick_help, "_storage_call", side_effect=save_call), \
+             patch.object(quick_help.threading, "Thread", ImmediateThread):
+            started = quick_help.start_quick_help_job(
+                db_path=Path("state.sqlite"),
+                deal_id="101",
+                question="",
+                confirm_paid=True,
+                manual_audio_attachment=MANUAL_AUDIO,
+            )
+
+        self.assertEqual(started["status"], "done")
+        self.assertNotIn("manual_audio_attachment", started)
+        self.assertEqual(saved_kwargs["question"], "Запись разговора: conversation.m4a")
+        self.assertNotIn(MANUAL_AUDIO["transcript"], str(saved_kwargs))
+        self.assertEqual(generate.call_args.kwargs["manual_audio_attachment"], MANUAL_AUDIO)
+        self.assertIsNone(quick_help._QUICK_HELP_JOBS[started["job_id"]].manual_audio_attachment)
 
     def test_only_requested_mode_is_generated(self) -> None:
         seen = []

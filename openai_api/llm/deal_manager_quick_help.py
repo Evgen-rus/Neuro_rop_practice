@@ -281,16 +281,20 @@ def _shared_context_sections(
     communication_pattern_context: dict[str, Any],
     manager_tactics: str,
     question: str,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> list[str]:
-    return [
+    sections = [
         f"MANAGER_TACTICS:\n{manager_tactics}",
         _section("SITUATION_CONTEXT", situation_projection),
         _section("ANALYSIS_CONTEXT", analysis_projection),
         _section("DEAL_CONTEXT", project_deal(deal)),
         _section("CURRENT_BITRIX_TASK", project_bitrix_task(current_bitrix_task)),
         _section("COMMUNICATION_PATTERN_CONTEXT", communication_pattern_context),
-        _section("MANAGER_QUESTION", question),
     ]
+    if manual_audio_attachment:
+        sections.append(_section("MANUAL_AUDIO_CONTEXT", manual_audio_attachment))
+    sections.append(_section("MANAGER_QUESTION", question))
+    return sections
 
 
 def build_reanimator_prompt(
@@ -302,6 +306,7 @@ def build_reanimator_prompt(
     situation_projection: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     manager_tactics: str | None = None,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> str:
     question = str(question or "").strip()[:MAX_MANAGER_CONTEXT_CHARS]
     manager_tactics = manager_tactics if manager_tactics is not None else load_manager_tactics()
@@ -314,6 +319,7 @@ def build_reanimator_prompt(
             "- Опирайся только на переданные CONTEXT и не придумывай ответ клиента, факты, даты, суммы или договорённости.\n"
             "- Не называй попытку звонка контактом. CRM-задача — поручение, а не доказательство клиентского результата.\n"
             "- COMMUNICATION_PATTERN_CONTEXT содержит только детерминированный срез коммуникаций без текстов и транскриптов. По нему можно утверждать повторение канала или попыток без подтверждённого контакта, но нельзя утверждать повторение одинакового CTA.\n"
+            "- MANUAL_AUDIO_CONTEXT приложен менеджером вручную и пока не подтверждён CRM. Используй его как provisional context, но не считай новым CRM-звонком, KPI или доказанным движением сделки. При конфликте приоритет имеет CRM evidence.\n"
             "- Если один канал или способ контакта несколько раз не дал подтверждённого результата, не рекомендуй просто повторить его: измени хотя бы канал, повод, CTA, требуемое усилие клиента, аргумент или допустимого участника сделки. Не придумывай новых лиц.\n"
             "- Не откатывай сделку к общей квалификации, если она уже дошла до КП, договора, счёта или оплаты и нет конкретной причины возвращаться назад. Убирай текущий blocker.\n"
             "- Блок «Понял ситуацию» строится строго как: situation_summary → next_action → expected_result.\n"
@@ -343,6 +349,7 @@ def build_reanimator_prompt(
                 communication_pattern_context=communication_pattern_context,
                 manager_tactics=manager_tactics,
                 question=question,
+                manual_audio_attachment=manual_audio_attachment,
             ),
         ]
     )
@@ -357,6 +364,7 @@ def build_push_prompt(
     situation_projection: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     manager_tactics: str | None = None,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> str:
     question = str(question or "").strip()[:MAX_MANAGER_CONTEXT_CHARS]
     manager_tactics = manager_tactics if manager_tactics is not None else load_manager_tactics()
@@ -370,6 +378,7 @@ def build_push_prompt(
             "- Опирайся только на переданные CONTEXT и факты, явно сообщённые менеджером в текущем вопросе. Не придумывай ответ клиента, факты, даты, суммы, скидки, бонусы, бронь, дедлайны, конкурентные предложения, технические характеристики, экономический эффект, обещания производства, решения клиента, полномочия или договорённости.\n"
             "- Не называй попытку звонка контактом. CRM-задача — поручение, а не доказательство клиентского результата.\n"
             "- COMMUNICATION_PATTERN_CONTEXT содержит только детерминированный срез коммуникаций без текстов и транскриптов. По нему можно утверждать повторение канала или попыток без подтверждённого контакта, но нельзя утверждать повторение одинакового CTA.\n"
+            "- MANUAL_AUDIO_CONTEXT приложен менеджером вручную и пока не подтверждён CRM. Используй его как provisional context, но не считай новым CRM-звонком, KPI или доказанным движением сделки. При конфликте приоритет имеет CRM evidence.\n"
             "- Если один канал или способ контакта несколько раз не дал подтверждённого результата, не рекомендуй просто повторить его: измени канал, повод, CTA, аргумент или допустимого участника сделки. Не придумывай новых лиц.\n"
             "- Не откатывай сделку к общей квалификации, если она уже дошла до КП, договора, счёта или оплаты и нет конкретной причины возвращаться назад.\n"
             "- Блок «Понял ситуацию» строится строго как: situation_summary → next_action → expected_result. Он должен сказать, что сейчас происходит, что конкретно сделать и какой подтверждаемый результат нужен. Это не большой аналитический отчёт.\n"
@@ -401,6 +410,7 @@ def build_push_prompt(
                 communication_pattern_context=communication_pattern_context,
                 manager_tactics=manager_tactics,
                 question=question,
+                manual_audio_attachment=manual_audio_attachment,
             ),
         ]
     )
@@ -433,6 +443,7 @@ def assemble_quick_help_prompt(
     situation_projection: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     manager_tactics: str | None = None,
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> str:
     tactics = manager_tactics if manager_tactics is not None else load_manager_tactics()
     question = str(question or "").strip()[:MAX_MANAGER_CONTEXT_CHARS]
@@ -446,6 +457,7 @@ def assemble_quick_help_prompt(
             communication_pattern_context=communication_pattern_context,
             manager_tactics=tactics,
             question=question,
+            manual_audio_attachment=manual_audio_attachment,
         ),
     )
 
@@ -460,6 +472,7 @@ def build_quick_help_prompt(
     communication_pattern_context: dict[str, Any],
     manager_tactics: str | None = None,
     mode: str = "reanimator",
+    manual_audio_attachment: dict[str, Any] | None = None,
 ) -> str:
     if mode not in ASSISTANT_MODES:
         raise ValueError("mode должен быть push или reanimator")
@@ -472,6 +485,7 @@ def build_quick_help_prompt(
         situation_projection=situation_projection,
         communication_pattern_context=communication_pattern_context,
         manager_tactics=manager_tactics,
+        manual_audio_attachment=manual_audio_attachment,
     )
 
 
@@ -484,6 +498,7 @@ def generate_deal_manager_quick_help(
     situation_projection: dict[str, Any],
     communication_pattern_context: dict[str, Any],
     manager_tactics: str | None = None,
+    manual_audio_attachment: dict[str, Any] | None = None,
     mode: str = "reanimator",
     model: str = MANAGER_MODEL,
     reasoning_effort: str = MANAGER_REASONING_EFFORT,
@@ -507,6 +522,7 @@ def generate_deal_manager_quick_help(
             situation_projection=situation_projection,
             communication_pattern_context=communication_pattern_context,
             manager_tactics=tactics,
+            manual_audio_attachment=manual_audio_attachment,
         )
     else:
         prompt = build_quick_help_prompt(
@@ -518,6 +534,7 @@ def generate_deal_manager_quick_help(
             communication_pattern_context=communication_pattern_context,
             manager_tactics=tactics,
             mode=mode,
+            manual_audio_attachment=manual_audio_attachment,
         )
     cache_key = (
         "neuro-rop:deal-manager-push:v4"
@@ -525,7 +542,10 @@ def generate_deal_manager_quick_help(
         else "neuro-rop:deal-manager-quick-help:v7"
     )
     knowledge_prefix = prompt_prefix_before(prompt, "SITUATION_CONTEXT:")
-    deal_prefix = prompt_prefix_before(prompt, "MANAGER_QUESTION:")
+    deal_prefix = prompt_prefix_before(
+        prompt,
+        "MANUAL_AUDIO_CONTEXT:" if manual_audio_attachment else "MANAGER_QUESTION:",
+    )
     result, metadata = call_structured_output_json(
         prompt,
         schema=quick_help_schema(tactic_ids=tactic_ids),
