@@ -2,6 +2,7 @@
   "schema_id": "canonical_state_contract_fixtures",
   "schema_version": "1",
   "scenario_ids": ["T01", "T02", "T03", "T04", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14", "T15", "T16", "T17", "T18"],
+  "projection_ids": ["P01", "P02", "P03", "P04", "P05"],
   "observed_at": {
     "a": "2026-09-07T10:00:00+03:00",
     "b": "2026-09-07T10:05:00+03:00"
@@ -206,6 +207,186 @@
       "CLOSED": "N",
       "DATE_MODIFY": "2026-09-07T16:05:00+03:00",
       "MODIFY_BY_ID": "43"
+    }
+  },
+  "deal_projection": {
+    "before": {
+      "ID": "990001",
+      "TITLE": "Synthetic deal projection",
+      "STAGE_ID": "C9:NEW",
+      "CATEGORY_ID": "9",
+      "OPPORTUNITY": "250000.00",
+      "CURRENCY_ID": "RUB",
+      "ASSIGNED_BY_ID": "901",
+      "CLOSED": "N",
+      "MOVED_TIME": "2026-09-07T16:10:00+03:00",
+      "MOVED_BY_ID": "902",
+      "LEAD_ID": "990101",
+      "CONTACT_ID": "990102",
+      "COMPANY_ID": "990103",
+      "DATE_MODIFY": "2026-09-07T16:15:00+03:00",
+      "MODIFY_BY_ID": "903",
+      "DATE_CREATE": "2026-09-01T09:00:00+03:00"
+    },
+    "expected_semantic": {
+      "id": "990001",
+      "title_hash": "c8f3334d73e948f8465a38c5022881ed08ef0a2536df95566c35a49c210a57c0",
+      "stage_id": "C9:NEW",
+      "category_id": "9",
+      "opportunity": "250000.00",
+      "currency_id": "RUB",
+      "assigned_by_id": "901",
+      "closed": "N",
+      "moved_time": "2026-09-07T16:10:00+03:00",
+      "moved_by_id": "902",
+      "lead_id": "990101",
+      "contact_id": "990102",
+      "company_id": "990103"
+    },
+    "expected_metadata": {
+      "date_modify": "2026-09-07T16:15:00+03:00",
+      "modify_by_id": "903",
+      "date_create": "2026-09-01T09:00:00+03:00",
+      "source": "crm.deal.get"
+    },
+    "stage_changed": {
+      "ID": "990001",
+      "TITLE": "Synthetic deal projection",
+      "STAGE_ID": "C9:IN_PROGRESS",
+      "CATEGORY_ID": "9",
+      "OPPORTUNITY": "250000.00",
+      "CURRENCY_ID": "RUB",
+      "ASSIGNED_BY_ID": "901",
+      "CLOSED": "N",
+      "MOVED_TIME": "2026-09-07T16:10:00+03:00",
+      "MOVED_BY_ID": "902",
+      "LEAD_ID": "990101",
+      "CONTACT_ID": "990102",
+      "COMPANY_ID": "990103",
+      "DATE_MODIFY": "2026-09-07T16:15:00+03:00",
+      "MODIFY_BY_ID": "903",
+      "DATE_CREATE": "2026-09-01T09:00:00+03:00"
+    }
+  },
+  "activity_projection": {
+    "before": {
+      "ID": "990201",
+      "TYPE_ID": "2",
+      "PROVIDER_ID": "VOXIMPLANT_CALL",
+      "PROVIDER_TYPE_ID": "CALL",
+      "ORIGIN_ID": "synthetic-call-990201",
+      "SUBJECT": "Synthetic call subject",
+      "DESCRIPTION": "Synthetic call description",
+      "START_TIME": "2026-09-07T10:00:00+03:00",
+      "END_TIME": "2026-09-07T10:05:00+03:00",
+      "DEADLINE": "2026-09-07T10:30:00+03:00",
+      "COMPLETED": "Y",
+      "STATUS": "2",
+      "DIRECTION": "2",
+      "RESPONSIBLE_ID": "911",
+      "OWNER_TYPE_ID": "2",
+      "OWNER_ID": "990001",
+      "LAST_UPDATED": "2026-09-07T10:06:00+03:00",
+      "CREATED": "2026-09-07T09:59:00+03:00",
+      "AUTHOR_ID": "912",
+      "EDITOR_ID": "913",
+      "SETTINGS": {"MISSED_CALL": true},
+      "FILES": [],
+      "COMMUNICATIONS": [
+        {"ENTITY_TYPE_ID": "3", "ENTITY_ID": "990302", "VALUE": "synthetic-contact-value-b"},
+        {"ENTITY_TYPE_ID": "1", "ENTITY_ID": "990301", "VALUE": "synthetic-contact-value-a"}
+      ]
+    },
+    "expected_semantic": {
+      "kind": "call",
+      "type_id": "2",
+      "provider_id": "VOXIMPLANT_CALL",
+      "provider_type_id": "CALL",
+      "origin_id": "synthetic-call-990201",
+      "subject_hash": "a1b107f2f505e065aa65c00232e65c3b00b27d82e2ba9f39c516e6f431dd05ce",
+      "description_hash": "5e1832c4b502a3b2c1ef26e163ee8a1cf8656dd7b8ed44ae4d584300d06c0eab",
+      "start_time": "2026-09-07T10:00:00+03:00",
+      "end_time": "2026-09-07T10:05:00+03:00",
+      "deadline": "2026-09-07T10:30:00+03:00",
+      "completed": "Y",
+      "status": "2",
+      "direction": "2",
+      "responsible_id": "911",
+      "owner_type_id": "2",
+      "owner_id": "990001",
+      "missed_call": true,
+      "file_ids": [],
+      "communications": [
+        {"entity_type_id": "1", "entity_id": "990301"},
+        {"entity_type_id": "3", "entity_id": "990302"}
+      ]
+    }
+  },
+  "task_projection": {
+    "before": {
+      "id": "990401",
+      "status": "2",
+      "deadline": "2026-09-10T18:00:00+03:00",
+      "closedDate": "2026-09-11T12:00:00+03:00",
+      "responsibleId": "921",
+      "title": "Synthetic task title",
+      "description": "Synthetic task description",
+      "changedDate": "2026-09-07T11:00:00+03:00"
+    },
+    "expected_semantic": {
+      "id": "990401",
+      "status": "2",
+      "deadline": "2026-09-10T18:00:00+03:00",
+      "closed_date": "2026-09-11T12:00:00+03:00",
+      "responsible_id": "921",
+      "title_hash": "e8c9c98f6208809590c7c3a134c73dda3f430cf3f4499e2ef982c8428f0fcf66",
+      "description_hash": "33b27cdab6c71409793108263da3ce61bb83d41b788943f48f251388c3156b33"
+    },
+    "expected_metadata": {
+      "changed_date": "2026-09-07T11:00:00+03:00",
+      "source": "tasks.task.get"
+    }
+  },
+  "timeline_projection": {
+    "before": {
+      "ID": "990501",
+      "CREATED": "2026-09-07T12:00:00+03:00",
+      "AUTHOR_ID": "931",
+      "COMMENT": "Synthetic timeline comment",
+      "FILES": [
+        {"id": "990503", "url": "https://example.invalid/file?fileId=990503&_efd=AAA", "name": "synthetic-a.txt", "size": 10},
+        {"id": "990502", "url": "https://example.invalid/file?fileId=990502&_efd=AAA", "name": "synthetic-b.txt", "size": 20}
+      ]
+    },
+    "expected_semantic": {
+      "id": "990501",
+      "created": "2026-09-07T12:00:00+03:00",
+      "author_id": "931",
+      "comment_hash": "da0dde9bcc7dad5e01b4f0dad39978bbba25caec1c61269efe261081460fac2c",
+      "file_ids": ["990502", "990503"]
+    }
+  },
+  "im_message_projection": {
+    "before": {
+      "id": "990601",
+      "dialog_id": "chat990001",
+      "date": "2026-09-07T13:00:00+03:00",
+      "author_id": "941",
+      "text": "Synthetic IM message"
+    },
+    "expected_semantic": {
+      "id": "990601",
+      "dialog_id": "chat990001",
+      "date": "2026-09-07T13:00:00+03:00",
+      "author_id": "941",
+      "text_hash": "90231b0b11417fb43e76c7042793a5f0add8833ba871b7bc92a081ad772a0f79"
+    },
+    "text_changed": {
+      "id": "990601",
+      "dialog_id": "chat990001",
+      "date": "2026-09-07T13:00:00+03:00",
+      "author_id": "941",
+      "text": "Synthetic IM message revised"
     }
   },
   "incremental_set": {

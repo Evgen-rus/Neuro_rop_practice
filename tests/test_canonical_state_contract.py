@@ -34,9 +34,13 @@ class CanonicalStateFixtureTests(unittest.TestCase):
     def test_fixture_covers_t01_through_t18(self):
         self.assertEqual(FIXTURE["scenario_ids"], [f"T{number:02d}" for number in range(1, 19)])
 
+    def test_fixture_covers_p01_through_p05(self):
+        self.assertEqual(FIXTURE["projection_ids"], [f"P{number:02d}" for number in range(1, 6)])
+
     def test_fixture_is_privacy_safe(self):
         for key, value in walk(FIXTURE):
-            self.assertNotEqual(key.upper(), "VALUE")
+            if key.upper() == "VALUE":
+                self.assertIn(value, {"synthetic-contact-value-a", "synthetic-contact-value-b"})
             if not isinstance(value, str):
                 continue
             self.assertNotIn("@", value)
@@ -286,6 +290,97 @@ class CanonicalStateContractTests(unittest.TestCase):
         state, _ = self.merge(None, [before], source_status={"activities": "ok"})
         _, delta = self.merge(state, [after], source_status={"activities": "ok"})
         self.assertEqual(delta["entries"], [])
+
+    def test_p01_deal_semantic_projection_and_stage_revision(self):
+        fixture = FIXTURE["deal_projection"]
+        before = canonical_state.project_deal(copy.deepcopy(fixture["before"]))
+        after = canonical_state.project_deal(copy.deepcopy(fixture["stage_changed"]))
+        self.assertEqual(before["key"], "deal:990001")
+        self.assertEqual(before["semantic"], fixture["expected_semantic"])
+        self.assertEqual(before["metadata"], fixture["expected_metadata"])
+        state, _ = self.merge(None, [before], source_status={"deal": "ok"})
+        _, delta = self.merge(state, [after], source_status={"deal": "ok"})
+        entry = self.one_entry(delta, "UPDATED_MEANINGFUL")
+        self.assertEqual(entry["changed_semantic_fields"], ["stage_id"])
+
+    def test_p02_activity_projection_privacy_order_and_end_time_revision(self):
+        fixture = FIXTURE["activity_projection"]
+        raw = copy.deepcopy(fixture["before"])
+        before = self.activity(raw)
+        self.assertEqual(before["semantic"], fixture["expected_semantic"])
+        self.assertTrue(before["semantic"]["missed_call"])
+        self.assertNotIn("VALUE", {key.upper() for key, _ in walk(before)})
+        self.assertNotIn("synthetic-contact-value", json.dumps(before, ensure_ascii=False))
+
+        reordered_raw = copy.deepcopy(raw)
+        reordered_raw["COMMUNICATIONS"].reverse()
+        reordered = self.activity(reordered_raw)
+        self.assertEqual(before["semantic_fingerprint"], reordered["semantic_fingerprint"])
+        self.assertEqual(before["raw_fingerprint"], reordered["raw_fingerprint"])
+
+        end_changed_raw = copy.deepcopy(raw)
+        end_changed_raw["END_TIME"] = "2026-09-07T10:06:00+03:00"
+        end_changed = self.activity(end_changed_raw)
+        state, _ = self.merge(None, [before], source_status={"activities": "ok"})
+        _, delta = self.merge(state, [end_changed], source_status={"activities": "ok"})
+        entry = self.one_entry(delta, "UPDATED_MEANINGFUL")
+        self.assertEqual(entry["changed_semantic_fields"], ["end_time"])
+
+    def test_p03_task_projection_semantic_and_technical_revisions(self):
+        fixture = FIXTURE["task_projection"]
+        before_raw = copy.deepcopy(fixture["before"])
+        before = canonical_state.project_task(before_raw)
+        self.assertEqual(before["key"], "task:990401")
+        self.assertEqual(before["semantic"], fixture["expected_semantic"])
+        self.assertEqual(before["metadata"], fixture["expected_metadata"])
+
+        status_changed_raw = copy.deepcopy(before_raw)
+        status_changed_raw["status"] = "3"
+        status_changed = canonical_state.project_task(status_changed_raw)
+        state, _ = self.merge(None, [before], source_status={"tasks": "ok"})
+        _, delta = self.merge(state, [status_changed], source_status={"tasks": "ok"})
+        entry = self.one_entry(delta, "UPDATED_MEANINGFUL")
+        self.assertEqual(entry["changed_semantic_fields"], ["status"])
+
+        changed_date_raw = copy.deepcopy(before_raw)
+        changed_date_raw["changedDate"] = "2026-09-07T11:05:00+03:00"
+        changed_date = canonical_state.project_task(changed_date_raw)
+        self.assertEqual(before["semantic_fingerprint"], changed_date["semantic_fingerprint"])
+        self.assertNotEqual(before["raw_fingerprint"], changed_date["raw_fingerprint"])
+        _, delta = self.merge(state, [changed_date], source_status={"tasks": "ok"})
+        entry = self.one_entry(delta, "UPDATED_TECHNICAL")
+        self.assertEqual(entry["changed_semantic_fields"], [])
+        self.assertEqual(entry["changed_metadata_fields"], ["changed_date"])
+
+    def test_p04_timeline_projection_ignores_file_transport_metadata(self):
+        fixture = FIXTURE["timeline_projection"]
+        before_raw = copy.deepcopy(fixture["before"])
+        before = canonical_state.project_timeline_comment(before_raw)
+        self.assertEqual(before["key"], "timeline_comment:990501")
+        self.assertEqual(before["semantic"], fixture["expected_semantic"])
+
+        transport_changed_raw = copy.deepcopy(before_raw)
+        transport_changed_raw["FILES"].reverse()
+        for file_value in transport_changed_raw["FILES"]:
+            file_value["url"] = file_value["url"].replace("_efd=AAA", "_efd=BBB")
+            file_value["name"] = "changed.bin"
+            file_value["size"] = 999
+        transport_changed = canonical_state.project_timeline_comment(transport_changed_raw)
+        self.assertEqual(before["semantic_fingerprint"], transport_changed["semantic_fingerprint"])
+        self.assertEqual(before["raw_fingerprint"], transport_changed["raw_fingerprint"])
+
+    def test_p05_im_message_projection_and_text_revision(self):
+        fixture = FIXTURE["im_message_projection"]
+        before = canonical_state.project_im_message(copy.deepcopy(fixture["before"]))
+        after = canonical_state.project_im_message(copy.deepcopy(fixture["text_changed"]))
+        self.assertEqual(before["key"], "im_message:990601")
+        self.assertEqual(before["semantic"], fixture["expected_semantic"])
+        self.assertEqual(after["key"], before["key"])
+        state, _ = self.merge(None, [before], source_status={"im_messages": "ok"})
+        _, delta = self.merge(state, [after], source_status={"im_messages": "ok"})
+        entry = self.one_entry(delta, "UPDATED_MEANINGFUL")
+        self.assertEqual(entry["key"], "im_message:990601")
+        self.assertEqual(entry["changed_semantic_fields"], ["text_hash"])
 
 
 if __name__ == "__main__":
