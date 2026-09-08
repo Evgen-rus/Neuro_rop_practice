@@ -238,6 +238,7 @@ def build_prompt(
     prior_neuro_rop_recommendation: dict[str, Any] | None = None,
     current_situation_context: dict[str, Any] | None = None,
     daily_quality_context: dict[str, Any] | None = None,
+    incremental_context: dict[str, Any] | None = None,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -256,6 +257,21 @@ def build_prompt(
 
 {history_text.strip()}"""
     incremental_rules = ""
+    if incremental_context is not None:
+        evidence_sections = "## INCREMENTAL INPUT\n\n" + json.dumps(
+            incremental_context,
+            ensure_ascii=False,
+            indent=2,
+        )
+        incremental_rules = """
+<incremental_analysis_rules>
+- PREVIOUS_TRUSTED_COMPLETE_ANALYSIS — предыдущее проверенное понимание, а не неизменная истина.
+- Новые данные могут сохранить, пересмотреть или опровергнуть прежние выводы.
+- Используй только CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE как новые evidence.
+- Не считай отсутствие старых неизменившихся событий их удалением.
+- Верни полный текущий analysis JSON той же схемы, что FULL, не patch и не список изменений.
+</incremental_analysis_rules>
+"""
     situation_context_text = render_deal_current_situation_context(current_situation_context)
     evidence_sections = f"""{evidence_sections}
 

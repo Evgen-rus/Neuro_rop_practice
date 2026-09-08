@@ -241,6 +241,8 @@ def persist_successful_llm_run(
     decision_reason: dict[str, Any],
     prompt_version: str | None = None,
     evidence_ids_included: list[str] | None = None,
+    evidence_coverage: dict[str, Any] | None = None,
+    canonical_state: dict[str, Any] | None = None,
 ) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
@@ -296,6 +298,8 @@ def persist_successful_llm_run(
         raw_path=str(paths["raw"]),
         decision_reason=decision_reason,
         evidence_ids_included=evidence_ids_included,
+        evidence_coverage=evidence_coverage,
+        canonical_state=canonical_state,
         **analysis_run_provenance(
             payload,
             fingerprint=fingerprint,

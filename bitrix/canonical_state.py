@@ -242,6 +242,73 @@ def project_im_message(raw: dict[str, Any]) -> dict[str, Any]:
     return _entity("im_message", source_id, semantic, {})
 
 
+def _response_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    if isinstance(value.get("items"), list):
+        return [item for item in value["items"] if isinstance(item, dict)]
+    result = (value.get("response") or {}).get("result") if value.get("ok") else None
+    return [item for item in result if isinstance(item, dict)] if isinstance(result, list) else []
+
+
+def _response_item(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not value.get("ok"):
+        return {}
+    result = (value.get("response") or {}).get("result")
+    return result if isinstance(result, dict) else {}
+
+
+def _source_ok(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("ok") is True and value.get("refresh_ok") is not False
+
+
+def merge_deal_bundle(
+    state: dict[str, Any] | None,
+    bundle: dict[str, Any],
+    *,
+    observed_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project one persisted read-only deal bundle into canonical state."""
+    deal = (bundle.get("deal") or {}).get("item") or {}
+    activities = bundle.get("activities")
+    task_responses = bundle.get("bitrix_tasks")
+    timeline_attempts = bundle.get("timeline_comments")
+    source_status = {
+        "deal": "ok" if deal.get("ID") else "failed",
+        "activities": "ok" if _source_ok(activities) else "failed",
+        "tasks": "ok" if isinstance(task_responses, dict) and all(
+            _source_ok(response) for response in task_responses.values()
+        ) else "failed",
+        "timeline_comments": "ok" if isinstance(timeline_attempts, list) and timeline_attempts and all(
+            _source_ok(attempt) for attempt in timeline_attempts
+        ) else "failed",
+    }
+    entities = [project_deal(deal)] if source_status["deal"] == "ok" else []
+
+    details = bundle.get("activity_details") or {}
+    for row in _response_items(activities):
+        activity_id = str(row.get("ID") or "")
+        detail = _response_item(details.get(activity_id)) if isinstance(details, dict) else {}
+        entities.append(project_activity({**row, **detail} if detail else row))
+
+    for response in task_responses.values() if isinstance(task_responses, dict) else ():
+        result = _response_item(response)
+        task = result.get("task") if isinstance(result.get("task"), dict) else result
+        if task.get("id") or task.get("ID"):
+            entities.append(project_task(task))
+
+    for attempt in timeline_attempts if isinstance(timeline_attempts, list) else ():
+        entities.extend(project_timeline_comment(item) for item in _response_items(attempt))
+
+    return merge_canonical_state(
+        state,
+        owner={"entity_type": "deal", "entity_id": bundle.get("deal_id") or deal.get("ID")},
+        observed_at=observed_at,
+        source_status=source_status,
+        entities=entities,
+    )
+
+
 def _changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     return sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
 
@@ -282,6 +349,8 @@ def merge_canonical_state(
         raise ValueError("Unsupported canonical source status")
 
     previous = copy.deepcopy(state) if state is not None else None
+    if previous is not None and previous.get("owner") != normalized_owner:
+        raise ValueError("Canonical state owner does not match merge owner")
     current_entities = copy.deepcopy(previous.get("entities", {})) if previous else {}
     current_status = copy.deepcopy(previous.get("source_status", {})) if previous else {}
     current_status.update(source_status)

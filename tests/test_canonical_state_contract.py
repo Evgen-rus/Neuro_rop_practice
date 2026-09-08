@@ -77,6 +77,20 @@ class CanonicalStateContractTests(unittest.TestCase):
         value["FILES"] = copy.deepcopy(files)
         return value
 
+    def test_owner_mismatch_is_rejected_without_mutating_state(self):
+        entity = self.activity(self.email_with_files(FIXTURE["email_efd"]["files_a"]))
+        state, _ = self.merge(None, [entity], source_status={"activities": "ok"})
+        original = copy.deepcopy(state)
+        with self.assertRaises(ValueError):
+            canonical_state.merge_canonical_state(
+                state,
+                owner={"entity_type": "deal", "entity_id": "different"},
+                observed_at=FIXTURE["observed_at"]["b"],
+                source_status={"activities": "ok"},
+                entities=[],
+            )
+        self.assertEqual(state, original)
+
     def test_t01_observed_at_does_not_break_idempotency(self):
         entity = self.activity(self.email_with_files(FIXTURE["email_efd"]["files_a"]))
         first, first_delta = self.merge(None, [entity], source_status={"activities": "ok"})

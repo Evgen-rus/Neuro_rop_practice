@@ -265,6 +265,9 @@ def _init_db_unlocked(db_path: str | Path) -> None:
                 provenance_json TEXT,
                 error TEXT,
                 evidence_ids_included_json TEXT,
+                evidence_coverage_json TEXT,
+                canonical_fingerprint TEXT,
+                canonical_state_json TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -1145,6 +1148,9 @@ def _init_db_unlocked(db_path: str | Path) -> None:
         _ensure_column(conn, "analysis_runs", "logic_version", "TEXT")
         _ensure_column(conn, "analysis_runs", "provenance_json", "TEXT")
         _ensure_column(conn, "analysis_runs", "evidence_ids_included_json", "TEXT")
+        _ensure_column(conn, "analysis_runs", "evidence_coverage_json", "TEXT")
+        _ensure_column(conn, "analysis_runs", "canonical_fingerprint", "TEXT")
+        _ensure_column(conn, "analysis_runs", "canonical_state_json", "TEXT")
         _ensure_column(conn, "deal_semantic_checkpoints", "baseline_snapshot_json", "TEXT")
         _ensure_column(conn, "automatic_analysis_runs", "spend_batch_path", "TEXT")
         _ensure_column(conn, "automatic_analysis_runs", "diary_written_at", "TEXT")
@@ -2256,10 +2262,22 @@ def save_analysis_run(
     logic_version: str | None = None,
     provenance: dict[str, Any] | None = None,
     evidence_ids_included: list[str] | None = None,
+    evidence_coverage: dict[str, Any] | None = None,
+    canonical_state: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> int:
     if provenance is not None and not isinstance(provenance, dict):
         raise ValueError("Provenance должен быть JSON-объектом")
+    if evidence_coverage is not None and not isinstance(evidence_coverage, dict):
+        raise ValueError("Evidence coverage должен быть JSON-объектом")
+    if canonical_state is not None and not isinstance(canonical_state, dict):
+        raise ValueError("Canonical state должен быть JSON-объектом")
+    canonical_fingerprint = (
+        str(canonical_state.get("semantic_fingerprint") or "").strip()
+        if canonical_state is not None else None
+    )
+    if canonical_state is not None and not canonical_fingerprint:
+        raise ValueError("Canonical state должен содержать semantic_fingerprint")
     init_db(db_path)
     with connect(db_path) as conn:
         cursor = conn.execute(
@@ -2279,10 +2297,13 @@ def save_analysis_run(
                 logic_version,
                 provenance_json,
                 evidence_ids_included_json,
+                evidence_coverage_json,
+                canonical_fingerprint,
+                canonical_state_json,
                 error,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entity_type,
@@ -2299,11 +2320,52 @@ def save_analysis_run(
                 str(logic_version).strip() or None if logic_version is not None else None,
                 dumps_json(provenance) if provenance is not None else None,
                 dumps_json(evidence_ids_included) if evidence_ids_included is not None else None,
+                dumps_json(evidence_coverage) if evidence_coverage is not None else None,
+                canonical_fingerprint,
+                dumps_json(canonical_state) if canonical_state is not None else None,
                 error,
                 utcish_now(),
             ),
         )
         return int(cursor.lastrowid)
+
+
+def get_latest_analysis_run(
+    db_path: str | Path,
+    *,
+    entity_type: str,
+    entity_id: str,
+    statuses: tuple[str, ...] | None = None,
+) -> dict[str, Any] | None:
+    init_db(db_path)
+    status_values = tuple(str(status) for status in statuses or ())
+    status_clause = ""
+    params: list[Any] = [str(entity_type), str(entity_id)]
+    if status_values:
+        status_clause = f" AND status IN ({','.join('?' for _ in status_values)})"
+        params.extend(status_values)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            f"""
+            SELECT * FROM analysis_runs
+            WHERE entity_type = ? AND entity_id = ?
+            {status_clause}
+            ORDER BY id DESC LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    if row is None:
+        return None
+    value = dict(row)
+    for name, default in (
+        ("decision_reason_json", None),
+        ("provenance_json", None),
+        ("evidence_ids_included_json", None),
+        ("evidence_coverage_json", None),
+        ("canonical_state_json", None),
+    ):
+        value[name.removesuffix("_json")] = loads_json(value.pop(name), default)
+    return value
 
 
 def get_analysis_run_evidence_ids(db_path: str | Path, analysis_run_id: int) -> list[str] | None:
