@@ -67,6 +67,74 @@ export type LearningShadowRun = {
   cases: LearningShadowCase[]
 }
 
+export type AiSpendPeriod = {
+  date?: string
+  from?: string
+  to?: string
+  label?: string
+  estimated_cost_rub: number | null
+  estimated_cost_usd: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  paid_calls_label: string
+}
+
+export type AiSpendDaySummary = AiSpendPeriod & {
+  date: string
+  label: string
+}
+
+export type AiSpendSummary = {
+  disclaimer: string
+  title: string
+  today: AiSpendPeriod
+  last_7_days: AiSpendPeriod
+  last_30_days: AiSpendPeriod
+  days: AiSpendDaySummary[]
+  skipped_lines: number
+}
+
+export type AiSpendEvent = {
+  at: string | null
+  time: string
+  kind: string | null
+  kind_label: string
+  entity_type: string | null
+  entity_id: string | null
+  entity_label: string | null
+  model: string | null
+  model_label: string | null
+  estimated_cost_rub: number | null
+  estimated_cost_usd: number | null
+  estimated_cost_rub_label: string
+  status: string | null
+  status_label: string | null
+  attempt: number | null
+  run_id: string | null
+  job_id: string | null
+  input_tokens: number | null
+  cached_input_tokens: number | null
+  cache_write_tokens: number | null
+  output_tokens: number | null
+  reasoning_tokens: number | null
+  cache_hit_percent: number | null
+  duration_seconds: number | null
+  day: string
+}
+
+export type AiSpendDay = {
+  disclaimer: string
+  date: string
+  label: string
+  estimated_cost_rub: number | null
+  estimated_cost_usd: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  paid_calls_label: string
+  skipped_lines: number
+  events: AiSpendEvent[]
+}
+
 export type TrajectoryCategory = 'all' | 'deals' | 'leads' | 'communications' | 'tasks' | 'crm' | 'neurorop'
 
 export type TrajectoryTotals = {
@@ -2692,6 +2760,15 @@ export function fetchLearningShadowRun(runId: number) {
 
 export function fetchLearningShadowRuns() {
   return api<{ items: LearningShadowRun[] }>('/api/admin/learning-shadow/runs')
+}
+
+export function fetchAiSpendSummary() {
+  return api<AiSpendSummary>('/api/admin/ai-spend/summary')
+}
+
+export function fetchAiSpendDay(date: string) {
+  const query = new URLSearchParams({ date })
+  return api<AiSpendDay>(`/api/admin/ai-spend/day?${query.toString()}`)
 }
 
 export function asRecord(value: unknown): Record<string, unknown> {

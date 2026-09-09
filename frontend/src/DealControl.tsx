@@ -112,6 +112,7 @@ import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { ManagerTrajectory } from './ManagerTrajectory'
 import { LearningShadow } from './LearningShadow'
+import { AiSpend, AiSpendDashboardCard } from './AiSpend'
 import { DealQualityAndFocus, DealReviewCard } from './DealReviewCard'
 import {
   commentsWithoutWorklogs,
@@ -161,6 +162,10 @@ const VIEW_COPY: Record<DealControlView, { title: string; subtitle: string }> = 
   shadow: {
     title: 'Learning Shadow',
     subtitle: 'Связь рекомендаций с действиями менеджера и результатом сделки',
+  },
+  spend: {
+    title: 'Расходы AI',
+    subtitle: 'Стоимость работы НейроРОПа',
   },
   team: {
     title: 'Команда',
@@ -559,6 +564,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
   function openShadowView() {
     setView('shadow')
+    setManagerFilter('')
+    setTimeView('all')
+  }
+
+  function openSpendView() {
+    setView('spend')
     setManagerFilter('')
     setTimeView('all')
   }
@@ -998,6 +1009,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         {user.role === 'admin' ? <button className={view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Learning Shadow">
           <span>↯</span><b>Learning Shadow</b><small>Рекомендации → действия</small>
         </button> : null}
+        {user.role === 'admin' ? <button className={view === 'spend' ? 'active' : ''} onClick={openSpendView} title="Расходы AI">
+          <span>₽</span><b>Расходы AI</b><small>Стоимость работы НейроРОПа</small>
+        </button> : null}
         {user.role === 'admin' ? <span className="dc-sidebar-split" aria-hidden="true" /> : null}
         {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Команда">
           <span>◍</span><b>Команда</b><small>Логины и Bitrix ID</small>
@@ -1008,7 +1022,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content">
-      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
+      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
         <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />
@@ -1020,6 +1034,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         </div>
       </header>
       <AutomaticAnalysisStatus role={user.role} onRefresh={applyAutomaticAnalysisRefresh} />
+      {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}
 
       {error ? <div className="dc-alert error">{error}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}

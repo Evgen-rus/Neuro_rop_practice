@@ -179,6 +179,11 @@ def _record_spend_diary(event: dict[str, Any]) -> None:
                 else None
             ),
             now=_requested_at_msk(event.get("requested_at")),
+            input_tokens=event.get("input_tokens"),
+            cached_input_tokens=event.get("cached_input_tokens"),
+            cache_write_tokens=event.get("cache_write_tokens"),
+            output_tokens=event.get("output_tokens"),
+            reasoning_tokens=event.get("reasoning_tokens"),
         )
     except Exception as error:  # noqa: BLE001 - diary is best-effort
         logger.warning("Unable to append spend diary: %s", type(error).__name__)

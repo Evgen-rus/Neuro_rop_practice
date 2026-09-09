@@ -46,3 +46,12 @@ test('manager landing uses today and own manager filter like clicking the tab', 
 test('manager cannot open admin or ROP-only tabs', () => {
   assert.deepEqual(viewsAllowedForRole('manager'), ['dashboard', 'manager'])
 })
+
+test('admin can open spend, other roles cannot', () => {
+  assert.equal(resolveDealControlView('admin', 'spend'), 'spend')
+  assert.equal(resolveDealControlView('rop', 'spend'), 'rop')
+  assert.equal(resolveDealControlView('manager', 'spend'), 'manager')
+  assert.equal(viewsAllowedForRole('admin').includes('spend'), true)
+  assert.equal(viewsAllowedForRole('rop').includes('spend'), false)
+  assert.equal(viewsAllowedForRole('manager').includes('spend'), false)
+})

@@ -67,6 +67,7 @@ from api.jobs import (
     unwrap_analysis_payload,
     workspace_dir,
 )
+from api.ai_spend import build_ai_spend_day, build_ai_spend_summary
 from api.learning_shadow import (
     get_learning_shadow_run,
     list_learning_shadow_runs,
@@ -942,6 +943,18 @@ def manager_trajectory_event_get(
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/admin/ai-spend/summary")
+def ai_spend_summary_get() -> dict[str, Any]:
+    _require_admin()
+    return build_ai_spend_summary()
+
+
+@app.get("/api/admin/ai-spend/day")
+def ai_spend_day_get(date_: date = Query(alias="date")) -> dict[str, Any]:
+    _require_admin()
+    return build_ai_spend_day(date_)
 
 
 @app.get("/api/admin/learning-shadow/runs")

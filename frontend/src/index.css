@@ -3630,6 +3630,102 @@ textarea {
 .ls-case details { margin-top: 7px; border: 1px solid #e0e7ef; border-radius: 8px; }.ls-case summary { padding: 9px 11px; cursor: pointer; }.ls-case pre { max-height: 420px; margin: 0; padding: 12px; overflow: auto; border-top: 1px solid #e0e7ef; color: #30465f; background: #f7f9fc; font-size: 11px; white-space: pre-wrap; }
 @media (max-width: 800px) { .ls-controls { align-items: stretch; flex-direction: column; }.ls-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
+.ai-spend-teaser {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--dc-line);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.ai-spend-teaser:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 18px rgba(33, 62, 105, .1);
+}
+.ai-spend-teaser > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--dc-green);
+  background: var(--dc-green-weak);
+  font-size: 15px;
+  font-weight: 900;
+}
+.ai-spend-teaser div { display: grid; min-width: 0; }
+.ai-spend-teaser small { color: var(--dc-muted); font-size: 10px; line-height: 1.2; }
+.ai-spend-teaser strong { color: #14263c; font-size: clamp(16px, 1.2vw, 22px); line-height: 1.15; }
+.ai-spend-teaser em {
+  margin-left: auto;
+  color: #1d5fbf;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ai-spend-page { min-height: 100%; padding: 22px; background: #f4f7fb; }
+.ai-spend-note { margin: 0 0 14px; max-width: 46rem; color: #6c7f95; font-size: 13px; }
+.ai-spend-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.ai-spend-kpis article { display: grid; gap: 3px; padding: 14px; border: 1px solid #d9e3ee; border-radius: 10px; background: #fff; }
+.ai-spend-kpis small { color: #63778e; font-size: 11px; font-weight: 700; }
+.ai-spend-kpis strong { color: #1768f2; font-size: 24px; line-height: 1.15; }
+.ai-spend-kpis span { color: #63778e; font-size: 12px; }
+.ai-spend-days { display: grid; gap: 10px; }
+.ai-spend-day { overflow: hidden; border: 1px solid #d9e3ee; border-radius: 12px; background: #fff; }
+.ai-spend-day-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.ai-spend-day-toggle strong { display: block; color: #102037; font-size: 15px; }
+.ai-spend-day-toggle span { color: #63778e; font-size: 12px; }
+.ai-spend-day-toggle i { color: #81aee6; font-style: normal; font-size: 18px; }
+.ai-spend-day-body { display: grid; gap: 8px; padding: 0 14px 14px; border-top: 1px solid #e0e7ef; }
+.ai-spend-event { padding: 12px 0 4px; border-top: 1px solid #edf1f5; }
+.ai-spend-event:first-child { border-top: 0; padding-top: 12px; }
+.ai-spend-event-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ai-spend-event-main strong { display: block; color: #14263c; font-size: 14px; }
+.ai-spend-event-main p { margin: 4px 0 0; color: #63778e; font-size: 12px; }
+.ai-spend-event-main b { color: #14263c; font-size: 14px; white-space: nowrap; }
+.ai-spend-tech-toggle {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  color: #1d5fbf;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ai-spend-tech { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 10px 0 0; padding: 10px 12px; border: 1px solid #e0e7ef; border-radius: 8px; background: #f7f9fc; }
+.ai-spend-tech div { display: grid; gap: 2px; }
+.ai-spend-tech dt { color: #718298; font-size: 11px; }
+.ai-spend-tech dd { margin: 0; color: #30465f; font-size: 12px; word-break: break-all; }
+.ai-spend-empty { margin: 0; color: #63778e; font-size: 12px; }
+@media (max-width: 800px) {
+  .ai-spend-kpis { grid-template-columns: 1fr; }
+  .ai-spend-tech { grid-template-columns: 1fr; }
+  .ai-spend-teaser em { display: none; }
+}
+
 @media (max-width: 760px) {
   .dc-shell,
   .dc-shell.menu-open {
