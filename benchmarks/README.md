@@ -32,3 +32,18 @@ Open local `benchmarks/results/benchmark_results.json` and set each score to `pa
 ## Deliberate paid-run guard
 
 A case may additionally declare a local `legacy_command` list. Executing it requires both `--execute-legacy` and `--allow-paid-api`; this repository stage does not use that mode.
+
+## Stage 6: FULL vs INCREMENTAL
+
+Copy `incremental_evaluation.example.json` to ignored `benchmarks/local/`, then point its seven slots to local analysis artifacts from one synthetic A→B→C→D→E chain. Replace the placeholder state fingerprints with the actual canonical fingerprints. The collector validates the production analysis schema, declared lineage and equal-state controls before creating review rubrics. The slots cover both comparisons required by the roadmap:
+
+- `incremental_b` vs `full_b`;
+- chained `incremental_e` vs fresh `full_e`.
+
+Collect validation inputs, token usage, estimated cost and empty manual rubrics without calling OpenAI:
+
+```powershell
+.\venv\Scripts\python.exe .\benchmarks\run_incremental_evaluation.py --manifest .\benchmarks\local\incremental_evaluation.json
+```
+
+The minimal combined chain requires exactly seven successful paid analysis runs: FULL(A), INCREMENTAL(B), FULL(B), INCREMENTAL(C), INCREMENTAL(D), INCREMENTAL(E), FULL(E). Validation repair or fallback attempts, if triggered during artifact generation, are additional paid API requests and must be counted from each artifact's metadata. The collector itself performs zero API calls.

@@ -17,7 +17,15 @@ def _bundle() -> dict:
             "10": {"ok": True, "response": {"result": {"ID": "10", "END_TIME": "new"}}},
         },
         "bitrix_tasks": {
-            "20": {"ok": True, "response": {"result": {"task": {"id": "20", "status": "2"}}}},
+            "20": {"ok": True, "response": {"result": {"task": {
+                "id": "20", "status": "2", "chatId": "40",
+            }}}},
+        },
+        "bitrix_task_chats": {
+            "20": {"ok": True, "response": {"result": {"messages": [{
+                "id": "50", "date": "2026-01-01T09:00:00+03:00",
+                "author_id": "2", "text": "synthetic internal task message",
+            }]}}},
         },
         "timeline_comments": [{"ok": True, "items": [{"ID": "30", "COMMENT": "synthetic"}]}],
     }
@@ -28,10 +36,11 @@ class CanonicalStateBundleAdapterTests(unittest.TestCase):
         state, delta = merge_deal_bundle(None, _bundle(), observed_at="2026-01-01T10:00:00+03:00")
         self.assertEqual(
             set(state["entities"]),
-            {"deal:7", "activity:10", "task:20", "timeline_comment:30"},
+            {"deal:7", "activity:10", "task:20", "timeline_comment:30", "im_message:50"},
         )
         self.assertEqual(state["entities"]["activity:10"]["semantic"]["end_time"], "new")
-        self.assertEqual(len(delta["entries"]), 4)
+        self.assertEqual(state["entities"]["im_message:50"]["semantic"]["dialog_id"], "chat40")
+        self.assertEqual(len(delta["entries"]), 5)
 
     def test_failed_refresh_keeps_previous_source_entities(self) -> None:
         state, _ = merge_deal_bundle(None, _bundle(), observed_at="2026-01-01T10:00:00+03:00")

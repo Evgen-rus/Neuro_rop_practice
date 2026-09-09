@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
+from bitrix.canonical_state import merge_deal_bundle
 from bitrix.customer_history import build_deal_normalized_communications
 from bitrix.deals.communication_history import include_source_lead_communications
 from openai_api.llm.deal_daily_quality import load_daily_quality_context
@@ -42,9 +43,17 @@ from openai_api.change_detection.decision_engine import (
 )
 from openai_api.llm.analyze_deal import (
     DEAL_PROMPT_CACHE_KEY,
+    INCREMENTAL_DEAL_PROMPT_VERSION,
     load_context_diagnostics_for_analysis,
     render_report,
 )
+from openai_api.config import DEAL_INCREMENTAL_ANALYSIS_ENABLED
+from openai_api.llm.deal_evidence import (
+    collect_deal_evidence,
+    coverage_for_included_evidence,
+    evidence_delta,
+)
+from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
 from openai_api.change_detection.snapshot import (
     build_deal_snapshot,
     compare_snapshots,
@@ -62,9 +71,9 @@ from storage.rop_db import (
     get_entity_state,
     init_db,
     merge_deal_daily_quality_state,
+    publish_analysis_run,
     save_analysis_run,
     save_mini_recommendation,
-    update_entity_memory,
     upsert_entity_state,
     utcish_now,
 )
@@ -175,10 +184,16 @@ def analysis_paths(current_deal_dir: Path, deal_id: str) -> dict[str, Path]:
         "raw": analysis_dir / f"deal_{deal_id}_raw_model_output.txt",
         "snapshot": analysis_dir / f"deal_{deal_id}_snapshot.json",
         "mini": analysis_dir / f"deal_{deal_id}_mini_recommendation.md",
+        "incremental": analysis_dir / f"deal_{deal_id}_incremental_context.json",
     }
 
 
-def run_existing_analyzer(args: argparse.Namespace, transcript_arg: str) -> None:
+def run_existing_analyzer(
+    args: argparse.Namespace,
+    transcript_arg: str,
+    *,
+    incremental_context: Path | None = None,
+) -> None:
     command = [
         sys.executable,
         str(PROJECT_ROOT / "openai_api" / "llm" / "analyze_deal.py"),
@@ -192,6 +207,8 @@ def run_existing_analyzer(args: argparse.Namespace, transcript_arg: str) -> None
     ]
     if args.model:
         command.extend(["--model", str(args.model)])
+    if incremental_context is not None:
+        command.extend(["--incremental-context", str(incremental_context)])
 
     logger.info("Running existing deal analyzer: %s", " ".join(command))
     subprocess.run(command, cwd=BASE_DIR, check=True)
@@ -243,9 +260,16 @@ def persist_successful_llm_run(
     evidence_ids_included: list[str] | None = None,
     evidence_coverage: dict[str, Any] | None = None,
     canonical_state: dict[str, Any] | None = None,
+    available_evidence: list[dict[str, Any]] | None = None,
 ) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
+    if evidence_ids_included is None and isinstance(payload.get("evidence_ids_included"), list):
+        evidence_ids_included = [str(item) for item in payload["evidence_ids_included"]]
+    if evidence_coverage is None and available_evidence is not None and evidence_ids_included is not None:
+        evidence_coverage = coverage_for_included_evidence(available_evidence, evidence_ids_included)
+    if canonical_state is None or evidence_ids_included is None or evidence_coverage is None:
+        raise ValueError("Trusted analysis persistence requires canonical state and evidence coverage")
     audit = analysis.get("communication_quality_audit") if isinstance(analysis, dict) else None
     if isinstance(audit, dict):
         details = ((decision_reason.get("diff") or {}).get("details") or {})
@@ -275,23 +299,11 @@ def persist_successful_llm_run(
                 ),
                 encoding="utf-8",
             )
-    if evidence_ids_included is None and isinstance(payload.get("evidence_ids_included"), list):
-        evidence_ids_included = [str(item) for item in payload["evidence_ids_included"]]
-    memory_update = analysis.get("memory_update") if isinstance(analysis, dict) else None
-
-    if isinstance(memory_update, dict):
-        update_entity_memory(
-            db_path,
-            entity_type="deal",
-            entity_id=str(args.deal_id),
-            memory_update=memory_update,
-        )
-
     run_id = save_analysis_run(
         db_path,
         entity_type="deal",
         entity_id=str(args.deal_id),
-        status=decision_status,
+        status="PUBLISHING",
         fingerprint=fingerprint,
         analysis_path=str(paths["analysis"]),
         report_path=str(paths["report"]),
@@ -313,19 +325,25 @@ def persist_successful_llm_run(
     )
     payload["analysis_run_id"] = run_id
     save_json(paths["analysis"], payload)
-    upsert_entity_state(
+    memory_update = analysis.get("memory_update") if isinstance(analysis, dict) else None
+    publish_analysis_run(
         db_path,
-        entity_type="deal",
-        entity_id=str(args.deal_id),
-        fingerprint=fingerprint,
-        snapshot=snapshot,
-        last_analysis_status=decision_status,
-        last_analysis_path=str(paths["analysis"]),
-        last_report_path=str(paths["report"]),
-        last_risk_level=extract_risk_level(payload),
-        last_analysis=payload,
-        last_recommendation=extract_last_recommendation(payload),
-        last_analysis_at=utcish_now(),
+        run_id,
+        decision_status,
+        state={
+            "entity_type": "deal",
+            "entity_id": str(args.deal_id),
+            "fingerprint": fingerprint,
+            "snapshot": snapshot,
+            "last_analysis_status": decision_status,
+            "last_analysis_path": str(paths["analysis"]),
+            "last_report_path": str(paths["report"]),
+            "last_risk_level": extract_risk_level(payload),
+            "last_analysis": payload,
+            "last_recommendation": extract_last_recommendation(payload),
+            "last_analysis_at": utcish_now(),
+        },
+        memory_update=memory_update if isinstance(memory_update, dict) else None,
     )
     return run_id
 
@@ -415,6 +433,57 @@ def filter_today_mini_triggers(db_path: Path, deal_id: str, triggers: list[dict[
     return filtered
 
 
+def stage5_inputs(
+    db_path: Path,
+    *,
+    deal_id: str,
+    raw_bundle: dict[str, Any],
+    current_deal_dir: Path,
+) -> tuple[dict[str, Any] | None, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    baseline = get_trusted_deal_baseline(
+        db_path,
+        deal_id,
+        compatible_prompt_versions={DEAL_PROMPT_CACHE_KEY, INCREMENTAL_DEAL_PROMPT_VERSION},
+        expected_logic_version="change-aware-v1",
+    )
+    canonical_state, canonical_delta = merge_deal_bundle(
+        (baseline or {}).get("canonical_state"),
+        raw_bundle,
+        observed_at=str(raw_bundle.get("generated_at") or utcish_now()),
+    )
+    available_evidence = collect_deal_evidence(raw_bundle, current_deal_dir / "transcripts")
+    return baseline, canonical_state, canonical_delta, available_evidence
+
+
+def incremental_context(
+    baseline: dict[str, Any],
+    canonical_state: dict[str, Any],
+    canonical_delta: dict[str, Any],
+    available_evidence: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    revised_evidence, next_coverage = evidence_delta(
+        available_evidence,
+        baseline["evidence_coverage"],
+    )
+    crm_delta = [
+        entry for entry in canonical_delta.get("entries", [])
+        if entry.get("change_type") in {"NEW", "UPDATED_MEANINGFUL"}
+    ]
+    deal = canonical_state.get("entities", {}).get(
+        f"deal:{canonical_state['owner']['entity_id']}",
+        {},
+    )
+    return {
+        "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": baseline["analysis"],
+        "CRM_SEMANTIC_DELTA": crm_delta,
+        "NEW_OR_REVISED_CLIENT_EVIDENCE": revised_evidence,
+        "CURRENT_REQUIRED_CRM_FACTS": {
+            "deal": deal.get("semantic") or {},
+            "source_status": canonical_state.get("source_status") or {},
+        },
+    }, next_coverage
+
+
 def main() -> None:
     args = parse_args()
     load_dotenv(BASE_DIR / ".env")
@@ -466,8 +535,111 @@ def main() -> None:
             return
 
         save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
+        baseline = None
+        canonical_state = canonical_delta = None
+        available_evidence: list[dict[str, Any]] = []
+        if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}:
+            baseline, canonical_state, canonical_delta, available_evidence = stage5_inputs(
+                db_path,
+                deal_id=str(args.deal_id),
+                raw_bundle=raw_bundle,
+                current_deal_dir=current_deal_dir,
+            )
+        full_decision_reason: dict[str, Any] | None = None
+        incremental_blocker = None
+        if baseline is None:
+            incremental_blocker = "unsafe_trusted_baseline"
+        elif "new_client_reply" in set(decision.diff.get("changes") or []):
+            incremental_blocker = "client_reply_requires_full"
+        elif "commercial_refs_changed" in set(decision.diff.get("changes") or []):
+            incremental_blocker = "commercial_delta_requires_full"
+        elif any(
+            status != "ok"
+            for status in (canonical_state or {}).get("source_status", {}).values()
+        ):
+            incremental_blocker = "canonical_source_incomplete"
+        elif args.force_llm:
+            incremental_blocker = "forced_full"
+
+        if decision.status == FULL_LLM_ANALYSIS and DEAL_INCREMENTAL_ANALYSIS_ENABLED:
+            if incremental_blocker is None:
+                decision = ProcessingDecision(
+                    status=INCREMENTAL_LLM_ANALYSIS,
+                    reasons=decision.reasons,
+                    triggers=decision.triggers,
+                    diff=decision.diff,
+                )
+            elif incremental_blocker != "forced_full":
+                full_decision_reason = {
+                    **decision.as_dict(),
+                    "fallback": True,
+                    "fallback_reason": incremental_blocker,
+                }
 
         if decision.status == INCREMENTAL_LLM_ANALYSIS:
+            if DEAL_INCREMENTAL_ANALYSIS_ENABLED and incremental_blocker is None:
+                try:
+                    context, next_coverage = incremental_context(
+                        baseline,
+                        canonical_state,
+                        canonical_delta,
+                        available_evidence,
+                    )
+                    save_json(paths["incremental"], context)
+                    run_existing_analyzer(
+                        args,
+                        analyzer_transcript_arg,
+                        incremental_context=paths["incremental"],
+                    )
+                except Exception as incremental_error:
+                    logger.warning(
+                        "Incremental deal analysis failed; running one FULL_REBUILD: %s",
+                        type(incremental_error).__name__,
+                    )
+                    full_decision_reason = {
+                        **decision.as_dict(),
+                        "fallback": True,
+                        "fallback_reason": "incremental_execution_failed",
+                        "baseline_run_id": baseline["analysis_run_id"],
+                    }
+                else:
+                    incremental_reason = {
+                        **decision.as_dict(),
+                        "baseline_run_id": baseline["analysis_run_id"],
+                        "baseline_fingerprint": baseline["canonical_fingerprint"],
+                        "canonical_from_fingerprint": canonical_delta.get("from_semantic_fingerprint"),
+                        "canonical_to_fingerprint": canonical_delta.get("to_semantic_fingerprint"),
+                        "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
+                        "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
+                    }
+                    run_id = persist_successful_llm_run(
+                        db_path=db_path,
+                        args=args,
+                        fingerprint=fingerprint,
+                        snapshot=snapshot,
+                        decision_status=INCREMENTAL_LLM_ANALYSIS,
+                        paths=paths,
+                        decision_reason=incremental_reason,
+                        prompt_version=INCREMENTAL_DEAL_PROMPT_VERSION,
+                        evidence_coverage=next_coverage,
+                        canonical_state=canonical_state,
+                    )
+                    emit_deal_publish_ready(
+                        str(args.deal_id),
+                        analysis_run_id=run_id,
+                        engine_status=INCREMENTAL_LLM_ANALYSIS,
+                    )
+                    print(f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}")
+                    return
+            else:
+                full_decision_reason = {
+                    **decision.as_dict(),
+                    "fallback": DEAL_INCREMENTAL_ANALYSIS_ENABLED,
+                    "fallback_reason": (
+                        incremental_blocker or "unsafe_trusted_baseline"
+                        if DEAL_INCREMENTAL_ANALYSIS_ENABLED else "incremental_feature_disabled"
+                    ),
+                }
             decision = ProcessingDecision(
                 status=FULL_LLM_ANALYSIS,
                 reasons=decision.reasons,
@@ -484,8 +656,10 @@ def main() -> None:
                 snapshot=snapshot,
                 decision_status=decision.status,
                 paths=paths,
-                decision_reason=decision.as_dict(),
+                decision_reason=full_decision_reason or decision.as_dict(),
                 evidence_ids_included=None,
+                canonical_state=canonical_state,
+                available_evidence=available_evidence,
             )
             emit_deal_publish_ready(
                 str(args.deal_id),

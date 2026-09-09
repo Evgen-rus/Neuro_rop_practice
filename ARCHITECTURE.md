@@ -45,6 +45,7 @@ ROP Assistant помогает руководителю продаж разби�
 - HTTP-идентичность берётся только из серверной сессии; `role`, `manager_id` и `source_role` из тела или query-параметров не являются полномочиями. Токен сессии хранится только в виде digest, cookie — `HttpOnly`, `Secure`, `SameSite=Lax`; чужая строка менеджера остаётся облегчённой и не открывается.
 - Все сохраняемые тексты — UTF-8; JSON с кириллицей сохраняется с `ensure_ascii=False`. ASCII-safe допустим только для строки transport-progress до её разбора.
 - Lead и deal — разные контракты: у них отдельные context builders, prompts, validators и renderers. Общая механика не разрешает смешивать поля или переиспользовать renderer одного контура в другом.
+- Подготовка canonical state и evidence coverage для deal — обязательный preflight: её ошибка останавливает запуск до платного LLM-вызова, потому что такой результат нельзя опубликовать как trusted baseline.
 - Все бизнес-даты и сроки рассчитываются и отображаются в `Europe/Moscow`; локальная временная зона браузера или машины не должна менять день, срок или сортировку.
 - Lead с подтверждённой конверсией переводится в deal-flow. Отсутствующий `CONTACT_ID` не доказывает отсутствие связанной сделки.
 - CRM-запись о звонке, `COMPLETED=Y` или внутренний комментарий сами по себе не доказывают содержательный контакт с клиентом. Для лида это требует подходящего transcript/contact evidence; попытки, подтверждённый контакт и внутреннюю информацию хранить раздельно.
@@ -64,7 +65,7 @@ ROP Assistant помогает руководителю продаж разби�
 - Исход deal-control должен содержать достаточно данных для своего состояния: попытка без ответа и незавершённый результат требуют следующего шага со сроком, подтверждённый контакт — описания ответа, отказ — причины. Перенос срока РОПом требует причины; роль автора сохраняется в истории. Отменённые задачи учитываются отдельно и не входят в знаменатель метрик исходов или сравнение AI/no-AI.
 - Полный Markdown-отчёт создаётся только после успешной бизнес-валидации JSON. OKF/knowledge задают правила оценки, но не являются фактами конкретной сущности.
 - Обычный запуск полного анализа проходит через `analyze_lead_if_changed.py` или `analyze_deal_if_changed.py`. Прямой `analyze_*` требует явного `--allow-direct-llm`.
-- Исторический статус `INCREMENTAL_LLM_ANALYSIS` в `analysis_runs` и связанные semantic checkpoint / V2-run таблицы остаются читаемыми. Новый runtime всегда публикует FULL после change detection; lead-контур incremental-анализа не использует.
+- Исторические semantic checkpoint / V2-run таблицы остаются читаемыми, но runtime их не пишет. Deal-контур при `DEAL_INCREMENTAL_ANALYSIS_ENABLED=true` использует только валидный trusted baseline и один безопасный FULL fallback; default `false` сохраняет прежний FULL-маршрут. Lead-контур incremental-анализа не использует.
 - У LLM есть transport retries и не более одного corrective semantic retry после ошибки JSON/валидации. Не добавляй бесконечные или скрытые платные повторы.
 - Ручной change-aware анализ сделки и прочие платные AI-действия по сделке (Дожим, скрипты, фоллоуапы, companion, guidance) доступны в пределах серверного deal-scope: `admin` — для всех сделок, `rop` — для сделок своей команды, `manager` — только для собственных. Для `rop`/`manager` подтверждение возможного платного запуска, `force_llm=False` и FULL/MINI/skip остаются обязательными. В Контроле сделок `admin` после явного выбора в том же окне может запустить принудительный FULL (`force_llm=True` + `confirm_paid`); обычная проверка остаётся тем же change-aware путём. Lead paid AI по-прежнему только `admin`.
 - AI-подсказка к задаче РОПа запускается только явно, привязывается к ревизии задачи и последнему полному deal-анализу; устаревшую подсказку нельзя показывать менеджеру как актуальную.
@@ -115,7 +116,7 @@ FULL semantic retry после deterministic normalization может выпол
 
 `stage_policy.py` определяет семантику стадий для решения. `crm_pipeline_map.json` — только локальная карта реальных Bitrix IDs и имён для UI/фильтров; изменения в ней не меняют бизнес-семантику closed stages.
 
-Evidence identity для provenance FULL-анализа идентифицирует звонки, входящие email и сообщения по CRM activity (`call:<id>`, `email:<id>`, `message:<id>`), а не по пути/mtime transcript-файла. Исторические таблицы `deal_semantic_checkpoints` и `deal_incremental_v2_runs` остаются в SQLite для чтения старых записей; runtime их больше не пишет. Downstream по-прежнему получает один полный validated deal analysis.
+Evidence identity идентифицирует звонки, входящие email и сообщения по CRM activity (`call:<id>`, `email:<id>`, `message:<id>`), а не по пути/mtime transcript-файла. Успешные FULL/INCREMENTAL сохраняют фактическое evidence coverage и canonical state; baseline публикуется trusted только после завершения файловой и SQLite-персистенции. Downstream по-прежнему получает один полный validated deal analysis.
 
 ### 5. SQLite, кандидаты и daily summary
 

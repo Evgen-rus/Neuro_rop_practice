@@ -29,15 +29,19 @@ from openai_api.llm.validation import (
     validate_deal_analysis,
 )
 from progress_events import compact_decision_status
+from storage import rop_db
 from storage.rop_db import (
     connect,
+    get_analysis_run,
     get_entity_state,
     get_latest_deal_semantic_checkpoint,
     init_db,
     list_analysis_runs,
+    publish_analysis_run,
     save_analysis_run,
     save_deal_incremental_v2_run,
     save_deal_semantic_checkpoint,
+    upsert_entity_state,
 )
 from test_lead_qualification_assessment import lead_analysis
 
@@ -80,8 +84,7 @@ class DealFullProductionFlowTests(unittest.TestCase):
         )
         self.assertEqual(decision.status, FULL_LLM_ANALYSIS)
 
-    def test_production_flags_run_full_analyzer_without_incremental_context(self) -> None:
-        """Legacy INCREMENTAL decision is published through the FULL analyzer."""
+    def test_default_full_decision_runs_without_incremental_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = SimpleNamespace(
@@ -94,7 +97,7 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 dry_run_decision=False,
             )
             decision = ProcessingDecision(
-                status=INCREMENTAL_LLM_ANALYSIS,
+                status=FULL_LLM_ANALYSIS,
                 reasons=["new evidence"],
                 triggers=[],
                 diff={"changes": ["transcript_changed"], "details": {}},
@@ -112,6 +115,11 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 patch.object(analyze_deal_if_changed, "compare_snapshots", return_value=decision.diff),
                 patch.object(analyze_deal_if_changed, "get_entity_memory", return_value=None),
                 patch.object(analyze_deal_if_changed, "decide_deal_processing", return_value=decision),
+                patch.object(
+                    analyze_deal_if_changed,
+                    "stage5_inputs",
+                    return_value=(None, {"owner": {"entity_id": "7"}}, {"entries": []}, []),
+                ),
                 patch.object(analyze_deal_if_changed, "persist_successful_llm_run", return_value=1),
                 patch.object(analyze_deal_if_changed, "emit_deal_publish_ready"),
                 patch.object(analyze_deal_if_changed, "run_existing_analyzer") as analyzer,
@@ -132,6 +140,7 @@ class DealFullProductionFlowTests(unittest.TestCase):
             payload = {
                 "deal_id": "7",
                 "analysis_mode": "full",
+                "evidence_ids_included": [],
                 "model_metadata": {"model": "test-model"},
                 "analysis": {"main_risk": {"risk_level": "medium"}},
             }
@@ -148,6 +157,13 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 decision_status=FULL_LLM_ANALYSIS,
                 paths={"analysis": analysis_path, "report": report_path, "raw": raw_path},
                 decision_reason={"status": FULL_LLM_ANALYSIS, "reasons": ["тест"], "diff": {}},
+                canonical_state={
+                    "schema_id": "canonical_bitrix_state",
+                    "schema_version": "1",
+                    "owner": {"entity_type": "deal", "entity_id": "7"},
+                    "semantic_fingerprint": "canonical-fp",
+                },
+                available_evidence=[],
             )
             saved = json.loads(analysis_path.read_text(encoding="utf-8"))
             state = get_entity_state(db_path, "deal", "7")
@@ -158,6 +174,98 @@ class DealFullProductionFlowTests(unittest.TestCase):
         self.assertEqual(state["current_fingerprint"], "fp-1")
         self.assertEqual(runs[0]["status"], FULL_LLM_ANALYSIS)
         self.assertEqual(runs[0]["id"], run_id)
+
+    def test_failed_publication_never_creates_trusted_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "state.sqlite"
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps({
+                "analysis_mode": "full",
+                "evidence_ids_included": [],
+                "analysis": {"main_risk": {"risk_level": "medium"}},
+            }), encoding="utf-8")
+            paths = {"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"}
+            args = SimpleNamespace(deal_id="7", deal_root=str(root), model=None)
+            with patch.object(analyze_deal_if_changed, "publish_analysis_run", side_effect=OSError("disk")):
+                with self.assertRaises(OSError):
+                    analyze_deal_if_changed.persist_successful_llm_run(
+                        db_path=db_path,
+                        args=args,
+                        fingerprint="fp-1",
+                        snapshot={"deal": {"id": "7"}},
+                        decision_status=FULL_LLM_ANALYSIS,
+                        paths=paths,
+                        decision_reason={"status": FULL_LLM_ANALYSIS},
+                        canonical_state={
+                            "schema_id": "canonical_bitrix_state",
+                            "schema_version": "1",
+                            "owner": {"entity_type": "deal", "entity_id": "7"},
+                            "semantic_fingerprint": "canonical-fp",
+                        },
+                        available_evidence=[],
+                    )
+            run_id = json.loads(analysis_path.read_text(encoding="utf-8"))["analysis_run_id"]
+            run = get_analysis_run(db_path, run_id)
+            state = get_entity_state(db_path, "deal", "7")
+        self.assertEqual(run["status"], "PUBLISHING")
+        self.assertIsNone(state)
+
+    def test_atomic_publication_rolls_back_run_and_state_on_db_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite"
+            upsert_entity_state(
+                db_path,
+                entity_type="deal",
+                entity_id="7",
+                fingerprint="old",
+                snapshot={"version": "old"},
+                last_analysis_status=FULL_LLM_ANALYSIS,
+            )
+            run_id = save_analysis_run(
+                db_path,
+                entity_type="deal",
+                entity_id="7",
+                status="PUBLISHING",
+            )
+            with patch.object(rop_db, "_update_entity_memory", side_effect=OSError("disk")):
+                with self.assertRaises(OSError):
+                    publish_analysis_run(
+                        db_path,
+                        run_id,
+                        FULL_LLM_ANALYSIS,
+                        state={
+                            "entity_type": "deal",
+                            "entity_id": "7",
+                            "fingerprint": "new",
+                            "snapshot": {"version": "new"},
+                            "last_analysis_status": FULL_LLM_ANALYSIS,
+                        },
+                        memory_update={"version": "new"},
+                    )
+            run = get_analysis_run(db_path, run_id)
+            state = get_entity_state(db_path, "deal", "7")
+        self.assertEqual(run["status"], "PUBLISHING")
+        self.assertEqual(state["current_fingerprint"], "old")
+
+    def test_incomplete_trusted_metadata_is_rejected_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps({
+                "analysis_mode": "full",
+                "analysis": {"main_risk": {"risk_level": "medium"}},
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "canonical state and evidence coverage"):
+                analyze_deal_if_changed.persist_successful_llm_run(
+                    db_path=root / "state.sqlite",
+                    args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                    fingerprint="fp",
+                    snapshot={},
+                    decision_status=FULL_LLM_ANALYSIS,
+                    paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
+                    decision_reason={"status": FULL_LLM_ANALYSIS},
+                )
 
     def test_legacy_incremental_run_and_v2_rows_remain_readable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

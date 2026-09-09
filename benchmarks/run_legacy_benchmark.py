@@ -62,8 +62,9 @@ def legacy_metrics(baseline: dict[str, Any]) -> dict[str, Any]:
     metadata = analysis.get("model_metadata") if isinstance(analysis.get("model_metadata"), dict) else {}
     usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
     details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
-    budget_path = Path(str(baseline.get("prompt_budget_json") or ""))
-    budget = read_json(budget_path) if budget_path.exists() else None
+    budget_value = baseline.get("prompt_budget_json")
+    budget_path = Path(str(budget_value)) if budget_value else None
+    budget = read_json(budget_path) if budget_path and budget_path.is_file() else None
     return {
         "model": metadata.get("model"),
         "input_tokens": usage.get("input_tokens"),

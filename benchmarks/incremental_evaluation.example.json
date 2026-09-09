@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "case_id": "deal-synthetic-chain",
+  "artifacts": {
+    "full_a": {"analysis_json": "C:/local/eval/full_a.json", "state_fingerprint": "STATE_A", "baseline": null},
+    "incremental_b": {"analysis_json": "C:/local/eval/incremental_b.json", "state_fingerprint": "STATE_B", "baseline": "full_a"},
+    "full_b": {"analysis_json": "C:/local/eval/full_b.json", "state_fingerprint": "STATE_B", "baseline": null},
+    "incremental_c": {"analysis_json": "C:/local/eval/incremental_c.json", "state_fingerprint": "STATE_C", "baseline": "incremental_b"},
+    "incremental_d": {"analysis_json": "C:/local/eval/incremental_d.json", "state_fingerprint": "STATE_D", "baseline": "incremental_c"},
+    "incremental_e": {"analysis_json": "C:/local/eval/incremental_e.json", "state_fingerprint": "STATE_E", "baseline": "incremental_d"},
+    "full_e": {"analysis_json": "C:/local/eval/full_e.json", "state_fingerprint": "STATE_E", "baseline": null}
+  }
+}

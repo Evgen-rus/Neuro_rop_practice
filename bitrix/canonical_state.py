@@ -272,6 +272,7 @@ def merge_deal_bundle(
     deal = (bundle.get("deal") or {}).get("item") or {}
     activities = bundle.get("activities")
     task_responses = bundle.get("bitrix_tasks")
+    task_chats = bundle.get("bitrix_task_chats")
     timeline_attempts = bundle.get("timeline_comments")
     source_status = {
         "deal": "ok" if deal.get("ID") else "failed",
@@ -281,6 +282,9 @@ def merge_deal_bundle(
         ) else "failed",
         "timeline_comments": "ok" if isinstance(timeline_attempts, list) and timeline_attempts and all(
             _source_ok(attempt) for attempt in timeline_attempts
+        ) else "failed",
+        "im_messages": "ok" if isinstance(task_chats, dict) and all(
+            _source_ok(response) for response in task_chats.values()
         ) else "failed",
     }
     entities = [project_deal(deal)] if source_status["deal"] == "ok" else []
@@ -299,6 +303,17 @@ def merge_deal_bundle(
 
     for attempt in timeline_attempts if isinstance(timeline_attempts, list) else ():
         entities.extend(project_timeline_comment(item) for item in _response_items(attempt))
+
+    for task_id, response in task_chats.items() if isinstance(task_chats, dict) else ():
+        task_result = _response_item(task_responses.get(task_id)) if isinstance(task_responses, dict) else {}
+        task = task_result.get("task") if isinstance(task_result.get("task"), dict) else task_result
+        chat_id = task.get("chatId") or task.get("chat_id")
+        messages = _response_item(response).get("messages")
+        if not chat_id or not isinstance(messages, list):
+            continue
+        for message in messages:
+            if isinstance(message, dict) and (message.get("id") or message.get("ID")):
+                entities.append(project_im_message({**message, "dialog_id": f"chat{chat_id}"}))
 
     return merge_canonical_state(
         state,

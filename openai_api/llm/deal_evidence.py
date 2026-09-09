@@ -94,6 +94,17 @@ def coverage_from_evidence(items: list[dict[str, Any]]) -> dict[str, dict[str, A
     }
 
 
+def coverage_for_included_evidence(
+    items: list[dict[str, Any]],
+    included_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    by_id = {str(item.get("evidence_id") or ""): item for item in items}
+    missing = sorted({str(item) for item in included_ids} - set(by_id))
+    if missing:
+        raise EvidenceDeltaError("included_evidence_content_missing")
+    return coverage_from_evidence([by_id[str(item)] for item in dict.fromkeys(included_ids)])
+
+
 def evidence_delta(
     current: list[dict[str, Any]],
     previous_coverage: dict[str, Any] | None,

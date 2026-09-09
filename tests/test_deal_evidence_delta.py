@@ -7,11 +7,21 @@ from openai_api.change_detection.snapshot import text_hash
 from openai_api.llm.deal_evidence import (
     EvidenceDeltaError,
     collect_deal_evidence,
+    coverage_for_included_evidence,
     evidence_delta,
 )
 
 
 class DealEvidenceDeltaContractTests(unittest.TestCase):
+    def test_full_coverage_contains_only_evidence_actually_in_prompt(self) -> None:
+        items = [
+            {"evidence_id": "call:1", "content_hash": "h1", "kind": "call_transcript"},
+            {"evidence_id": "email:2", "content_hash": "h2", "kind": "inbound_email"},
+        ]
+        self.assertEqual(set(coverage_for_included_evidence(items, ["call:1"])), {"call:1"})
+        with self.assertRaisesRegex(EvidenceDeltaError, "included_evidence_content_missing"):
+            coverage_for_included_evidence(items, ["message:3"])
+
     def test_trusted_coverage_is_required(self) -> None:
         with self.assertRaisesRegex(EvidenceDeltaError, "trusted_evidence_coverage_missing"):
             evidence_delta([], None)

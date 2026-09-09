@@ -54,6 +54,7 @@ from storage.rop_db import (
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
 DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v3"
+INCREMENTAL_DEAL_PROMPT_VERSION = "neuro-rop:incremental-deal:v1"
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
 
@@ -116,11 +117,39 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow direct LLM call. Prefer analyze_deal_if_changed.py for normal runs.",
     )
+    parser.add_argument(
+        "--incremental-context",
+        default=None,
+        help="Internal JSON context produced by analyze_deal_if_changed.py.",
+    )
     return parser.parse_args()
 
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def load_incremental_context(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    expected = {
+        "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS",
+        "CRM_SEMANTIC_DELTA",
+        "NEW_OR_REVISED_CLIENT_EVIDENCE",
+        "CURRENT_REQUIRED_CRM_FACTS",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError("Incremental context has an invalid shape")
+    if not isinstance(value["PREVIOUS_TRUSTED_COMPLETE_ANALYSIS"], dict):
+        raise ValueError("Incremental baseline analysis must be an object")
+    if not isinstance(value["CRM_SEMANTIC_DELTA"], list):
+        raise ValueError("CRM semantic delta must be a list")
+    if not isinstance(value["NEW_OR_REVISED_CLIENT_EVIDENCE"], list):
+        raise ValueError("Evidence delta must be a list")
+    if not isinstance(value["CURRENT_REQUIRED_CRM_FACTS"], dict):
+        raise ValueError("Current required CRM facts must be an object")
+    return value
 
 
 def latest_transcript(transcripts_dir: Path) -> Path:
@@ -269,6 +298,7 @@ def build_prompt(
 - Новые данные могут сохранить, пересмотреть или опровергнуть прежние выводы.
 - Используй только CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE как новые evidence.
 - Не считай отсутствие старых неизменившихся событий их удалением.
+- Не удаляй нерешённые обязательства, риски и противоречия из управленческих блоков, пока новые evidence явно не подтвердят их закрытие; новое событие может изменить приоритет, но не отменяет их молча.
 - Верни полный текущий analysis JSON той же схемы, что FULL, не patch и не список изменений.
 </incremental_analysis_rules>
 """
@@ -1714,6 +1744,8 @@ def main() -> None:
     history_text = read_text(history_path)
     current_situation_context = load_deal_current_situation_context(deal_dir, str(args.deal_id))
     daily_quality_context = load_daily_quality_context(deal_dir, str(args.deal_id))
+    incremental_context_path = getattr(args, "incremental_context", None)
+    incremental_context = load_incremental_context(incremental_context_path)
     prompt = build_prompt(
         args.deal_id,
         history_text,
@@ -1724,6 +1756,7 @@ def main() -> None:
         prior_neuro_rop_recommendation,
         current_situation_context,
         daily_quality_context,
+        incremental_context,
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"
@@ -1732,14 +1765,14 @@ def main() -> None:
     prompt_budget = build_prompt_budget(
         prompt=prompt,
         model=args.model,
-        history_text=history_text,
-        transcript_text=transcript_text,
+        history_text="" if incremental_context is not None else history_text,
+        transcript_text="" if incremental_context is not None else transcript_text,
         diagnostics_text=context_diagnostics_text,
         okf_sections=okf_sections,
         stage_policy=stage_policy,
     )
     write_prompt_budget(prompt_budget_path, prompt_budget)
-    logger.info("Saved full analysis request prompt: %s", prompt_path)
+    logger.info("Saved %s analysis request prompt: %s", "incremental" if incremental_context else "full", prompt_path)
     logger.info("Saved privacy-preserving prompt budget: %s", prompt_budget_path)
 
     if args.dry_run:
@@ -1776,9 +1809,9 @@ def main() -> None:
                 "deal", str(args.deal_id), "validation", detail="Проверяет ответ модели"
             ),
             analysis_caller=call_analysis_json,
-            call_type="full_deal_analysis",
-            prompt_cache_key=DEAL_PROMPT_CACHE_KEY,
-            prompt_cache_markers=deal_prompt_cache_markers(transcript_text),
+            call_type="incremental_deal_analysis" if incremental_context else "full_deal_analysis",
+            prompt_cache_key=INCREMENTAL_DEAL_PROMPT_VERSION if incremental_context else DEAL_PROMPT_CACHE_KEY,
+            prompt_cache_markers=None if incremental_context else deal_prompt_cache_markers(transcript_text),
             trace_entity_type="deal",
             trace_entity_id=str(args.deal_id),
         )
@@ -1813,14 +1846,18 @@ def main() -> None:
         "input_files": {
             "history": str(history_path),
             "transcript": str(transcript_path) if transcript_path else None,
-            "incremental_context": None,
+            "incremental_context": str(incremental_context_path) if incremental_context_path else None,
             "context_diagnostics": context_diagnostics_paths,
             "knowledge": [str(path) for path, _text in okf_sections],
         },
         "crm_stage_policy": stage_policy,
         "PRIOR_NEURO_ROP_RECOMMENDATION": prior_neuro_rop_recommendation,
-        "analysis_mode": "full",
-        "evidence_ids_included": sorted(set(
+        "analysis_mode": "incremental" if incremental_context else "full",
+        "evidence_ids_included": sorted({
+            str(item.get("evidence_id"))
+            for item in (incremental_context or {}).get("NEW_OR_REVISED_CLIENT_EVIDENCE", [])
+            if isinstance(item, dict) and item.get("evidence_id")
+        }) if incremental_context else sorted(set(
             transcript_evidence_ids_for_input(
                 deal_dir / "transcripts",
                 deal_id=str(args.deal_id),

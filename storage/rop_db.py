@@ -2197,9 +2197,25 @@ def upsert_entity_state(
     last_analysis_at: str | None = None,
 ) -> None:
     init_db(db_path)
-    now = utcish_now()
     with connect(db_path) as conn:
-        conn.execute(
+        _upsert_entity_state(
+            conn,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            fingerprint=fingerprint,
+            snapshot=snapshot,
+            last_analysis_status=last_analysis_status,
+            last_analysis_path=last_analysis_path,
+            last_report_path=last_report_path,
+            last_risk_level=last_risk_level,
+            last_analysis=last_analysis,
+            last_recommendation=last_recommendation,
+            last_analysis_at=last_analysis_at,
+        )
+
+
+def _upsert_entity_state(conn: sqlite3.Connection, **state: Any) -> None:
+    conn.execute(
             """
             INSERT INTO entity_state (
                 entity_type,
@@ -2229,18 +2245,18 @@ def upsert_entity_state(
                 updated_at = excluded.updated_at
             """,
             (
-                entity_type,
-                str(entity_id),
-                fingerprint,
-                dumps_json(snapshot),
-                last_analysis_status,
-                last_analysis_at,
-                last_analysis_path,
-                last_report_path,
-                last_risk_level,
-                dumps_json(last_analysis) if last_analysis is not None else None,
-                dumps_json(last_recommendation) if last_recommendation is not None else None,
-                now,
+                state["entity_type"],
+                str(state["entity_id"]),
+                state["fingerprint"],
+                dumps_json(state["snapshot"]),
+                state["last_analysis_status"],
+                state.get("last_analysis_at"),
+                state.get("last_analysis_path"),
+                state.get("last_report_path"),
+                state.get("last_risk_level"),
+                dumps_json(state.get("last_analysis")) if state.get("last_analysis") is not None else None,
+                dumps_json(state.get("last_recommendation")) if state.get("last_recommendation") is not None else None,
+                utcish_now(),
             ),
         )
 
@@ -2354,6 +2370,20 @@ def get_latest_analysis_run(
             """,
             params,
         ).fetchone()
+    return _decode_analysis_run(row)
+
+
+def get_analysis_run(db_path: str | Path, analysis_run_id: int) -> dict[str, Any] | None:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM analysis_runs WHERE id = ?",
+            (int(analysis_run_id),),
+        ).fetchone()
+    return _decode_analysis_run(row)
+
+
+def _decode_analysis_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
     value = dict(row)
@@ -2366,6 +2396,33 @@ def get_latest_analysis_run(
     ):
         value[name.removesuffix("_json")] = loads_json(value.pop(name), default)
     return value
+
+
+def publish_analysis_run(
+    db_path: str | Path,
+    analysis_run_id: int,
+    status: str,
+    *,
+    state: dict[str, Any],
+    memory_update: dict[str, Any] | None,
+) -> None:
+    """Atomically publish the run, entity state and optional memory."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE analysis_runs SET status = ? WHERE id = ? AND status = 'PUBLISHING'",
+            (str(status), int(analysis_run_id)),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"Analysis run {analysis_run_id} is not publishable")
+        _upsert_entity_state(conn, **state)
+        if memory_update is not None:
+            _update_entity_memory(
+                conn,
+                entity_type=str(state["entity_type"]),
+                entity_id=str(state["entity_id"]),
+                memory_update=memory_update,
+            )
 
 
 def get_analysis_run_evidence_ids(db_path: str | Path, analysis_run_id: int) -> list[str] | None:
@@ -2445,7 +2502,22 @@ def update_entity_memory(
 ) -> None:
     init_db(db_path)
     with connect(db_path) as conn:
-        conn.execute(
+        _update_entity_memory(
+            conn,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_update=memory_update,
+        )
+
+
+def _update_entity_memory(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    memory_update: dict[str, Any],
+) -> None:
+    conn.execute(
             """
             INSERT INTO entity_memory (entity_type, entity_id, memory_json, updated_at)
             VALUES (?, ?, ?, ?)
@@ -6716,7 +6788,7 @@ def save_deal_manager_worklog(
                 last_changed_at,
                 observed_at,
             ),
-        )
+    )
         if changed:
             _insert_manager_trajectory_event(
                 conn,
