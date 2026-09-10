@@ -23,6 +23,7 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
             {"closed": False},
             incremental_context={
                 "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": {"deal_state": {"summary": "synthetic-baseline"}},
+                "TRUSTED_CONTINUITY_BASELINE": {"deal_context": {"critical_facts": [{"fact_id": "stable_fact"}]}},
                 "CRM_SEMANTIC_DELTA": [{"key": "deal:7", "change_type": "UPDATED_MEANINGFUL"}],
                 "NEW_OR_REVISED_CLIENT_EVIDENCE": [{
                     "evidence_id": "call:201", "text": "synthetic-new-evidence",
@@ -35,13 +36,16 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
             "CRM_SEMANTIC_DELTA",
             "NEW_OR_REVISED_CLIENT_EVIDENCE",
             "CURRENT_REQUIRED_CRM_FACTS",
+            "stable_fact",
             "synthetic-baseline",
             "synthetic-new-evidence",
             "synthetic-rule",
         ):
             self.assertIn(marker, prompt)
         self.assertIn("полный текущий analysis JSON", prompt)
+        self.assertIn("TRUSTED_CONTINUITY_BASELINE", prompt)
         self.assertIn("не отменяет их молча", prompt)
+        self.assertIn("исходящие активности не являются evidence", prompt)
         self.assertNotIn("old-unchanged-history", prompt)
         self.assertNotIn("old-unchanged-transcript", prompt)
 

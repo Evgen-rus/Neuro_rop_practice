@@ -54,6 +54,7 @@ from openai_api.llm.deal_evidence import (
     evidence_delta,
 )
 from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
+from openai_api.llm.validation import AnalysisValidationError, validate_deal_analysis_continuity
 from openai_api.change_detection.snapshot import (
     build_deal_snapshot,
     compare_snapshots,
@@ -185,6 +186,7 @@ def analysis_paths(current_deal_dir: Path, deal_id: str) -> dict[str, Path]:
         "snapshot": analysis_dir / f"deal_{deal_id}_snapshot.json",
         "mini": analysis_dir / f"deal_{deal_id}_mini_recommendation.md",
         "incremental": analysis_dir / f"deal_{deal_id}_incremental_context.json",
+        "continuity": analysis_dir / f"deal_{deal_id}_continuity_baseline.json",
     }
 
 
@@ -193,6 +195,9 @@ def run_existing_analyzer(
     transcript_arg: str,
     *,
     incremental_context: Path | None = None,
+    continuity_baseline: Path | None = None,
+    continuity_correction: bool = False,
+    db_path: Path | None = None,
 ) -> None:
     command = [
         sys.executable,
@@ -209,6 +214,12 @@ def run_existing_analyzer(
         command.extend(["--model", str(args.model)])
     if incremental_context is not None:
         command.extend(["--incremental-context", str(incremental_context)])
+    if continuity_baseline is not None:
+        command.extend(["--continuity-baseline", str(continuity_baseline)])
+    if continuity_correction:
+        command.append("--continuity-correction")
+    if db_path is not None:
+        command.extend(["--db-path", str(db_path)])
 
     logger.info("Running existing deal analyzer: %s", " ".join(command))
     subprocess.run(command, cwd=BASE_DIR, check=True)
@@ -247,6 +258,19 @@ def extract_last_recommendation(payload: dict[str, Any]) -> dict[str, Any] | Non
     return recommendation
 
 
+def _continuity_changed_evidence_ids(
+    available_evidence: list[dict[str, Any]] | None,
+    baseline: dict[str, Any] | None,
+) -> list[str]:
+    if not available_evidence or not isinstance(baseline, dict):
+        return []
+    previous_coverage = baseline.get("evidence_coverage")
+    if not isinstance(previous_coverage, dict):
+        return []
+    delta, _ = evidence_delta(available_evidence, previous_coverage)
+    return [str(item["evidence_id"]) for item in delta if item.get("evidence_id") is not None]
+
+
 def persist_successful_llm_run(
     *,
     db_path: Path,
@@ -261,6 +285,8 @@ def persist_successful_llm_run(
     evidence_coverage: dict[str, Any] | None = None,
     canonical_state: dict[str, Any] | None = None,
     available_evidence: list[dict[str, Any]] | None = None,
+    continuity_baseline: dict[str, Any] | None = None,
+    changed_evidence_ids: list[str] | None = None,
 ) -> int:
     payload = load_analysis_payload(paths["analysis"])
     analysis = extract_analysis(payload)
@@ -270,6 +296,20 @@ def persist_successful_llm_run(
         evidence_coverage = coverage_for_included_evidence(available_evidence, evidence_ids_included)
     if canonical_state is None or evidence_ids_included is None or evidence_coverage is None:
         raise ValueError("Trusted analysis persistence requires canonical state and evidence coverage")
+    validate_deal_analysis_continuity(
+        analysis,
+        continuity_baseline,
+        available_evidence_ids=(
+            [str(item["evidence_id"]) for item in available_evidence]
+            if available_evidence is not None
+            else None
+        ),
+        changed_evidence_ids=(
+            changed_evidence_ids
+            if changed_evidence_ids is not None
+            else _continuity_changed_evidence_ids(available_evidence, continuity_baseline)
+        ),
+    )
     audit = analysis.get("communication_quality_audit") if isinstance(analysis, dict) else None
     if isinstance(audit, dict):
         details = ((decision_reason.get("diff") or {}).get("details") or {})
@@ -475,6 +515,7 @@ def incremental_context(
     )
     return {
         "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": baseline["analysis"],
+        "TRUSTED_CONTINUITY_BASELINE": continuity_baseline_context(baseline),
         "CRM_SEMANTIC_DELTA": crm_delta,
         "NEW_OR_REVISED_CLIENT_EVIDENCE": revised_evidence,
         "CURRENT_REQUIRED_CRM_FACTS": {
@@ -482,6 +523,22 @@ def incremental_context(
             "source_status": canonical_state.get("source_status") or {},
         },
     }, next_coverage
+
+
+def continuity_baseline_context(baseline: dict[str, Any]) -> dict[str, Any]:
+    analysis = baseline.get("analysis") if isinstance(baseline, dict) else None
+    analysis = analysis if isinstance(analysis, dict) else {}
+    context = analysis.get("deal_context")
+    context = context if isinstance(context, dict) else {}
+    return {
+        "deal_context": {
+            "critical_facts": context.get("critical_facts") or [],
+            "commitments": context.get("commitments") or [],
+            "turning_points": context.get("turning_points") or [],
+            "source_conflicts": context.get("source_conflicts") or [],
+        },
+        "main_risk": analysis.get("main_risk") or {},
+    }
 
 
 def main() -> None:
@@ -590,6 +647,7 @@ def main() -> None:
                         args,
                         analyzer_transcript_arg,
                         incremental_context=paths["incremental"],
+                        db_path=db_path,
                     )
                 except Exception as incremental_error:
                     logger.warning(
@@ -603,34 +661,49 @@ def main() -> None:
                         "baseline_run_id": baseline["analysis_run_id"],
                     }
                 else:
-                    incremental_reason = {
-                        **decision.as_dict(),
-                        "baseline_run_id": baseline["analysis_run_id"],
-                        "baseline_fingerprint": baseline["canonical_fingerprint"],
-                        "canonical_from_fingerprint": canonical_delta.get("from_semantic_fingerprint"),
-                        "canonical_to_fingerprint": canonical_delta.get("to_semantic_fingerprint"),
-                        "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
-                        "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
-                    }
-                    run_id = persist_successful_llm_run(
-                        db_path=db_path,
-                        args=args,
-                        fingerprint=fingerprint,
-                        snapshot=snapshot,
-                        decision_status=INCREMENTAL_LLM_ANALYSIS,
-                        paths=paths,
-                        decision_reason=incremental_reason,
-                        prompt_version=INCREMENTAL_DEAL_PROMPT_VERSION,
-                        evidence_coverage=next_coverage,
-                        canonical_state=canonical_state,
-                    )
-                    emit_deal_publish_ready(
-                        str(args.deal_id),
-                        analysis_run_id=run_id,
-                        engine_status=INCREMENTAL_LLM_ANALYSIS,
-                    )
-                    print(f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}")
-                    return
+                    try:
+                        incremental_reason = {
+                            **decision.as_dict(),
+                            "baseline_run_id": baseline["analysis_run_id"],
+                            "baseline_fingerprint": baseline["canonical_fingerprint"],
+                            "canonical_from_fingerprint": canonical_delta.get("from_semantic_fingerprint"),
+                            "canonical_to_fingerprint": canonical_delta.get("to_semantic_fingerprint"),
+                            "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
+                            "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
+                        }
+                        run_id = persist_successful_llm_run(
+                            db_path=db_path,
+                            args=args,
+                            fingerprint=fingerprint,
+                            snapshot=snapshot,
+                            decision_status=INCREMENTAL_LLM_ANALYSIS,
+                            paths=paths,
+                            decision_reason=incremental_reason,
+                            prompt_version=INCREMENTAL_DEAL_PROMPT_VERSION,
+                            evidence_coverage=next_coverage,
+                            canonical_state=canonical_state,
+                            available_evidence=available_evidence,
+                            continuity_baseline=baseline,
+                        )
+                    except AnalysisValidationError as incremental_error:
+                        logger.warning(
+                            "Incremental deal analysis was rejected before publication; running one FULL_REBUILD: %s",
+                            type(incremental_error).__name__,
+                        )
+                        full_decision_reason = {
+                            **decision.as_dict(),
+                            "fallback": True,
+                            "fallback_reason": "incremental_execution_failed",
+                            "baseline_run_id": baseline["analysis_run_id"],
+                        }
+                    else:
+                        emit_deal_publish_ready(
+                            str(args.deal_id),
+                            analysis_run_id=run_id,
+                            engine_status=INCREMENTAL_LLM_ANALYSIS,
+                        )
+                        print(f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}")
+                        return
             else:
                 full_decision_reason = {
                     **decision.as_dict(),
@@ -648,19 +721,43 @@ def main() -> None:
             )
 
         if decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS}:
-            run_existing_analyzer(args, analyzer_transcript_arg)
-            run_id = persist_successful_llm_run(
+            continuity_path = None
+            if baseline is not None:
+                continuity_path = paths["continuity"]
+                save_json(continuity_path, continuity_baseline_context(baseline))
+            run_existing_analyzer(
+                args,
+                analyzer_transcript_arg,
+                continuity_baseline=continuity_path,
                 db_path=db_path,
-                args=args,
-                fingerprint=fingerprint,
-                snapshot=snapshot,
-                decision_status=decision.status,
-                paths=paths,
-                decision_reason=full_decision_reason or decision.as_dict(),
-                evidence_ids_included=None,
-                canonical_state=canonical_state,
-                available_evidence=available_evidence,
             )
+            persist_kwargs = {
+                "db_path": db_path,
+                "args": args,
+                "fingerprint": fingerprint,
+                "snapshot": snapshot,
+                "decision_status": decision.status,
+                "paths": paths,
+                "decision_reason": full_decision_reason or decision.as_dict(),
+                "evidence_ids_included": None,
+                "canonical_state": canonical_state,
+                "available_evidence": available_evidence,
+                "continuity_baseline": baseline,
+            }
+            try:
+                run_id = persist_successful_llm_run(**persist_kwargs)
+            except AnalysisValidationError:
+                if continuity_path is None:
+                    raise
+                logger.warning("FULL deal analysis rejected by continuity gate; running one bounded correction")
+                run_existing_analyzer(
+                    args,
+                    analyzer_transcript_arg,
+                    continuity_baseline=continuity_path,
+                    continuity_correction=True,
+                    db_path=db_path,
+                )
+                run_id = persist_successful_llm_run(**persist_kwargs)
             emit_deal_publish_ready(
                 str(args.deal_id),
                 analysis_run_id=run_id,

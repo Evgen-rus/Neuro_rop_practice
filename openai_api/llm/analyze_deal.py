@@ -122,6 +122,21 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Internal JSON context produced by analyze_deal_if_changed.py.",
     )
+    parser.add_argument(
+        "--continuity-baseline",
+        default=None,
+        help="Internal trusted continuity baseline for a FULL analysis.",
+    )
+    parser.add_argument(
+        "--db-path",
+        default=str(DEFAULT_DB_PATH),
+        help="SQLite path used for the current deal's prior recommendation projection.",
+    )
+    parser.add_argument(
+        "--continuity-correction",
+        action="store_true",
+        help="Request one bounded correction after a trusted continuity rejection.",
+    )
     return parser.parse_args()
 
 
@@ -268,6 +283,8 @@ def build_prompt(
     current_situation_context: dict[str, Any] | None = None,
     daily_quality_context: dict[str, Any] | None = None,
     incremental_context: dict[str, Any] | None = None,
+    continuity_baseline: dict[str, Any] | None = None,
+    continuity_correction: bool = False,
 ) -> str:
     okf_text = "\n\n".join(
         f"### OKF FILE: {path.name}\n\n{text.strip()}" for path, text in okf_sections
@@ -295,6 +312,7 @@ def build_prompt(
         incremental_rules = """
 <incremental_analysis_rules>
 - PREVIOUS_TRUSTED_COMPLETE_ANALYSIS — предыдущее проверенное понимание, а не неизменная истина.
+- TRUSTED_CONTINUITY_BASELINE — короткий обязательный список stable IDs: сохрани каждый пункт, если новое evidence явно не закрывает его.
 - Новые данные могут сохранить, пересмотреть или опровергнуть прежние выводы.
 - Используй только CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE как новые evidence.
 - Не считай отсутствие старых неизменившихся событий их удалением.
@@ -308,6 +326,25 @@ def build_prompt(
 {CURRENT_SITUATION_CONTEXT_MARKER}
 
 {situation_context_text}"""
+    if continuity_baseline is not None and incremental_context is None:
+        evidence_sections += f"""
+
+## TRUSTED CONTINUITY BASELINE
+
+{json.dumps(continuity_baseline, ensure_ascii=False, indent=2)}
+
+<continuity_rules>
+- Это точка continuity для текущего FULL, а не альтернативный источник фактов.
+- Сохрани каждый перечисленный stable ID unresolved critical fact, commitment, active turning point и source conflict в полном текущем JSON.
+- Не повышай статус needs_confirmation/conflicted в confirmed и не закрывай obligation/turning point/risk только по старому evidence.
+- Если новое evidence действительно закрывает пункт, сохрани его stable ID и укажи точный новый/revised evidence ID.
+</continuity_rules>"""
+        if continuity_correction:
+            evidence_sections += """
+
+<continuity_correction>
+- Предыдущий кандидат не прошёл deterministic continuity gate. Перед ответом сверь все baseline IDs буквально и верни их в полном JSON; не удаляй unresolved item и не меняй статус по старому evidence.
+</continuity_correction>"""
     communication_audit_rules = f"""
 <communication_quality_audit_rules>
 {DAILY_QUALITY_RULE}
@@ -387,6 +424,7 @@ def build_prompt(
 - Открытые задачи Bitrix, их описания и сообщения в чатах задач — внутренний рабочий контекст. Используй их для определения незавершённого действия и срока, но не выдавай за слова клиента.
 - Если текущая стадия, история стадий и открытая задача показывают переход к договору, счету или оплате, формулируй контроль вокруг ближайшего незавершённого шага к деньгам, а не начинай квалификацию заново без отдельного основания.
 - Diagnostics используй только как сведения о полноте/ограничениях выгрузки, не как факты сделки.
+- Явные ссылки на call/email/message/transcript используй только с точным ID из доступного client evidence; исходящие активности не являются evidence. Для закрытия unresolved факта, обязательства, turning point, конфликта или риска укажи новую/revised evidence, иначе сохрани исходное состояние.
 </grounding_rules>
 
 <crm_stage_rules>
@@ -1673,6 +1711,15 @@ def save_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_continuity_baseline(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("Continuity baseline must be an object")
+    return value
+
+
 def load_context_diagnostics_for_analysis(
     *,
     entity_type: str,
@@ -1716,7 +1763,7 @@ def main() -> None:
         )
     )
     prior_neuro_rop_recommendation = get_latest_neuro_rop_recommendation_projection(
-        DEFAULT_DB_PATH,
+        Path(getattr(args, "db_path", DEFAULT_DB_PATH)),
         str(args.deal_id),
     )
 
@@ -1746,6 +1793,7 @@ def main() -> None:
     daily_quality_context = load_daily_quality_context(deal_dir, str(args.deal_id))
     incremental_context_path = getattr(args, "incremental_context", None)
     incremental_context = load_incremental_context(incremental_context_path)
+    continuity_baseline = load_continuity_baseline(getattr(args, "continuity_baseline", None))
     prompt = build_prompt(
         args.deal_id,
         history_text,
@@ -1757,6 +1805,8 @@ def main() -> None:
         current_situation_context,
         daily_quality_context,
         incremental_context,
+        continuity_baseline,
+        bool(getattr(args, "continuity_correction", False)),
     )
     analysis_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = analysis_dir / f"deal_{args.deal_id}_request_prompt.txt"

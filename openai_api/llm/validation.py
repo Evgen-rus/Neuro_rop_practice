@@ -2192,6 +2192,197 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
         raise AnalysisValidationError("Invalid deal analysis: " + "; ".join(errors), errors=errors)
 
 
+_EXPLICIT_EVIDENCE_REFERENCE_RE = re.compile(
+    r"(?<![\w:])(?P<kind>call|email|message|transcript|звонок|письмо|сообщение)"
+    r"(?:(?:[_\s-]*id)|\s*)?(?:[:#=№-]\s*)?(?P<id>\d+)(?!\w)",
+    re.IGNORECASE,
+)
+_EVIDENCE_KIND_ALIASES = {
+    "call": "call",
+    "email": "email",
+    "message": "message",
+    "transcript": "call",
+    "звонок": "call",
+    "письмо": "email",
+    "сообщение": "message",
+}
+_CONTINUITY_CLOSED_MARKER_RE = re.compile(
+    r"(?:resolved|closed|cleared|устран|снят|закрыт|подтверждён|подтвержден)",
+    re.IGNORECASE,
+)
+
+
+def _iter_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _iter_strings(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _iter_strings(nested)
+
+
+def _explicit_evidence_references(value: Any) -> set[str]:
+    references: set[str] = set()
+    for text in _iter_strings(value):
+        for match in _EXPLICIT_EVIDENCE_REFERENCE_RE.finditer(text):
+            kind = _EVIDENCE_KIND_ALIASES[match.group("kind").lower()]
+            references.add(f"{kind}:{match.group('id')}")
+    return references
+
+
+def _continuity_analysis(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    nested = value.get("analysis")
+    return nested if isinstance(nested, dict) else value
+
+
+def _continuity_items(context: dict[str, Any], field: str, id_field: str) -> dict[str, dict[str, Any]]:
+    items = context.get(field)
+    if not isinstance(items, list):
+        return {}
+    return {
+        str(item[id_field]): item
+        for item in items
+        if isinstance(item, dict) and item.get(id_field) is not None
+    }
+
+
+def _continuity_needs_new_evidence(item: dict[str, Any], changed_evidence_ids: set[str]) -> bool:
+    return not (_explicit_evidence_references(item) & changed_evidence_ids)
+
+
+def _continuity_has_explicit_closure(analysis: dict[str, Any], changed_evidence_ids: set[str]) -> bool:
+    if not changed_evidence_ids:
+        return False
+    changed_references = _explicit_evidence_references(analysis.get("what_changed")) & changed_evidence_ids
+    if not changed_references:
+        return False
+    return bool(_CONTINUITY_CLOSED_MARKER_RE.search(" ".join(_iter_strings(analysis.get("what_changed")))))
+
+
+def _continuity_item_has_explicit_closure(
+    analysis: dict[str, Any],
+    item_id: str,
+    changed_evidence_ids: set[str],
+) -> bool:
+    what_changed = " ".join(_iter_strings(analysis.get("what_changed")))
+    return (
+        item_id.lower() in what_changed.lower()
+        and bool(_CONTINUITY_CLOSED_MARKER_RE.search(what_changed))
+        and bool(_explicit_evidence_references(what_changed) & changed_evidence_ids)
+    )
+
+
+def validate_deal_analysis_continuity(
+    analysis: dict[str, Any],
+    baseline: dict[str, Any] | None = None,
+    *,
+    available_evidence_ids: list[str] | None = None,
+    changed_evidence_ids: list[str] | None = None,
+) -> None:
+    """Reject a candidate that loses trusted deal facts before persistence."""
+    errors: list[str] = []
+    current = _continuity_analysis(analysis) or {}
+    changed = {str(value) for value in (changed_evidence_ids or [])}
+    references = _explicit_evidence_references(current)
+    if available_evidence_ids is not None:
+        available = {str(value) for value in available_evidence_ids}
+        for reference in sorted(references - available):
+            errors.append(f"uncovered explicit evidence reference: {reference}")
+
+    previous = _continuity_analysis(baseline)
+    if previous is not None:
+        previous_context = previous.get("deal_context")
+        current_context = current.get("deal_context")
+        if isinstance(previous_context, dict) and isinstance(current_context, dict):
+            for field, id_field, unresolved, closed in (
+                (
+                    "critical_facts",
+                    "fact_id",
+                    {"needs_confirmation", "conflicted", "outdated"},
+                    {"confirmed"},
+                ),
+                ("commitments", "commitment_id", {"open", "unknown", "broken"}, {"done"}),
+                ("turning_points", "turning_point_id", {"active"}, {"resolved", "superseded"}),
+            ):
+                previous_items = _continuity_items(previous_context, field, id_field)
+                current_items = _continuity_items(current_context, field, id_field)
+                for item_id, previous_item in previous_items.items():
+                    if previous_item.get("status") not in unresolved:
+                        continue
+                    current_item = current_items.get(item_id)
+                    if current_item is None:
+                        if not _continuity_item_has_explicit_closure(current, item_id, changed):
+                            errors.append(f"lost unresolved {field[:-1]}: {item_id}")
+                    elif current_item.get("status") in closed and _continuity_needs_new_evidence(
+                        current_item,
+                        changed,
+                    ) and not _continuity_item_has_explicit_closure(current, item_id, changed):
+                        errors.append(f"closed unresolved {field[:-1]} without new evidence: {item_id}")
+
+            previous_conflicts = previous_context.get("source_conflicts")
+            current_conflicts = current_context.get("source_conflicts")
+            if isinstance(previous_conflicts, list) and isinstance(current_conflicts, list):
+                closure = _continuity_has_explicit_closure(current, changed)
+                if len(current_conflicts) < len(previous_conflicts) and not closure:
+                    errors.append("lost unresolved source conflict")
+                current_conflict_references = [
+                    _explicit_evidence_references(item) for item in current_conflicts
+                ]
+                for previous_conflict in previous_conflicts:
+                    previous_references = _explicit_evidence_references(previous_conflict)
+                    if previous_references and not any(
+                        previous_references <= current_references
+                        for current_references in current_conflict_references
+                    ) and not closure:
+                        errors.append("lost source conflict evidence")
+                        break
+
+        previous_risk = previous.get("main_risk")
+        current_risk = current.get("main_risk")
+        if isinstance(previous_risk, dict) and previous_risk and (
+            not isinstance(current_risk, dict) or not current_risk
+        ):
+            if not _continuity_has_explicit_closure(current, changed):
+                errors.append("lost unresolved deal risk")
+        if isinstance(previous_risk, dict) and isinstance(current_risk, dict):
+            risk_rank = {"low": 1, "medium": 2, "medium_high": 3, "high": 4, "critical": 5}
+            previous_level = str(previous_risk.get("risk_level") or "").lower()
+            current_level = str(current_risk.get("risk_level") or "").lower()
+            if (
+                previous_level in risk_rank
+                and current_level in risk_rank
+                and risk_rank[current_level] < risk_rank[previous_level]
+                and _continuity_needs_new_evidence(current_risk, changed)
+                and not _continuity_has_explicit_closure(current, changed)
+            ):
+                errors.append("downgraded deal risk without new evidence")
+            previous_description = str(previous_risk.get("description") or "").strip()
+            current_description = str(current_risk.get("description") or "").strip()
+            if previous_description and not current_description and not _continuity_has_explicit_closure(
+                current,
+                changed,
+            ):
+                errors.append("lost unresolved deal risk description")
+            if previous_level in {"high", "critical"}:
+                previous_type = str(previous_risk.get("risk_type") or "").strip()
+                current_type = str(current_risk.get("risk_type") or "").strip()
+                if previous_type and current_type and previous_type != current_type and _continuity_needs_new_evidence(
+                    current_risk,
+                    changed,
+                ) and not _continuity_has_explicit_closure(current, changed):
+                    errors.append("replaced unresolved deal risk without new evidence")
+
+    if errors:
+        raise AnalysisValidationError(
+            "Invalid deal analysis continuity: " + "; ".join(errors),
+            errors=errors,
+        )
+
+
 def _requires_missing_crm_return_task(analysis: dict[str, Any]) -> bool:
     assessment = analysis.get("qualification_assessment")
     if not isinstance(assessment, dict):

@@ -24,9 +24,11 @@ from openai_api.change_detection.decision_engine import (
 from openai_api.llm import analyze_deal_if_changed
 from openai_api.llm.analyze_deal import DEAL_PROMPT_CACHE_KEY, build_prompt
 from openai_api.llm.validation import (
+    AnalysisValidationError,
     DEAL_REQUIRED_FIELDS,
     normalize_analysis_for_validation,
     validate_deal_analysis,
+    validate_deal_analysis_continuity,
 )
 from progress_events import compact_decision_status
 from storage import rop_db
@@ -142,7 +144,19 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 "analysis_mode": "full",
                 "evidence_ids_included": [],
                 "model_metadata": {"model": "test-model"},
-                "analysis": {"main_risk": {"risk_level": "medium"}},
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "invoice_stage",
+                            "status": "needs_confirmation",
+                            "evidence": ["call:1"],
+                        }],
+                        "commitments": [],
+                        "turning_points": [],
+                        "source_conflicts": [],
+                    },
+                },
             }
             analysis_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             report_path.write_text("отчёт", encoding="utf-8")
@@ -163,7 +177,15 @@ class DealFullProductionFlowTests(unittest.TestCase):
                     "owner": {"entity_type": "deal", "entity_id": "7"},
                     "semantic_fingerprint": "canonical-fp",
                 },
-                available_evidence=[],
+                available_evidence=[{
+                    "evidence_id": "call:1",
+                    "content_hash": "h1",
+                    "kind": "call_transcript",
+                }],
+                continuity_baseline={
+                    "analysis": payload["analysis"],
+                    "evidence_coverage": {},
+                },
             )
             saved = json.loads(analysis_path.read_text(encoding="utf-8"))
             state = get_entity_state(db_path, "deal", "7")
@@ -314,6 +336,151 @@ class DealFullProductionFlowTests(unittest.TestCase):
         self.assertIn("История сделки", prompt)
         self.assertNotIn("PREVIOUS_ANALYSIS", prompt)
         self.assertNotIn("<incremental_analysis_rules>", prompt)
+
+    def test_full_prompt_contains_trusted_continuity_baseline_without_dropping_history(self) -> None:
+        prompt = build_prompt(
+            "7",
+            "История сделки",
+            "Транскрипция",
+            "Диагностика",
+            [],
+            {},
+            continuity_baseline={
+                "deal_context": {
+                    "critical_facts": [{
+                        "fact_id": "invoice_stage",
+                        "status": "needs_confirmation",
+                        "evidence": ["call:1"],
+                    }],
+                    "commitments": [{
+                        "commitment_id": "manager_check",
+                        "status": "open",
+                        "evidence": ["call:1"],
+                    }],
+                    "turning_points": [{
+                        "turning_point_id": "invoice",
+                        "status": "active",
+                        "evidence": ["call:1"],
+                    }],
+                    "source_conflicts": [{"description": "status conflict", "sources": ["call:1"]}],
+                },
+                "main_risk": {"risk_level": "high", "risk_type": "approval"},
+            },
+            continuity_correction=True,
+        )
+        for marker in ("invoice_stage", "manager_check", "invoice", "status conflict", "approval"):
+            self.assertIn(marker, prompt)
+        self.assertIn("История сделки", prompt)
+        self.assertIn("## TRUSTED CONTINUITY BASELINE", prompt)
+        self.assertIn("continuity_correction", prompt)
+
+    def test_full_analyzer_receives_actual_db_and_continuity_paths(self) -> None:
+        args = SimpleNamespace(deal_id="7", deal_root="workspace", model=None)
+        with patch.object(analyze_deal_if_changed.subprocess, "run") as run:
+            analyze_deal_if_changed.run_existing_analyzer(
+                args,
+                "none",
+                continuity_baseline=Path("baseline.json"),
+                continuity_correction=True,
+                db_path=Path("state.sqlite"),
+            )
+        command = run.call_args.args[0]
+        self.assertIn("--continuity-baseline", command)
+        self.assertIn("baseline.json", command)
+        self.assertIn("--continuity-correction", command)
+        self.assertIn("--db-path", command)
+        self.assertIn("state.sqlite", command)
+
+    def test_continuity_rejects_uncovered_reference_before_full_or_incremental_persistence(self) -> None:
+        for decision_status in (FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS):
+            with self.subTest(decision_status=decision_status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                analysis_path = root / "analysis.json"
+                analysis_path.write_text(json.dumps({
+                    "analysis_mode": "incremental" if decision_status == INCREMENTAL_LLM_ANALYSIS else "full",
+                    "evidence_ids_included": [],
+                    "analysis": {
+                        "main_risk": {"risk_level": "medium"},
+                        "deal_context": {
+                            "critical_facts": [{
+                                "fact_id": "payment_terms",
+                                "status": "confirmed",
+                                "evidence": ["Email 655627"],
+                            }],
+                        },
+                    },
+                }), encoding="utf-8")
+                with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference"):
+                    analyze_deal_if_changed.persist_successful_llm_run(
+                        db_path=root / "state.sqlite",
+                        args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                        fingerprint="fp",
+                        snapshot={},
+                        decision_status=decision_status,
+                        paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
+                        decision_reason={"status": decision_status},
+                        evidence_coverage={},
+                        canonical_state={},
+                        available_evidence=[],
+                    )
+                self.assertFalse((root / "state.sqlite").exists())
+
+    def test_continuity_rejects_unresolved_loss_and_old_evidence_upgrade(self) -> None:
+        baseline = {
+            "deal_context": {
+                "critical_facts": [{"fact_id": "equipment", "status": "needs_confirmation", "evidence": ["call:1"]}],
+                "commitments": [{"commitment_id": "manager_check", "status": "open", "evidence": ["call:1"]}],
+                "turning_points": [{"turning_point_id": "invoice", "status": "active", "evidence": ["call:1"]}],
+                "source_conflicts": [{"description": "разный статус счёта", "sources": ["call:1"]}],
+            },
+            "main_risk": {"risk_level": "high", "risk_type": "approval"},
+        }
+        candidate = {
+            "deal_context": {
+                "critical_facts": [{"fact_id": "equipment", "status": "confirmed", "evidence": ["call:1"]}],
+                "commitments": [],
+                "turning_points": [],
+                "source_conflicts": [],
+            },
+            "main_risk": {"risk_level": "high", "risk_type": "approval"},
+        }
+        with self.assertRaisesRegex(AnalysisValidationError, "lost unresolved commitment") as raised:
+            validate_deal_analysis_continuity(
+                candidate,
+                baseline,
+                available_evidence_ids=["call:1"],
+                changed_evidence_ids=[],
+            )
+        self.assertIn("closed unresolved critical_fact without new evidence", str(raised.exception))
+        self.assertIn("lost unresolved turning_point", str(raised.exception))
+        self.assertIn("lost unresolved source conflict", str(raised.exception))
+
+    def test_continuity_accepts_explicit_new_evidence_closure(self) -> None:
+        baseline = {
+            "deal_context": {
+                "critical_facts": [{"fact_id": "equipment", "status": "needs_confirmation", "evidence": ["call:1"]}],
+                "commitments": [{"commitment_id": "manager_check", "status": "open", "evidence": ["call:1"]}],
+                "turning_points": [{"turning_point_id": "invoice", "status": "active", "evidence": ["call:1"]}],
+                "source_conflicts": [{"description": "разный статус счёта", "sources": ["call:1"]}],
+            },
+            "main_risk": {"risk_level": "high", "risk_type": "approval"},
+        }
+        candidate = {
+            "what_changed": ["resolved by call:2"],
+            "deal_context": {
+                "critical_facts": [{"fact_id": "equipment", "status": "confirmed", "evidence": ["call:2"]}],
+                "commitments": [{"commitment_id": "manager_check", "status": "done", "evidence": ["call:2"]}],
+                "turning_points": [{"turning_point_id": "invoice", "status": "resolved", "evidence": ["call:2"]}],
+                "source_conflicts": [],
+            },
+            "main_risk": {"risk_level": "medium", "risk_type": "approval", "evidence": ["call:2"]},
+        }
+        validate_deal_analysis_continuity(
+            candidate,
+            baseline,
+            available_evidence_ids=["call:1", "call:2"],
+            changed_evidence_ids=["call:2"],
+        )
 
     def test_valid_deal_analysis_passes_canonical_validator(self) -> None:
         analysis = {key: {} for key in DEAL_REQUIRED_FIELDS}
