@@ -90,6 +90,24 @@ class DealEvidenceDeltaContractTests(unittest.TestCase):
             {"call:201", "email:301", "message:302"},
         )
 
+    @patch("openai_api.llm.deal_evidence.transcript_items", return_value=[])
+    def test_confirmed_inbound_messenger_mirror_is_evidence(self, _transcript_items) -> None:
+        event = {
+            "source_ids": ["401"],
+            "occurred_at": "2026-01-01T10:00:00+03:00",
+            "channel": "max",
+            "direction": "incoming",
+            "participant_role": "client",
+            "contact_class": "confirmed_contact",
+            "content": "synthetic-client-message",
+        }
+        outbound = {**event, "source_ids": ["402"], "direction": "outgoing", "participant_role": "employee"}
+        evidence = collect_deal_evidence(
+            {"deal_id": "1", "normalized_communications": [event, outbound]},
+            "unused",
+        )
+        self.assertEqual([item["evidence_id"] for item in evidence], ["message:401"])
+
     @patch("openai_api.llm.deal_evidence.transcript_items")
     def test_same_call_transcript_is_omitted_until_content_changes(self, transcript_items) -> None:
         transcript_items.return_value = [{"activity_id": "201", "text": "synthetic-call-v1"}]

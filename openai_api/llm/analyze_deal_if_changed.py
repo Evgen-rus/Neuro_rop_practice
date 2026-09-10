@@ -309,6 +309,7 @@ def persist_successful_llm_run(
             if changed_evidence_ids is not None
             else _continuity_changed_evidence_ids(available_evidence, continuity_baseline)
         ),
+        reject_confirmation_upgrades=decision_status == INCREMENTAL_LLM_ANALYSIS,
     )
     audit = analysis.get("communication_quality_audit") if isinstance(analysis, dict) else None
     if isinstance(audit, dict):
@@ -501,8 +502,13 @@ def incremental_context(
     canonical_delta: dict[str, Any],
     available_evidence: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    covered_ids = set(baseline["evidence_coverage"])
+    delta_evidence = [
+        item for item in available_evidence
+        if item.get("evidence_id") in covered_ids or item.get("kind") == "call_transcript"
+    ]
     revised_evidence, next_coverage = evidence_delta(
-        available_evidence,
+        delta_evidence,
         baseline["evidence_coverage"],
     )
     crm_delta = [
@@ -518,6 +524,11 @@ def incremental_context(
         "TRUSTED_CONTINUITY_BASELINE": continuity_baseline_context(baseline),
         "CRM_SEMANTIC_DELTA": crm_delta,
         "NEW_OR_REVISED_CLIENT_EVIDENCE": revised_evidence,
+        "AVAILABLE_CLIENT_EVIDENCE_IDS": [
+            str(item["evidence_id"])
+            for item in available_evidence
+            if item.get("evidence_id") is not None
+        ],
         "CURRENT_REQUIRED_CRM_FACTS": {
             "deal": deal.get("semantic") or {},
             "source_status": canonical_state.get("source_status") or {},
@@ -684,6 +695,11 @@ def main() -> None:
                             canonical_state=canonical_state,
                             available_evidence=available_evidence,
                             continuity_baseline=baseline,
+                            changed_evidence_ids=[
+                                str(item["evidence_id"])
+                                for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
+                                if item.get("evidence_id") is not None
+                            ],
                         )
                     except AnalysisValidationError as incremental_error:
                         logger.warning(

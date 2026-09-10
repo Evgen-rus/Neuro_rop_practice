@@ -467,19 +467,78 @@ class DealFullProductionFlowTests(unittest.TestCase):
         }
         candidate = {
             "what_changed": ["resolved by call:2"],
+            "money_path_diagnosis": {"evidence": ["Звонок activity_id=2"]},
             "deal_context": {
                 "critical_facts": [{"fact_id": "equipment", "status": "confirmed", "evidence": ["call:2"]}],
                 "commitments": [{"commitment_id": "manager_check", "status": "done", "evidence": ["call:2"]}],
                 "turning_points": [{"turning_point_id": "invoice", "status": "resolved", "evidence": ["call:2"]}],
                 "source_conflicts": [],
             },
-            "main_risk": {"risk_level": "medium", "risk_type": "approval", "evidence": ["call:2"]},
+            "main_risk": {"risk_level": "medium", "risk_type": "payment_delay"},
         }
         validate_deal_analysis_continuity(
             candidate,
             baseline,
             available_evidence_ids=["call:1", "call:2"],
             changed_evidence_ids=["call:2"],
+        )
+
+    def test_incremental_confirmation_upgrade_requires_full(self) -> None:
+        baseline = {
+            "qualification_assessment": {
+                "bant": {
+                    "timeframe": {
+                        "status": "missing",
+                        "decision_timing_status": "not_confirmed",
+                    },
+                },
+            },
+            "deal_context": {
+                "pressure_levers": [{
+                    "lever_id": "payment_deadline",
+                    "basis_status": "needs_confirmation",
+                }],
+            },
+        }
+        candidate = {
+            "qualification_assessment": {
+                "bant": {
+                    "timeframe": {
+                        "status": "confirmed",
+                        "decision_timing_status": "confirmed",
+                        "evidence": ["call:2"],
+                    },
+                },
+            },
+            "deal_context": {
+                "pressure_levers": [{
+                    "lever_id": "payment_deadline",
+                    "basis_status": "confirmed",
+                    "evidence": ["call:2"],
+                }],
+            },
+        }
+
+        with self.assertRaisesRegex(AnalysisValidationError, "incremental confirmation upgrade requires FULL"):
+            validate_deal_analysis_continuity(
+                candidate,
+                baseline,
+                available_evidence_ids=["call:2"],
+                changed_evidence_ids=["call:2"],
+                reject_confirmation_upgrades=True,
+            )
+
+        validate_deal_analysis_continuity(
+            candidate,
+            baseline,
+            available_evidence_ids=["call:2"],
+            changed_evidence_ids=["call:2"],
+        )
+
+    def test_continuity_does_not_parse_call_date_as_evidence_id(self) -> None:
+        validate_deal_analysis_continuity(
+            {"communication_quality_audit": {"scope_summary": "Звонок 28.08.2026"}},
+            available_evidence_ids=[],
         )
 
     def test_valid_deal_analysis_passes_canonical_validator(self) -> None:

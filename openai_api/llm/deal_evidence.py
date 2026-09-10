@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from bitrix.customer_history import build_normalized_communications, is_confirmed_client_reply
 from openai_api.audio.transcript_context import AGGREGATE_STEM, transcript_items
 from openai_api.change_detection.snapshot import activity_kind, result_item, result_items, text_hash
 
@@ -77,6 +78,29 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
             "occurred_at": str(row["occurred_at"] or ""),
             "content_hash": text_hash(text),
             "subject": row["subject"],
+            "text": text,
+        }
+
+    communications = raw_bundle.get("normalized_communications")
+    if not isinstance(communications, list):
+        communications = build_normalized_communications(raw_bundle)
+    for event in communications:
+        if not isinstance(event, dict) or not is_confirmed_client_reply(event):
+            continue
+        source_ids = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
+        source_id = str(source_ids[0] if source_ids else "").strip()
+        text = str(event.get("content") or "").strip()
+        if not source_id or not text:
+            continue
+        prefix = "email" if str(event.get("channel") or "").lower() == "email" else "message"
+        evidence_id = f"{prefix}:{source_id}"
+        evidence[evidence_id] = {
+            "evidence_id": evidence_id,
+            "kind": f"inbound_{prefix}",
+            "activity_id": source_id,
+            "occurred_at": str(event.get("occurred_at") or ""),
+            "content_hash": text_hash(text),
+            "subject": str(event.get("subject") or ""),
             "text": text,
         }
     return sorted(evidence.values(), key=lambda item: (item["occurred_at"], item["evidence_id"]))

@@ -150,8 +150,10 @@ def load_incremental_context(path: str | None) -> dict[str, Any] | None:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     expected = {
         "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS",
+        "TRUSTED_CONTINUITY_BASELINE",
         "CRM_SEMANTIC_DELTA",
         "NEW_OR_REVISED_CLIENT_EVIDENCE",
+        "AVAILABLE_CLIENT_EVIDENCE_IDS",
         "CURRENT_REQUIRED_CRM_FACTS",
     }
     if not isinstance(value, dict) or set(value) != expected:
@@ -162,6 +164,8 @@ def load_incremental_context(path: str | None) -> dict[str, Any] | None:
         raise ValueError("CRM semantic delta must be a list")
     if not isinstance(value["NEW_OR_REVISED_CLIENT_EVIDENCE"], list):
         raise ValueError("Evidence delta must be a list")
+    if not isinstance(value["AVAILABLE_CLIENT_EVIDENCE_IDS"], list):
+        raise ValueError("Available client evidence ids must be a list")
     if not isinstance(value["CURRENT_REQUIRED_CRM_FACTS"], dict):
         raise ValueError("Current required CRM facts must be an object")
     return value
@@ -315,6 +319,7 @@ def build_prompt(
 - TRUSTED_CONTINUITY_BASELINE — короткий обязательный список stable IDs: сохрани каждый пункт, если новое evidence явно не закрывает его.
 - Новые данные могут сохранить, пересмотреть или опровергнуть прежние выводы.
 - Используй только CRM_SEMANTIC_DELTA и NEW_OR_REVISED_CLIENT_EVIDENCE как новые evidence.
+- Явные ссылки call/email/message/transcript допустимы только из AVAILABLE_CLIENT_EVIDENCE_IDS; удали унаследованные ссылки, которых в этом списке нет, не удаляя сам stable item.
 - Не считай отсутствие старых неизменившихся событий их удалением.
 - Не удаляй нерешённые обязательства, риски и противоречия из управленческих блоков, пока новые evidence явно не подтвердят их закрытие; новое событие может изменить приоритет, но не отменяет их молча.
 - Верни полный текущий analysis JSON той же схемы, что FULL, не patch и не список изменений.

@@ -2194,7 +2194,7 @@ def validate_deal_analysis(analysis: dict[str, Any]) -> None:
 
 _EXPLICIT_EVIDENCE_REFERENCE_RE = re.compile(
     r"(?<![\w:])(?P<kind>call|email|message|transcript|звонок|письмо|сообщение)"
-    r"(?:(?:[_\s-]*id)|\s*)?(?:[:#=№-]\s*)?(?P<id>\d+)(?!\w)",
+    r"(?:(?:[_\s-]*(?:activity[_\s-]*)?id)|\s*)?(?:[:#=№-]\s*)?(?P<id>\d+)(?![\w./-])",
     re.IGNORECASE,
 )
 _EVIDENCE_KIND_ALIASES = {
@@ -2254,6 +2254,10 @@ def _continuity_needs_new_evidence(item: dict[str, Any], changed_evidence_ids: s
     return not (_explicit_evidence_references(item) & changed_evidence_ids)
 
 
+def _is_confirmation_upgrade(previous: Any, current: Any) -> bool:
+    return previous in {"not_confirmed", "needs_confirmation"} and current == "confirmed"
+
+
 def _continuity_has_explicit_closure(analysis: dict[str, Any], changed_evidence_ids: set[str]) -> bool:
     if not changed_evidence_ids:
         return False
@@ -2282,6 +2286,7 @@ def validate_deal_analysis_continuity(
     *,
     available_evidence_ids: list[str] | None = None,
     changed_evidence_ids: list[str] | None = None,
+    reject_confirmation_upgrades: bool = False,
 ) -> None:
     """Reject a candidate that loses trusted deal facts before persistence."""
     errors: list[str] = []
@@ -2341,6 +2346,44 @@ def validate_deal_analysis_continuity(
                         errors.append("lost source conflict evidence")
                         break
 
+            if reject_confirmation_upgrades:
+                for field, id_field in (
+                    ("commitments", "commitment_id"),
+                    ("pressure_levers", "lever_id"),
+                ):
+                    previous_items = _continuity_items(previous_context, field, id_field)
+                    current_items = _continuity_items(current_context, field, id_field)
+                    for item_id, previous_item in previous_items.items():
+                        current_item = current_items.get(item_id)
+                        if current_item and _is_confirmation_upgrade(
+                            previous_item.get("basis_status"), current_item.get("basis_status")
+                        ):
+                            errors.append(f"incremental confirmation upgrade requires FULL: {field}.{item_id}")
+
+                previous_decision = previous_context.get("decision_path")
+                current_decision = current_context.get("decision_path")
+                if (
+                    isinstance(previous_decision, dict)
+                    and isinstance(current_decision, dict)
+                    and _is_confirmation_upgrade(
+                        previous_decision.get("basis_status"), current_decision.get("basis_status")
+                    )
+                ):
+                    errors.append("incremental confirmation upgrade requires FULL: decision_path")
+
+        if reject_confirmation_upgrades:
+            previous_assessment = previous.get("qualification_assessment")
+            current_assessment = current.get("qualification_assessment")
+            previous_bant = previous_assessment.get("bant") if isinstance(previous_assessment, dict) else None
+            current_bant = current_assessment.get("bant") if isinstance(current_assessment, dict) else None
+            if isinstance(previous_bant, dict) and isinstance(current_bant, dict):
+                previous_timeframe = previous_bant.get("timeframe")
+                current_timeframe = current_bant.get("timeframe")
+                if isinstance(previous_timeframe, dict) and isinstance(current_timeframe, dict):
+                    for field in ("decision_timing_status", "need_or_launch_timing_status"):
+                        if _is_confirmation_upgrade(previous_timeframe.get(field), current_timeframe.get(field)):
+                            errors.append(f"incremental confirmation upgrade requires FULL: bant.timeframe.{field}")
+
         previous_risk = previous.get("main_risk")
         current_risk = current.get("main_risk")
         if isinstance(previous_risk, dict) and previous_risk and (
@@ -2352,11 +2395,15 @@ def validate_deal_analysis_continuity(
             risk_rank = {"low": 1, "medium": 2, "medium_high": 3, "high": 4, "critical": 5}
             previous_level = str(previous_risk.get("risk_level") or "").lower()
             current_level = str(current_risk.get("risk_level") or "").lower()
+            risk_evidence_context = {
+                "main_risk": current_risk,
+                "money_path_diagnosis": current.get("money_path_diagnosis"),
+            }
             if (
                 previous_level in risk_rank
                 and current_level in risk_rank
                 and risk_rank[current_level] < risk_rank[previous_level]
-                and _continuity_needs_new_evidence(current_risk, changed)
+                and _continuity_needs_new_evidence(risk_evidence_context, changed)
                 and not _continuity_has_explicit_closure(current, changed)
             ):
                 errors.append("downgraded deal risk without new evidence")
@@ -2371,7 +2418,7 @@ def validate_deal_analysis_continuity(
                 previous_type = str(previous_risk.get("risk_type") or "").strip()
                 current_type = str(current_risk.get("risk_type") or "").strip()
                 if previous_type and current_type and previous_type != current_type and _continuity_needs_new_evidence(
-                    current_risk,
+                    risk_evidence_context,
                     changed,
                 ) and not _continuity_has_explicit_closure(current, changed):
                     errors.append("replaced unresolved deal risk without new evidence")
