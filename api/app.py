@@ -67,7 +67,12 @@ from api.jobs import (
     unwrap_analysis_payload,
     workspace_dir,
 )
-from api.ai_spend import build_ai_spend_day, build_ai_spend_summary
+from api.ai_spend import (
+    build_ai_spend_analytics,
+    build_ai_spend_day,
+    build_ai_spend_events,
+    build_ai_spend_summary,
+)
 from api.learning_shadow import (
     get_learning_shadow_run,
     list_learning_shadow_runs,
@@ -955,6 +960,48 @@ def ai_spend_summary_get() -> dict[str, Any]:
 def ai_spend_day_get(date_: date = Query(alias="date")) -> dict[str, Any]:
     _require_admin()
     return build_ai_spend_day(date_)
+
+
+@app.get("/api/admin/ai-spend/analytics")
+def ai_spend_analytics_get(
+    preset: str = Query(default="30"),
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_ai_spend_analytics(preset=preset, from_date=from_date, to_date=to_date)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/admin/ai-spend/events")
+def ai_spend_events_get(
+    preset: str = Query(default="30"),
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    q: str = Query(default=""),
+    kind_group: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    attention: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    _require_admin()
+    try:
+        return build_ai_spend_events(
+            preset=preset,
+            from_date=from_date,
+            to_date=to_date,
+            q=q,
+            kind_group=kind_group,
+            status=status,
+            attention=attention,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/admin/learning-shadow/runs")

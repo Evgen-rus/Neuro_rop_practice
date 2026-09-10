@@ -97,11 +97,15 @@ export type AiSpendSummary = {
 export type AiSpendEvent = {
   at: string | null
   time: string
+  datetime_label?: string
   kind: string | null
   kind_label: string
+  kind_group?: string
+  kind_group_label?: string
   entity_type: string | null
   entity_id: string | null
   entity_label: string | null
+  bitrix_url?: string | null
   model: string | null
   model_label: string | null
   estimated_cost_rub: number | null
@@ -117,9 +121,12 @@ export type AiSpendEvent = {
   cache_write_tokens: number | null
   output_tokens: number | null
   reasoning_tokens: number | null
+  token_total?: number | null
   cache_hit_percent: number | null
   duration_seconds: number | null
   day: string
+  event_key?: string
+  attention?: string[]
 }
 
 export type AiSpendDay = {
@@ -133,6 +140,128 @@ export type AiSpendDay = {
   paid_calls_label: string
   skipped_lines: number
   events: AiSpendEvent[]
+}
+
+export type AiSpendPeriodPreset = '7' | '30' | 'custom'
+
+export type AiSpendTotals = {
+  estimated_cost_rub: number | null
+  estimated_cost_usd: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  paid_calls_label: string
+  unknown_cost_calls: number
+  total_tokens: number
+  total_tokens_label: string
+  average_cost_rub: number | null
+  average_cost_rub_label: string
+  event_count: number
+}
+
+export type AiSpendDailyPoint = {
+  date: string
+  label: string
+  short_label: string
+  estimated_cost_rub: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  paid_calls_label: string
+  total_tokens: number
+  total_tokens_label: string
+  unknown_cost_calls: number
+}
+
+export type AiSpendBreakdownRow = {
+  id: string
+  label: string
+  estimated_cost_rub: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  paid_calls_label?: string
+  calls_label: string
+  total_tokens?: number
+  share: number | null
+  daily?: AiSpendDailyPoint[]
+}
+
+export type AiSpendTopEntity = {
+  entity_type: string | null
+  entity_id: string | null
+  label: string
+  bitrix_url: string | null
+  estimated_cost_rub: number | null
+  estimated_cost_rub_label: string
+  paid_calls: number
+  calls_label: string
+  primary_kind: string | null
+  primary_kind_label: string
+  share: number | null
+}
+
+export type AiSpendAttentionItem = {
+  id: string
+  title: string
+  severity: 'error' | 'warning' | 'info'
+  count: number
+  count_label: string
+  explanation: string
+}
+
+export type AiSpendAnalytics = {
+  disclaimer: string
+  title: string
+  period: {
+    preset: string
+    from: string
+    to: string
+    label: string
+    days: number
+    today: string
+  }
+  previous_period: {
+    from: string
+    to: string
+    label: string
+  }
+  totals: AiSpendTotals
+  today?: AiSpendTotals & { date: string; label: string }
+  yesterday?: AiSpendTotals & { date: string; label: string }
+  comparison: {
+    cost_percent: number | null
+    calls_percent: number | null
+    tokens_percent: number | null
+    average_cost_percent: number | null
+  }
+  daily_series: AiSpendDailyPoint[]
+  kind_groups: AiSpendBreakdownRow[]
+  by_kind: AiSpendBreakdownRow[]
+  by_model: AiSpendBreakdownRow[]
+  top_entities: AiSpendTopEntity[]
+  attention: AiSpendAttentionItem[]
+  skipped_lines: number
+  has_events: boolean
+  has_unknown_cost: boolean
+}
+
+export type AiSpendEventsPage = {
+  disclaimer: string
+  period: {
+    preset: string
+    from: string
+    to: string
+    label: string
+  }
+  q: string
+  kind_group: string | null
+  status: string | null
+  attention: string | null
+  page: number
+  page_size: number
+  total: number
+  pages: number
+  skipped_lines: number
+  events: AiSpendEvent[]
+  empty_reason: 'search' | 'period' | null
 }
 
 export type TrajectoryCategory = 'all' | 'deals' | 'leads' | 'communications' | 'tasks' | 'crm' | 'neurorop'
@@ -2769,6 +2898,14 @@ export function fetchAiSpendSummary() {
 export function fetchAiSpendDay(date: string) {
   const query = new URLSearchParams({ date })
   return api<AiSpendDay>(`/api/admin/ai-spend/day?${query.toString()}`)
+}
+
+export function fetchAiSpendAnalytics(query: URLSearchParams) {
+  return api<AiSpendAnalytics>(`/api/admin/ai-spend/analytics?${query.toString()}`)
+}
+
+export function fetchAiSpendEvents(query: URLSearchParams) {
+  return api<AiSpendEventsPage>(`/api/admin/ai-spend/events?${query.toString()}`)
 }
 
 export function asRecord(value: unknown): Record<string, unknown> {

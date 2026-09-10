@@ -158,6 +158,35 @@ def paid_calls_label(count: int) -> str:
     return f"{count} платных вызовов"
 
 
+def calls_count_label(count: int) -> str:
+    n = abs(count) % 100
+    n1 = n % 10
+    if 11 <= n <= 14:
+        word = "вызовов"
+    elif n1 == 1:
+        word = "вызов"
+    elif 2 <= n1 <= 4:
+        word = "вызова"
+    else:
+        word = "вызовов"
+    return f"{count} {word}"
+
+
+def format_tokens_ui(value: int | None) -> str:
+    if value is None:
+        return "—"
+    magnitude = abs(int(value))
+    if magnitude >= 1_000_000:
+        millions = magnitude / 1_000_000
+        text = f"{millions:.1f}".replace(".", ",")
+        if text.endswith(",0"):
+            text = text[:-2]
+        sign = "-" if value < 0 else ""
+        return f"{sign}{text} млн"
+    sign = "-" if value < 0 else ""
+    return f"{sign}{_group_int(magnitude)}"
+
+
 def _clean_text(value: Any) -> str:
     return " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split())
 

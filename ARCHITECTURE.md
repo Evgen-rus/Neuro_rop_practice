@@ -167,7 +167,7 @@ Evidence identity для provenance FULL-анализа идентифициру
 
 - Bitrix webhook и `OPENAI_API_KEY` читаются из окружения. Не выводи их значение и не помещай в тестовые фикстуры.
 - Каждая физическая попытка Bitrix REST фиксируется одной privacy-safe JSONL-строкой в `logs/bitrix_usage_daily/YYYY-MM-DD.jsonl`; trace содержит только метод, форму запроса без значений, длительность и технический результат, но не URL/webhook, CRM ID, payload, тексты ошибок или содержимое ответа.
-- Человеческий дневник оценки OpenAI пишется в `logs/daily_spend/YYYY-MM-DD.txt` (и соседний events JSONL); в нём допустимы ID сделки/лида и сумма, но не промпты, транскрипты и CRM-тексты. Admin-only `/api/admin/ai-spend/*` читает только этот events JSONL и отдаёт оценку по тарифу проекта, не счёт OpenAI; `openai_usage.jsonl` отдельно не суммируется.
+- Человеческий дневник оценки OpenAI пишется в `logs/daily_spend/YYYY-MM-DD.txt` (и соседний events JSONL); в нём допустимы ID сделки/лида и сумма, но не промпты, транскрипты и CRM-тексты. Admin-only `/api/admin/ai-spend/summary`, `/day`, `/analytics` и `/events` читают только этот events JSONL и отдают оценку по тарифу проекта, не счёт OpenAI; `openai_usage.jsonl` отдельно не суммируется. Analytics/events — проекция выбранного периода поверх уже записанных событий, не вторая telemetry.
 - `reports/` содержит локальные CRM exports, аудио, transcripts, analysis, Markdown и SQLite; это runtime data, не исходный код.
 - Тексты задач и выбранных сообщений их чатов могут входить в локальный deal context; вложения задач/чатов не скачиваются и не передаются в полный анализ.
 - `crm_pipeline_map.json` также является локальной CRM-выгрузкой и не должен пополняться персональными данными вручную.
