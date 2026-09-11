@@ -289,7 +289,6 @@ export function AiSpendDashboardCard({ onOpen }: { onOpen: () => void }) {
       <small>Расходы AI сегодня</small>
       <strong>{summary?.today.estimated_cost_rub_label || '…'}</strong>
     </div>
-    <em>Подробнее →</em>
   </button>
 }
 
@@ -395,7 +394,6 @@ export function AiSpend() {
     <header className="dc-header ai-spend-header">
       <div className="dc-header-title">
         <h1>Расходы AI</h1>
-        <p>Стоимость работы НейроРОПа</p>
       </div>
       {analytics && totals ? <section className="ai-spend-kpis" aria-label="Ключевые показатели">
         <article>
@@ -458,7 +456,6 @@ export function AiSpend() {
         <header>
           <div>
             <h2>Динамика расходов</h2>
-            <p>Почему в отдельные дни сумма выросла</p>
           </div>
           <div className="ai-spend-pills compact">
             {SPEND_CHART_METRICS.map((item) => (
@@ -489,7 +486,6 @@ export function AiSpend() {
         <section className="ai-spend-card">
           <header>
             <h2>Расходы по операциям</h2>
-            <p>Куда уходят деньги</p>
           </header>
           <BreakdownList
             rows={analytics.by_kind}
@@ -500,7 +496,6 @@ export function AiSpend() {
         <section className="ai-spend-card">
           <header>
             <h2>Расходы по моделям</h2>
-            <p>Какие модели создают стоимость</p>
           </header>
           <BreakdownList
             rows={analytics.by_model}
@@ -532,7 +527,6 @@ export function AiSpend() {
         <section className="ai-spend-card">
           <header>
             <h2>Где потратили больше всего</h2>
-            <p>Сделки, лиды и вызовы без сущности</p>
           </header>
           {analytics.top_entities.length ? <ol className="ai-spend-entities">
             {analytics.top_entities.map((item: AiSpendTopEntity, index) => (
@@ -556,7 +550,6 @@ export function AiSpend() {
         <header>
           <div>
             <h2>Журнал вызовов</h2>
-            <p>Детали одного вызова — после раскрытия строки</p>
           </div>
           <span>{events ? `${events.total} записей` : ''}</span>
         </header>

@@ -1025,6 +1025,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
+        {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}
         <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />
         <div className="dc-refresh">
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
@@ -1034,7 +1035,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
         </div>
       </header>
       <AutomaticAnalysisStatus role={user.role} onRefresh={applyAutomaticAnalysisRefresh} />
-      {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}
 
       {error ? <div className="dc-alert error">{error}</div> : null}
       {data.sync_errors.length ? <details className="dc-sync-errors"><summary>Bitrix обновлён с ограничениями: {data.sync_errors.length}</summary><ul>{data.sync_errors.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
