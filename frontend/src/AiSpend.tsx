@@ -454,8 +454,15 @@ export function AiSpend() {
 
       <section className="ai-spend-card ai-spend-chart">
         <header>
-          <div>
+          <div className="ai-spend-chart-heading">
             <h2>Динамика расходов</h2>
+            <div className="ai-spend-pills wrap" aria-label="Тип операций">
+              {kindFilters(analytics).map((item) => (
+                <button key={item.id} type="button" className={kindFilter === item.id ? 'active' : ''} onClick={() => setKindFilter(item.id)}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="ai-spend-pills compact">
             {SPEND_CHART_METRICS.map((item) => (
@@ -465,13 +472,6 @@ export function AiSpend() {
             ))}
           </div>
         </header>
-        <div className="ai-spend-pills wrap" aria-label="Тип операций">
-          {kindFilters(analytics).map((item) => (
-            <button key={item.id} type="button" className={kindFilter === item.id ? 'active' : ''} onClick={() => setKindFilter(item.id)}>
-              {item.label}
-            </button>
-          ))}
-        </div>
         <div className="ai-spend-chart-body">
           <DayList
             series={series}
