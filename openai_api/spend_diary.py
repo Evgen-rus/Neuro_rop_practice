@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,20 @@ KIND_LABELS = {
     "transcription": "транскрибация",
     "transcription_voice": "транскрибация голоса",
 }
+
+MODEL_LABELS = {
+    "gpt-5.6-terra": "GPT-5.6 Terra",
+    "gpt-5.6-luna": "GPT-5.6 Luna",
+    "gpt-5.5": "GPT-5.5",
+    "gpt-5.4": "GPT-5.4",
+    "gpt-5.4-mini": "GPT-5.4 Mini",
+    "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe",
+}
+
+MONTH_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
 
 
 def spend_diary_dir() -> Path:
@@ -81,6 +95,28 @@ def format_rub(value: float | None) -> str:
     return f"~{value:.2f} ₽"
 
 
+def _group_int(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def format_rub_ui(value: float | None) -> str:
+    """Human-readable RUB estimate for admin UI: ~1 940 ₽ or ~31,40 ₽."""
+    if value is None:
+        return "оценка недоступна"
+    sign = "-" if value < 0 else ""
+    magnitude = abs(value)
+    if abs(magnitude - round(magnitude)) < 0.005:
+        return f"~{sign}{_group_int(int(round(magnitude)))} ₽"
+    whole = int(magnitude)
+    frac = int(round((magnitude - whole) * 100))
+    if frac == 100:
+        whole += 1
+        frac = 0
+    if frac == 0:
+        return f"~{sign}{_group_int(whole)} ₽"
+    return f"~{sign}{_group_int(whole)},{frac:02d} ₽"
+
+
 def kind_label(kind: str | None) -> str:
     raw = str(kind or "").strip()
     if raw in KIND_LABELS:
@@ -92,6 +128,63 @@ def kind_label(kind: str | None) -> str:
     if "attention_delta" in raw:
         return "compact"
     return raw.replace("_", " ") or "вызов OpenAI"
+
+
+def display_kind_label(kind: str | None) -> str:
+    label = kind_label(kind)
+    return label[:1].upper() + label[1:] if label else "Вызов OpenAI"
+
+
+def model_label(model: str | None) -> str | None:
+    raw = str(model or "").strip()
+    if not raw:
+        return None
+    return MODEL_LABELS.get(raw, raw)
+
+
+def day_label(value: date) -> str:
+    return f"{value.day:02d} {MONTH_GENITIVE[value.month - 1]}"
+
+
+def paid_calls_label(count: int) -> str:
+    n = abs(count) % 100
+    n1 = n % 10
+    if 11 <= n <= 14:
+        return f"{count} платных вызовов"
+    if n1 == 1:
+        return f"{count} платный вызов"
+    if 2 <= n1 <= 4:
+        return f"{count} платных вызова"
+    return f"{count} платных вызовов"
+
+
+def calls_count_label(count: int) -> str:
+    n = abs(count) % 100
+    n1 = n % 10
+    if 11 <= n <= 14:
+        word = "вызовов"
+    elif n1 == 1:
+        word = "вызов"
+    elif 2 <= n1 <= 4:
+        word = "вызова"
+    else:
+        word = "вызовов"
+    return f"{count} {word}"
+
+
+def format_tokens_ui(value: int | None) -> str:
+    if value is None:
+        return "—"
+    magnitude = abs(int(value))
+    if magnitude >= 1_000_000:
+        millions = magnitude / 1_000_000
+        text = f"{millions:.1f}".replace(".", ",")
+        if text.endswith(",0"):
+            text = text[:-2]
+        sign = "-" if value < 0 else ""
+        return f"{sign}{text} млн"
+    sign = "-" if value < 0 else ""
+    return f"{sign}{_group_int(magnitude)}"
 
 
 def _clean_text(value: Any) -> str:
@@ -114,6 +207,13 @@ def _as_float(value: Any) -> float | None:
     if number != number:  # NaN
         return None
     return number
+
+
+def _as_int(value: Any) -> int | None:
+    number = _as_float(value)
+    if number is None:
+        return None
+    return int(number)
 
 
 def _entity_word(entity_type: str | None) -> str:
@@ -140,14 +240,15 @@ def _write_event_line(path: Path, event: dict[str, Any]) -> None:
         stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl_counted(path: Path) -> tuple[list[dict[str, Any]], int]:
     if not path.exists():
-        return []
+        return [], 0
     events: list[dict[str, Any]] = []
+    skipped = 0
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
+        return [], 0
     for line in lines:
         raw = line.strip()
         if not raw:
@@ -155,10 +256,28 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
+            skipped += 1
             continue
         if isinstance(payload, dict):
             events.append(payload)
+        else:
+            skipped += 1
+    return events, skipped
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    events, _skipped = _read_jsonl_counted(path)
     return events
+
+
+def events_file_path(day: date | str) -> Path:
+    stamp = day.isoformat() if isinstance(day, date) else str(day).strip()
+    return spend_diary_dir() / f"{stamp}.events.jsonl"
+
+
+def load_day_events(day: date | str) -> tuple[list[dict[str, Any]], int]:
+    """Read one Moscow-day events JSONL. A broken line is skipped, not fatal."""
+    return _read_jsonl_counted(events_file_path(day))
 
 
 def load_batch_events(path: str | Path | None) -> list[dict[str, Any]]:
@@ -214,6 +333,7 @@ def record_transcription_spend(
             model=used_model,
             status="success",
             attempt=attempt,
+            duration_seconds=duration_seconds,
         )
     except Exception as error:  # noqa: BLE001 - diary is best-effort
         logger.warning("Не удалось записать трату транскрибации: %s", type(error).__name__)
@@ -231,6 +351,12 @@ def record_paid_call(
     status: str = "success",
     attempt: int | None = None,
     now: datetime | None = None,
+    input_tokens: int | None = None,
+    cached_input_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    output_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+    duration_seconds: float | None = None,
 ) -> dict[str, Any] | None:
     """Append one paid OpenAI call. Never raises into the caller."""
     if not str(kind or "").strip():
@@ -249,6 +375,15 @@ def record_paid_call(
         "run_id": _clean_text(os.getenv(RUN_ENV))[:80] or None,
         "job_id": _clean_text(os.getenv(JOB_ENV))[:80] or None,
     }
+    extras = {
+        "input_tokens": _as_int(input_tokens),
+        "cached_input_tokens": _as_int(cached_input_tokens),
+        "cache_write_tokens": _as_int(cache_write_tokens),
+        "output_tokens": _as_int(output_tokens),
+        "reasoning_tokens": _as_int(reasoning_tokens),
+        "duration_seconds": _as_float(duration_seconds),
+    }
+    event.update({key: value for key, value in extras.items() if value is not None})
     try:
         with _WRITE_LOCK:
             _write_event_line(events_path(moment), event)

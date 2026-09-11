@@ -1,8 +1,8 @@
-export type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'shadow' | 'team' | 'manager'
+export type DealControlView = 'dashboard' | 'rop' | 'daily' | 'trajectory' | 'shadow' | 'spend' | 'team' | 'manager'
 export type DealControlRole = 'admin' | 'rop' | 'manager'
 export type DealControlTimeView = 'all' | 'attention' | 'today' | 'tomorrow' | 'future' | 'overdue'
 
-export const DEAL_CONTROL_VIEWS: DealControlView[] = ['dashboard', 'rop', 'daily', 'trajectory', 'shadow', 'team', 'manager']
+export const DEAL_CONTROL_VIEWS: DealControlView[] = ['dashboard', 'rop', 'daily', 'trajectory', 'shadow', 'spend', 'team', 'manager']
 
 const VIEW_STORAGE_PREFIX = 'rop-assistant:deal-control-view:'
 
