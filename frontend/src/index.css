@@ -3739,14 +3739,14 @@ textarea {
 .ai-spend-card header p { margin: 4px 0 0; color: #6c7f95; font-size: 13px; }
 .ai-spend-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .ai-spend-split > .ai-spend-card { margin-bottom: 0; }
-.ai-spend-chart { padding: 10px 14px 8px; }
+.ai-spend-chart { padding: 8px 14px 8px; }
 .ai-spend-card.ai-spend-chart > header {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 10px 12px;
+  gap: 8px 12px;
   margin-bottom: 0;
-  padding-bottom: 8px;
+  padding-bottom: 0;
   border-bottom: 1px solid #d0dbe6;
 }
 .ai-spend-chart-heading {
@@ -3759,7 +3759,8 @@ textarea {
 }
 .ai-spend-chart-heading h2 { flex: 0 0 auto; white-space: nowrap; }
 .ai-spend-chart .ai-spend-pills { gap: 5px; }
-.ai-spend-chart-heading .ai-spend-pills {
+.ai-spend-chart-heading .ai-spend-pills,
+.ai-spend-chart-heading .ai-spend-pills.wrap {
   flex: 1 1 auto;
   flex-wrap: nowrap;
   margin: 0;
@@ -3780,7 +3781,7 @@ textarea {
   grid-template-columns: minmax(240px, 1fr) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
-  padding-top: 6px;
+  padding-top: 2px;
 }
 .ai-spend-day-list {
   display: grid;

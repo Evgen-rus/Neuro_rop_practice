@@ -85,7 +85,7 @@ function SpendChart({
   const width = SPEND_CHART_WIDTH
   const height = SPEND_CHART_HEIGHT
   const padX = SPEND_CHART_PAD_X
-  const padY = 8
+  const padY = 4
   const innerW = width - padX * 2
   const innerH = height - padY * 2
   const points = series.map((point, index) => {
