@@ -16,6 +16,11 @@ npm ci
 npm run dev
 ```
 
+один автоматический цикл анализа всех сделок из выбранных воронок и этапов
+```powershell
+.\venv\Scripts\python.exe .\scripts\bitrix_crm_cycle_diag.py --one-automatic-cycle
+```
+
 API: http://127.0.0.1:8000/api/health
 UI: http://127.0.0.1:5173
 
