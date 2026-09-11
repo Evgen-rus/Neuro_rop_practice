@@ -3740,40 +3740,54 @@ textarea {
 .ai-spend-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .ai-spend-split > .ai-spend-card { margin-bottom: 0; }
 .ai-spend-chart { padding: 10px 14px 8px; }
-.ai-spend-chart > header {
+.ai-spend-card.ai-spend-chart > header {
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px 12px;
   margin-bottom: 0;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e0e7ef;
+  border-bottom: 1px solid #d0dbe6;
 }
 .ai-spend-chart-heading {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px 10px;
   min-width: 0;
 }
+.ai-spend-chart-heading h2 { flex: 0 0 auto; white-space: nowrap; }
 .ai-spend-chart .ai-spend-pills { gap: 5px; }
-.ai-spend-chart .ai-spend-pills.wrap { margin: 0; }
+.ai-spend-chart-heading .ai-spend-pills {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  margin: 0;
+  min-width: 0;
+}
+.ai-spend-chart .ai-spend-pills.compact {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
 .ai-spend-chart .ai-spend-pills button {
   min-height: 28px;
   padding: 3px 10px;
   font-size: 12px;
+  white-space: nowrap;
 }
 .ai-spend-chart-body {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
-  padding-top: 8px;
+  padding-top: 6px;
 }
 .ai-spend-day-list {
   display: grid;
   align-content: start;
   min-height: 0;
-  height: 184px;
-  max-height: 184px;
+  height: 208px;
+  max-height: 208px;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -3817,22 +3831,17 @@ textarea {
 .ai-spend-chart-labels { display: flex; justify-content: space-between; gap: 4px; margin-top: 2px; color: #7b8ea3; font-size: 11px; line-height: 1.2; }
 .ai-spend-chart-labels .hidden { visibility: hidden; }
 .ai-spend-chart-tooltip {
-  position: absolute;
-  right: 0;
-  bottom: 18px;
-  left: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
-  margin: 0;
+  margin-top: 4px;
   padding: 4px 8px;
   border: 1px solid #e0e7ef;
   border-radius: 8px;
   color: #4b6078;
-  background: rgba(247, 249, 252, .94);
+  background: #f7f9fc;
   font-size: 11px;
   line-height: 1.25;
-  pointer-events: none;
 }
 .ai-spend-chart-tooltip strong { color: #14263c; }
 .ai-spend-bars { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -4040,8 +4049,12 @@ textarea {
   .ai-spend-split { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
+  .ai-spend-card.ai-spend-chart > header,
+  .ai-spend-chart-heading,
+  .ai-spend-chart-heading .ai-spend-pills { flex-wrap: wrap; }
+  .ai-spend-chart .ai-spend-pills.compact { width: 100%; justify-content: flex-start; }
   .ai-spend-chart-body { grid-template-columns: 1fr; }
-  .ai-spend-day-list { height: auto; max-height: 184px; }
+  .ai-spend-day-list { height: auto; max-height: 208px; }
   .ai-spend-chart-canvas svg { flex: none; height: 132px; }
 }
 @media (max-width: 800px) {
@@ -4050,7 +4063,6 @@ textarea {
   .ai-spend-tech { grid-template-columns: 1fr; }
   .ai-spend-row { grid-template-columns: 1fr 1fr; }
   .ai-spend-chart-canvas svg { height: 132px; }
-  .ai-spend-chart-tooltip { bottom: 14px; }
 }
 
 @media (max-width: 760px) {

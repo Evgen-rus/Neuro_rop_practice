@@ -415,7 +415,7 @@ export function AiSpend() {
           <Delta value={analytics.comparison.calls_percent} compact />
         </article>
         <article>
-          <small>Средняя стоимость вызова</small>
+          <small>Средний запрос</small>
           <strong>{totals.average_cost_rub_label}</strong>
           <Delta value={analytics.comparison.average_cost_percent} compact />
         </article>
