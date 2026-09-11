@@ -45,8 +45,12 @@ from openai_api.llm.analyze_deal import (
     COMPATIBLE_DEAL_PROMPT_VERSIONS,
     DEAL_PROMPT_CACHE_KEY,
     INCREMENTAL_DEAL_PROMPT_VERSION,
+    MISSING_TRANSCRIPT_PROMPT_TEXT,
     load_context_diagnostics_for_analysis,
+    read_text,
     render_report,
+    resolve_history_path,
+    transcript_text_for_prompt,
 )
 from openai_api.config import DEAL_INCREMENTAL_ANALYSIS_ENABLED
 from openai_api.llm.deal_evidence import (
@@ -88,6 +92,119 @@ from storage.rop_db import (
 
 
 logger = get_logger(__file__)
+
+# INCREMENTAL must keep at least ~10% unique-input advantage over FULL.
+INCREMENTAL_VARIABLE_SIZE_RATIO_THRESHOLD = 0.90
+_INCREMENTAL_VARIABLE_KEYS = (
+    "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS",
+    "CRM_SEMANTIC_DELTA",
+    "NEW_OR_REVISED_CLIENT_EVIDENCE",
+    "AVAILABLE_CLIENT_EVIDENCE_IDS",
+    "CURRENT_REQUIRED_CRM_FACTS",
+)
+
+
+def utf8_byte_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def json_utf8_byte_len(value: Any) -> int:
+    return utf8_byte_len(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def measure_full_variable_bytes(history_text: str, transcript_text: str) -> int:
+    """UTF-8 size of the FULL-only CRM/history and evidence/transcript blocks."""
+    return utf8_byte_len(history_text.strip()) + utf8_byte_len(transcript_text.strip())
+
+
+def measure_incremental_variable_bytes(context: dict[str, Any]) -> int:
+    """UTF-8 size of incremental-only payload blocks, without shared continuity."""
+    payload = {
+        key: context[key]
+        for key in _INCREMENTAL_VARIABLE_KEYS
+        if key in context
+    }
+    return json_utf8_byte_len(payload)
+
+
+def choose_safe_llm_mode_by_variable_size(
+    *,
+    full_variable_bytes: int,
+    incremental_variable_bytes: int,
+    threshold: float = INCREMENTAL_VARIABLE_SIZE_RATIO_THRESHOLD,
+) -> dict[str, Any]:
+    """Pick INCREMENTAL only when its unique context is at least ~10% smaller."""
+    if full_variable_bytes <= 0:
+        ratio = None
+        chosen = "full"
+    else:
+        ratio = incremental_variable_bytes / full_variable_bytes
+        chosen = (
+            "incremental"
+            if incremental_variable_bytes <= full_variable_bytes * threshold
+            else "full"
+        )
+    return {
+        "full_variable_bytes": int(full_variable_bytes),
+        "incremental_variable_bytes": int(incremental_variable_bytes),
+        "routing_size_ratio": ratio,
+        "routing_size_threshold": threshold,
+        "chosen_analysis_mode": chosen,
+    }
+
+
+def load_full_variable_texts(
+    current_deal_dir: Path,
+    deal_id: str,
+    transcript_path: Path | None,
+) -> tuple[str, str] | None:
+    """Read the same history/transcript texts FULL would send, without building a prompt."""
+    history_path = resolve_history_path(current_deal_dir, str(deal_id))
+    if not history_path.exists():
+        return None
+    history_text = read_text(history_path)
+    if transcript_path is None:
+        return history_text, MISSING_TRANSCRIPT_PROMPT_TEXT
+    return (
+        history_text,
+        transcript_text_for_prompt(
+            transcript_path,
+            read_text(transcript_path),
+            deal_id=str(deal_id),
+        ),
+    )
+
+
+def adaptive_variable_size_routing(
+    *,
+    context: dict[str, Any],
+    current_deal_dir: Path,
+    deal_id: str,
+    transcript_path: Path | None,
+) -> dict[str, Any] | None:
+    """Cheap deterministic FULL vs INCREMENTAL check on unique UTF-8 blocks."""
+    texts = load_full_variable_texts(current_deal_dir, deal_id, transcript_path)
+    if texts is None:
+        logger.info(
+            "Adaptive FULL/INCREMENTAL size routing skipped: FULL history is unavailable"
+        )
+        return None
+    history_text, transcript_text = texts
+    routing = choose_safe_llm_mode_by_variable_size(
+        full_variable_bytes=measure_full_variable_bytes(history_text, transcript_text),
+        incremental_variable_bytes=measure_incremental_variable_bytes(context),
+    )
+    logger.info(
+        "Adaptive FULL/INCREMENTAL size routing: full_variable_bytes=%s "
+        "incremental_variable_bytes=%s routing_size_ratio=%s "
+        "routing_size_threshold=%s chosen_analysis_mode=%s",
+        routing["full_variable_bytes"],
+        routing["incremental_variable_bytes"],
+        routing["routing_size_ratio"],
+        routing["routing_size_threshold"],
+        routing["chosen_analysis_mode"],
+    )
+    return routing
 
 
 def parse_args() -> argparse.Namespace:
@@ -657,6 +774,8 @@ def main() -> None:
 
         if decision.status == INCREMENTAL_LLM_ANALYSIS:
             if DEAL_INCREMENTAL_ANALYSIS_ENABLED and incremental_blocker is None:
+                size_routing = None
+                use_incremental_llm = False
                 try:
                     context, next_coverage = incremental_context(
                         baseline,
@@ -664,13 +783,31 @@ def main() -> None:
                         canonical_delta,
                         available_evidence,
                     )
-                    save_json(paths["incremental"], context)
-                    run_existing_analyzer(
-                        args,
-                        analyzer_transcript_arg,
-                        incremental_context=paths["incremental"],
-                        db_path=db_path,
+                    size_routing = adaptive_variable_size_routing(
+                        context=context,
+                        current_deal_dir=current_deal_dir,
+                        deal_id=str(args.deal_id),
+                        transcript_path=transcript_path,
                     )
+                    if (
+                        size_routing is not None
+                        and size_routing["chosen_analysis_mode"] != "incremental"
+                    ):
+                        full_decision_reason = {
+                            **decision.as_dict(),
+                            "fallback": True,
+                            "fallback_reason": "incremental_variable_size_not_advantageous",
+                            **size_routing,
+                        }
+                    else:
+                        use_incremental_llm = True
+                        save_json(paths["incremental"], context)
+                        run_existing_analyzer(
+                            args,
+                            analyzer_transcript_arg,
+                            incremental_context=paths["incremental"],
+                            db_path=db_path,
+                        )
                 except Exception as incremental_error:
                     logger.warning(
                         "Incremental deal analysis failed; running one FULL_REBUILD: %s",
@@ -683,105 +820,107 @@ def main() -> None:
                         "baseline_run_id": baseline["analysis_run_id"],
                     }
                 else:
-                    incremental_reason = {
-                        **decision.as_dict(),
-                        "baseline_run_id": baseline["analysis_run_id"],
-                        "baseline_fingerprint": baseline["canonical_fingerprint"],
-                        "canonical_from_fingerprint": canonical_delta.get("from_semantic_fingerprint"),
-                        "canonical_to_fingerprint": canonical_delta.get("to_semantic_fingerprint"),
-                        "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
-                        "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
-                    }
-                    persist_kwargs = {
-                        "db_path": db_path,
-                        "args": args,
-                        "fingerprint": fingerprint,
-                        "snapshot": snapshot,
-                        "decision_status": INCREMENTAL_LLM_ANALYSIS,
-                        "paths": paths,
-                        "decision_reason": incremental_reason,
-                        "prompt_version": INCREMENTAL_DEAL_PROMPT_VERSION,
-                        "evidence_coverage": next_coverage,
-                        "canonical_state": canonical_state,
-                        "available_evidence": available_evidence,
-                        "continuity_baseline": baseline,
-                        "changed_evidence_ids": [
-                            str(item["evidence_id"])
-                            for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
-                            if item.get("evidence_id") is not None
-                        ],
-                    }
-                    try:
-                        run_id = persist_successful_llm_run(**persist_kwargs)
-                    except AnalysisValidationError as incremental_error:
-                        logger.warning(
-                            "Incremental deal analysis was rejected before publication: %s",
-                            incremental_error,
-                        )
-                        if continuity_errors_are_repairable(incremental_error):
+                    if use_incremental_llm:
+                        incremental_reason = {
+                            **decision.as_dict(),
+                            **(size_routing or {}),
+                            "baseline_run_id": baseline["analysis_run_id"],
+                            "baseline_fingerprint": baseline["canonical_fingerprint"],
+                            "canonical_from_fingerprint": canonical_delta.get("from_semantic_fingerprint"),
+                            "canonical_to_fingerprint": canonical_delta.get("to_semantic_fingerprint"),
+                            "changed_entity_count": len(context["CRM_SEMANTIC_DELTA"]),
+                            "evidence_delta_count": len(context["NEW_OR_REVISED_CLIENT_EVIDENCE"]),
+                        }
+                        persist_kwargs = {
+                            "db_path": db_path,
+                            "args": args,
+                            "fingerprint": fingerprint,
+                            "snapshot": snapshot,
+                            "decision_status": INCREMENTAL_LLM_ANALYSIS,
+                            "paths": paths,
+                            "decision_reason": incremental_reason,
+                            "prompt_version": INCREMENTAL_DEAL_PROMPT_VERSION,
+                            "evidence_coverage": next_coverage,
+                            "canonical_state": canonical_state,
+                            "available_evidence": available_evidence,
+                            "continuity_baseline": baseline,
+                            "changed_evidence_ids": [
+                                str(item["evidence_id"])
+                                for item in context["NEW_OR_REVISED_CLIENT_EVIDENCE"]
+                                if item.get("evidence_id") is not None
+                            ],
+                        }
+                        try:
+                            run_id = persist_successful_llm_run(**persist_kwargs)
+                        except AnalysisValidationError as incremental_error:
                             logger.warning(
-                                "Incremental continuity gate failed; running one bounded correction"
-                            )
-                            try:
-                                run_existing_analyzer(
-                                    args,
-                                    analyzer_transcript_arg,
-                                    incremental_context=paths["incremental"],
-                                    continuity_correction=True,
-                                    db_path=db_path,
-                                )
-                                run_id = persist_successful_llm_run(**persist_kwargs)
-                            except AnalysisValidationError as second_error:
-                                logger.warning(
-                                    "Incremental continuity correction was rejected; running one FULL_REBUILD: %s",
-                                    second_error,
-                                )
-                                full_decision_reason = {
-                                    **decision.as_dict(),
-                                    "fallback": True,
-                                    "fallback_reason": "incremental_execution_failed",
-                                    "baseline_run_id": baseline["analysis_run_id"],
-                                }
-                            except Exception as second_error:
-                                logger.warning(
-                                    "Incremental continuity correction failed; running one FULL_REBUILD: %s",
-                                    type(second_error).__name__,
-                                )
-                                full_decision_reason = {
-                                    **decision.as_dict(),
-                                    "fallback": True,
-                                    "fallback_reason": "incremental_execution_failed",
-                                    "baseline_run_id": baseline["analysis_run_id"],
-                                }
-                            else:
-                                emit_deal_publish_ready(
-                                    str(args.deal_id),
-                                    analysis_run_id=run_id,
-                                    engine_status=INCREMENTAL_LLM_ANALYSIS,
-                                )
-                                print(
-                                    f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}"
-                                )
-                                return
-                        else:
-                            logger.warning(
-                                "Incremental deal analysis was rejected before publication; running one FULL_REBUILD: %s",
+                                "Incremental deal analysis was rejected before publication: %s",
                                 incremental_error,
                             )
-                            full_decision_reason = {
-                                **decision.as_dict(),
-                                "fallback": True,
-                                "fallback_reason": "incremental_execution_failed",
-                                "baseline_run_id": baseline["analysis_run_id"],
-                            }
-                    else:
-                        emit_deal_publish_ready(
-                            str(args.deal_id),
-                            analysis_run_id=run_id,
-                            engine_status=INCREMENTAL_LLM_ANALYSIS,
-                        )
-                        print(f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}")
-                        return
+                            if continuity_errors_are_repairable(incremental_error):
+                                logger.warning(
+                                    "Incremental continuity gate failed; running one bounded correction"
+                                )
+                                try:
+                                    run_existing_analyzer(
+                                        args,
+                                        analyzer_transcript_arg,
+                                        incremental_context=paths["incremental"],
+                                        continuity_correction=True,
+                                        db_path=db_path,
+                                    )
+                                    run_id = persist_successful_llm_run(**persist_kwargs)
+                                except AnalysisValidationError as second_error:
+                                    logger.warning(
+                                        "Incremental continuity correction was rejected; running one FULL_REBUILD: %s",
+                                        second_error,
+                                    )
+                                    full_decision_reason = {
+                                        **decision.as_dict(),
+                                        "fallback": True,
+                                        "fallback_reason": "incremental_execution_failed",
+                                        "baseline_run_id": baseline["analysis_run_id"],
+                                    }
+                                except Exception as second_error:
+                                    logger.warning(
+                                        "Incremental continuity correction failed; running one FULL_REBUILD: %s",
+                                        type(second_error).__name__,
+                                    )
+                                    full_decision_reason = {
+                                        **decision.as_dict(),
+                                        "fallback": True,
+                                        "fallback_reason": "incremental_execution_failed",
+                                        "baseline_run_id": baseline["analysis_run_id"],
+                                    }
+                                else:
+                                    emit_deal_publish_ready(
+                                        str(args.deal_id),
+                                        analysis_run_id=run_id,
+                                        engine_status=INCREMENTAL_LLM_ANALYSIS,
+                                    )
+                                    print(
+                                        f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}"
+                                    )
+                                    return
+                            else:
+                                logger.warning(
+                                    "Incremental deal analysis was rejected before publication; running one FULL_REBUILD: %s",
+                                    incremental_error,
+                                )
+                                full_decision_reason = {
+                                    **decision.as_dict(),
+                                    "fallback": True,
+                                    "fallback_reason": "incremental_execution_failed",
+                                    "baseline_run_id": baseline["analysis_run_id"],
+                                }
+                        else:
+                            emit_deal_publish_ready(
+                                str(args.deal_id),
+                                analysis_run_id=run_id,
+                                engine_status=INCREMENTAL_LLM_ANALYSIS,
+                            )
+                            print(f"{INCREMENTAL_LLM_ANALYSIS}: LLM analysis completed for deal {args.deal_id}")
+                            return
             else:
                 full_decision_reason = {
                     **decision.as_dict(),

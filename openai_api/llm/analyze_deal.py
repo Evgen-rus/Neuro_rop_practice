@@ -64,6 +64,10 @@ COMPATIBLE_DEAL_PROMPT_VERSIONS = frozenset(
 )
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
+MISSING_TRANSCRIPT_PROMPT_TEXT = (
+    "Транскрибация не предоставлена. Анализируй историю сделки, активности, "
+    "комментарии, текущий этап и риски без нового события."
+)
 
 # Одна формулировка next_action для FULL, чтобы повторный анализ
 # не переоценивал тот же бизнес-факт иначе.
@@ -1810,7 +1814,7 @@ def main() -> None:
             deal_id=str(args.deal_id),
         )
     else:
-        transcript_text = "Транскрибация не предоставлена. Анализируй историю сделки, активности, комментарии, текущий этап и риски без нового события."
+        transcript_text = MISSING_TRANSCRIPT_PROMPT_TEXT
 
     okf_sections: list[tuple[Path, str]] = []
     for path in knowledge_files(knowledge_dir, entity_type="deal"):
