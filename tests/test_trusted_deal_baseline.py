@@ -16,7 +16,7 @@ from openai_api.change_detection.decision_engine import (
     SKIPPED_NO_CHANGES,
 )
 from openai_api.llm import analyze_deal_if_changed
-from openai_api.llm.analyze_deal import DEAL_PROMPT_CACHE_KEY, INCREMENTAL_DEAL_PROMPT_VERSION
+from openai_api.llm.analyze_deal import DEAL_PROMPT_CACHE_KEY, INCREMENTAL_DEAL_PROMPT_VERSION, COMPATIBLE_DEAL_PROMPT_VERSIONS
 from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
 from openai_api.llm.validation import DEAL_REQUIRED_FIELDS, normalize_analysis_for_validation
 from storage.rop_db import get_entity_state, save_analysis_run, upsert_entity_state
@@ -255,7 +255,7 @@ class TrustedDealBaselineContractTests(unittest.TestCase):
             baseline = get_trusted_deal_baseline(
                 db_path,
                 "7",
-                compatible_prompt_versions={DEAL_PROMPT_CACHE_KEY, INCREMENTAL_DEAL_PROMPT_VERSION},
+                compatible_prompt_versions=COMPATIBLE_DEAL_PROMPT_VERSIONS,
                 expected_logic_version="change-aware-v1",
             )
         self.assertEqual(baseline["fingerprint"], "snapshot-3")

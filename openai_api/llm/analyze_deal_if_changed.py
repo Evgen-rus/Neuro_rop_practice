@@ -42,6 +42,7 @@ from openai_api.change_detection.decision_engine import (
     save_mini_recommendation_markdown,
 )
 from openai_api.llm.analyze_deal import (
+    COMPATIBLE_DEAL_PROMPT_VERSIONS,
     DEAL_PROMPT_CACHE_KEY,
     INCREMENTAL_DEAL_PROMPT_VERSION,
     load_context_diagnostics_for_analysis,
@@ -488,7 +489,7 @@ def stage5_inputs(
     baseline = get_trusted_deal_baseline(
         db_path,
         deal_id,
-        compatible_prompt_versions={DEAL_PROMPT_CACHE_KEY, INCREMENTAL_DEAL_PROMPT_VERSION},
+        compatible_prompt_versions=COMPATIBLE_DEAL_PROMPT_VERSIONS,
         expected_logic_version="change-aware-v1",
     )
     canonical_state, canonical_delta = merge_deal_bundle(

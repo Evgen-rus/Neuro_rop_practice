@@ -54,7 +54,14 @@ from storage.rop_db import (
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
 DEAL_ID_SECTION_MARKER = "## ID СДЕЛКИ"
 DEAL_PROMPT_CACHE_KEY = "neuro-rop:full-deal:v3"
-INCREMENTAL_DEAL_PROMPT_VERSION = "neuro-rop:incremental-deal:v1"
+INCREMENTAL_DEAL_PROMPT_VERSION = "neuro-rop:incremental-deal:v2"
+COMPATIBLE_DEAL_PROMPT_VERSIONS = frozenset(
+    {
+        DEAL_PROMPT_CACHE_KEY,
+        "neuro-rop:incremental-deal:v1",
+        INCREMENTAL_DEAL_PROMPT_VERSION,
+    }
+)
 TRANSCRIPT_SECTION_MARKER = "## ТРАНСКРИБАЦИИ / НОВЫЕ СОБЫТИЯ"
 HISTORY_SECTION_MARKER = "## ИСТОРИЯ СДЕЛКИ"
 
@@ -233,6 +240,13 @@ def deal_prompt_cache_markers(transcript_text: str) -> list[str]:
     return markers
 
 
+def deal_analysis_cache_options(*, incremental: bool, transcript_text: str) -> tuple[str, list[str]]:
+    """FULL and incremental share the OpenAI key and the prefix before ## ID СДЕЛКИ."""
+    if incremental:
+        return DEAL_PROMPT_CACHE_KEY, [DEAL_ID_SECTION_MARKER]
+    return DEAL_PROMPT_CACHE_KEY, deal_prompt_cache_markers(transcript_text)
+
+
 def resolve_history_path(deal_dir: Path, deal_id: str) -> Path:
     compact_path = deal_dir / "history" / f"deal_{deal_id}_llm_context.md"
     if compact_path.exists():
@@ -306,14 +320,10 @@ def build_prompt(
 {HISTORY_SECTION_MARKER}
 
 {history_text.strip()}"""
+    # Empty on purpose: this slot sits in the cached prefix before ## ID СДЕЛКИ.
     incremental_rules = ""
     if incremental_context is not None:
-        evidence_sections = "## INCREMENTAL INPUT\n\n" + json.dumps(
-            incremental_context,
-            ensure_ascii=False,
-            indent=2,
-        )
-        incremental_rules = """
+        incremental_prefix = """
 <incremental_analysis_rules>
 - PREVIOUS_TRUSTED_COMPLETE_ANALYSIS — предыдущее проверенное понимание, а не неизменная истина.
 - TRUSTED_CONTINUITY_BASELINE — короткий обязательный список stable IDs: сохрани каждый пункт, если новое evidence явно не закрывает его.
@@ -328,13 +338,18 @@ def build_prompt(
 </incremental_analysis_rules>
 """
         if continuity_correction:
-            incremental_rules += """
+            incremental_prefix += """
 <continuity_correction>
 - Предыдущий incremental-кандидат не прошёл deterministic continuity gate.
 - Верни все baseline stable IDs. Не меняй confirmation или BANT без ID из NEW_OR_REVISED_CLIENT_EVIDENCE.
 - Не удаляй unresolved item и не закрывай его только по старому evidence.
 </continuity_correction>
 """
+        evidence_sections = (
+            incremental_prefix
+            + "## INCREMENTAL INPUT\n\n"
+            + json.dumps(incremental_context, ensure_ascii=False, indent=2)
+        )
     situation_context_text = render_deal_current_situation_context(current_situation_context)
     evidence_sections = f"""{evidence_sections}
 
@@ -1858,6 +1873,10 @@ def main() -> None:
     raw_path = analysis_dir / f"deal_{args.deal_id}_raw_model_output.txt"
     error_path = analysis_dir / f"deal_{args.deal_id}_analysis_error.json"
 
+    cache_key, cache_markers = deal_analysis_cache_options(
+        incremental=incremental_context is not None,
+        transcript_text=transcript_text,
+    )
     emit_progress("deal", str(args.deal_id), "llm_analysis", detail="Анализирует OpenAI")
     try:
         analysis, metadata = call_validated_analysis_json(
@@ -1875,8 +1894,8 @@ def main() -> None:
             ),
             analysis_caller=call_analysis_json,
             call_type="incremental_deal_analysis" if incremental_context else "full_deal_analysis",
-            prompt_cache_key=INCREMENTAL_DEAL_PROMPT_VERSION if incremental_context else DEAL_PROMPT_CACHE_KEY,
-            prompt_cache_markers=None if incremental_context else deal_prompt_cache_markers(transcript_text),
+            prompt_cache_key=cache_key,
+            prompt_cache_markers=cache_markers,
             trace_entity_type="deal",
             trace_entity_id=str(args.deal_id),
         )

@@ -6,8 +6,12 @@ import tempfile
 from pathlib import Path
 
 from openai_api.llm.analyze_deal import (
+    COMPATIBLE_DEAL_PROMPT_VERSIONS,
+    DEAL_ID_SECTION_MARKER,
+    DEAL_PROMPT_CACHE_KEY,
     INCREMENTAL_DEAL_PROMPT_VERSION,
     build_prompt,
+    deal_analysis_cache_options,
     load_incremental_context,
 )
 from openai_api.llm.analyze_deal_if_changed import incremental_context
@@ -113,11 +117,56 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
         )
         self.assertIn("<continuity_correction>", prompt)
         self.assertIn("NEW_OR_REVISED_CLIENT_EVIDENCE", prompt)
+        self.assertGreater(prompt.find("<continuity_correction>"), prompt.find(DEAL_ID_SECTION_MARKER))
         self.assertNotIn("old-unchanged-history", prompt)
         self.assertNotIn("## TRUSTED CONTINUITY BASELINE", prompt)
 
-    def test_incremental_prompt_has_separate_cache_version(self) -> None:
-        self.assertEqual(INCREMENTAL_DEAL_PROMPT_VERSION, "neuro-rop:incremental-deal:v1")
+    def test_incremental_shares_full_instruction_prefix(self) -> None:
+        context = {
+            "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": {"deal_state": {"summary": "synthetic-baseline"}},
+            "TRUSTED_CONTINUITY_BASELINE": {"deal_context": {"critical_facts": [{"fact_id": "stable_fact"}]}},
+            "CRM_SEMANTIC_DELTA": [],
+            "NEW_OR_REVISED_CLIENT_EVIDENCE": [{"evidence_id": "call:201", "text": "synthetic-new-evidence"}],
+            "AVAILABLE_CLIENT_EVIDENCE_IDS": ["call:201"],
+            "CURRENT_REQUIRED_CRM_FACTS": {"stage_id": "SYNTHETIC:STAGE"},
+        }
+        kwargs = {
+            "deal_id": "7",
+            "history_text": "old-unchanged-history",
+            "transcript_text": "old-unchanged-transcript",
+            "context_diagnostics_text": "synthetic-diagnostics",
+            "okf_sections": [(Path("synthetic-rules.md"), "synthetic-rule")],
+            "stage_policy": {"closed": False},
+        }
+        full = build_prompt(**kwargs)
+        incremental = build_prompt(**kwargs, incremental_context=context)
+        marker_at = full.find(DEAL_ID_SECTION_MARKER)
+        self.assertGreater(marker_at, 0)
+        self.assertEqual(full[:marker_at], incremental[:incremental.find(DEAL_ID_SECTION_MARKER)])
+        rules_at = incremental.find("<incremental_analysis_rules>")
+        input_at = incremental.find("## INCREMENTAL INPUT")
+        self.assertGreater(rules_at, incremental.find(DEAL_ID_SECTION_MARKER))
+        self.assertGreater(input_at, rules_at)
+        self.assertNotIn("<incremental_analysis_rules>", full[:marker_at])
+
+    def test_incremental_prompt_version_stays_separate_from_openai_cache_key(self) -> None:
+        self.assertEqual(INCREMENTAL_DEAL_PROMPT_VERSION, "neuro-rop:incremental-deal:v2")
+        self.assertNotEqual(INCREMENTAL_DEAL_PROMPT_VERSION, DEAL_PROMPT_CACHE_KEY)
+        self.assertIn("neuro-rop:incremental-deal:v1", COMPATIBLE_DEAL_PROMPT_VERSIONS)
+        self.assertIn(INCREMENTAL_DEAL_PROMPT_VERSION, COMPATIBLE_DEAL_PROMPT_VERSIONS)
+        self.assertIn(DEAL_PROMPT_CACHE_KEY, COMPATIBLE_DEAL_PROMPT_VERSIONS)
+
+    def test_incremental_openai_cache_shares_full_key_and_id_marker(self) -> None:
+        key, markers = deal_analysis_cache_options(incremental=True, transcript_text="### Звонок 1\n")
+        self.assertEqual(key, DEAL_PROMPT_CACHE_KEY)
+        self.assertEqual(markers, [DEAL_ID_SECTION_MARKER])
+        full_key, full_markers = deal_analysis_cache_options(
+            incremental=False,
+            transcript_text="### Звонок 1\n",
+        )
+        self.assertEqual(full_key, DEAL_PROMPT_CACHE_KEY)
+        self.assertGreater(len(full_markers), 1)
+        self.assertEqual(full_markers[0], DEAL_ID_SECTION_MARKER)
 
 
 if __name__ == "__main__":
