@@ -456,7 +456,7 @@ export function AiSpend() {
         <header>
           <div className="ai-spend-chart-heading">
             <h2>Динамика расходов</h2>
-            <div className="ai-spend-pills wrap" aria-label="Тип операций">
+            <div className="ai-spend-pills" aria-label="Тип операций">
               {kindFilters(analytics).map((item) => (
                 <button key={item.id} type="button" className={kindFilter === item.id ? 'active' : ''} onClick={() => setKindFilter(item.id)}>
                   {item.label}
