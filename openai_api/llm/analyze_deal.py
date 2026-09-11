@@ -322,8 +322,18 @@ def build_prompt(
 - Явные ссылки call/email/message/transcript допустимы только из AVAILABLE_CLIENT_EVIDENCE_IDS; удали унаследованные ссылки, которых в этом списке нет, не удаляя сам stable item.
 - Не считай отсутствие старых неизменившихся событий их удалением.
 - Не удаляй нерешённые обязательства, риски и противоречия из управленческих блоков, пока новые evidence явно не подтвердят их закрытие; новое событие может изменить приоритет, но не отменяет их молча.
+- Повышай basis_status или BANT timing до confirmed только если в этом же поле есть ID из NEW_OR_REVISED_CLIENT_EVIDENCE.
+- Понижай уже confirmed только если новое клиентское evidence явно опровергает срок или основание; не меняй confirmed по старому списку.
 - Верни полный текущий analysis JSON той же схемы, что FULL, не patch и не список изменений.
 </incremental_analysis_rules>
+"""
+        if continuity_correction:
+            incremental_rules += """
+<continuity_correction>
+- Предыдущий incremental-кандидат не прошёл deterministic continuity gate.
+- Верни все baseline stable IDs. Не меняй confirmation или BANT без ID из NEW_OR_REVISED_CLIENT_EVIDENCE.
+- Не удаляй unresolved item и не закрывай его только по старому evidence.
+</continuity_correction>
 """
     situation_context_text = render_deal_current_situation_context(current_situation_context)
     evidence_sections = f"""{evidence_sections}

@@ -13,6 +13,7 @@ from openai_api.change_detection.decision_engine import (
     ProcessingDecision,
 )
 from openai_api.llm import analyze_deal, analyze_deal_if_changed
+from openai_api.llm.validation import AnalysisValidationError
 
 
 class DealChangeCliTests(unittest.TestCase):
@@ -159,6 +160,108 @@ class DealChangeCliTests(unittest.TestCase):
         self.assertIsNotNone(analyzer.call_args.kwargs["incremental_context"])
         self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
 
+    def test_client_reply_routes_incremental_when_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["client reply"],
+                    triggers=[],
+                    diff={"changes": ["new_client_reply"], "details": {}},
+                ),
+            )
+        self.assertIsNotNone(analyzer.call_args.kwargs["incremental_context"])
+        self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
+
+    def test_repairable_continuity_error_runs_one_incremental_correction(self) -> None:
+        error = AnalysisValidationError(
+            "Invalid deal analysis continuity: confirmation upgrade without new evidence: decision_path",
+            errors=["confirmation upgrade without new evidence: decision_path"],
+        )
+        persist_calls = {"count": 0}
+
+        def persist_once(*_args, **_kwargs):
+            persist_calls["count"] += 1
+            if persist_calls["count"] == 1:
+                raise error
+            return 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                persistence_error=persist_once,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["new evidence"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        self.assertEqual(analyzer.call_count, 2)
+        self.assertTrue(analyzer.call_args_list[1].kwargs.get("continuity_correction"))
+        self.assertIsNotNone(analyzer.call_args_list[1].kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_count, 2)
+        self.assertEqual(persist.call_args.kwargs["decision_status"], INCREMENTAL_LLM_ANALYSIS)
+
+    def test_failed_incremental_correction_runs_exactly_one_full_fallback(self) -> None:
+        error = AnalysisValidationError(
+            "Invalid deal analysis continuity: lost unresolved commitment: manager_check",
+            errors=["lost unresolved commitment: manager_check"],
+        )
+
+        def persist_incremental_fails(*_args, **kwargs):
+            if kwargs.get("decision_status") == INCREMENTAL_LLM_ANALYSIS:
+                raise error
+            return 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                persistence_error=persist_incremental_fails,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["new evidence"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        self.assertEqual(analyzer.call_count, 3)
+        self.assertTrue(analyzer.call_args_list[1].kwargs.get("continuity_correction"))
+        self.assertIsNone(analyzer.call_args_list[2].kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
+
+    def test_unrepairable_continuity_error_skips_correction(self) -> None:
+        error = AnalysisValidationError(
+            "Invalid deal analysis continuity: unknown domain rule",
+            errors=["unknown domain rule"],
+        )
+
+        def persist_incremental_fails(*_args, **kwargs):
+            if kwargs.get("decision_status") == INCREMENTAL_LLM_ANALYSIS:
+                raise error
+            return 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer, persist = self._run_main(
+                Path(directory),
+                incremental_enabled=True,
+                persistence_error=persist_incremental_fails,
+                decision=ProcessingDecision(
+                    status=FULL_LLM_ANALYSIS,
+                    reasons=["new evidence"],
+                    triggers=[],
+                    diff={"changes": ["transcript_changed"], "details": {}},
+                ),
+            )
+        self.assertEqual(analyzer.call_count, 2)
+        self.assertFalse(analyzer.call_args_list[0].kwargs.get("continuity_correction"))
+        self.assertIsNone(analyzer.call_args_list[1].kwargs.get("incremental_context"))
+        self.assertEqual(persist.call_args.kwargs["decision_status"], FULL_LLM_ANALYSIS)
+
     def test_incremental_error_runs_exactly_one_full_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -235,7 +338,6 @@ class DealChangeCliTests(unittest.TestCase):
     def test_force_and_unsupported_context_keep_full_with_opt_in(self) -> None:
         cases = (
             ("force", True, {"changes": ["transcript_changed"], "details": {}}, {}),
-            ("client reply", False, {"changes": ["new_client_reply"], "details": {}}, {}),
             ("commercial", False, {"changes": ["commercial_refs_changed"], "details": {}}, {}),
             ("failed source", False, {"changes": ["transcript_changed"], "details": {}}, {"activities": "failed"}),
         )

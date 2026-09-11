@@ -2258,6 +2258,60 @@ def _is_confirmation_upgrade(previous: Any, current: Any) -> bool:
     return previous in {"not_confirmed", "needs_confirmation"} and current == "confirmed"
 
 
+def _is_confirmation_downgrade(previous: Any, current: Any) -> bool:
+    return previous == "confirmed" and current in {
+        "not_confirmed",
+        "needs_confirmation",
+        "unknown",
+        "inferred",
+        "missing",
+    }
+
+
+_REPAIRABLE_CONTINUITY_PREFIXES = (
+    "uncovered explicit evidence reference:",
+    "lost unresolved ",
+    "closed unresolved ",
+    "lost unresolved source conflict",
+    "lost source conflict evidence",
+    "confirmation upgrade without new evidence:",
+    "confirmation downgrade without new evidence:",
+    "lost unresolved deal risk",
+    "downgraded deal risk without new evidence",
+    "lost unresolved deal risk description",
+    "replaced unresolved deal risk without new evidence",
+)
+
+
+def continuity_errors_are_repairable(error: AnalysisValidationError) -> bool:
+    """True when every continuity error can be fixed by one incremental correction."""
+    messages = [str(item) for item in error.errors] if error.errors else [str(error)]
+    if not messages:
+        return False
+    return all(
+        any(message.startswith(prefix) for prefix in _REPAIRABLE_CONTINUITY_PREFIXES)
+        for message in messages
+    )
+
+
+def _append_confirmation_shift_errors(
+    errors: list[str],
+    *,
+    path: str,
+    previous_status: Any,
+    current_status: Any,
+    current_item: dict[str, Any],
+    changed: set[str],
+) -> None:
+    if previous_status == current_status:
+        return
+    missing_new_evidence = _continuity_needs_new_evidence(current_item, changed)
+    if _is_confirmation_upgrade(previous_status, current_status) and missing_new_evidence:
+        errors.append(f"confirmation upgrade without new evidence: {path}")
+    elif _is_confirmation_downgrade(previous_status, current_status) and missing_new_evidence:
+        errors.append(f"confirmation downgrade without new evidence: {path}")
+
+
 def _continuity_has_explicit_closure(analysis: dict[str, Any], changed_evidence_ids: set[str]) -> bool:
     if not changed_evidence_ids:
         return False
@@ -2286,7 +2340,7 @@ def validate_deal_analysis_continuity(
     *,
     available_evidence_ids: list[str] | None = None,
     changed_evidence_ids: list[str] | None = None,
-    reject_confirmation_upgrades: bool = False,
+    enforce_confirmation_evidence: bool = False,
 ) -> None:
     """Reject a candidate that loses trusted deal facts before persistence."""
     errors: list[str] = []
@@ -2346,7 +2400,7 @@ def validate_deal_analysis_continuity(
                         errors.append("lost source conflict evidence")
                         break
 
-            if reject_confirmation_upgrades:
+            if enforce_confirmation_evidence:
                 for field, id_field in (
                     ("commitments", "commitment_id"),
                     ("pressure_levers", "lever_id"),
@@ -2355,23 +2409,29 @@ def validate_deal_analysis_continuity(
                     current_items = _continuity_items(current_context, field, id_field)
                     for item_id, previous_item in previous_items.items():
                         current_item = current_items.get(item_id)
-                        if current_item and _is_confirmation_upgrade(
-                            previous_item.get("basis_status"), current_item.get("basis_status")
-                        ):
-                            errors.append(f"incremental confirmation upgrade requires FULL: {field}.{item_id}")
+                        if current_item:
+                            _append_confirmation_shift_errors(
+                                errors,
+                                path=f"{field}.{item_id}",
+                                previous_status=previous_item.get("basis_status"),
+                                current_status=current_item.get("basis_status"),
+                                current_item=current_item,
+                                changed=changed,
+                            )
 
                 previous_decision = previous_context.get("decision_path")
                 current_decision = current_context.get("decision_path")
-                if (
-                    isinstance(previous_decision, dict)
-                    and isinstance(current_decision, dict)
-                    and _is_confirmation_upgrade(
-                        previous_decision.get("basis_status"), current_decision.get("basis_status")
+                if isinstance(previous_decision, dict) and isinstance(current_decision, dict):
+                    _append_confirmation_shift_errors(
+                        errors,
+                        path="decision_path",
+                        previous_status=previous_decision.get("basis_status"),
+                        current_status=current_decision.get("basis_status"),
+                        current_item=current_decision,
+                        changed=changed,
                     )
-                ):
-                    errors.append("incremental confirmation upgrade requires FULL: decision_path")
 
-        if reject_confirmation_upgrades:
+        if enforce_confirmation_evidence:
             previous_assessment = previous.get("qualification_assessment")
             current_assessment = current.get("qualification_assessment")
             previous_bant = previous_assessment.get("bant") if isinstance(previous_assessment, dict) else None
@@ -2381,8 +2441,14 @@ def validate_deal_analysis_continuity(
                 current_timeframe = current_bant.get("timeframe")
                 if isinstance(previous_timeframe, dict) and isinstance(current_timeframe, dict):
                     for field in ("decision_timing_status", "need_or_launch_timing_status"):
-                        if _is_confirmation_upgrade(previous_timeframe.get(field), current_timeframe.get(field)):
-                            errors.append(f"incremental confirmation upgrade requires FULL: bant.timeframe.{field}")
+                        _append_confirmation_shift_errors(
+                            errors,
+                            path=f"bant.timeframe.{field}",
+                            previous_status=previous_timeframe.get(field),
+                            current_status=current_timeframe.get(field),
+                            current_item=current_timeframe,
+                            changed=changed,
+                        )
 
         previous_risk = previous.get("main_risk")
         current_risk = current.get("main_risk")

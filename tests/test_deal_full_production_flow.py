@@ -26,6 +26,7 @@ from openai_api.llm.analyze_deal import DEAL_PROMPT_CACHE_KEY, build_prompt
 from openai_api.llm.validation import (
     AnalysisValidationError,
     DEAL_REQUIRED_FIELDS,
+    continuity_errors_are_repairable,
     normalize_analysis_for_validation,
     validate_deal_analysis,
     validate_deal_analysis_continuity,
@@ -483,13 +484,14 @@ class DealFullProductionFlowTests(unittest.TestCase):
             changed_evidence_ids=["call:2"],
         )
 
-    def test_incremental_confirmation_upgrade_requires_full(self) -> None:
+    def test_incremental_confirmation_shift_requires_new_evidence_not_full(self) -> None:
         baseline = {
             "qualification_assessment": {
                 "bant": {
                     "timeframe": {
                         "status": "missing",
                         "decision_timing_status": "not_confirmed",
+                        "need_or_launch_timing_status": "confirmed",
                     },
                 },
             },
@@ -500,12 +502,13 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 }],
             },
         }
-        candidate = {
+        upgraded = {
             "qualification_assessment": {
                 "bant": {
                     "timeframe": {
                         "status": "confirmed",
                         "decision_timing_status": "confirmed",
+                        "need_or_launch_timing_status": "confirmed",
                         "evidence": ["call:2"],
                     },
                 },
@@ -518,21 +521,135 @@ class DealFullProductionFlowTests(unittest.TestCase):
                 }],
             },
         }
-
-        with self.assertRaisesRegex(AnalysisValidationError, "incremental confirmation upgrade requires FULL"):
-            validate_deal_analysis_continuity(
-                candidate,
-                baseline,
-                available_evidence_ids=["call:2"],
-                changed_evidence_ids=["call:2"],
-                reject_confirmation_upgrades=True,
-            )
+        silent_upgrade = {
+            "qualification_assessment": {
+                "bant": {
+                    "timeframe": {
+                        "status": "confirmed",
+                        "decision_timing_status": "confirmed",
+                        "need_or_launch_timing_status": "confirmed",
+                        "evidence": ["call:1"],
+                    },
+                },
+            },
+            "deal_context": {
+                "pressure_levers": [{
+                    "lever_id": "payment_deadline",
+                    "basis_status": "confirmed",
+                    "evidence": ["call:1"],
+                }],
+            },
+        }
+        silent_downgrade = {
+            "qualification_assessment": {
+                "bant": {
+                    "timeframe": {
+                        "status": "missing",
+                        "decision_timing_status": "not_confirmed",
+                        "need_or_launch_timing_status": "not_confirmed",
+                        "evidence": ["call:1"],
+                    },
+                },
+            },
+            "deal_context": {
+                "pressure_levers": [{
+                    "lever_id": "payment_deadline",
+                    "basis_status": "needs_confirmation",
+                    "evidence": ["call:1"],
+                }],
+            },
+        }
+        cited_downgrade = {
+            "qualification_assessment": {
+                "bant": {
+                    "timeframe": {
+                        "status": "missing",
+                        "decision_timing_status": "not_confirmed",
+                        "need_or_launch_timing_status": "not_confirmed",
+                        "evidence": ["call:2"],
+                    },
+                },
+            },
+            "deal_context": {
+                "pressure_levers": [{
+                    "lever_id": "payment_deadline",
+                    "basis_status": "needs_confirmation",
+                    "evidence": ["call:2"],
+                }],
+            },
+        }
 
         validate_deal_analysis_continuity(
-            candidate,
+            upgraded,
             baseline,
-            available_evidence_ids=["call:2"],
+            available_evidence_ids=["call:1", "call:2"],
             changed_evidence_ids=["call:2"],
+            enforce_confirmation_evidence=True,
+        )
+        validate_deal_analysis_continuity(
+            silent_upgrade,
+            baseline,
+            available_evidence_ids=["call:1", "call:2"],
+            changed_evidence_ids=["call:2"],
+        )
+        with self.assertRaisesRegex(AnalysisValidationError, "confirmation upgrade without new evidence") as raised:
+            validate_deal_analysis_continuity(
+                silent_upgrade,
+                baseline,
+                available_evidence_ids=["call:1", "call:2"],
+                changed_evidence_ids=["call:2"],
+                enforce_confirmation_evidence=True,
+            )
+        self.assertTrue(continuity_errors_are_repairable(raised.exception))
+        self.assertNotIn("requires FULL", str(raised.exception))
+        with self.assertRaisesRegex(AnalysisValidationError, "confirmation downgrade without new evidence"):
+            validate_deal_analysis_continuity(
+                silent_downgrade,
+                {
+                    **baseline,
+                    "qualification_assessment": {
+                        "bant": {
+                            "timeframe": {
+                                "status": "confirmed",
+                                "decision_timing_status": "confirmed",
+                                "need_or_launch_timing_status": "confirmed",
+                            },
+                        },
+                    },
+                    "deal_context": {
+                        "pressure_levers": [{
+                            "lever_id": "payment_deadline",
+                            "basis_status": "confirmed",
+                        }],
+                    },
+                },
+                available_evidence_ids=["call:1", "call:2"],
+                changed_evidence_ids=["call:2"],
+                enforce_confirmation_evidence=True,
+            )
+        validate_deal_analysis_continuity(
+            cited_downgrade,
+            {
+                **baseline,
+                "qualification_assessment": {
+                    "bant": {
+                        "timeframe": {
+                            "status": "confirmed",
+                            "decision_timing_status": "confirmed",
+                            "need_or_launch_timing_status": "confirmed",
+                        },
+                    },
+                },
+                "deal_context": {
+                    "pressure_levers": [{
+                        "lever_id": "payment_deadline",
+                        "basis_status": "confirmed",
+                    }],
+                },
+            },
+            available_evidence_ids=["call:1", "call:2"],
+            changed_evidence_ids=["call:2"],
+            enforce_confirmation_evidence=True,
         )
 
     def test_continuity_does_not_parse_call_date_as_evidence_id(self) -> None:

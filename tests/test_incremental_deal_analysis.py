@@ -48,6 +48,9 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
         self.assertIn("полный текущий analysis JSON", prompt)
         self.assertIn("TRUSTED_CONTINUITY_BASELINE", prompt)
         self.assertIn("не отменяет их молча", prompt)
+        self.assertIn("NEW_OR_REVISED_CLIENT_EVIDENCE", prompt)
+        self.assertIn("Повышай basis_status или BANT timing до confirmed", prompt)
+        self.assertNotIn("<continuity_correction>", prompt)
         self.assertIn("исходящие активности не являются evidence", prompt)
         self.assertIn("call:101", prompt)
         self.assertNotIn("old-unchanged-history", prompt)
@@ -88,6 +91,30 @@ class IncrementalDealAnalysisTests(unittest.TestCase):
             ["call:101", "message:201"],
         )
         self.assertEqual(loaded["NEW_OR_REVISED_CLIENT_EVIDENCE"], [])
+
+    def test_incremental_continuity_correction_stays_on_incremental_input(self) -> None:
+        context = {
+            "PREVIOUS_TRUSTED_COMPLETE_ANALYSIS": {"deal_state": {"summary": "synthetic-baseline"}},
+            "TRUSTED_CONTINUITY_BASELINE": {"deal_context": {"critical_facts": [{"fact_id": "stable_fact"}]}},
+            "CRM_SEMANTIC_DELTA": [],
+            "NEW_OR_REVISED_CLIENT_EVIDENCE": [{"evidence_id": "call:201", "text": "synthetic-new-evidence"}],
+            "AVAILABLE_CLIENT_EVIDENCE_IDS": ["call:201"],
+            "CURRENT_REQUIRED_CRM_FACTS": {"stage_id": "SYNTHETIC:STAGE"},
+        }
+        prompt = build_prompt(
+            "7",
+            "old-unchanged-history",
+            "old-unchanged-transcript",
+            "synthetic-diagnostics",
+            [],
+            {},
+            incremental_context=context,
+            continuity_correction=True,
+        )
+        self.assertIn("<continuity_correction>", prompt)
+        self.assertIn("NEW_OR_REVISED_CLIENT_EVIDENCE", prompt)
+        self.assertNotIn("old-unchanged-history", prompt)
+        self.assertNotIn("## TRUSTED CONTINUITY BASELINE", prompt)
 
     def test_incremental_prompt_has_separate_cache_version(self) -> None:
         self.assertEqual(INCREMENTAL_DEAL_PROMPT_VERSION, "neuro-rop:incremental-deal:v1")
