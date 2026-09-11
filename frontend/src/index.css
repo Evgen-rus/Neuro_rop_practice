@@ -3739,22 +3739,37 @@ textarea {
 .ai-spend-card header p { margin: 4px 0 0; color: #6c7f95; font-size: 13px; }
 .ai-spend-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .ai-spend-split > .ai-spend-card { margin-bottom: 0; }
-.ai-spend-chart { padding: 12px 16px 10px; }
+.ai-spend-chart { padding: 10px 14px 8px; }
+.ai-spend-chart > header {
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.ai-spend-chart .ai-spend-pills { gap: 5px; }
+.ai-spend-chart .ai-spend-pills.wrap { margin: 0 0 6px; }
+.ai-spend-chart .ai-spend-pills button {
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
 .ai-spend-chart-body {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  gap: 12px;
+  align-items: stretch;
 }
 .ai-spend-day-list {
   display: grid;
-  max-height: 220px;
+  align-content: start;
+  min-height: 0;
+  height: 184px;
+  max-height: 184px;
   margin: 0;
   padding: 0;
   overflow: auto;
   list-style: none;
   border: 1px solid #e0e7ef;
-  border-radius: 10px;
+  border-radius: 8px;
 }
 .ai-spend-day-list li { border-bottom: 1px solid #edf1f5; }
 .ai-spend-day-list li:last-child { border-bottom: 0; }
@@ -3763,38 +3778,45 @@ textarea {
   width: 100%;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 5px 10px;
   border: 0;
   background: transparent;
   text-align: left;
   font: inherit;
   cursor: pointer;
 }
+.ai-spend-day-list button > span { display: grid; gap: 1px; min-width: 0; }
 .ai-spend-day-list button:hover { background: #f7f9fc; }
-.ai-spend-day-list strong { display: block; color: #14263c; font-size: 13px; }
-.ai-spend-day-list small { color: #6c7f95; font-size: 12px; }
-.ai-spend-day-list b { color: #14263c; font-size: 13px; white-space: nowrap; }
+.ai-spend-day-list strong { display: block; color: #14263c; font-size: 13px; line-height: 1.2; }
+.ai-spend-day-list small { color: #6c7f95; font-size: 11px; line-height: 1.2; }
+.ai-spend-day-list b { color: #14263c; font-size: 13px; line-height: 1.2; white-space: nowrap; }
 .ai-spend-chart-canvas { position: relative; min-width: 0; }
-.ai-spend-chart-canvas svg { display: block; width: 100%; height: 140px; }
+.ai-spend-chart-canvas svg { display: block; width: 100%; height: 168px; }
 .ai-spend-chart-axis { stroke: #e3ebf3; stroke-width: 1; }
 .ai-spend-chart-area { fill: rgba(23, 104, 242, .12); }
 .ai-spend-chart-line { stroke: #1768f2; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
 .ai-spend-chart-dot { fill: #1768f2; }
 .ai-spend-chart-dot.active { fill: #0b58c8; }
-.ai-spend-chart-labels { display: flex; justify-content: space-between; gap: 4px; margin-top: 4px; color: #7b8ea3; font-size: 11px; }
+.ai-spend-chart-labels { display: flex; justify-content: space-between; gap: 4px; margin-top: 2px; color: #7b8ea3; font-size: 11px; line-height: 1.2; }
 .ai-spend-chart-labels .hidden { visibility: hidden; }
 .ai-spend-chart-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: 16px;
+  left: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 12px;
-  margin-top: 8px;
-  padding: 6px 8px;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 4px 8px;
   border: 1px solid #e0e7ef;
   border-radius: 8px;
   color: #4b6078;
-  background: #f7f9fc;
-  font-size: 12px;
+  background: rgba(247, 249, 252, .94);
+  font-size: 11px;
+  line-height: 1.25;
+  pointer-events: none;
 }
 .ai-spend-chart-tooltip strong { color: #14263c; }
 .ai-spend-bars { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -4003,14 +4025,15 @@ textarea {
 }
 @media (max-width: 900px) {
   .ai-spend-chart-body { grid-template-columns: 1fr; }
-  .ai-spend-day-list { max-height: 180px; }
+  .ai-spend-day-list { height: auto; max-height: 184px; }
 }
 @media (max-width: 800px) {
   .ai-spend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-spend-period { justify-items: start; margin-left: 0; width: 100%; }
   .ai-spend-tech { grid-template-columns: 1fr; }
   .ai-spend-row { grid-template-columns: 1fr 1fr; }
-  .ai-spend-chart-canvas svg { height: 120px; }
+  .ai-spend-chart-canvas svg { height: 132px; }
+  .ai-spend-chart-tooltip { bottom: 14px; }
 }
 
 @media (max-width: 760px) {
