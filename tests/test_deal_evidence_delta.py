@@ -9,6 +9,7 @@ from openai_api.llm.deal_evidence import (
     collect_deal_evidence,
     coverage_for_included_evidence,
     evidence_delta,
+    mentionable_audio_reference_ids,
 )
 
 
@@ -125,6 +126,31 @@ class DealEvidenceDeltaContractTests(unittest.TestCase):
         self.assertEqual(revision_delta[0]["delta_kind"], "evidence_revision")
         self.assertEqual(revision_delta[0]["revision"], 2)
         self.assertEqual(revision_delta[0]["content_hash"], text_hash("synthetic-call-v2"))
+
+    def test_mentionable_audio_ids_are_calls_and_max_voice_not_emails(self) -> None:
+        ids = mentionable_audio_reference_ids(
+            canonical_state={
+                "entities": {
+                    "activity:667045": {
+                        "entity_type": "activity",
+                        "subtype": "call",
+                        "source_id": "667045",
+                    },
+                    "activity:655627": {
+                        "entity_type": "activity",
+                        "subtype": "email",
+                        "source_id": "655627",
+                    },
+                }
+            },
+            manifest_calls=[{
+                "audio_kind": "max_voice",
+                "timeline_comment_id": "3083729",
+                "activity_id": "max_3083729_abc",
+            }],
+            available_evidence=[{"evidence_id": "call:201"}],
+        )
+        self.assertEqual(ids, ["call:201", "call:3083729", "call:667045", "message:3083729"])
 
 
 if __name__ == "__main__":

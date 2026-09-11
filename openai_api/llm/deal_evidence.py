@@ -7,6 +7,7 @@ the same ``call:<activity_id>`` evidence.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -237,3 +238,67 @@ def inbound_evidence_ids_present_in_prompt(
         if activity_id and evidence_text and activity_id in prompt_text and evidence_text in prompt_text:
             included.add(str(item["evidence_id"]))
     return sorted(included)
+
+
+def _digit_id(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text.isdigit() else ""
+
+
+def mentionable_audio_reference_ids(
+    *,
+    canonical_state: dict[str, Any] | None = None,
+    manifest_calls: list[dict[str, Any]] | None = None,
+    available_evidence: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """IDs a model may mention for calls/Max voice even without a transcript.
+
+    This is not client-evidence identity. Inbound email/message text stays in
+    ``collect_deal_evidence``. Confirmation still needs NEW_OR_REVISED IDs.
+    """
+    ids: set[str] = set()
+    for item in available_evidence or []:
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        if evidence_id:
+            ids.add(evidence_id)
+
+    entities = (canonical_state or {}).get("entities") if isinstance(canonical_state, dict) else None
+    if isinstance(entities, dict):
+        for key, entity in entities.items():
+            if not isinstance(entity, dict):
+                continue
+            entity_type = str(entity.get("entity_type") or "")
+            kind = str(entity.get("subtype") or (entity.get("semantic") or {}).get("kind") or "").lower()
+            if entity_type != "activity" and not str(key).startswith("activity:"):
+                continue
+            if kind != "call":
+                continue
+            source_id = _digit_id(entity.get("source_id"))
+            if not source_id and ":" in str(key):
+                source_id = _digit_id(str(key).split(":", 1)[1])
+            if source_id:
+                ids.add(f"call:{source_id}")
+
+    for row in manifest_calls or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("audio_kind") or "") == "max_voice":
+            comment_id = _digit_id(row.get("timeline_comment_id"))
+            if comment_id:
+                ids.add(f"call:{comment_id}")
+                ids.add(f"message:{comment_id}")
+            continue
+        activity_id = _digit_id(row.get("activity_id"))
+        if activity_id:
+            ids.add(f"call:{activity_id}")
+    return sorted(ids)
+
+
+def load_deal_audio_manifest_calls(deal_root: str | Path, deal_id: str) -> list[dict[str, Any]]:
+    path = Path(deal_root) / f"deal_{deal_id}" / "audio" / f"deal_{deal_id}_call_audio_manifest.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    calls = payload.get("calls") if isinstance(payload, dict) else None
+    return [item for item in calls if isinstance(item, dict)] if isinstance(calls, list) else []

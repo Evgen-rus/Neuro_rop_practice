@@ -392,39 +392,245 @@ class DealFullProductionFlowTests(unittest.TestCase):
         self.assertIn("--db-path", command)
         self.assertIn("state.sqlite", command)
 
-    def test_continuity_rejects_uncovered_reference_before_full_or_incremental_persistence(self) -> None:
-        for decision_status in (FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS):
-            with self.subTest(decision_status=decision_status), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                analysis_path = root / "analysis.json"
-                analysis_path.write_text(json.dumps({
-                    "analysis_mode": "incremental" if decision_status == INCREMENTAL_LLM_ANALYSIS else "full",
-                    "evidence_ids_included": [],
-                    "analysis": {
-                        "main_risk": {"risk_level": "medium"},
-                        "deal_context": {
-                            "critical_facts": [{
-                                "fact_id": "payment_terms",
-                                "status": "confirmed",
-                                "evidence": ["Email 655627"],
-                            }],
-                        },
+    def test_continuity_rejects_uncovered_reference_before_incremental_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps({
+                "analysis_mode": "incremental",
+                "evidence_ids_included": [],
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "payment_terms",
+                            "status": "confirmed",
+                            "evidence": ["Email 655627"],
+                        }],
                     },
-                }), encoding="utf-8")
-                with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference"):
-                    analyze_deal_if_changed.persist_successful_llm_run(
-                        db_path=root / "state.sqlite",
-                        args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
-                        fingerprint="fp",
-                        snapshot={},
-                        decision_status=decision_status,
-                        paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
-                        decision_reason={"status": decision_status},
-                        evidence_coverage={},
-                        canonical_state={},
-                        available_evidence=[],
-                    )
-                self.assertFalse((root / "state.sqlite").exists())
+                },
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference"):
+                analyze_deal_if_changed.persist_successful_llm_run(
+                    db_path=root / "state.sqlite",
+                    args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                    fingerprint="fp",
+                    snapshot={},
+                    decision_status=INCREMENTAL_LLM_ANALYSIS,
+                    paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
+                    decision_reason={"status": INCREMENTAL_LLM_ANALYSIS},
+                    evidence_coverage={},
+                    canonical_state={},
+                    available_evidence=[],
+                )
+            self.assertFalse((root / "state.sqlite").exists())
+
+    def test_incremental_persistence_allows_known_call_without_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "state.sqlite"
+            analysis_path = root / "analysis.json"
+            report_path = root / "report.md"
+            raw_path = root / "raw.txt"
+            payload = {
+                "analysis_mode": "incremental",
+                "evidence_ids_included": [],
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "payment_terms",
+                            "status": "confirmed",
+                            "evidence": ["call:667045"],
+                        }],
+                        "commitments": [],
+                        "turning_points": [],
+                        "source_conflicts": [],
+                    },
+                },
+            }
+            analysis_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            report_path.write_text("отчёт", encoding="utf-8")
+            raw_path.write_text("", encoding="utf-8")
+            run_id = analyze_deal_if_changed.persist_successful_llm_run(
+                db_path=db_path,
+                args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                fingerprint="fp-inc-call",
+                snapshot={"deal": {"id": "7"}},
+                decision_status=INCREMENTAL_LLM_ANALYSIS,
+                paths={"analysis": analysis_path, "report": report_path, "raw": raw_path},
+                decision_reason={"status": INCREMENTAL_LLM_ANALYSIS, "reasons": ["тест"], "diff": {}},
+                evidence_coverage={},
+                canonical_state={
+                    "schema_id": "canonical_bitrix_state",
+                    "schema_version": "1",
+                    "owner": {"entity_type": "deal", "entity_id": "7"},
+                    "semantic_fingerprint": "canonical-fp",
+                    "entities": {
+                        "activity:667045": {
+                            "key": "activity:667045",
+                            "entity_type": "activity",
+                            "subtype": "call",
+                            "source_id": "667045",
+                            "semantic": {"kind": "call"},
+                        }
+                    },
+                },
+                available_evidence=[],
+            )
+            state = get_entity_state(db_path, "deal", "7")
+            saved = json.loads(analysis_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["last_analysis_status"], INCREMENTAL_LLM_ANALYSIS)
+        self.assertEqual(run_id, saved["analysis_run_id"])
+
+    def test_incremental_persistence_allows_known_max_voice_without_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "state.sqlite"
+            analysis_path = root / "analysis.json"
+            report_path = root / "report.md"
+            raw_path = root / "raw.txt"
+            audio_dir = root / "deal_7" / "audio"
+            audio_dir.mkdir(parents=True)
+            (audio_dir / "deal_7_call_audio_manifest.json").write_text(
+                json.dumps({
+                    "calls": [{
+                        "audio_kind": "max_voice",
+                        "timeline_comment_id": "3083729",
+                        "activity_id": "max_3083729_abc",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            payload = {
+                "analysis_mode": "incremental",
+                "evidence_ids_included": [],
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "voice_gap",
+                            "status": "needs_confirmation",
+                            "evidence": ["сообщение 3083729"],
+                        }],
+                        "commitments": [],
+                        "turning_points": [],
+                        "source_conflicts": [],
+                    },
+                },
+            }
+            analysis_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            report_path.write_text("отчёт", encoding="utf-8")
+            raw_path.write_text("", encoding="utf-8")
+            run_id = analyze_deal_if_changed.persist_successful_llm_run(
+                db_path=db_path,
+                args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                fingerprint="fp-inc-max",
+                snapshot={"deal": {"id": "7"}},
+                decision_status=INCREMENTAL_LLM_ANALYSIS,
+                paths={"analysis": analysis_path, "report": report_path, "raw": raw_path},
+                decision_reason={"status": INCREMENTAL_LLM_ANALYSIS, "reasons": ["тест"], "diff": {}},
+                evidence_coverage={},
+                canonical_state={
+                    "schema_id": "canonical_bitrix_state",
+                    "schema_version": "1",
+                    "owner": {"entity_type": "deal", "entity_id": "7"},
+                    "semantic_fingerprint": "canonical-fp",
+                    "entities": {},
+                },
+                available_evidence=[],
+            )
+            saved = json.loads(analysis_path.read_text(encoding="utf-8"))
+        self.assertEqual(run_id, saved["analysis_run_id"])
+
+    def test_incremental_persistence_still_rejects_unknown_call_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps({
+                "analysis_mode": "incremental",
+                "evidence_ids_included": [],
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "payment_terms",
+                            "status": "confirmed",
+                            "evidence": ["call:999999"],
+                        }],
+                    },
+                },
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(AnalysisValidationError, "uncovered explicit evidence reference: call:999999"):
+                analyze_deal_if_changed.persist_successful_llm_run(
+                    db_path=root / "state.sqlite",
+                    args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                    fingerprint="fp",
+                    snapshot={},
+                    decision_status=INCREMENTAL_LLM_ANALYSIS,
+                    paths={"analysis": analysis_path, "report": root / "report.md", "raw": root / "raw.txt"},
+                    decision_reason={"status": INCREMENTAL_LLM_ANALYSIS},
+                    evidence_coverage={},
+                    canonical_state={
+                        "entities": {
+                            "activity:667045": {
+                                "entity_type": "activity",
+                                "subtype": "call",
+                                "source_id": "667045",
+                            }
+                        }
+                    },
+                    available_evidence=[],
+                )
+            self.assertFalse((root / "state.sqlite").exists())
+
+    def test_full_persistence_allows_crm_call_id_outside_transcript_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "state.sqlite"
+            analysis_path = root / "analysis.json"
+            report_path = root / "report.md"
+            raw_path = root / "raw.txt"
+            payload = {
+                "analysis_mode": "full",
+                "evidence_ids_included": [],
+                "analysis": {
+                    "main_risk": {"risk_level": "medium"},
+                    "deal_context": {
+                        "critical_facts": [{
+                            "fact_id": "payment_terms",
+                            "status": "confirmed",
+                            "evidence": ["call:667045"],
+                        }],
+                        "commitments": [],
+                        "turning_points": [],
+                        "source_conflicts": [],
+                    },
+                },
+            }
+            analysis_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            report_path.write_text("отчёт", encoding="utf-8")
+            raw_path.write_text("", encoding="utf-8")
+            run_id = analyze_deal_if_changed.persist_successful_llm_run(
+                db_path=db_path,
+                args=SimpleNamespace(deal_id="7", deal_root=str(root), model=None),
+                fingerprint="fp-full-uncovered",
+                snapshot={"deal": {"id": "7"}},
+                decision_status=FULL_LLM_ANALYSIS,
+                paths={"analysis": analysis_path, "report": report_path, "raw": raw_path},
+                decision_reason={"status": FULL_LLM_ANALYSIS, "reasons": ["тест"], "diff": {}},
+                canonical_state={
+                    "schema_id": "canonical_bitrix_state",
+                    "schema_version": "1",
+                    "owner": {"entity_type": "deal", "entity_id": "7"},
+                    "semantic_fingerprint": "canonical-fp",
+                },
+                available_evidence=[],
+            )
+            saved = json.loads(analysis_path.read_text(encoding="utf-8"))
+            state = get_entity_state(db_path, "deal", "7")
+        self.assertEqual(run_id, saved["analysis_run_id"])
+        self.assertEqual(state["last_analysis_status"], FULL_LLM_ANALYSIS)
 
     def test_continuity_rejects_unresolved_loss_and_old_evidence_upgrade(self) -> None:
         baseline = {

@@ -53,6 +53,8 @@ from openai_api.llm.deal_evidence import (
     collect_deal_evidence,
     coverage_for_included_evidence,
     evidence_delta,
+    load_deal_audio_manifest_calls,
+    mentionable_audio_reference_ids,
 )
 from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
 from openai_api.llm.validation import (
@@ -301,12 +303,18 @@ def persist_successful_llm_run(
         evidence_coverage = coverage_for_included_evidence(available_evidence, evidence_ids_included)
     if canonical_state is None or evidence_ids_included is None or evidence_coverage is None:
         raise ValueError("Trusted analysis persistence requires canonical state and evidence coverage")
+    # Incremental may mention real call/Max-voice IDs without a transcript.
+    # Those IDs are not NEW_OR_REVISED evidence. FULL stays on the main path.
     validate_deal_analysis_continuity(
         analysis,
         continuity_baseline,
         available_evidence_ids=(
-            [str(item["evidence_id"]) for item in available_evidence]
-            if available_evidence is not None
+            mentionable_audio_reference_ids(
+                canonical_state=canonical_state,
+                manifest_calls=load_deal_audio_manifest_calls(args.deal_root, str(args.deal_id)),
+                available_evidence=available_evidence,
+            )
+            if decision_status == INCREMENTAL_LLM_ANALYSIS
             else None
         ),
         changed_evidence_ids=(
