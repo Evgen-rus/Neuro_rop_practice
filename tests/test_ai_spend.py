@@ -239,6 +239,7 @@ class AiSpendProjectionTests(unittest.TestCase):
 
     def test_human_labels_and_rub_format(self) -> None:
         self.assertEqual(display_kind_label("full_deal_analysis"), "Полный анализ")
+        self.assertEqual(display_kind_label("incremental_deal_analysis"), "Инкрементальный анализ")
         self.assertEqual(display_kind_label("deal_manager_quick_help_push"), "Quick Help")
         self.assertEqual(model_label("gpt-5.6-terra"), "GPT-5.6 Terra")
         self.assertEqual(format_rub_ui(1940), "~1 940 ₽")
@@ -429,6 +430,28 @@ class AiSpendAnalyticsTests(unittest.TestCase):
         self.assertEqual(payload["today"]["estimated_cost_rub"], 15.0)
         self.assertEqual(payload["yesterday"]["date"], "2026-09-08")
         self.assertEqual(payload["yesterday"]["estimated_cost_rub"], 0.0)
+
+    def test_incremental_analysis_joins_full_analysis_group(self) -> None:
+        record_paid_call(
+            kind="full_deal_analysis",
+            estimated_cost_rub=20,
+            entity_type="deal",
+            entity_id="1",
+            now=NOW,
+        )
+        record_paid_call(
+            kind="incremental_deal_analysis",
+            estimated_cost_rub=18,
+            entity_type="deal",
+            entity_id="1",
+            now=NOW,
+        )
+        payload = build_ai_spend_analytics(preset="7", now=NOW)
+        groups = {item["id"]: item for item in payload["kind_groups"]}
+        self.assertEqual(groups["full_analysis"]["paid_calls"], 2)
+        self.assertEqual(groups["other"]["paid_calls"], 0)
+        by_kind = {item["id"]: item for item in payload["by_kind"]}
+        self.assertEqual(by_kind["incremental_deal_analysis"]["label"], "Инкрементальный анализ")
 
     def test_honest_comparison_percent(self) -> None:
         earlier = NOW - timedelta(days=8)

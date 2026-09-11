@@ -31,6 +31,7 @@ KIND_LABELS = {
     "full_deal_analysis": "полный анализ",
     "full_lead_analysis": "полный анализ лида",
     "full_analysis": "полный анализ",
+    "incremental_deal_analysis": "инкрементальный анализ",
     "deal_manager_quick_help_push": "Quick Help",
     "deal_manager_quick_help_reanimator": "Quick Help (дожим)",
     "deal_manager_followups": "фоллоуапы",

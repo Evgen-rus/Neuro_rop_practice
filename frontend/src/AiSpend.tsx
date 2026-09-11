@@ -636,6 +636,6 @@ function kindGroupFromKind(analytics: AiSpendAnalytics, kindId: string): string 
   if (kindId.startsWith('deal_manager_quick_help_')) return 'quick_help'
   if (kindId.startsWith('deal_manager_full_script_')) return 'scripts'
   if (kindId.startsWith('transcription')) return 'transcription'
-  if (kindId === 'full_deal_analysis' || kindId === 'full_lead_analysis' || kindId === 'full_analysis') return 'full_analysis'
+  if (kindId === 'full_deal_analysis' || kindId === 'full_lead_analysis' || kindId === 'full_analysis' || kindId === 'incremental_deal_analysis') return 'full_analysis'
   return 'other'
 }

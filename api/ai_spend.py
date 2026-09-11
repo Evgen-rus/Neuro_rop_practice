@@ -73,7 +73,12 @@ ATTENTION_META = {
 
 def kind_group_id(kind: str | None) -> str:
     raw = str(kind or "").strip()
-    if raw in {"full_deal_analysis", "full_lead_analysis", "full_analysis"}:
+    if raw in {
+        "full_deal_analysis",
+        "full_lead_analysis",
+        "full_analysis",
+        "incremental_deal_analysis",
+    }:
         return "full_analysis"
     if raw.startswith("deal_manager_quick_help_"):
         return "quick_help"
