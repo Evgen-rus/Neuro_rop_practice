@@ -22,6 +22,7 @@ from storage.rop_db import (
     hash_auth_password,
     init_db,
     list_auth_users,
+    list_disabled_manager_trajectory_ids,
     record_auth_login_attempt,
     revoke_auth_session,
     revoke_auth_user_sessions,
@@ -141,6 +142,25 @@ class AuthStorageTests(unittest.TestCase):
                 manager_id="10",
             )
         self.assertEqual(admin["role"], "admin")
+
+    def test_manager_trajectory_collection_can_be_disabled_without_disabling_login(self) -> None:
+        self._create_admin()
+        manager = create_auth_user(
+            self.db_path,
+            login="manager-one",
+            password_hash="hash",
+            role="manager",
+            manager_id="10",
+        )
+        self.assertTrue(manager["trajectory_enabled"])
+        updated = update_auth_user(
+            self.db_path,
+            user_id=int(manager["id"]),
+            trajectory_enabled=False,
+        )
+        self.assertTrue(updated["is_active"])
+        self.assertFalse(updated["trajectory_enabled"])
+        self.assertEqual(list_disabled_manager_trajectory_ids(self.db_path), ["10"])
 
     def test_last_active_admin_is_protected(self) -> None:
         first = self._create_admin("first-admin")

@@ -81,6 +81,7 @@ def _safe_user(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "role": role,
         "manager_id": str(row.get("manager_id") or "") or None,
         "is_active": bool(row.get("is_active")),
+        "trajectory_enabled": bool(row.get("trajectory_enabled", True)),
     }
 
 

@@ -8,6 +8,7 @@ export type AuthAccount = {
   role: AuthRole
   manager_id: string | null
   is_active: boolean
+  trajectory_enabled?: boolean
 }
 
 export type AuthUser = AuthAccount & {
@@ -1873,6 +1874,13 @@ export function setAuthUserPassword(userId: number, password: string) {
   return api<{ user: AuthAccount }>(`/api/auth/users/${encodeURIComponent(String(userId))}/password`, {
     method: 'POST',
     body: JSON.stringify({ password }),
+  })
+}
+
+export function setAuthUserTrajectoryEnabled(userId: number, enabled: boolean) {
+  return api<{ user: AuthAccount }>(`/api/auth/users/${encodeURIComponent(String(userId))}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ trajectory_enabled: enabled }),
   })
 }
 

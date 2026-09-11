@@ -391,6 +391,7 @@ def _init_db_unlocked(db_path: str | Path) -> None:
                 role TEXT NOT NULL CHECK(role IN ('admin', 'rop', 'manager')),
                 manager_id TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+                trajectory_enabled INTEGER NOT NULL DEFAULT 1 CHECK(trajectory_enabled IN (0, 1)),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CHECK(
@@ -1144,6 +1145,7 @@ def _init_db_unlocked(db_path: str | Path) -> None:
             """
         )
         _ensure_column(conn, "analysis_runs", "model", "TEXT")
+        _ensure_column(conn, "auth_users", "trajectory_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "analysis_runs", "prompt_version", "TEXT")
         _ensure_column(conn, "analysis_runs", "logic_version", "TEXT")
         _ensure_column(conn, "analysis_runs", "provenance_json", "TEXT")
@@ -1465,6 +1467,7 @@ def _auth_user_row(
         return None
     value = dict(row)
     value["is_active"] = bool(value.get("is_active"))
+    value["trajectory_enabled"] = bool(value.get("trajectory_enabled", 1))
     if not include_password_hash:
         value.pop("password_hash", None)
     return value
@@ -1590,6 +1593,16 @@ def list_auth_users(db_path: str | Path) -> list[dict[str, Any]]:
     return [item for row in rows if (item := _auth_user_row(row)) is not None]
 
 
+def list_disabled_manager_trajectory_ids(db_path: str | Path) -> list[str]:
+    init_db(db_path)
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT manager_id FROM auth_users "
+            "WHERE role = 'manager' AND trajectory_enabled = 0 AND manager_id IS NOT NULL"
+        ).fetchall()
+    return [manager_id for row in rows if (manager_id := str(row["manager_id"] or "").strip())]
+
+
 def update_auth_user(
     db_path: str | Path,
     *,
@@ -1597,6 +1610,7 @@ def update_auth_user(
     role: str | None = None,
     manager_id: object = _UNSET,
     is_active: bool | None = None,
+    trajectory_enabled: bool | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
     with connect(db_path) as conn:
@@ -1616,6 +1630,10 @@ def update_auth_user(
         else:
             next_manager_id = _normalize_auth_manager_id(manager_id)
         next_active = bool(current["is_active"]) if is_active is None else bool(is_active)
+        next_trajectory_enabled = (
+            bool(current["trajectory_enabled"])
+            if trajectory_enabled is None else bool(trajectory_enabled)
+        )
         _validate_auth_user_state(
             role=next_role,
             manager_id=next_manager_id,
@@ -1638,13 +1656,14 @@ def update_auth_user(
             conn.execute(
                 """
                 UPDATE auth_users
-                SET role = ?, manager_id = ?, is_active = ?, updated_at = ?
+                SET role = ?, manager_id = ?, is_active = ?, trajectory_enabled = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     next_role,
                     next_manager_id,
                     int(next_active),
+                    int(next_trajectory_enabled),
                     utcish_now(),
                     int(user_id),
                 ),

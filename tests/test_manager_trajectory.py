@@ -30,6 +30,8 @@ from storage.rop_db import (
     save_deal_manager_quick_help,
     save_deal_manager_situation_confirmation,
     save_ui_report,
+    create_auth_user,
+    update_auth_user,
     upsert_deal_control_deal,
 )
 
@@ -342,6 +344,39 @@ class ManagerTrajectoryCollectionTests(unittest.TestCase):
             {"schema_version", "period", "collection_status", "summary", "managers", "warnings"},
         )
         self.assertEqual(report["managers"][0]["counts"]["crm_activity_observed"], 2)
+
+    def test_disabled_manager_is_not_requested_or_shown(self) -> None:
+        create_auth_user(self.db_path, login="admin", password_hash="hash", role="admin")
+        manager = create_auth_user(
+            self.db_path,
+            login="manager",
+            password_hash="hash",
+            role="manager",
+            manager_id="10",
+        )
+        update_auth_user(
+            self.db_path,
+            user_id=int(manager["id"]),
+            trajectory_enabled=False,
+        )
+
+        class NoBitrixCalls:
+            def __getattr__(self, name):
+                raise AssertionError(f"Bitrix не должен вызываться: {name}")
+
+        result = collect_manager_trajectory(
+            NoBitrixCalls(),
+            db_path=self.db_path,
+            from_at=NOW - timedelta(days=1),
+            to_at=NOW,
+        )
+        report = build_manager_trajectory_report(
+            db_path=self.db_path,
+            from_at=NOW - timedelta(days=1),
+            to_at=NOW,
+        )
+        self.assertEqual(result["manager_ids"], [])
+        self.assertEqual(report["managers"], [])
 
     def test_messenger_mirror_comments_are_collected_for_responsible_card(self) -> None:
         class MessengerBitrixClient(FakeBitrixClient):

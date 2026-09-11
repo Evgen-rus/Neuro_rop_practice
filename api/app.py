@@ -529,6 +529,7 @@ class AuthUserUpdateRequest(BaseModel):
     role: Literal["admin", "rop", "manager"] | None = None
     manager_id: str | None = Field(default=None, max_length=80)
     is_active: bool | None = None
+    trajectory_enabled: bool | None = None
 
 
 class AuthPasswordRequest(BaseModel):

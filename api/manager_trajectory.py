@@ -25,6 +25,7 @@ from storage.rop_db import (
     DEFAULT_DB_PATH,
     get_deal_control_scope,
     get_manager_trajectory_collection_state,
+    list_disabled_manager_trajectory_ids,
     list_deal_control_deals,
     list_manager_trajectory_events,
     list_manager_trajectory_entity_states,
@@ -114,13 +115,15 @@ def collect_manager_trajectory(
 ) -> dict[str, Any]:
     """Collect manager-associated CRM facts; never writes to Bitrix or calls AI."""
     scope = get_deal_control_scope(db_path)
-    managers = list(dict.fromkeys(
+    requested_managers = list(dict.fromkeys(
         str(item).strip()
         for item in (manager_ids if manager_ids is not None else scope.get("manager_ids") or [])
         if str(item).strip()
     ))
-    if not managers:
+    if not requested_managers:
         raise ValueError("В deal-control scope не настроены manager_ids")
+    disabled = set(list_disabled_manager_trajectory_ids(db_path))
+    managers = [manager_id for manager_id in requested_managers if manager_id not in disabled]
     end = _aware(to_at or datetime.now(MSK_TZ)).astimezone(MSK_TZ)
     state = get_manager_trajectory_collection_state(db_path, collection_key=COLLECTION_KEY)
     if from_at is not None:
@@ -132,6 +135,32 @@ def collect_manager_trajectory(
         start = end - timedelta(days=1)
     if start >= end:
         raise ValueError("Начало периода должно быть раньше окончания")
+
+    counts = {
+        "activities": 0,
+        "stage_changes": 0,
+        "stage_history": 0,
+        "task_history": 0,
+        "timeline_comments": 0,
+        "business_field_changes": 0,
+        "presence_snapshots": 0,
+        "ignored_outside_scope": 0,
+    }
+    if not managers:
+        collection_state = save_manager_trajectory_collection_state(
+            db_path,
+            collection_key=COLLECTION_KEY,
+            status="success",
+            successful_through=_iso(end),
+        )
+        return {
+            "status": "success",
+            "period": {"from": _iso(start), "to": _iso(end)},
+            "manager_ids": [],
+            "counts": counts,
+            "errors": {},
+            "collection_state": collection_state,
+        }
 
     def custom_fields(entity_type: str) -> list[str]:
         raw = os.getenv(f"MANAGER_TRAJECTORY_{entity_type.upper()}_UF_FIELDS", "")
@@ -155,16 +184,6 @@ def collect_manager_trajectory(
         if not response.get("ok")
     }
     errors.update({f"activities:{key}": str(value) for key, value in activity_result["errors"].items()})
-    counts = {
-        "activities": 0,
-        "stage_changes": 0,
-        "stage_history": 0,
-        "task_history": 0,
-        "timeline_comments": 0,
-        "business_field_changes": 0,
-        "presence_snapshots": 0,
-        "ignored_outside_scope": 0,
-    }
     allowed = set(managers)
 
     activity_facts: list[dict[str, Any]] = []
@@ -721,11 +740,29 @@ def build_manager_trajectory_report(
     start = _aware(from_at).astimezone(MSK_TZ)
     end = _aware(to_at).astimezone(MSK_TZ)
     scope = get_deal_control_scope(db_path)
-    managers = list(dict.fromkeys(
+    requested_managers = list(dict.fromkeys(
         str(item).strip()
         for item in (manager_ids if manager_ids is not None else scope.get("manager_ids") or [])
         if str(item).strip()
     ))
+    disabled = set(list_disabled_manager_trajectory_ids(db_path))
+    managers = [manager_id for manager_id in requested_managers if manager_id not in disabled]
+    if not managers:
+        return {
+            "schema_version": 3,
+            "period": {"from": _iso(start), "to": _iso(end), "timezone": "Europe/Moscow"},
+            "collection_status": get_manager_trajectory_collection_state(db_path, collection_key=COLLECTION_KEY),
+            "summary": {
+                "managers": 0,
+                "unique_crm_actions": 0,
+                "recommendations_generated": 0,
+                "recommendations_shown": 0,
+                "recommendations_viewed": 0,
+                "quick_help_opened": 0,
+            },
+            "managers": [],
+            "warnings": [],
+        }
     events = list_manager_trajectory_events(
         db_path,
         from_at=_iso(start),

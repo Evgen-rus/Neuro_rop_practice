@@ -6,6 +6,7 @@ import {
   deactivateAuthUser,
   fetchAuthUsers,
   setAuthUserPassword,
+  setAuthUserTrajectoryEnabled,
   type AuthAccount,
   type AuthUser,
   type DealControlDashboard,
@@ -182,6 +183,24 @@ export function TeamAdmin({ user, scope, syncing, flashError = '', flashNotice =
     }
   }
 
+  async function toggleTrajectory(account: AuthAccount) {
+    const enabled = account.trajectory_enabled !== false
+    setBusy(`trajectory:${account.id}`)
+    setError('')
+    setNotice('')
+    try {
+      const response = await setAuthUserTrajectoryEnabled(account.id, !enabled)
+      if (response.user) replaceAccount(response.user)
+      setNotice(enabled
+        ? `${account.login} исключён из сбора траектории.`
+        : `${account.login} снова включён в сбор траектории.`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy('')
+    }
+  }
+
   return <div className="team-page">
     <header className="team-header">
       <div>
@@ -245,6 +264,7 @@ export function TeamAdmin({ user, scope, syncing, flashError = '', flashNotice =
                 {roleLabel(account.role)}
                 {account.manager_id ? ` · Bitrix ${account.manager_id}` : ''}
                 {account.role === 'manager' ? ` · ${inScope ? 'в выборке команды' : 'не в выборке'}` : ''}
+                {account.role === 'manager' ? ` · сбор ${account.trajectory_enabled === false ? 'выключен' : 'включён'}` : ''}
                 {account.is_active ? '' : ' · выключен'}
               </small>
             </div>
@@ -253,6 +273,12 @@ export function TeamAdmin({ user, scope, syncing, flashError = '', flashNotice =
                 <button className="dc-button primary" type="button" disabled={Boolean(busy)} onClick={() => void addToScope(account)}>
                   {busy === `scope:${account.id}` ? <span className="dc-spinner" /> : null}
                   В выборку
+                </button>
+              ) : null}
+              {account.role === 'manager' && account.manager_id ? (
+                <button className="dc-button" type="button" disabled={Boolean(busy)} onClick={() => void toggleTrajectory(account)}>
+                  {busy === `trajectory:${account.id}` ? <span className="dc-spinner" /> : null}
+                  {account.trajectory_enabled === false ? 'Собирать данные' : 'Не собирать'}
                 </button>
               ) : null}
               <button

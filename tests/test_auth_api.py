@@ -21,6 +21,7 @@ def _user(role: str, *, manager_id: str | None = None, user_id: int = 1) -> dict
         "role": role,
         "manager_id": manager_id,
         "is_active": True,
+        "trajectory_enabled": True,
     }
 
 
@@ -417,13 +418,14 @@ class AuthContractTests(unittest.TestCase):
             listed = api_app.auth_users()
             updated = api_app.auth_user_update(
                 10,
-                api_app.AuthUserUpdateRequest.model_validate({"manager_id": None}),
+                api_app.AuthUserUpdateRequest.model_validate({"manager_id": None, "trajectory_enabled": False}),
             )
 
         self.assertNotIn("password_hash", listed["items"][0])
         self.assertNotIn("password_hash", updated["user"])
         self.assertEqual(calls[0]["user_id"], 10)
         self.assertIsNone(calls[0]["manager_id"])
+        self.assertFalse(calls[0]["trajectory_enabled"])
 
     def test_scope_manager_append_is_admin_only(self) -> None:
         from fastapi import HTTPException
