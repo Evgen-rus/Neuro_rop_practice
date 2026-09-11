@@ -3666,7 +3666,7 @@ textarea {
 .ai-spend-teaser strong { color: #14263c; font-size: clamp(16px, 1.2vw, 22px); line-height: 1.15; }
 
 .ai-spend-page { min-height: 100%; padding: 22px 0 36px; background: transparent; }
-.ai-spend-header { align-items: flex-start; gap: 12px 16px; flex-wrap: wrap; }
+.ai-spend-header { align-items: center; gap: 12px 16px; flex-wrap: wrap; }
 .ai-spend-header .dc-header-title { flex: 0 0 auto; }
 .ai-spend-header .dc-header-title h1 { white-space: normal; }
 .ai-spend-header .dc-header-title p { margin-top: 4px; font-size: 13px; }
@@ -3739,7 +3739,7 @@ textarea {
 .ai-spend-card header p { margin: 4px 0 0; color: #6c7f95; font-size: 13px; }
 .ai-spend-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .ai-spend-split > .ai-spend-card { margin-bottom: 0; }
-.ai-spend-chart { padding: 8px 14px 8px; }
+.ai-spend-chart { padding: 8px 18px 10px; }
 .ai-spend-card.ai-spend-chart > header {
   display: flex;
   flex-wrap: nowrap;
@@ -3757,23 +3757,35 @@ textarea {
   gap: 8px 10px;
   min-width: 0;
 }
-.ai-spend-chart-heading h2 { flex: 0 0 auto; white-space: nowrap; }
+.ai-spend-chart-heading h2 {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 24px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 .ai-spend-chart .ai-spend-pills { gap: 5px; }
 .ai-spend-chart-heading .ai-spend-pills,
 .ai-spend-chart-heading .ai-spend-pills.wrap {
+  display: flex;
   flex: 1 1 auto;
   flex-wrap: nowrap;
+  align-items: center;
   margin: 0;
   min-width: 0;
 }
 .ai-spend-chart .ai-spend-pills.compact {
+  display: flex;
   flex: 0 0 auto;
   flex-wrap: nowrap;
+  align-items: center;
 }
 .ai-spend-chart .ai-spend-pills button {
-  min-height: 28px;
-  padding: 3px 10px;
+  min-height: 24px;
+  padding: 2px 10px;
   font-size: 12px;
+  line-height: 1.2;
   white-space: nowrap;
 }
 .ai-spend-chart-body {
