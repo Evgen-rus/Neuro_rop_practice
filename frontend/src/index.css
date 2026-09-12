@@ -10036,6 +10036,32 @@ ul.facts.bad li:before {
   font-size: 13px;
   line-height: 1.5;
 }
+.llm-runtime-badge {
+  position: fixed;
+  z-index: 120;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(520px, calc(100vw - 36px));
+  border: 1px solid #b9c9db;
+  border-radius: 12px;
+  color: #263b52;
+  background: #fff;
+  box-shadow: 0 12px 36px rgba(22, 42, 66, .2);
+  font-size: 12px;
+}
+.llm-runtime-badge > summary { display: flex; align-items: center; gap: 7px; padding: 9px 12px; cursor: pointer; list-style: none; font-weight: 700; }
+.llm-runtime-badge > summary::-webkit-details-marker { display: none; }
+.llm-runtime-badge > summary i { width: 8px; height: 8px; border-radius: 50%; background: #2d9b64; }
+.llm-runtime-badge.warning > summary i { background: #d58a19; }
+.llm-runtime-badge.error > summary i { background: #c8464f; }
+.llm-runtime-badge > div { padding: 0 12px 11px; border-top: 1px solid #e0e7ef; }
+.llm-runtime-badge strong { display: block; margin: 9px 0; }
+.llm-runtime-badge dl { display: grid; gap: 5px; margin: 0; }
+.llm-runtime-badge dl div { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 9px; }
+.llm-runtime-badge dt { color: #6d7f93; }
+.llm-runtime-badge dd { margin: 0; overflow-wrap: anywhere; }
+.llm-runtime-badge p { margin: 9px 0 0; color: #607389; }
+.llm-runtime-badge small { display: block; margin-top: 4px; color: #a2454b; }
 .dc-image-preview { position: absolute; z-index: 50; inset: 0; display: grid; place-items: center; padding: 28px; background: rgba(18, 30, 46, .76); }
 .dc-image-preview figure { position: relative; max-width: 92%; max-height: 90%; margin: 0; overflow: hidden; border-radius: 12px; background: #fff; box-shadow: 0 22px 64px rgba(0, 0, 0, .28); }
 .dc-image-preview img { display: block; max-width: 100%; max-height: 78vh; object-fit: contain; background: #f3f5f8; }

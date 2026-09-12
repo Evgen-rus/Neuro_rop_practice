@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import httpx
-from openai import APITimeoutError, InternalServerError, RateLimitError
+from openai import APITimeoutError, InternalServerError, PermissionDeniedError, RateLimitError
 
 from openai_api.config import OPENAI_ANALYSIS_MODEL
 from openai_api.config import OPENAI_LEARNING_SHADOW_MODEL, OPENAI_MANAGER_MODEL
@@ -16,6 +16,7 @@ from openai_api.llm.llm_client import (
     call_analysis_json,
     call_structured_output_json,
     call_validated_analysis_json,
+    _provider_error_metadata,
 )
 
 
@@ -62,6 +63,17 @@ def repair_builder(primary: dict, _error: BaseException) -> SectionRepairPlan:
 
 
 class ProviderFlowTests(unittest.TestCase):
+    def test_provider_error_metadata_keeps_only_safe_diagnostics(self) -> None:
+        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        response = httpx.Response(403, request=request, headers={"x-request-id": "req_safe123"})
+        error = PermissionDeniedError("denied", response=response, body={"error": {"code": "policy_violation"}})
+
+        self.assertEqual(_provider_error_metadata(error), {
+            "error_status_code": 403,
+            "error_code": "policy_violation",
+            "request_id": "req_safe123",
+        })
+
     def setUp(self) -> None:
         trace = patch("openai_api.llm.llm_client.append_usage_trace")
         self.usage_trace = trace.start()

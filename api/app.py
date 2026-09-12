@@ -78,6 +78,7 @@ from api.learning_shadow import (
     list_learning_shadow_runs,
     start_learning_shadow_run,
 )
+from api.llm_runtime import build_llm_runtime_status
 from api.deal_control import add_task as add_deal_control_task
 from api.deal_control import (
     build_deal_control_dashboard,
@@ -955,6 +956,12 @@ def manager_trajectory_event_get(
 def ai_spend_summary_get() -> dict[str, Any]:
     _require_admin()
     return build_ai_spend_summary()
+
+
+@app.get("/api/admin/llm-runtime")
+def llm_runtime_get() -> dict[str, Any]:
+    _require_admin()
+    return build_llm_runtime_status()
 
 
 @app.get("/api/admin/ai-spend/day")

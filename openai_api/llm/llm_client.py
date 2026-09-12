@@ -401,6 +401,7 @@ def call_analysis_json(
             "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
             "transport_error": True,
         }
+        error_metadata.update(_provider_error_metadata(error))
         if defer_usage_trace and isinstance(error, (OpenAIError, TimeoutError, ConnectionError)):
             error.analysis_metadata = error_metadata
         else:
@@ -834,6 +835,19 @@ def _provider_error_reason(error: BaseException) -> str:
     return f"{type(error).__name__}" + (f": status={status}" if status is not None else "")
 
 
+def _provider_error_metadata(error: BaseException) -> dict[str, Any]:
+    body = getattr(error, "body", None)
+    nested = body.get("error") if isinstance(body, dict) else None
+    code = getattr(error, "code", None) or (nested.get("code") if isinstance(nested, dict) else None)
+    safe_code = str(code or "").strip()
+    request_id = str(getattr(error, "request_id", None) or "").strip()
+    return {
+        "error_status_code": status_code_from_error(error),
+        "error_code": safe_code if re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", safe_code) else None,
+        "request_id": request_id if re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", request_id) else None,
+    }
+
+
 def _without_raw_text(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key != "raw_output_text"}
 
@@ -1028,6 +1042,7 @@ def _call_structured_output_json_once(
                 "reasoning_effort": effective_reasoning_effort,
                 "provider_fallback": provider_fallback,
                 "provider_fallback_reason": provider_fallback_reason,
+                **_provider_error_metadata(error),
             },
             status="error",
             entity_type=trace_entity_type,

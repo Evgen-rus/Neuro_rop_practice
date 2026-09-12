@@ -20,6 +20,29 @@ export type AuthMeResponse = {
   user: AuthUser
 }
 
+export type LlmRuntimeStatus = {
+  provider: 'openai' | 'openrouter'
+  status: 'configured' | 'degraded' | 'blocked'
+  status_label: string
+  credential_configured: boolean
+  fallback_enabled: boolean
+  roles: Record<'analysis' | 'repair' | 'manager' | 'learning_shadow', { model: string; reasoning: string }>
+  transcription: { provider: 'openai'; model: string }
+  last_request: null | {
+    requested_at: string | null
+    provider: string | null
+    model: string | null
+    status: string | null
+    error_type: string | null
+    error_status_code: number | null
+    error_code: string | null
+    request_id: string | null
+    error_label: string | null
+    provider_fallback: boolean
+    provider_fallback_reason: string | null
+  }
+}
+
 export type LearningShadowTimelineEvent = {
   event_id: string
   timestamp: string
@@ -1840,6 +1863,10 @@ async function api<T>(path: string, init?: RequestInit, options: ApiOptions = {}
 
 export function fetchCurrentUser() {
   return api<AuthMeResponse>('/api/auth/me')
+}
+
+export function fetchLlmRuntimeStatus() {
+  return api<LlmRuntimeStatus>('/api/admin/llm-runtime')
 }
 
 export function login(loginValue: string, password: string) {

@@ -18,6 +18,9 @@ class UsageTraceTests(unittest.TestCase):
             "provider": "openrouter",
             "provider_fallback": True,
             "provider_fallback_reason": "RateLimitError: status=429",
+            "error_status_code": 429,
+            "error_code": "rate_limit_exceeded",
+            "request_id": "req_safe123",
             "model": "gpt-5.6-terra",
             "reasoning_effort": "low",
             "prompt_cache": {
@@ -61,6 +64,9 @@ class UsageTraceTests(unittest.TestCase):
         self.assertEqual(event["provider"], "openrouter")
         self.assertTrue(event["provider_fallback"])
         self.assertEqual(event["provider_fallback_reason"], "RateLimitError: status=429")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_code"], "rate_limit_exceeded")
+        self.assertEqual(event["request_id"], "req_safe123")
         self.assertIsNone(event["semantic_attempt_number"])
         self.assertIsNone(event["validation_status"])
         self.assertEqual(event["entity_id"], "123")

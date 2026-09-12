@@ -30,6 +30,7 @@ import {
   fetchDailySummary,
   fetchCurrentUser,
   fetchJob,
+  fetchLlmRuntimeStatus,
   fetchPipelines,
   fetchReport,
   fetchReviewReport,
@@ -50,6 +51,7 @@ import {
   updateAnalysisProfile,
   ApiError,
   type AuthUser,
+  type LlmRuntimeStatus,
 } from './api'
 import { clearStoredDealControlView } from './dealControlStartView'
 
@@ -600,7 +602,64 @@ function AuthenticatedApp() {
       </section>
     </main>
   }
-  return <MainApp user={user} onLogout={signOut} />
+  return <>
+    <MainApp user={user} onLogout={signOut} />
+    {user.role === 'admin' ? <AdminLlmRuntimeBadge /> : null}
+  </>
+}
+
+function AdminLlmRuntimeBadge() {
+  const [runtime, setRuntime] = useState<LlmRuntimeStatus | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = () => void fetchLlmRuntimeStatus()
+      .then((value) => { if (!cancelled) { setRuntime(value); setError(false) } })
+      .catch(() => { if (!cancelled) setError(true) })
+    refresh()
+    const timer = window.setInterval(refresh, 30_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [])
+
+  if (error && !runtime) return <div className="llm-runtime-badge error" role="status">Статус AI недоступен</div>
+  if (!runtime) return null
+  const fallback = runtime.provider === 'openrouter' && Boolean(runtime.last_request?.provider_fallback)
+  const tone = runtime.status === 'blocked' ? 'error' : runtime.status === 'degraded' || fallback ? 'warning' : 'ready'
+  const provider = runtime.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI'
+  const summary = runtime.status === 'degraded'
+    ? `${provider} → OpenAI · нет ключа`
+    : fallback
+      ? `OpenRouter → OpenAI · ${runtime.last_request?.model || 'fallback'}`
+    : `AI: ${provider} · ${runtime.roles.analysis.model}`
+  const roleLabels: Record<string, string> = {
+    analysis: 'Анализ', repair: 'Repair', manager: 'Manager', learning_shadow: 'Learning Shadow',
+  }
+
+  return <details className={`llm-runtime-badge ${tone}`}>
+    <summary><i aria-hidden="true" />{summary}</summary>
+    <div>
+      <strong>{runtime.status_label}</strong>
+      <dl>
+        {Object.entries(runtime.roles).map(([role, profile]) => <div key={role}>
+          <dt>{roleLabels[role] || role}</dt><dd>{profile.model} · {profile.reasoning}</dd>
+        </div>)}
+        <div><dt>Транскрибация</dt><dd>OpenAI · {runtime.transcription.model}</dd></div>
+      </dl>
+      {runtime.last_request ? <p>
+        Последний вызов: {runtime.last_request.provider} · {runtime.last_request.model || 'модель неизвестна'} · {runtime.last_request.status || 'статус неизвестен'}
+        {runtime.last_request.provider_fallback ? ' · fallback' : ''}
+        {runtime.last_request.requested_at ? ` · ${formatMoscowDateTime(runtime.last_request.requested_at, {})}` : ''}
+        {runtime.last_request.provider_fallback_reason ? <small>{runtime.last_request.provider_fallback_reason}</small> : null}
+        {runtime.last_request.error_label ? <small>
+          {runtime.last_request.error_label}
+          {runtime.last_request.error_status_code ? ` · HTTP ${runtime.last_request.error_status_code}` : ''}
+          {runtime.last_request.error_code ? ` · ${runtime.last_request.error_code}` : ''}
+          {runtime.last_request.request_id ? ` · ${runtime.last_request.request_id}` : ''}
+        </small> : null}
+      </p> : <p>Фактических вызовов в журнале ещё нет.</p>}
+    </div>
+  </details>
 }
 
 function ReviewPage({ shareToken }: { shareToken: string }) {
