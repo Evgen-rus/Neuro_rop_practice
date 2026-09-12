@@ -590,6 +590,15 @@ class PromptLabStorageTests(unittest.TestCase):
         self.assertNotIn("gpt-5.6-terra-mini", ids)
         self.assertFalse(any("terra mini" in str(item["label"]).lower() for item in list_lab_models()))
 
+    def test_model_list_uses_configured_openai_whitelist(self) -> None:
+        with patch("openai_api.llm.prompt_lab_models.OPENAI_PROMPT_LAB_MODELS", ("gpt-5.4",)):
+            self.assertEqual([item["id"] for item in list_lab_models(include_runtime=False)], ["gpt-5.4"])
+            with self.assertRaises(ValueError):
+                validate_model_reasoning("gpt-5.5", "low")
+        with patch("openai_api.llm.prompt_lab_models.OPENAI_PROMPT_LAB_MODELS", ("unsupported-model",)):
+            with self.assertRaisesRegex(ValueError, "unsupported model"):
+                list_lab_models(include_runtime=False)
+
     def test_export_current_uses_selected_version_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = Path(directory) / "lab.sqlite"

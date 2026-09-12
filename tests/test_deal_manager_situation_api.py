@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api import deal_manager_situation as situation
-from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
+from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT, MANAGER_SITUATION_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import (
     MANAGER_MODEL,
     MANAGER_REASONING_EFFORT,
@@ -169,6 +169,7 @@ class DealManagerSituationTests(unittest.TestCase):
         self.assertIn("CURRENT_BITRIX_TASK", prefix)
         self.assertNotIn("PREVIOUS_MANAGER_PROJECTION:\n", prefix)
         self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-situation:v3")
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], MANAGER_SITUATION_MAX_OUTPUT_TOKENS)
 
     def test_confirm_uses_canonical_storage_and_never_calls_llm(self) -> None:
         calls = []

@@ -9,21 +9,18 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 from typing import Any
 
-from openai_api.config import ANALYSIS_MODEL, ANALYSIS_REASONING_EFFORT
+from openai_api.config import (
+    MANAGER_SITUATION_MAX_OUTPUT_TOKENS,
+    OPENAI_MANAGER_MODEL as MANAGER_MODEL,
+    OPENAI_MANAGER_REASONING_EFFORT as MANAGER_REASONING_EFFORT,
+)
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.validation import remove_retired_deal_fields
 
 
-MANAGER_MODEL = os.getenv("DEAL_MANAGER_MODEL", ANALYSIS_MODEL).strip() or ANALYSIS_MODEL
-MANAGER_REASONING_EFFORT = (
-    os.getenv("DEAL_MANAGER_REASONING_EFFORT", ANALYSIS_REASONING_EFFORT).strip()
-    or ANALYSIS_REASONING_EFFORT
-)
 MAX_MANAGER_CONTEXT_CHARS = 4000
-MAX_SITUATION_OUTPUT_TOKENS = 2400
 
 _ANALYSIS_FIELDS = (
     "deal_state",
@@ -399,7 +396,7 @@ def generate_deal_manager_situation(
         schema_name="deal_manager_situation",
         model=model,
         reasoning_effort=reasoning_effort,
-        max_output_tokens=MAX_SITUATION_OUTPUT_TOKENS,
+        max_output_tokens=MANAGER_SITUATION_MAX_OUTPUT_TOKENS,
         log_title="deal manager situation prompt",
         call_type="deal_manager_situation",
         prompt_cache_key="neuro-rop:deal-manager-situation:v3",

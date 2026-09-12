@@ -5,11 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from openai_api.config import ANALYSIS_MODEL
+from openai_api.config import ANALYSIS_MODEL, TASK_GUIDANCE_MAX_OUTPUT_TOKENS
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id
-
-
-MAX_GUIDANCE_OUTPUT_TOKENS = 5000
 
 
 def _short_text_list_schema(max_items: int = 4) -> dict[str, Any]:
@@ -135,7 +132,7 @@ def generate_deal_task_guidance(
         schema=deal_task_guidance_schema(),
         schema_name="deal_task_guidance",
         model=model,
-        max_output_tokens=MAX_GUIDANCE_OUTPUT_TOKENS,
+        max_output_tokens=TASK_GUIDANCE_MAX_OUTPUT_TOKENS,
         log_title="deal task guidance prompt",
         call_type="deal_task_guidance",
         disable_implicit_cache=True,

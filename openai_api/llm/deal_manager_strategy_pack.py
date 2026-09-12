@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import STRATEGY_PACK_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_email import email_schema, validate_email
 from openai_api.llm.deal_manager_full_script import full_script_schema, validate_full_script
 from openai_api.llm.deal_manager_quick_help import project_locked_move, project_quick_help_for_material
@@ -14,7 +15,6 @@ from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id
 
 PACK_CONTRACT = "strategy_pack_v1"
 STRATEGIES = ("primary", "alternative", "pattern_break")
-MAX_STRATEGY_PACK_OUTPUT_TOKENS = 9000
 
 
 def strategy_pack_schema() -> dict[str, Any]:
@@ -110,7 +110,7 @@ def generate_strategy_pack(**kwargs: Any) -> tuple[dict[str, Any], dict[str, Any
     prompt = build_strategy_pack_prompt(**kwargs)
     result, metadata = call_structured_output_json(
         prompt, schema=strategy_pack_schema(), schema_name="deal_manager_strategy_pack", model=MANAGER_MODEL,
-        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=MAX_STRATEGY_PACK_OUTPUT_TOKENS,
+        reasoning_effort=MANAGER_REASONING_EFFORT, max_output_tokens=STRATEGY_PACK_MAX_OUTPUT_TOKENS,
         log_title="deal manager strategy pack prompt", call_type="deal_manager_strategy_pack",
         prompt_cache_key="neuro-rop:deal-manager-strategy-pack:v1",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),

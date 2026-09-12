@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import FULL_SCRIPT_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.deal_manager_quick_help import (
@@ -14,7 +15,6 @@ from openai_api.llm.deal_manager_quick_help import (
 from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 
-MAX_FULL_SCRIPT_OUTPUT_TOKENS = 6000
 SCRIPT_CONTRACT = "conversation_script_v1"
 CALL_SCRIPT_CONTRACT = "conversation_script_v2"
 STRATEGIES = ("primary", "alternative", "pattern_break")
@@ -283,7 +283,7 @@ def generate_deal_manager_full_script(**kwargs: Any) -> tuple[dict[str, Any], di
     cache_version = "v5" if script_mode == "call" else "v4"
     result, metadata = call_structured_output_json(
         prompt, schema=full_script_schema(script_mode), schema_name="deal_manager_full_script", model=model,
-        reasoning_effort=reasoning_effort, max_output_tokens=MAX_FULL_SCRIPT_OUTPUT_TOKENS,
+        reasoning_effort=reasoning_effort, max_output_tokens=FULL_SCRIPT_MAX_OUTPUT_TOKENS,
         log_title="deal manager full script prompt", call_type=call_type,
         prompt_cache_key=f"neuro-rop:deal-manager-full-script:{script_mode}:{cache_version}",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),

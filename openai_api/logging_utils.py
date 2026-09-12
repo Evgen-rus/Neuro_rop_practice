@@ -5,13 +5,13 @@ Readable audit logging for data sent to OpenAI models.
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
+from openai_api.config import OPENAI_LOG_PREVIEW_CHARS, OPENAI_LOG_PREVIEW_LINES
 
-DEFAULT_PREVIEW_LINES = int(os.getenv("OPENAI_LOG_PREVIEW_LINES", "25") or "25")
-DEFAULT_PREVIEW_CHARS = int(os.getenv("OPENAI_LOG_PREVIEW_CHARS", "4000") or "4000")
+DEFAULT_PREVIEW_LINES = OPENAI_LOG_PREVIEW_LINES
+DEFAULT_PREVIEW_CHARS = OPENAI_LOG_PREVIEW_CHARS
 
 
 def sha256_short(data: bytes, length: int = 16) -> str:
@@ -154,4 +154,3 @@ def log_model_binary_payload(
         lines.insert(-2, f"{key}: {value}")
     lines.append("=== OPENAI REQUEST BINARY PREVIEW END ===")
     logger.info("\n%s", "\n".join(lines))
-

@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import (
+    LEARNING_SHADOW_MAX_OUTPUT_TOKENS,
+    OPENAI_LEARNING_SHADOW_MODEL as LEARNING_SHADOW_MODEL,
+    OPENAI_LEARNING_SHADOW_REASONING_EFFORT as LEARNING_SHADOW_REASONING_EFFORT,
+)
 from openai_api.llm.llm_client import call_structured_output_json
-
-
-LEARNING_SHADOW_MODEL = "gpt-5.6-luna"
-LEARNING_SHADOW_REASONING_EFFORT = "xhigh"
-LEARNING_SHADOW_MAX_OUTPUT_TOKENS = 12000
-
 
 def learning_shadow_schema() -> dict[str, Any]:
     correlation = {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from openai_api.config import STRATEGY_PACK_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_strategy_pack import (
     PACK_CONTRACT,
     build_strategy_pack_prompt,
@@ -75,6 +76,7 @@ class DealManagerStrategyPackTests(unittest.TestCase):
                 objection_handling={"items": [{"objection_id": "technical_doubt"}]},
             )
         self.assertEqual(call.call_args.kwargs["prompt_cache_key"], "neuro-rop:deal-manager-strategy-pack:v1")
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], STRATEGY_PACK_MAX_OUTPUT_TOKENS)
         prefix = call.call_args.kwargs["stable_prefix"]
         self.assertIn("ANALYSIS_CONTEXT", prefix)
         self.assertNotIn("LOCKED_MOVE:", prefix)

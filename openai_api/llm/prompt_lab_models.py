@@ -9,8 +9,8 @@ already prices, not from a generic GPT-5 list.
 
 from __future__ import annotations
 
+from openai_api.config import OPENAI_PROMPT_LAB_MODELS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT
-from openai_api.pricing import ANALYSIS_MODEL_PRICES_USD_PER_1M
 
 
 REASONING_LABELS: dict[str, str] = {
@@ -60,10 +60,10 @@ def _reasoning_for(model_id: str) -> list[str]:
 
 
 def list_lab_models(*, include_runtime: bool = True) -> list[dict[str, object]]:
-    seen: list[str] = []
-    for model_id in ANALYSIS_MODEL_PRICES_USD_PER_1M:
-        if model_id not in seen:
-            seen.append(model_id)
+    seen = list(OPENAI_PROMPT_LAB_MODELS)
+    unknown = [model_id for model_id in seen if model_id not in MODEL_REASONING]
+    if unknown:
+        raise ValueError(f"OPENAI_PROMPT_LAB_MODELS contains unsupported model: {', '.join(unknown)}")
     if include_runtime and MANAGER_MODEL not in seen:
         seen.insert(0, MANAGER_MODEL)
     elif include_runtime:

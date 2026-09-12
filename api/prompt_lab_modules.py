@@ -6,15 +6,16 @@ from typing import Any, Callable
 
 from openai_api.config import (
     COMPANION_MAX_OUTPUT_TOKENS,
+    EMAIL_MAX_OUTPUT_TOKENS,
     FOLLOWUPS_MAX_OUTPUT_TOKENS,
+    FULL_SCRIPT_MAX_OUTPUT_TOKENS,
     QUICK_HELP_MAX_OUTPUT_TOKENS,
 )
 from openai_api.llm.deal_manager_companion import COMPANION_CONTRACT, companion_static_prompt
-from openai_api.llm.deal_manager_email import EMAIL_CONTRACT, MAX_EMAIL_OUTPUT_TOKENS, email_static_prompt
+from openai_api.llm.deal_manager_email import EMAIL_CONTRACT, email_static_prompt
 from openai_api.llm.deal_manager_followups import FOLLOWUPS_CONTRACT, followups_static_prompt
 from openai_api.llm.deal_manager_full_script import (
     CALL_SCRIPT_CONTRACT,
-    MAX_FULL_SCRIPT_OUTPUT_TOKENS,
     SCRIPT_CONTRACT,
     full_script_static_prompt,
 )
@@ -59,7 +60,7 @@ def _script_spec(script_mode: str, label: str, contract: str) -> dict[str, Any]:
         "requires_upstream_quick_help": True,
         "schema_version": contract,
         "material_revision": MATERIAL_PROMPT_REVISION,
-        "max_output_tokens": MAX_EMAIL_OUTPUT_TOKENS if script_mode == "email" else MAX_FULL_SCRIPT_OUTPUT_TOKENS,
+        "max_output_tokens": EMAIL_MAX_OUTPUT_TOKENS if script_mode == "email" else FULL_SCRIPT_MAX_OUTPUT_TOKENS,
         "call_type": "prompt_lab_full_script",
         "static_prompt": email_static_prompt if script_mode == "email" else lambda: full_script_static_prompt(script_mode),
         "context_marker": "ANALYSIS_CONTEXT:",

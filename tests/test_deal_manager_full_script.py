@@ -6,10 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api import deal_manager_full_script as full_script_api
+from openai_api.config import FULL_SCRIPT_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_full_script import (
     CALL_SCRIPT_CONTRACT,
     build_full_script_prompt,
     full_script_schema,
+    generate_deal_manager_full_script,
     validate_full_script,
 )
 from openai_api.llm.deal_manager_quick_help import MATERIAL_PROMPT_REVISION
@@ -165,6 +167,24 @@ class DealManagerFullScriptTests(unittest.TestCase):
         self.assertIn(ANSWER["client_messages"]["alternative"], call_prompt)
         self.assertNotIn(ANSWER["client_messages"]["primary"], call_prompt)
         self.assertIn("technical_doubt", call_prompt)
+
+    def test_generator_uses_configured_output_token_limit(self) -> None:
+        with patch(
+            "openai_api.llm.deal_manager_full_script.call_structured_output_json",
+            return_value=(SCRIPT, {}),
+        ) as call:
+            generate_deal_manager_full_script(
+                analysis_projection=CONTEXT["analysis_projection"],
+                situation_projection=CONTEXT["situation_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                communication_pattern_context={"total_attempts": 2},
+                quick_help=ANSWER,
+                selected_strategy="alternative",
+                relevant_tactics=ANSWER["lifehacks"],
+                objection_handling={"items": [{"objection_id": "technical_doubt"}]},
+            )
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], FULL_SCRIPT_MAX_OUTPUT_TOKENS)
 
     def test_storage_is_idempotent_and_exact_context_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

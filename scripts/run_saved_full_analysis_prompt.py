@@ -101,7 +101,7 @@ def main() -> None:
         print(f"Frozen prompt verified: sha256={actual_hash}")
         return
 
-    os.environ["ANALYSIS_REASONING_EFFORT"] = args.reasoning_effort
+    os.environ["OPENAI_ANALYSIS_REASONING_EFFORT"] = args.reasoning_effort
 
     from openai_api.llm.analyze_deal import (
         DEAL_PROMPT_CACHE_KEY,

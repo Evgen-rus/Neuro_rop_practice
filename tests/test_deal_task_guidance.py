@@ -10,8 +10,8 @@ from api.deal_task_guidance import (
     get_task_guidance_job,
     start_task_guidance_job,
 )
+from openai_api.config import TASK_GUIDANCE_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_task_guidance import (
-    MAX_GUIDANCE_OUTPUT_TOKENS,
     build_deal_task_guidance_prompt,
     compact_analysis_context,
     deal_task_guidance_schema,
@@ -114,7 +114,7 @@ class DealTaskGuidanceTests(unittest.TestCase):
         self.assertNotIn("private_extra", prompt)
         self.assertNotIn("secret", prompt)
         self.assertIn("ready_text — до 1200 знаков", prompt)
-        self.assertEqual(MAX_GUIDANCE_OUTPUT_TOKENS, 5000)
+        self.assertEqual(TASK_GUIDANCE_MAX_OUTPUT_TOKENS, 5000)
         self.assertEqual(deal_task_guidance_schema()["properties"]["known_facts"]["maxItems"], 4)
         self.assertEqual(set(deal_task_guidance_schema()["required"]), set(GUIDANCE))
         self.assertNotIn("private_extra", compact_analysis_context(report))
@@ -131,6 +131,7 @@ class DealTaskGuidanceTests(unittest.TestCase):
             )
         self.assertTrue(call.call_args.kwargs["disable_implicit_cache"])
         self.assertEqual(call.call_args.kwargs["call_type"], "deal_task_guidance")
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], TASK_GUIDANCE_MAX_OUTPUT_TOKENS)
 
     def test_guidance_becomes_stale_only_when_task_input_or_report_changes(self):
         with tempfile.TemporaryDirectory() as directory:

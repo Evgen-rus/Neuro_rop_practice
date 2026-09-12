@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api import deal_manager_followups as followups_api
-from openai_api.config import FOLLOWUPS_MAX_OUTPUT_TOKENS
-from openai_api.llm.deal_manager_email import build_email_prompt, validate_email
+from openai_api.config import EMAIL_MAX_OUTPUT_TOKENS, FOLLOWUPS_MAX_OUTPUT_TOKENS
+from openai_api.llm.deal_manager_email import build_email_prompt, generate_deal_manager_email, validate_email
 from openai_api.llm.deal_manager_followups import (
     build_followups_prompt,
     generate_deal_manager_followups,
@@ -102,6 +102,22 @@ class DealManagerEmailFollowupsTests(unittest.TestCase):
                 communication_pattern_context=COMMUNICATION_CONTEXT,
             )
         self.assertEqual(call.call_args.kwargs["max_output_tokens"], FOLLOWUPS_MAX_OUTPUT_TOKENS)
+
+    def test_email_uses_configured_output_token_limit(self) -> None:
+        with patch(
+            "openai_api.llm.deal_manager_email.call_structured_output_json",
+            return_value=(EMAIL, {}),
+        ) as call:
+            generate_deal_manager_email(
+                analysis_projection=CONTEXT["analysis_projection"],
+                situation_projection=CONTEXT["situation_projection"],
+                deal=DEAL,
+                current_bitrix_task=CONTEXT["current_bitrix_task"],
+                communication_pattern_context=COMMUNICATION_CONTEXT,
+                quick_help=ANSWER,
+                selected_strategy="primary",
+            )
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], EMAIL_MAX_OUTPUT_TOKENS)
 
     def test_storage_is_exact_context_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

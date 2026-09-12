@@ -7,9 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from api.learning_shadow import collect_learning_shadow_cases, run_learning_shadow
+from openai_api.config import LEARNING_SHADOW_MAX_OUTPUT_TOKENS
 from openai_api.llm.learning_shadow import (
     LEARNING_SHADOW_MODEL,
     LEARNING_SHADOW_REASONING_EFFORT,
+    analyze_learning_shadow_case,
 )
 from storage.rop_db import (
     create_learning_shadow_run,
@@ -128,6 +130,16 @@ class LearningShadowTests(unittest.TestCase):
         self.assertEqual(saved["llm_cases"], 0)
         self.assertEqual(saved["completed_cases"], 0)
         self.assertEqual(saved["cases"][0]["status"], "no_action_observed")
+
+    def test_llm_case_uses_configured_profile_and_output_limit(self) -> None:
+        with patch(
+            "openai_api.llm.learning_shadow.call_structured_output_json",
+            return_value=({}, {}),
+        ) as call:
+            analyze_learning_shadow_case({"deal_id": "900", "timeline": []})
+        self.assertEqual(call.call_args.kwargs["model"], LEARNING_SHADOW_MODEL)
+        self.assertEqual(call.call_args.kwargs["reasoning_effort"], LEARNING_SHADOW_REASONING_EFFORT)
+        self.assertEqual(call.call_args.kwargs["max_output_tokens"], LEARNING_SHADOW_MAX_OUTPUT_TOKENS)
 
     def test_multiple_deals_produce_separate_cases(self) -> None:
         actor = {"actor_verified": True, "actor_role": "manager", "actor_manager_id": "10"}

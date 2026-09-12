@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from openai_api.config import EMAIL_MAX_OUTPUT_TOKENS
 from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT, project_bitrix_task, project_deal
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.deal_manager_quick_help import project_locked_move, project_quick_help_for_material
@@ -13,7 +14,6 @@ from openai_api.llm.prompt_parts import assemble_prompt, static_prompt_from_full
 
 EMAIL_CONTRACT = "manager_email_v1"
 STRATEGIES = ("primary", "alternative", "pattern_break")
-MAX_EMAIL_OUTPUT_TOKENS = 2600
 
 
 def email_schema() -> dict[str, Any]:
@@ -115,7 +115,7 @@ def generate_deal_manager_email(**kwargs: Any) -> tuple[dict[str, Any], dict[str
     prompt = assemble_prompt(prompt_template, email_context_sections(**kwargs)) if prompt_template else build_email_prompt(**kwargs)
     result, metadata = call_structured_output_json(
         prompt, schema=email_schema(), schema_name="deal_manager_email", model=model,
-        reasoning_effort=reasoning_effort, max_output_tokens=MAX_EMAIL_OUTPUT_TOKENS,
+        reasoning_effort=reasoning_effort, max_output_tokens=EMAIL_MAX_OUTPUT_TOKENS,
         log_title="deal manager email prompt", call_type=call_type,
         prompt_cache_key="neuro-rop:deal-manager-email:v3",
         stable_prefix=prompt_prefix_before(prompt, "LOCKED_MOVE:"),
