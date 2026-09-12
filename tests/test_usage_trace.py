@@ -15,6 +15,9 @@ class UsageTraceTests(unittest.TestCase):
         return {
             "requested_at": "2026-08-08T09:00:00+00:00",
             "call_type": "full_deal_analysis",
+            "provider": "openrouter",
+            "provider_fallback": True,
+            "provider_fallback_reason": "RateLimitError: status=429",
             "model": "gpt-5.6-terra",
             "reasoning_effort": "low",
             "prompt_cache": {
@@ -55,6 +58,9 @@ class UsageTraceTests(unittest.TestCase):
         )
         serialized = json.dumps(event, ensure_ascii=False)
         self.assertEqual(event["cached_input_tokens"], 1_200)
+        self.assertEqual(event["provider"], "openrouter")
+        self.assertTrue(event["provider_fallback"])
+        self.assertEqual(event["provider_fallback_reason"], "RateLimitError: status=429")
         self.assertIsNone(event["semantic_attempt_number"])
         self.assertIsNone(event["validation_status"])
         self.assertEqual(event["entity_id"], "123")
@@ -98,6 +104,8 @@ class UsageTraceTests(unittest.TestCase):
         self.assertEqual(filename, "2026-08-08.log")
         self.assertNotIn("\n", line)
         self.assertIn("entity=deal:123 456", line)
+        self.assertIn("provider=openrouter", line)
+        self.assertIn("provider_fallback=True", line)
         self.assertIn("input=2000", line)
         self.assertIn("cached=1200", line)
         self.assertIn("cache_write=0", line)

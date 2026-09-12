@@ -36,6 +36,12 @@ def _read_csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     items = tuple(dict.fromkeys(item.strip() for item in (value or "").split(",") if item.strip()))
     return items or default
 
+
+LLM_PROVIDER = (os.getenv("LLM_PROVIDER", "openai").strip().lower() or "openai")
+if LLM_PROVIDER not in {"openai", "openrouter"}:
+    raise RuntimeError("LLM_PROVIDER must be one of: openai, openrouter")
+LLM_FALLBACK_TO_OPENAI = read_bool_env("LLM_FALLBACK_TO_OPENAI", True)
+
 BITRIX_PORTAL_URL = os.getenv("BITRIX_PORTAL_URL", "").strip().rstrip("/")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_REQUEST_TIMEOUT_SECONDS = max(
@@ -64,11 +70,82 @@ OPENAI_PROMPT_LAB_MODELS = _read_csv_env(
     ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
 )
 
-# Stable internal names keep existing callers unchanged; env names are OpenAI-specific.
-ANALYSIS_MODEL = OPENAI_ANALYSIS_MODEL
-ANALYSIS_REASONING_EFFORT = OPENAI_ANALYSIS_REASONING_EFFORT
-ANALYSIS_REPAIR_MODEL = OPENAI_REPAIR_MODEL
-ANALYSIS_REPAIR_REASONING_EFFORT = OPENAI_REPAIR_REASONING_EFFORT
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_BASE_URL = (
+    os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/")
+    or "https://openrouter.ai/api/v1"
+)
+OPENROUTER_ANALYSIS_MODEL = os.getenv("OPENROUTER_ANALYSIS_MODEL", "").strip()
+OPENROUTER_ANALYSIS_REASONING_EFFORT = (
+    os.getenv("OPENROUTER_ANALYSIS_REASONING_EFFORT", OPENAI_ANALYSIS_REASONING_EFFORT).strip()
+    or OPENAI_ANALYSIS_REASONING_EFFORT
+)
+OPENROUTER_REPAIR_MODEL = os.getenv("OPENROUTER_REPAIR_MODEL", "").strip()
+OPENROUTER_REPAIR_REASONING_EFFORT = (
+    os.getenv("OPENROUTER_REPAIR_REASONING_EFFORT", OPENAI_REPAIR_REASONING_EFFORT).strip()
+    or OPENAI_REPAIR_REASONING_EFFORT
+)
+OPENROUTER_MANAGER_MODEL = os.getenv("OPENROUTER_MANAGER_MODEL", "").strip()
+OPENROUTER_MANAGER_REASONING_EFFORT = (
+    os.getenv("OPENROUTER_MANAGER_REASONING_EFFORT", OPENAI_MANAGER_REASONING_EFFORT).strip()
+    or OPENAI_MANAGER_REASONING_EFFORT
+)
+OPENROUTER_LEARNING_SHADOW_MODEL = os.getenv("OPENROUTER_LEARNING_SHADOW_MODEL", "").strip()
+OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT = (
+    os.getenv("OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT", OPENAI_LEARNING_SHADOW_REASONING_EFFORT).strip()
+    or OPENAI_LEARNING_SHADOW_REASONING_EFFORT
+)
+OPENROUTER_PROMPT_LAB_MODELS = _read_csv_env("OPENROUTER_PROMPT_LAB_MODELS", ())
+
+if LLM_PROVIDER == "openrouter":
+    _missing_openrouter_models = tuple(
+        name
+        for name, value in (
+            ("OPENROUTER_ANALYSIS_MODEL", OPENROUTER_ANALYSIS_MODEL),
+            ("OPENROUTER_REPAIR_MODEL", OPENROUTER_REPAIR_MODEL),
+            ("OPENROUTER_MANAGER_MODEL", OPENROUTER_MANAGER_MODEL),
+            ("OPENROUTER_LEARNING_SHADOW_MODEL", OPENROUTER_LEARNING_SHADOW_MODEL),
+        )
+        if not value
+    )
+    if _missing_openrouter_models:
+        raise RuntimeError(
+            "LLM_PROVIDER=openrouter requires non-empty role models: "
+            + ", ".join(_missing_openrouter_models)
+        )
+
+# Active transport/profile aliases keep callers provider-agnostic.
+ACTIVE_PROVIDER = LLM_PROVIDER
+ACTIVE_API_KEY = OPENROUTER_API_KEY if LLM_PROVIDER == "openrouter" else OPENAI_API_KEY
+ACTIVE_BASE_URL = OPENROUTER_BASE_URL if LLM_PROVIDER == "openrouter" else None
+ANALYSIS_MODEL = OPENROUTER_ANALYSIS_MODEL if LLM_PROVIDER == "openrouter" else OPENAI_ANALYSIS_MODEL
+ANALYSIS_REASONING_EFFORT = (
+    OPENROUTER_ANALYSIS_REASONING_EFFORT
+    if LLM_PROVIDER == "openrouter"
+    else OPENAI_ANALYSIS_REASONING_EFFORT
+)
+ANALYSIS_REPAIR_MODEL = OPENROUTER_REPAIR_MODEL if LLM_PROVIDER == "openrouter" else OPENAI_REPAIR_MODEL
+ANALYSIS_REPAIR_REASONING_EFFORT = (
+    OPENROUTER_REPAIR_REASONING_EFFORT
+    if LLM_PROVIDER == "openrouter"
+    else OPENAI_REPAIR_REASONING_EFFORT
+)
+MANAGER_MODEL = OPENROUTER_MANAGER_MODEL if LLM_PROVIDER == "openrouter" else OPENAI_MANAGER_MODEL
+MANAGER_REASONING_EFFORT = (
+    OPENROUTER_MANAGER_REASONING_EFFORT
+    if LLM_PROVIDER == "openrouter"
+    else OPENAI_MANAGER_REASONING_EFFORT
+)
+LEARNING_SHADOW_MODEL = (
+    OPENROUTER_LEARNING_SHADOW_MODEL
+    if LLM_PROVIDER == "openrouter"
+    else OPENAI_LEARNING_SHADOW_MODEL
+)
+LEARNING_SHADOW_REASONING_EFFORT = (
+    OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT
+    if LLM_PROVIDER == "openrouter"
+    else OPENAI_LEARNING_SHADOW_REASONING_EFFORT
+)
 ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS", "8000") or "8000")
 ANALYSIS_MAX_OUTPUT_TOKENS = int(os.getenv("ANALYSIS_MAX_OUTPUT_TOKENS", "3500") or "3500")
 # Quick Help / «Дожим» JSON plus reasoning tokens. 4000 was too tight with

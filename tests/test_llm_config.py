@@ -19,6 +19,19 @@ PROFILE_PAIRS = (
 )
 CONFIG_NAMES = {
     *(name for pair in PROFILE_PAIRS for name in pair),
+    "LLM_PROVIDER",
+    "LLM_FALLBACK_TO_OPENAI",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_BASE_URL",
+    "OPENROUTER_ANALYSIS_MODEL",
+    "OPENROUTER_ANALYSIS_REASONING_EFFORT",
+    "OPENROUTER_REPAIR_MODEL",
+    "OPENROUTER_REPAIR_REASONING_EFFORT",
+    "OPENROUTER_MANAGER_MODEL",
+    "OPENROUTER_MANAGER_REASONING_EFFORT",
+    "OPENROUTER_LEARNING_SHADOW_MODEL",
+    "OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT",
+    "OPENROUTER_PROMPT_LAB_MODELS",
     "OPENAI_LEARNING_SHADOW_MODEL",
     "OPENAI_LEARNING_SHADOW_REASONING_EFFORT",
     "OPENAI_PROMPT_LAB_MODELS",
@@ -141,6 +154,44 @@ class LlmConfigTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ["gpt-5.6-luna", "gpt-5.4"])
+
+    def test_openrouter_selects_active_role_profiles(self) -> None:
+        result = run_config(
+            "[c.LLM_PROVIDER, c.LLM_FALLBACK_TO_OPENAI, c.ACTIVE_BASE_URL, "
+            "c.ANALYSIS_MODEL, c.ANALYSIS_REASONING_EFFORT, c.ANALYSIS_REPAIR_MODEL, "
+            "c.ANALYSIS_REPAIR_REASONING_EFFORT, c.MANAGER_MODEL, c.MANAGER_REASONING_EFFORT, "
+            "c.LEARNING_SHADOW_MODEL, c.LEARNING_SHADOW_REASONING_EFFORT, "
+            "c.OPENAI_ANALYSIS_MODEL, c.OPENROUTER_PROMPT_LAB_MODELS, c.TRANSCRIPTION_MODEL]",
+            LLM_PROVIDER="openrouter",
+            LLM_FALLBACK_TO_OPENAI="true",
+            OPENROUTER_BASE_URL="https://router.example/v1/",
+            OPENROUTER_ANALYSIS_MODEL="provider/analysis",
+            OPENROUTER_ANALYSIS_REASONING_EFFORT="medium",
+            OPENROUTER_REPAIR_MODEL="provider/repair",
+            OPENROUTER_REPAIR_REASONING_EFFORT="high",
+            OPENROUTER_MANAGER_MODEL="provider/manager",
+            OPENROUTER_MANAGER_REASONING_EFFORT="xhigh",
+            OPENROUTER_LEARNING_SHADOW_MODEL="provider/shadow",
+            OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT="max",
+            OPENROUTER_PROMPT_LAB_MODELS="provider/manager,provider/analysis",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [
+            "openrouter", True, "https://router.example/v1", "provider/analysis", "medium",
+            "provider/repair", "high", "provider/manager", "xhigh", "provider/shadow", "max",
+            "gpt-5.6-terra", ["provider/manager", "provider/analysis"], "gpt-4o-mini-transcribe",
+        ])
+
+    def test_invalid_provider_fails_fast(self) -> None:
+        result = run_config("None", LLM_PROVIDER="other")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("LLM_PROVIDER must be one of: openai, openrouter", result.stderr)
+
+    def test_openrouter_requires_all_role_models(self) -> None:
+        result = run_config("None", LLM_PROVIDER="openrouter")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OPENROUTER_ANALYSIS_MODEL", result.stderr)
+        self.assertIn("OPENROUTER_LEARNING_SHADOW_MODEL", result.stderr)
 
 
 if __name__ == "__main__":

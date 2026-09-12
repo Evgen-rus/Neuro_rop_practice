@@ -6,9 +6,9 @@ import json
 from typing import Any
 
 from openai_api.config import (
+    LEARNING_SHADOW_MODEL,
+    LEARNING_SHADOW_REASONING_EFFORT,
     LEARNING_SHADOW_MAX_OUTPUT_TOKENS,
-    OPENAI_LEARNING_SHADOW_MODEL as LEARNING_SHADOW_MODEL,
-    OPENAI_LEARNING_SHADOW_REASONING_EFFORT as LEARNING_SHADOW_REASONING_EFFORT,
 )
 from openai_api.llm.llm_client import call_structured_output_json
 

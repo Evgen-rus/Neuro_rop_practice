@@ -10,6 +10,7 @@ import hashlib
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import partial
 from time import perf_counter
 from typing import Any, Callable
 
@@ -22,17 +23,35 @@ from openai_api.config import (
     ANALYSIS_REPAIR_MODEL,
     ANALYSIS_REPAIR_REASONING_EFFORT,
     ANALYSIS_REPAIR_MAX_OUTPUT_TOKENS,
+    LLM_FALLBACK_TO_OPENAI,
+    LLM_PROVIDER,
     OPENAI_API_KEY,
+    OPENAI_ANALYSIS_MODEL,
+    OPENAI_ANALYSIS_REASONING_EFFORT,
+    OPENAI_LEARNING_SHADOW_MODEL,
+    OPENAI_LEARNING_SHADOW_REASONING_EFFORT,
+    OPENAI_MANAGER_MODEL,
+    OPENAI_MANAGER_REASONING_EFFORT,
+    OPENAI_REPAIR_MODEL,
+    OPENAI_REPAIR_REASONING_EFFORT,
     OPENAI_REQUEST_TIMEOUT_SECONDS,
     USD_RUB_RATE,
     logger,
 )
 from openai_api.logging_utils import log_model_text_payload
 from openai_api.llm.full_analysis_repair import SectionRepairError, SectionRepairPlan
+from openai_api.llm.providers import (
+    chat_output_text,
+    chat_response_status,
+    normalize_openrouter_usage,
+    openrouter_client,
+    openrouter_cost,
+    openrouter_request_payload,
+)
 from openai_api.llm.usage_trace import append_usage_trace
 from openai_api.llm.validation_diagnostics import save_validation_diagnostic
 from openai_api.pricing import aggregate_analysis_cost, estimate_analysis_cost
-from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry
+from reliability.retry import DEFAULT_TRANSPORT_RETRY, RetryCallback, run_with_retry, status_code_from_error
 
 
 client = OpenAI(api_key=OPENAI_API_KEY, max_retries=0, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS)
@@ -291,17 +310,29 @@ def call_analysis_json(
     defer_usage_trace: bool = False,
     preview_prompt: bool = True,
     preview_response_errors: bool = True,
+    provider: str = LLM_PROVIDER,
+    provider_fallback: bool = False,
+    provider_fallback_reason: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
     request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
-    request_input, cache_options, cache_metadata = _cache_request(
-        prompt,
-        model=model,
-        prompt_cache_key=prompt_cache_key,
-        stable_prefix=stable_prefix,
-        cache_prefixes=cache_prefixes,
-        disable_implicit_cache=False,
-    )
+    if provider == "openrouter":
+        request_input, cache_options = prompt, {}
+        cache_metadata = {
+            "mode": "provider_automatic",
+            "prompt_cache_key": prompt_cache_key,
+            "breakpoint_count": 0,
+            "ttl": None,
+        }
+    else:
+        request_input, cache_options, cache_metadata = _cache_request(
+            prompt,
+            model=model,
+            prompt_cache_key=prompt_cache_key,
+            stable_prefix=stable_prefix,
+            cache_prefixes=cache_prefixes,
+            disable_implicit_cache=False,
+        )
     if preview_prompt:
         log_model_text_payload(
             logger,
@@ -309,7 +340,8 @@ def call_analysis_json(
             model=model,
             text=prompt,
             metadata={
-                "api": "responses.create",
+                "api": "chat.completions.create" if provider == "openrouter" else "responses.create",
+                "provider": provider,
                 "response_format": "json_object",
                 "reasoning_effort": effective_reasoning_effort,
                 "call_type": call_type,
@@ -318,8 +350,8 @@ def call_analysis_json(
         )
     else:
         logger.info(
-            "OpenAI request preview disabled: call_type=%s model=%s chars=%s sha256_16=%s",
-            call_type, model, len(prompt), hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+            "LLM request preview disabled: provider=%s call_type=%s model=%s chars=%s sha256_16=%s",
+            provider, call_type, model, len(prompt), hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
         )
     requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started_at = perf_counter()
@@ -331,8 +363,17 @@ def call_analysis_json(
             retry_callback(event)
 
     try:
-        response = run_with_retry(
-            lambda: client.responses.create(
+        if provider == "openrouter":
+            request = lambda: openrouter_client.chat.completions.create(**openrouter_request_payload(
+                prompt,
+                model=model,
+                reasoning_effort=effective_reasoning_effort,
+                max_output_tokens=max_output_tokens if max_output_tokens is not None else ANALYSIS_MAX_OUTPUT_TOKENS,
+                response_format={"type": "json_object"},
+                prompt_cache_key=prompt_cache_key,
+            ))
+        else:
+            request = lambda: client.responses.create(
                 model=model,
                 input=request_input,
                 max_output_tokens=max_output_tokens if max_output_tokens is not None else ANALYSIS_MAX_OUTPUT_TOKENS,
@@ -340,17 +381,21 @@ def call_analysis_json(
                 text={"format": {"type": "json_object"}},
                 store=False,
                 **cache_options,
-            ),
-            operation_name="openai:responses.create",
+            )
+        response = run_with_retry(
+            request,
+            operation_name=f"{provider}:json.create",
             policy=DEFAULT_TRANSPORT_RETRY,
             on_event=transport_callback,
         )
     except Exception as error:
         error_metadata = {
-            "model": model, "call_type": call_type, "requested_at": requested_at,
+            "provider": provider, "model": model, "call_type": call_type, "requested_at": requested_at,
             "latency_seconds": round(perf_counter() - started_at, 4),
             "prompt_cache": cache_metadata, "request_fingerprint": request_fingerprint,
             "reasoning_effort": effective_reasoning_effort,
+            "provider_fallback": provider_fallback,
+            "provider_fallback_reason": provider_fallback_reason,
             "transport_attempt_count": sum(1 for event in transport_events if event.get("status") == "attempt"),
             "transport_retry_count": sum(1 for event in transport_events if event.get("status") == "retry_wait"),
             "transport_retry": any(event.get("status") == "retry_wait" for event in transport_events),
@@ -364,13 +409,16 @@ def call_analysis_json(
         raise
     latency_seconds = round(perf_counter() - started_at, 4)
 
-    text = response_output_text(response)
-    usage = usage_to_dict(response)
-    estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    text = chat_output_text(response) if provider == "openrouter" else response_output_text(response)
+    usage = normalize_openrouter_usage(response) if provider == "openrouter" else usage_to_dict(response)
+    actual_model = str(getattr(response, "model", None) or model)
+    estimated_cost = (
+        openrouter_cost(actual_model, usage, USD_RUB_RATE)
+        if provider == "openrouter" else estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    )
     logger.info(
-        "OpenAI analysis response usage: call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
-        call_type,
-        model,
+        "LLM analysis response usage: provider=%s call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
+        provider, call_type, actual_model,
         usage.get("input_tokens"),
         estimated_cost.get("cached_input_tokens"),
         estimated_cost.get("cache_write_tokens"),
@@ -382,13 +430,17 @@ def call_analysis_json(
     )
 
     metadata = {
-        "model": model,
+        "provider": provider,
+        "model": actual_model,
+        "requested_model": model,
         "call_type": call_type,
         "requested_at": requested_at,
         "latency_seconds": latency_seconds,
         "prompt_cache": cache_metadata,
         "request_fingerprint": request_fingerprint,
         "reasoning_effort": effective_reasoning_effort,
+        "provider_fallback": provider_fallback,
+        "provider_fallback_reason": provider_fallback_reason,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
@@ -539,7 +591,7 @@ def _semantic_attempt_metadata(
     return result
 
 
-def call_validated_analysis_json(
+def _call_validated_analysis_json_flow(
     prompt: str,
     *,
     validator: Callable[[dict[str, Any]], None],
@@ -575,6 +627,7 @@ def call_validated_analysis_json(
     repair_plan: SectionRepairPlan | None = None
     primary_metadata: dict[str, Any] = {}
     fallback_prompt = ""
+    caller_provider = str(getattr(analysis_caller, "keywords", {}).get("provider", "openai"))
 
     for semantic_attempt, phase in enumerate(phases, 1):
         if semantic_callback is not None:
@@ -586,7 +639,9 @@ def call_validated_analysis_json(
                     "operation": "openai:validated_analysis",
                 }
             )
-        deferred_trace = analysis_caller is call_analysis_json
+        deferred_trace = analysis_caller is call_analysis_json or bool(
+            getattr(analysis_caller, "_defer_usage_trace", False)
+        )
         attempt_error: BaseException | None = None
         original_analysis: dict[str, Any] | None = None
         metadata: dict[str, Any] = {}
@@ -651,9 +706,10 @@ def call_validated_analysis_json(
             if deferred_trace:
                 append_usage_trace(attempt_metadata, status="error", entity_type=trace_entity_type,
                                    entity_id=trace_entity_id, error_type=type(error).__name__)
-            if phase != "repair":
+            if phase != "repair" or caller_provider == "openrouter":
                 # Preserve the existing API/transport exception contract. Primary
-                # network failures never enter semantic repair.
+                # network failures never enter semantic repair. OpenRouter
+                # technical failures always leave the whole provider flow.
                 error.analysis_metadata = _aggregate_attempt_metadata(attempts, metadata)
                 raise
             current_prompt = fallback_prompt
@@ -773,7 +829,68 @@ def call_validated_analysis_json(
     raise RuntimeError("semantic retry loop exhausted unexpectedly")
 
 
-def call_structured_output_json(
+def _provider_error_reason(error: BaseException) -> str:
+    status = status_code_from_error(error)
+    return f"{type(error).__name__}" + (f": status={status}" if status is not None else "")
+
+
+def _without_raw_text(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in metadata.items() if key != "raw_output_text"}
+
+
+def call_validated_analysis_json(prompt: str, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run one complete semantic flow, then optionally fall back providers."""
+    analysis_caller = kwargs.get("analysis_caller", call_analysis_json)
+    if LLM_PROVIDER != "openrouter" or analysis_caller is not call_analysis_json:
+        return _call_validated_analysis_json_flow(prompt, **kwargs)
+
+    openrouter_caller = partial(call_analysis_json, provider="openrouter")
+    openrouter_caller._defer_usage_trace = True  # type: ignore[attr-defined]
+    openrouter_kwargs = dict(kwargs)
+    openrouter_kwargs["analysis_caller"] = openrouter_caller
+    try:
+        return _call_validated_analysis_json_flow(prompt, **openrouter_kwargs)
+    except (OpenAIError, TimeoutError, ConnectionError, ValidatedAnalysisFailure) as error:
+        if not LLM_FALLBACK_TO_OPENAI:
+            raise
+        fallback_reason = _provider_error_reason(error)
+        failed_metadata = dict(getattr(error, "metadata", None) or getattr(error, "analysis_metadata", None) or {})
+
+    openai_caller = partial(
+        call_analysis_json,
+        provider="openai",
+        provider_fallback=True,
+        provider_fallback_reason=fallback_reason,
+    )
+    openai_caller._defer_usage_trace = True  # type: ignore[attr-defined]
+    fallback_kwargs = dict(kwargs)
+    fallback_kwargs.update(
+        model=OPENAI_ANALYSIS_MODEL,
+        reasoning_effort=OPENAI_ANALYSIS_REASONING_EFFORT,
+        repair_model=OPENAI_REPAIR_MODEL,
+        repair_reasoning_effort=OPENAI_REPAIR_REASONING_EFFORT,
+        analysis_caller=openai_caller,
+    )
+    analysis, metadata = _call_validated_analysis_json_flow(prompt, **fallback_kwargs)
+    final_metadata = dict(metadata)
+    final_metadata.update(
+        provider="openai",
+        provider_fallback=True,
+        provider_fallback_reason=fallback_reason,
+        provider_attempts=[_without_raw_text(failed_metadata), _without_raw_text(metadata)],
+    )
+    attempts = [
+        *[item for item in failed_metadata.get("semantic_attempts", []) if isinstance(item, dict)],
+        *[item for item in metadata.get("semantic_attempts", []) if isinstance(item, dict)],
+    ]
+    if attempts:
+        combined = _aggregate_attempt_metadata(attempts, metadata)
+        for key in ("usage", "estimated_cost", "estimated_cost_usd", "estimated_cost_rub", "latency_seconds"):
+            final_metadata[key] = combined.get(key)
+    return analysis, final_metadata
+
+
+def _call_structured_output_json_once(
     prompt: str,
     *,
     schema: dict[str, Any],
@@ -791,26 +908,39 @@ def call_structured_output_json(
     trace_entity_type: str | None = None,
     trace_entity_id: str | None = None,
     raw_exchange_callback: RawExchangeCallback | None = None,
+    provider: str = LLM_PROVIDER,
+    provider_fallback: bool = False,
+    provider_fallback_reason: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Call Responses structured outputs without changing the legacy JSON client."""
+    """Call one provider's structured-output endpoint."""
     effective_reasoning_effort = reasoning_effort or ANALYSIS_REASONING_EFFORT
     effective_call_type = call_type or schema_name
     request_fingerprint = _request_fingerprint(prompt, stable_prefix, cache_prefixes)
-    request_input, cache_options, cache_metadata = _cache_request(
-        prompt,
-        model=model,
-        prompt_cache_key=prompt_cache_key,
-        stable_prefix=stable_prefix,
-        cache_prefixes=cache_prefixes,
-        disable_implicit_cache=disable_implicit_cache,
-    )
+    if provider == "openrouter":
+        request_input, cache_options = prompt, {}
+        cache_metadata = {
+            "mode": "provider_automatic",
+            "prompt_cache_key": prompt_cache_key,
+            "breakpoint_count": 0,
+            "ttl": None,
+        }
+    else:
+        request_input, cache_options, cache_metadata = _cache_request(
+            prompt,
+            model=model,
+            prompt_cache_key=prompt_cache_key,
+            stable_prefix=stable_prefix,
+            cache_prefixes=cache_prefixes,
+            disable_implicit_cache=disable_implicit_cache,
+        )
     log_model_text_payload(
         logger,
         title=log_title,
         model=model,
         text=prompt,
         metadata={
-            "api": "responses.create",
+            "api": "chat.completions.create" if provider == "openrouter" else "responses.create",
+            "provider": provider,
             "response_format": "json_schema",
             "schema_name": schema_name,
             "reasoning_effort": effective_reasoning_effort,
@@ -820,15 +950,29 @@ def call_structured_output_json(
     )
     requested_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started_at = perf_counter()
-    request_payload = {
-        "model": model,
-        "input": request_input,
-        "max_output_tokens": max_output_tokens,
-        "reasoning": {"effort": effective_reasoning_effort},
-        "text": {"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
-        "store": False,
-        **cache_options,
-    }
+    request_payload = (
+        openrouter_request_payload(
+            prompt,
+            model=model,
+            reasoning_effort=effective_reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+            },
+            prompt_cache_key=prompt_cache_key,
+        )
+        if provider == "openrouter"
+        else {
+            "model": model,
+            "input": request_input,
+            "max_output_tokens": max_output_tokens,
+            "reasoning": {"effort": effective_reasoning_effort},
+            "text": {"format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}},
+            "store": False,
+            **cache_options,
+        }
+    )
     transport_attempt = 0
 
     def request_once() -> Any:
@@ -837,7 +981,10 @@ def call_structured_output_json(
         attempt_started_at = perf_counter()
         attempt_requested_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         try:
-            raw_response = client.responses.create(**request_payload)
+            raw_response = (
+                openrouter_client.chat.completions.create(**request_payload)
+                if provider == "openrouter" else client.responses.create(**request_payload)
+            )
         except Exception as error:
             _emit_raw_exchange(raw_exchange_callback, {
                 "attempt": transport_attempt,
@@ -849,7 +996,7 @@ def call_structured_output_json(
                 "error": {"type": type(error).__name__, "message": str(error)},
             })
             raise
-        raw_output_text = response_output_text(raw_response)
+        raw_output_text = chat_output_text(raw_response) if provider == "openrouter" else response_output_text(raw_response)
         _emit_raw_exchange(raw_exchange_callback, {
             "attempt": transport_attempt,
             "requested_at": attempt_requested_at,
@@ -864,13 +1011,14 @@ def call_structured_output_json(
     try:
         response = run_with_retry(
             request_once,
-            operation_name=f"openai:responses.create:{schema_name}",
+            operation_name=f"{provider}:structured.create:{schema_name}",
             policy=DEFAULT_TRANSPORT_RETRY,
             on_event=retry_callback,
         )
     except Exception as error:
         append_usage_trace(
             {
+                "provider": provider,
                 "model": model,
                 "call_type": effective_call_type,
                 "requested_at": requested_at,
@@ -878,6 +1026,8 @@ def call_structured_output_json(
                 "prompt_cache": cache_metadata,
                 "request_fingerprint": request_fingerprint,
                 "reasoning_effort": effective_reasoning_effort,
+                "provider_fallback": provider_fallback,
+                "provider_fallback_reason": provider_fallback_reason,
             },
             status="error",
             entity_type=trace_entity_type,
@@ -886,13 +1036,16 @@ def call_structured_output_json(
         )
         raise
     latency_seconds = round(perf_counter() - started_at, 4)
-    text = response_output_text(response)
-    usage = usage_to_dict(response)
-    estimated_cost = estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    text = chat_output_text(response) if provider == "openrouter" else response_output_text(response)
+    usage = normalize_openrouter_usage(response) if provider == "openrouter" else usage_to_dict(response)
+    actual_model = str(getattr(response, "model", None) or model)
+    estimated_cost = (
+        openrouter_cost(actual_model, usage, USD_RUB_RATE)
+        if provider == "openrouter" else estimate_analysis_cost(model, usage, USD_RUB_RATE)
+    )
     logger.info(
-        "OpenAI structured response usage: call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
-        effective_call_type,
-        model,
+        "LLM structured response usage: provider=%s call_type=%s model=%s input_tokens=%s cached_input_tokens=%s cache_write_tokens=%s output_tokens=%s total_tokens=%s latency_seconds=%s estimated_cost_usd=%s estimated_cost_rub=%s",
+        provider, effective_call_type, actual_model,
         usage.get("input_tokens"),
         estimated_cost.get("cached_input_tokens"),
         estimated_cost.get("cache_write_tokens"),
@@ -903,13 +1056,17 @@ def call_structured_output_json(
         estimated_cost.get("estimated_cost_rub"),
     )
     metadata = {
-        "model": model,
+        "provider": provider,
+        "model": actual_model,
+        "requested_model": model,
         "call_type": effective_call_type,
         "requested_at": requested_at,
         "latency_seconds": latency_seconds,
         "prompt_cache": cache_metadata,
         "request_fingerprint": request_fingerprint,
         "reasoning_effort": effective_reasoning_effort,
+        "provider_fallback": provider_fallback,
+        "provider_fallback_reason": provider_fallback_reason,
         "usage": usage,
         "estimated_cost": estimated_cost,
         "estimated_cost_usd": estimated_cost.get("estimated_cost_usd"),
@@ -917,8 +1074,8 @@ def call_structured_output_json(
         "response_id": getattr(response, "id", None),
         "raw_output_text": text,
         "schema_name": schema_name,
-        "response_status": response_status(response),
-        "incomplete_reason": response_incomplete_reason(response),
+        "response_status": chat_response_status(response)[0] if provider == "openrouter" else response_status(response),
+        "incomplete_reason": chat_response_status(response)[1] if provider == "openrouter" else response_incomplete_reason(response),
         "max_output_tokens": max_output_tokens,
     }
     if metadata["response_status"] == "incomplete":
@@ -953,3 +1110,44 @@ def call_structured_output_json(
         ) from error
     append_usage_trace(metadata, entity_type=trace_entity_type, entity_id=trace_entity_id)
     return parsed, metadata
+
+
+def _openai_structured_profile(call_type: str) -> tuple[str, str]:
+    if call_type == "learning_shadow_case":
+        return OPENAI_LEARNING_SHADOW_MODEL, OPENAI_LEARNING_SHADOW_REASONING_EFFORT
+    if call_type == "deal_task_guidance":
+        return OPENAI_ANALYSIS_MODEL, OPENAI_ANALYSIS_REASONING_EFFORT
+    return OPENAI_MANAGER_MODEL, OPENAI_MANAGER_REASONING_EFFORT
+
+
+def call_structured_output_json(prompt: str, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Call the active provider, with one provider-level production fallback."""
+    provider = str(kwargs.pop("provider", LLM_PROVIDER))
+    call_type = str(kwargs.get("call_type") or kwargs.get("schema_name") or "structured_output")
+    if provider != "openrouter":
+        return _call_structured_output_json_once(prompt, provider=provider, **kwargs)
+    try:
+        return _call_structured_output_json_once(prompt, provider="openrouter", **kwargs)
+    except Exception as error:
+        if not LLM_FALLBACK_TO_OPENAI or call_type.startswith("prompt_lab_"):
+            raise
+        fallback_reason = _provider_error_reason(error)
+        failed_metadata = dict(getattr(error, "metadata", None) or getattr(error, "analysis_metadata", None) or {})
+
+    fallback_model, fallback_reasoning = _openai_structured_profile(call_type)
+    fallback_kwargs = dict(kwargs)
+    fallback_kwargs.update(model=fallback_model, reasoning_effort=fallback_reasoning)
+    result, metadata = _call_structured_output_json_once(
+        prompt,
+        provider="openai",
+        provider_fallback=True,
+        provider_fallback_reason=fallback_reason,
+        **fallback_kwargs,
+    )
+    metadata = dict(metadata)
+    metadata.update(
+        provider_fallback=True,
+        provider_fallback_reason=fallback_reason,
+        provider_attempts=[_without_raw_text(failed_metadata), _without_raw_text(metadata)],
+    )
+    return result, metadata

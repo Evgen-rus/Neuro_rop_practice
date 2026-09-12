@@ -12,9 +12,9 @@ import json
 from typing import Any
 
 from openai_api.config import (
+    MANAGER_MODEL,
+    MANAGER_REASONING_EFFORT,
     MANAGER_SITUATION_MAX_OUTPUT_TOKENS,
-    OPENAI_MANAGER_MODEL as MANAGER_MODEL,
-    OPENAI_MANAGER_REASONING_EFFORT as MANAGER_REASONING_EFFORT,
 )
 from openai_api.llm.llm_client import call_structured_output_json, deal_trace_id, prompt_prefix_before
 from openai_api.llm.validation import remove_retired_deal_fields

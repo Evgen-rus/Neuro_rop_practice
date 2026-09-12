@@ -4,13 +4,19 @@ UI labels stay human-readable. Backend always uses real API ids from this
 project's runtime/pricing table, never guessed marketing names.
 
 Reasoning values are taken from OpenAI model cards for the ids this project
-already prices, not from a generic GPT-5 list.
+already prices. OpenRouter model ids are user-supplied gateway ids, so their
+whitelist entries use only the gateway's documented reasoning values.
 """
 
 from __future__ import annotations
 
-from openai_api.config import OPENAI_PROMPT_LAB_MODELS
-from openai_api.llm.deal_manager_situation import MANAGER_MODEL, MANAGER_REASONING_EFFORT
+from openai_api.config import (
+    LLM_PROVIDER,
+    MANAGER_MODEL,
+    MANAGER_REASONING_EFFORT,
+    OPENAI_PROMPT_LAB_MODELS,
+    OPENROUTER_PROMPT_LAB_MODELS,
+)
 
 
 REASONING_LABELS: dict[str, str] = {
@@ -30,6 +36,7 @@ REASONING_LABELS: dict[str, str] = {
 GPT56_REASONING = ("none", "low", "medium", "high", "xhigh", "max")
 GPT54_REASONING = ("none", "low", "medium", "high", "xhigh")
 GPT54_MINI_REASONING = ("none", "low", "medium", "high")
+OPENROUTER_REASONING = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 MODEL_REASONING: dict[str, tuple[str, ...]] = {
     "gpt-5.6-terra": GPT56_REASONING,
@@ -53,6 +60,8 @@ def _label_for(model_id: str) -> str:
 
 
 def _reasoning_for(model_id: str) -> list[str]:
+    if LLM_PROVIDER == "openrouter":
+        return list(OPENROUTER_REASONING)
     allowed = list(MODEL_REASONING.get(model_id) or ("low", "medium", "high"))
     if model_id == MANAGER_MODEL and MANAGER_REASONING_EFFORT not in allowed:
         allowed.append(MANAGER_REASONING_EFFORT)
@@ -60,14 +69,14 @@ def _reasoning_for(model_id: str) -> list[str]:
 
 
 def list_lab_models(*, include_runtime: bool = True) -> list[dict[str, object]]:
-    seen = list(OPENAI_PROMPT_LAB_MODELS)
-    unknown = [model_id for model_id in seen if model_id not in MODEL_REASONING]
-    if unknown:
-        raise ValueError(f"OPENAI_PROMPT_LAB_MODELS contains unsupported model: {', '.join(unknown)}")
-    if include_runtime and MANAGER_MODEL not in seen:
-        seen.insert(0, MANAGER_MODEL)
-    elif include_runtime:
-        seen = [MANAGER_MODEL, *[item for item in seen if item != MANAGER_MODEL]]
+    del include_runtime  # Kept for the existing API; the whitelist is authoritative.
+    seen = list(dict.fromkeys(
+        OPENROUTER_PROMPT_LAB_MODELS if LLM_PROVIDER == "openrouter" else OPENAI_PROMPT_LAB_MODELS
+    ))
+    if LLM_PROVIDER == "openai":
+        unknown = [model_id for model_id in seen if model_id not in MODEL_REASONING]
+        if unknown:
+            raise ValueError(f"OPENAI_PROMPT_LAB_MODELS contains unsupported model: {', '.join(unknown)}")
     return [
         {
             "id": model_id,
@@ -79,9 +88,10 @@ def list_lab_models(*, include_runtime: bool = True) -> list[dict[str, object]]:
 
 
 def resolved_runtime_config() -> dict[str, str]:
+    model, reasoning = validate_model_reasoning(MANAGER_MODEL, MANAGER_REASONING_EFFORT)
     return {
-        "model": MANAGER_MODEL,
-        "reasoning": MANAGER_REASONING_EFFORT,
+        "model": model,
+        "reasoning": reasoning,
     }
 
 
