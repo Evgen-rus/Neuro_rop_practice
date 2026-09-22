@@ -53,7 +53,7 @@ VERIFICATION: команда, результат, проверенная вер�
 | Модуль, контракт, продуктовый инвариант | Нужные разделы [архитектуры](../ARCHITECTURE.md), затем указанный код и связанные `tests/` |
 | Локальный запуск | [README](../README.md), `frontend/package.json`, lifespan в `api/app.py` |
 | Пользователи/сессии | [auth runbook](auth_users_runbook.md), `api/auth.py`, `api/access.py`, `scripts/manage_user.py` |
-| Деплой | [deploy README](../deploy/README.md), [production runbook](temporary_tunnel_runbook.md), `deploy/deploy-production.sh`, `.github/workflows/deploy-main.yml` |
+| Деплой | [deploy README](../deploy/README.md), [production runbook](temporary_tunnel_runbook.md), [ручные операции](manual_production_operations.md), `deploy/deploy-production.sh`, `.github/workflows/deploy-main.yml` |
 | Replay/benchmark | [benchmarks README](../benchmarks/README.md) и аргументы runner; LLM-режимы требуют разрешения |
 | Правила оценки клиента | `knowledge/clients/praktikm/index.md`, затем нужный раздел; это правила, не CRM-факты |
 

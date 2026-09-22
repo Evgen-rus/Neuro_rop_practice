@@ -39,3 +39,5 @@ SSH secrets и `StrictHostKeyChecking=yes` сохраняются.
 
 Первичная настройка host Nginx и HTTPS описана в
 [`Docs/temporary_tunnel_runbook.md`](../Docs/temporary_tunnel_runbook.md).
+Готовые команды для ручного обновления, перезапуска и диагностики находятся в
+[`Docs/manual_production_operations.md`](../Docs/manual_production_operations.md).
