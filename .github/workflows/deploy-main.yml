@@ -145,20 +145,15 @@ jobs:
             || fail "VPS HEAD does not match the tested commit"
 
           # Updates neuro-rop-api and neuro-rop-web only.
-          # The script must not stop, recreate, or restart a running neuro-rop-tunnel.
-          ./deploy/temporary-tunnel.sh
+          # Host Nginx, Certbot, the old tunnel and other projects are untouched.
+          ./deploy/deploy-production.sh
           REMOTE
 
-          deploy_url="$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' deploy-output.log | tail -n 1 || true)"
           {
             echo "## VPS deployment"
             echo
             echo "- Commit: \`${GITHUB_SHA}\`"
-            if [[ -n "${deploy_url}" ]]; then
-              echo "- Tunnel URL: ${deploy_url}"
-            else
-              echo "- Tunnel URL: see deploy step output or \`./deploy/temporary-tunnel.sh --show-url\` on the VPS"
-            fi
+            echo "- Production URL: https://neurorop.leadrecordwh.ru"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Remove SSH material

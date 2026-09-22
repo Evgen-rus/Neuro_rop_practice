@@ -9,52 +9,50 @@ def _normalize(text: str) -> str:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = _normalize((ROOT / "deploy" / "temporary-tunnel.sh").read_text(encoding="utf-8"))
+SCRIPT = _normalize((ROOT / "deploy" / "deploy-production.sh").read_text(encoding="utf-8"))
 WORKFLOW = _normalize(
     (ROOT / ".github" / "workflows" / "deploy-main.yml").read_text(encoding="utf-8")
 )
 
 
-class TemporaryTunnelDeployTests(unittest.TestCase):
-    def test_script_keeps_unix_shebang_and_tunnel_name(self) -> None:
+class ProductionDeployTests(unittest.TestCase):
+    def test_script_keeps_runtime_and_loopback_contract(self) -> None:
         self.assertTrue(SCRIPT.startswith("#!/usr/bin/env bash\n"))
-        self.assertIn('TUNNEL_CONTAINER="neuro-rop-tunnel"', SCRIPT)
         self.assertIn('API_CONTAINER="neuro-rop-api"', SCRIPT)
         self.assertIn('WEB_CONTAINER="neuro-rop-web"', SCRIPT)
+        self.assertIn('NETWORK="neuro-rop-practice-net"', SCRIPT)
+        self.assertIn("127.0.0.1:", SCRIPT)
+        self.assertIn("18081", SCRIPT)
+        self.assertIn('--restart unless-stopped', SCRIPT)
 
-    def test_regular_deploy_recreates_only_application_containers(self) -> None:
+    def test_deploy_recreates_only_application_containers(self) -> None:
         self.assertIn(
             'docker rm --force "${WEB_CONTAINER}" "${API_CONTAINER}"',
             SCRIPT,
         )
-        self.assertIn('--restart unless-stopped', SCRIPT)
-        self.assertIn("--show-url", SCRIPT)
-
-    def test_regular_deploy_does_not_stop_or_recreate_tunnel(self) -> None:
-        forbidden_commands = (
-            'docker rm --force "${TUNNEL_CONTAINER}"',
-            "docker rm --force ${TUNNEL_CONTAINER}",
-            'docker stop "${TUNNEL_CONTAINER}"',
-            'docker restart "${TUNNEL_CONTAINER}"',
-            'docker kill "${TUNNEL_CONTAINER}"',
+        forbidden = (
+            "neuro-rop-tunnel",
+            "neurorop-demo",
             "docker compose down",
             "docker-compose down",
+            "docker system prune",
+            "docker image prune",
+            "certbot",
+            "systemctl",
         )
-        for command in forbidden_commands:
-            with self.subTest(command=command):
-                self.assertNotIn(command, SCRIPT)
+        for value in forbidden:
+            with self.subTest(value=value):
+                self.assertNotIn(value, SCRIPT)
 
-        force_remove_lines = [
-            line.strip()
-            for line in SCRIPT.splitlines()
-            if "docker rm --force" in line
-        ]
-        self.assertEqual(len(force_remove_lines), 1)
-        self.assertNotIn("TUNNEL_CONTAINER", force_remove_lines[0])
+    def test_workflow_uses_production_backend_and_keeps_safety_checks(self) -> None:
+        self.assertIn("./deploy/deploy-production.sh", WORKFLOW)
+        self.assertNotIn("./deploy/temporary-tunnel.sh", WORKFLOW)
+        self.assertNotIn("trycloudflare.com", WORKFLOW)
+        self.assertIn("https://neurorop.leadrecordwh.ru", WORKFLOW)
+        self.assertIn("StrictHostKeyChecking=yes", WORKFLOW)
+        self.assertIn("git merge --ff-only", WORKFLOW)
+        self.assertIn("flock -n 9", WORKFLOW)
 
-    def test_workflow_calls_script_and_does_not_touch_tunnel(self) -> None:
-        self.assertIn("./deploy/temporary-tunnel.sh", WORKFLOW)
-        self.assertNotIn("docker compose down", WORKFLOW)
-        self.assertNotIn("docker-compose down", WORKFLOW)
-        self.assertNotIn("docker rm --force neuro-rop-tunnel", WORKFLOW)
-        self.assertNotIn("docker restart neuro-rop-tunnel", WORKFLOW)
+
+if __name__ == "__main__":
+    unittest.main()

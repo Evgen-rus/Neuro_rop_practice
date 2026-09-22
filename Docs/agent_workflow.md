@@ -53,7 +53,7 @@ VERIFICATION: команда, результат, проверенная вер�
 | Модуль, контракт, продуктовый инвариант | Нужные разделы [архитектуры](../ARCHITECTURE.md), затем указанный код и связанные `tests/` |
 | Локальный запуск | [README](../README.md), `frontend/package.json`, lifespan в `api/app.py` |
 | Пользователи/сессии | [auth runbook](auth_users_runbook.md), `api/auth.py`, `api/access.py`, `scripts/manage_user.py` |
-| Деплой | [deploy README](../deploy/README.md), [tunnel runbook](temporary_tunnel_runbook.md), `deploy/temporary-tunnel.sh`, `.github/workflows/deploy-main.yml` |
+| Деплой | [deploy README](../deploy/README.md), [production runbook](temporary_tunnel_runbook.md), `deploy/deploy-production.sh`, `.github/workflows/deploy-main.yml` |
 | Replay/benchmark | [benchmarks README](../benchmarks/README.md) и аргументы runner; LLM-режимы требуют разрешения |
 | Правила оценки клиента | `knowledge/clients/praktikm/index.md`, затем нужный раздел; это правила, не CRM-факты |
 
@@ -78,6 +78,6 @@ API smoke: сначала `$env:DAYTIME_CYCLE_ENABLED='false'`, затем `./ve
 
 UI: в `frontend/` — `npm run dev`. CLI: `./venv/Scripts/python.exe run_rop_assistant.py --help` для аргументов; pipeline без аргументов не использовать как проверку документации.
 
-Деплой на VPS (Bash): `./deploy/temporary-tunnel.sh` по runbook. Push в `main` запускает checks и автоматический deploy через `.github/workflows/deploy-main.yml`; не используй push как проверку документации.
+Деплой на VPS (Bash): `./deploy/deploy-production.sh` по runbook. Push в `main` запускает checks и автоматический deploy через `.github/workflows/deploy-main.yml`; не используй push как проверку документации.
 
 Worker запускает targeted checks своей области. Общие обязательные проверки интегрированного результата primary обязан обеспечить один раз, но сам запуск тяжёлого full suite может делегировать worker. Primary получает сжатый итог и изучает подробности failures только при необходимости. Успешный результат переиспользуй, если проверенные файлы/зависимости не изменились. Повтор — при новых изменениях, сбое или нерешённом риске. Не сокращай проверки корректности, безопасности и входной валидации ради бюджета. Финал: изменения, затронутый контракт, результаты проверок и явные пропуски с причинами.
