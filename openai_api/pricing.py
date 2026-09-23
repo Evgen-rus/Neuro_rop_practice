@@ -8,6 +8,20 @@ from typing import Any
 
 
 ANALYSIS_MODEL_PRICES_USD_PER_1M: dict[str, dict[str, float]] = {
+    "gpt-6-sol": {
+        # OpenAI standard short-context pricing.
+        "input": 2.00,
+        "cached_input": 0.20,
+        "cache_write": 2.50,
+        "output": 10.00,
+    },
+    "gpt-6-luna": {
+        # OpenAI standard short-context pricing.
+        "input": 0.10,
+        "cached_input": 0.01,
+        "cache_write": 0.125,
+        "output": 0.50,
+    },
     "gpt-5.6-terra": {
         # OpenAI standard pricing, verified 2026-08-08:
         # https://developers.openai.com/api/docs/models/gpt-5.6-terra

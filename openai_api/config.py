@@ -49,13 +49,13 @@ OPENAI_REQUEST_TIMEOUT_SECONDS = max(
     float(os.getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "600") or "600"),
 )
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
-OPENAI_ANALYSIS_MODEL = _read_openai_profile_env("OPENAI_ANALYSIS_MODEL", "ANALYSIS_MODEL", "gpt-5.6-terra")
+OPENAI_ANALYSIS_MODEL = _read_openai_profile_env("OPENAI_ANALYSIS_MODEL", "ANALYSIS_MODEL", "gpt-6-luna")
 OPENAI_ANALYSIS_REASONING_EFFORT = _read_openai_profile_env(
-    "OPENAI_ANALYSIS_REASONING_EFFORT", "ANALYSIS_REASONING_EFFORT", "low",
+    "OPENAI_ANALYSIS_REASONING_EFFORT", "ANALYSIS_REASONING_EFFORT", "high",
 )
-OPENAI_REPAIR_MODEL = _read_openai_profile_env("OPENAI_REPAIR_MODEL", "ANALYSIS_REPAIR_MODEL", "gpt-5.6-luna")
+OPENAI_REPAIR_MODEL = _read_openai_profile_env("OPENAI_REPAIR_MODEL", "ANALYSIS_REPAIR_MODEL", "gpt-6-luna")
 OPENAI_REPAIR_REASONING_EFFORT = _read_openai_profile_env(
-    "OPENAI_REPAIR_REASONING_EFFORT", "ANALYSIS_REPAIR_REASONING_EFFORT", "xhigh",
+    "OPENAI_REPAIR_REASONING_EFFORT", "ANALYSIS_REPAIR_REASONING_EFFORT", "high",
 )
 OPENAI_MANAGER_MODEL = _read_openai_profile_env("OPENAI_MANAGER_MODEL", "DEAL_MANAGER_MODEL", OPENAI_ANALYSIS_MODEL)
 OPENAI_MANAGER_REASONING_EFFORT = _read_openai_profile_env(
@@ -67,7 +67,7 @@ OPENAI_LEARNING_SHADOW_REASONING_EFFORT = (
 )
 OPENAI_PROMPT_LAB_MODELS = _read_csv_env(
     "OPENAI_PROMPT_LAB_MODELS",
-    ("gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
+    ("gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"),
 )
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()

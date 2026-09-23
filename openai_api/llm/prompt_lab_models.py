@@ -31,6 +31,7 @@ REASONING_LABELS: dict[str, str] = {
 
 # OpenAI model cards (2026):
 # gpt-5.6-terra / gpt-5.6-luna: none, low, medium, high, xhigh, max
+# gpt-6-sol / gpt-6-luna: same effort set as gpt-5.6.
 # gpt-5.4: none, low, medium, high, xhigh
 # gpt-5.4-mini / gpt-5.5: same family as 5.4 (no max). Mini has no xhigh on its card.
 GPT56_REASONING = ("none", "low", "medium", "high", "xhigh", "max")
@@ -39,6 +40,8 @@ GPT54_MINI_REASONING = ("none", "low", "medium", "high")
 OPENROUTER_REASONING = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 MODEL_REASONING: dict[str, tuple[str, ...]] = {
+    "gpt-6-sol": GPT56_REASONING,
+    "gpt-6-luna": GPT56_REASONING,
     "gpt-5.6-terra": GPT56_REASONING,
     "gpt-5.6-luna": GPT56_REASONING,
     "gpt-5.5": GPT54_REASONING,
@@ -47,6 +50,8 @@ MODEL_REASONING: dict[str, tuple[str, ...]] = {
 }
 
 _MODEL_LABELS = {
+    "gpt-6-sol": "6 Sol",
+    "gpt-6-luna": "6 Luna",
     "gpt-5.6-terra": "Terra",
     "gpt-5.6-luna": "Luna",
     "gpt-5.4-mini": "5.4 Mini",

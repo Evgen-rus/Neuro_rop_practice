@@ -79,12 +79,12 @@ class LlmConfigTests(unittest.TestCase):
         result = run_config("{name: getattr(c, name) for name in " + repr(names) + "}")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {
-            "ANALYSIS_MODEL": "gpt-5.6-terra",
-            "ANALYSIS_REASONING_EFFORT": "low",
-            "ANALYSIS_REPAIR_MODEL": "gpt-5.6-luna",
-            "ANALYSIS_REPAIR_REASONING_EFFORT": "xhigh",
-            "OPENAI_MANAGER_MODEL": "gpt-5.6-terra",
-            "OPENAI_MANAGER_REASONING_EFFORT": "low",
+            "ANALYSIS_MODEL": "gpt-6-luna",
+            "ANALYSIS_REASONING_EFFORT": "high",
+            "ANALYSIS_REPAIR_MODEL": "gpt-6-luna",
+            "ANALYSIS_REPAIR_REASONING_EFFORT": "high",
+            "OPENAI_MANAGER_MODEL": "gpt-6-luna",
+            "OPENAI_MANAGER_REASONING_EFFORT": "high",
             "OPENAI_LEARNING_SHADOW_MODEL": "gpt-5.6-luna",
             "OPENAI_LEARNING_SHADOW_REASONING_EFFORT": "xhigh",
             "ANALYSIS_MAX_OUTPUT_TOKENS": 3500,
@@ -179,7 +179,7 @@ class LlmConfigTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), [
             "openrouter", True, "https://router.example/v1", "provider/analysis", "medium",
             "provider/repair", "high", "provider/manager", "xhigh", "provider/shadow", "max",
-            "gpt-5.6-terra", ["provider/manager", "provider/analysis"], "gpt-4o-mini-transcribe",
+            "gpt-6-luna", ["provider/manager", "provider/analysis"], "gpt-4o-mini-transcribe",
         ])
 
     def test_invalid_provider_fails_fast(self) -> None:
