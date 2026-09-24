@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +25,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from bitrix.workspace import DEFAULT_DEAL_WORKSPACE_ROOT
 from bitrix.canonical_state import merge_deal_bundle
-from bitrix.customer_history import build_deal_normalized_communications
-from bitrix.deals.communication_history import include_source_lead_communications
 from openai_api.llm.deal_daily_quality import load_daily_quality_context
 from openai_api.audio.build_deal_transcript_context import build_all_deal_transcript_context
 from openai_api.audio.transcript_context import AGGREGATE_STEM
@@ -59,6 +58,7 @@ from openai_api.llm.deal_evidence import (
     collect_deal_evidence,
     coverage_for_included_evidence,
     evidence_delta,
+    workspace_normalized_communications,
 )
 from openai_api.llm.trusted_baseline import get_trusted_deal_baseline
 from openai_api.change_detection.snapshot import (
@@ -76,6 +76,7 @@ from storage.rop_db import (
     get_today_mini_trigger_types,
     get_entity_memory,
     get_entity_state,
+    get_latest_analysis_run,
     init_db,
     merge_deal_daily_quality_state,
     publish_analysis_run,
@@ -126,30 +127,6 @@ def raw_bundle_path(args: argparse.Namespace) -> Path:
     raise FileNotFoundError(f"Deal raw context not found: {workspace_path} or {fallback}")
 
 
-def normalized_communications_for_snapshot(
-    current_deal_dir: Path,
-    deal_id: str,
-    raw_bundle: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Read the already saved canonical ledger; never refresh Bitrix from change detection."""
-    history_path = (
-        current_deal_dir / "raw" / f"deal_{deal_id}_customer_history_bundle.json"
-    )
-    history: dict[str, Any] | None = None
-    if history_path.exists():
-        try:
-            value = load_json(history_path)
-        except (OSError, ValueError):
-            value = None
-        if isinstance(value, dict):
-            history = include_source_lead_communications(
-                value,
-                raw_bundle,
-                deal_id=str(deal_id),
-            )
-    return build_deal_normalized_communications(raw_bundle, history)
-
-
 def latest_transcript_or_none(transcripts_dir: Path) -> Path | None:
     candidates = sorted(
         [
@@ -195,6 +172,42 @@ def analysis_paths(current_deal_dir: Path, deal_id: str) -> dict[str, Path]:
         "prompt": analysis_dir / f"deal_{deal_id}_request_prompt.txt",
         "error": analysis_dir / f"deal_{deal_id}_analysis_error.json",
     }
+
+
+PAID_PERSIST_FAILURE_STAGE = "persist_after_paid_llm"
+PAID_PERSIST_FAILURE_RETRY_AFTER = timedelta(hours=24)
+
+
+class PaidRetrySuppressedError(RuntimeError):
+    """The same snapshot was already paid for but its result could not be persisted."""
+
+
+def recent_paid_persist_failure(
+    db_path: Path,
+    deal_id: str,
+    fingerprint: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Return the ERROR run that blocks an automatic paid retry of this fingerprint."""
+    run = get_latest_analysis_run(
+        db_path,
+        entity_type="deal",
+        entity_id=str(deal_id),
+        statuses=(ERROR,),
+        fingerprint=fingerprint,
+    )
+    reason = (run or {}).get("decision_reason")
+    if not isinstance(reason, dict) or reason.get("failure_stage") != PAID_PERSIST_FAILURE_STAGE:
+        return None
+    try:
+        created_at = datetime.fromisoformat(str(run.get("created_at") or ""))
+    except ValueError:
+        return None
+    if created_at.tzinfo is None:
+        return None
+    current = now or datetime.fromisoformat(utcish_now())
+    return run if current - created_at < PAID_PERSIST_FAILURE_RETRY_AFTER else None
 
 
 def run_existing_analyzer(
@@ -560,13 +573,15 @@ def main() -> None:
     db_path = db_path_from_args(args.db_path)
     current_deal_dir = deal_dir(args)
     paths = analysis_paths(current_deal_dir, str(args.deal_id))
+    fingerprint: str | None = None
+    paid_llm_status: str | None = None
 
     try:
         init_db(db_path)
         raw_path = raw_bundle_path(args)
         transcript_path, analyzer_transcript_arg = resolve_transcript_for_snapshot(args.transcript, current_deal_dir)
         raw_bundle = load_json(raw_path)
-        normalized_communications = normalized_communications_for_snapshot(
+        normalized_communications = workspace_normalized_communications(
             current_deal_dir,
             str(args.deal_id),
             raw_bundle,
@@ -609,6 +624,17 @@ def main() -> None:
             print(f"Fingerprint: {fingerprint}")
             print("Dry run: snapshot and SQLite state were not changed.")
             return
+
+        if (
+            decision.status in {FIRST_FULL_ANALYSIS, FULL_LLM_ANALYSIS, INCREMENTAL_LLM_ANALYSIS}
+            and not args.force_llm
+        ):
+            blocking_run = recent_paid_persist_failure(db_path, str(args.deal_id), fingerprint)
+            if blocking_run is not None:
+                raise PaidRetrySuppressedError(
+                    "paid_llm_retry_suppressed: analysis_run "
+                    f"{blocking_run['id']} already paid for this fingerprint but was not persisted"
+                )
 
         save_json(paths["snapshot"], {"fingerprint": fingerprint, "snapshot": snapshot, "diff": diff})
         canonical_state = canonical_delta = None
@@ -662,6 +688,7 @@ def main() -> None:
                         incremental_context=paths["incremental"],
                         db_path=db_path,
                     )
+                    paid_llm_status = INCREMENTAL_LLM_ANALYSIS
                 except Exception as incremental_error:
                     logger.warning(
                         "Incremental deal analysis failed; running one FULL_REBUILD: %s",
@@ -728,6 +755,7 @@ def main() -> None:
                 analyzer_transcript_arg,
                 db_path=db_path,
             )
+            paid_llm_status = decision.status
             persist_kwargs = {
                 "db_path": db_path,
                 "args": args,
@@ -848,6 +876,11 @@ def main() -> None:
                 entity_type="deal",
                 entity_id=str(args.deal_id),
                 status=ERROR,
+                fingerprint=fingerprint if paid_llm_status else None,
+                decision_reason=(
+                    {"failure_stage": PAID_PERSIST_FAILURE_STAGE, "decision_status": paid_llm_status}
+                    if paid_llm_status else None
+                ),
                 model=args.model,
                 prompt_version=DEAL_PROMPT_CACHE_KEY,
                 logic_version="change-aware-v1",

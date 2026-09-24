@@ -43,6 +43,7 @@ from openai_api.llm.deal_current_situation import (
 from openai_api.llm.deal_evidence import (
     inbound_evidence_ids_present_in_prompt,
     transcript_evidence_ids_for_input,
+    workspace_normalized_communications,
 )
 from openai_api.llm.llm_client import (
     ModelJsonParseError,
@@ -268,7 +269,12 @@ def load_raw_bundle_for_prompt_provenance(deal_dir: Path, deal_id: str) -> dict[
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return value if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        **value,
+        "normalized_communications": workspace_normalized_communications(deal_dir, deal_id, value),
+    }
 
 
 FULL_ANALYSIS_KNOWLEDGE_FILES = {

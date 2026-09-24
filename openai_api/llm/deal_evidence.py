@@ -11,12 +11,39 @@ from pathlib import Path
 from typing import Any
 
 from bitrix.customer_history import build_deal_normalized_communications, is_confirmed_client_reply
+from bitrix.deals.communication_history import include_source_lead_communications
 from openai_api.audio.transcript_context import AGGREGATE_STEM, transcript_items
-from openai_api.change_detection.snapshot import activity_kind, result_item, result_items, text_hash
+from openai_api.change_detection.snapshot import activity_kind, load_json, result_item, result_items, text_hash
 
 
 class EvidenceDeltaError(ValueError):
     """The available sources cannot prove a safe V2 evidence delta."""
+
+
+def workspace_normalized_communications(
+    deal_dir: Path,
+    deal_id: str,
+    raw_bundle: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Read the already saved canonical ledger; never refresh Bitrix.
+
+    The single communication source for change detection, available evidence
+    and FULL prompt provenance: raw context plus the saved customer history.
+    """
+    history_path = Path(deal_dir) / "raw" / f"deal_{deal_id}_customer_history_bundle.json"
+    history: dict[str, Any] | None = None
+    if history_path.exists():
+        try:
+            value = load_json(history_path)
+        except (OSError, ValueError):
+            value = None
+        if isinstance(value, dict):
+            history = include_source_lead_communications(
+                value,
+                raw_bundle,
+                deal_id=str(deal_id),
+            )
+    return build_deal_normalized_communications(raw_bundle, history)
 
 
 def _activity_rows(raw_bundle: dict[str, Any]) -> list[dict[str, Any]]:
@@ -51,22 +78,25 @@ def _digit_id(value: Any) -> str:
     return text if text.isdigit() else ""
 
 
-def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> list[dict[str, Any]]:
-    evidence: dict[str, dict[str, Any]] = {}
+def _collect_evidence_with_source_ids(
+    raw_bundle: dict[str, Any],
+    transcripts_dir: Any,
+) -> dict[str, tuple[dict[str, Any], tuple[str, ...]]]:
+    evidence: dict[str, tuple[dict[str, Any], tuple[str, ...]]] = {}
     for item in transcript_items(transcripts_dir, "deal", str(raw_bundle.get("deal_id") or "")):
         activity_id = str(item.get("activity_id") or "").strip()
         text = str(item.get("text") or "").strip()
         if not activity_id or not text:
             continue
         evidence_id = f"call:{activity_id}"
-        evidence[evidence_id] = {
+        evidence[evidence_id] = ({
             "evidence_id": evidence_id,
             "kind": "call_transcript",
             "activity_id": activity_id,
             "occurred_at": str(item.get("call_start") or ""),
             "content_hash": text_hash(text),
             "text": text,
-        }
+        }, (activity_id,))
 
     for row in _activity_rows(raw_bundle):
         if row["kind"] not in {"email", "message"} or not _is_inbound(row["direction"]):
@@ -76,7 +106,7 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
             continue
         prefix = "email" if row["kind"] == "email" else "message"
         evidence_id = f"{prefix}:{row['activity_id']}"
-        evidence[evidence_id] = {
+        evidence[evidence_id] = ({
             "evidence_id": evidence_id,
             "kind": f"inbound_{prefix}",
             "activity_id": row["activity_id"],
@@ -84,7 +114,7 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
             "content_hash": text_hash(text),
             "subject": row["subject"],
             "text": text,
-        }
+        }, (row["activity_id"],))
 
     communications = raw_bundle.get("normalized_communications")
     if not isinstance(communications, list):
@@ -93,13 +123,16 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
         if not isinstance(event, dict) or not is_confirmed_client_reply(event):
             continue
         source_ids = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
-        source_id = next(filter(None, map(_digit_id, source_ids)), "")
+        numeric_ids = tuple(dict.fromkeys(filter(None, map(_digit_id, source_ids))))
         text = str(event.get("content") or "").strip()
-        if not source_id or not text:
+        if not numeric_ids or not text:
             continue
+        # The id stays the first sorted numeric source id: stored evidence_coverage
+        # rows are keyed by it, so changing the rule would re-deliver old messages.
+        source_id = numeric_ids[0]
         prefix = "email" if str(event.get("channel") or "").lower() == "email" else "message"
         evidence_id = f"{prefix}:{source_id}"
-        evidence[evidence_id] = {
+        evidence[evidence_id] = ({
             "evidence_id": evidence_id,
             "kind": f"inbound_{prefix}",
             "activity_id": source_id,
@@ -107,8 +140,15 @@ def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> l
             "content_hash": text_hash(text),
             "subject": str(event.get("subject") or ""),
             "text": text,
-        }
-    return sorted(evidence.values(), key=lambda item: (item["occurred_at"], item["evidence_id"]))
+        }, numeric_ids)
+    return evidence
+
+
+def collect_deal_evidence(raw_bundle: dict[str, Any], transcripts_dir: Any) -> list[dict[str, Any]]:
+    return sorted(
+        (item for item, _source_ids in _collect_evidence_with_source_ids(raw_bundle, transcripts_dir).values()),
+        key=lambda item: (item["occurred_at"], item["evidence_id"]),
+    )
 
 
 def coverage_from_evidence(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -227,15 +267,20 @@ def inbound_evidence_ids_present_in_prompt(
 ) -> list[str]:
     """Return inbound evidence identities whose activity and text are in prompt.
 
-    Requiring both the activity id and its client text avoids guessing coverage
-    merely because an activity exists in the local workspace.
+    Requiring both an activity id and its client text avoids guessing coverage
+    merely because an activity exists in the local workspace. Any source id of
+    a deduplicated CRM mirror proves the same event. ``raw_bundle`` must carry
+    the same ``normalized_communications`` as the available evidence.
     """
     included: set[str] = set()
-    for item in collect_deal_evidence(raw_bundle, Path("__no_transcripts__")):
+    for item, source_ids in _collect_evidence_with_source_ids(raw_bundle, Path("__no_transcripts__")).values():
         if item.get("kind") not in {"inbound_email", "inbound_message"}:
             continue
-        activity_id = str(item.get("activity_id") or "").strip()
         evidence_text = str(item.get("text") or "").strip()
-        if activity_id and evidence_text and activity_id in prompt_text and evidence_text in prompt_text:
+        if (
+            evidence_text
+            and evidence_text in prompt_text
+            and any(source_id and source_id in prompt_text for source_id in source_ids)
+        ):
             included.add(str(item["evidence_id"]))
     return sorted(included)

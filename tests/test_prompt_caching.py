@@ -148,6 +148,30 @@ class PromptCachingRequestTests(unittest.TestCase):
         self.assertIn("сырой ответ", attempts[1]["raw_output_text"])
         self.assertIsNone(attempts[1]["error"])
 
+    def test_gpt6_family_uses_explicit_breakpoints(self) -> None:
+        prompt = "STATIC CONTRACT\n\n## ID СДЕЛКИ\n24193"
+        stable_prefix = "STATIC CONTRACT\n\n"
+        for model in ("gpt-6-sol", "gpt-6-luna"):
+            with self.subTest(model=model):
+                request_input, options, cache = _cache_request(
+                    prompt,
+                    model=model,
+                    prompt_cache_key="neuro-rop:full-deal:v3",
+                    stable_prefix=stable_prefix,
+                    disable_implicit_cache=False,
+                )
+                content = request_input[0]["content"]
+                self.assertEqual(cache["mode"], "explicit")
+                self.assertEqual(cache["breakpoint_count"], 1)
+                self.assertEqual(content[0]["text"], stable_prefix)
+                self.assertEqual(content[0]["prompt_cache_breakpoint"], {"mode": "explicit"})
+                self.assertEqual("".join(block["text"] for block in content), prompt)
+                self.assertEqual(
+                    options["extra_body"]["prompt_cache_options"],
+                    {"mode": "explicit", "ttl": "30m"},
+                )
+                self.assertEqual(options["prompt_cache_key"], "neuro-rop:full-deal:v3")
+
     def test_pre_56_model_keeps_legacy_request_shape(self) -> None:
         prompt = "STATIC\nDYNAMIC"
         with patch("openai_api.llm.llm_client.client.responses.create", return_value=response()) as create:

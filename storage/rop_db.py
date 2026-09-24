@@ -2382,6 +2382,7 @@ def get_latest_analysis_run(
     entity_type: str,
     entity_id: str,
     statuses: tuple[str, ...] | None = None,
+    fingerprint: str | None = None,
 ) -> dict[str, Any] | None:
     init_db(db_path)
     status_values = tuple(str(status) for status in statuses or ())
@@ -2390,6 +2391,9 @@ def get_latest_analysis_run(
     if status_values:
         status_clause = f" AND status IN ({','.join('?' for _ in status_values)})"
         params.extend(status_values)
+    if fingerprint is not None:
+        status_clause += " AND fingerprint = ?"
+        params.append(str(fingerprint))
     with connect(db_path) as conn:
         row = conn.execute(
             f"""
