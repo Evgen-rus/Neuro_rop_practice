@@ -243,7 +243,7 @@ def _cache_request(
         if len(prefix) <= previous_length:
             raise ValueError("Cache prefixes must be unique and ordered from shortest to longest")
         previous_length = len(prefix)
-    supports_explicit_cache = model.lower().startswith("gpt-5.6")
+    supports_explicit_cache = model.lower().startswith(("gpt-5.6", "gpt-6"))
     if (effective_prefixes or disable_implicit_cache) and not supports_explicit_cache:
         request_options = {"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}
         return prompt, request_options, {
