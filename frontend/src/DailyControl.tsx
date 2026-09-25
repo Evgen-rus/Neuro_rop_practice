@@ -17,7 +17,23 @@ import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
-import { businessReportWarnings, dailyTaskTotals, firstUnreviewedDeal, matchesDailySearch, hasReportDayWork, reportDayLabels, reportHeading, shouldOpenLatestReport, snapshotDayText, sortDailyReviewDeals } from './dailyControlView'
+import {
+  businessReportWarnings,
+  dailyTaskTotals,
+  dealMatchesDailyTrafficStatus,
+  DAILY_TRAFFIC_STATUSES,
+  firstUnreviewedDeal,
+  hasReportDayWork,
+  matchesDailySearch,
+  meaningfulAttentionReason,
+  reportDayLabels,
+  reportHeading,
+  shouldOpenLatestReport,
+  snapshotDayText,
+  sortDailyReviewDeals,
+  toggleDailyTrafficStatus,
+  type DailyTrafficStatus,
+} from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
@@ -26,9 +42,8 @@ const SPLITTER_MIN = 280
 const SPLITTER_MAX_MARGIN = 320
 const SPLITTER_STEP = 24
 const EMPTY_DEALS: DailyControlDeal[] = []
-type DailyTrafficFilter = 'all' | 'red' | 'yellow' | 'green'
-const STATUS_FILTERS: Array<{ id: DailyTrafficFilter; label: string }> = [
-  { id: 'all', label: 'Все' },
+const ALL_DAILY_TRAFFIC_STATUSES = new Set<DailyTrafficStatus>(DAILY_TRAFFIC_STATUSES)
+const STATUS_FILTERS: Array<{ id: DailyTrafficStatus; label: string }> = [
   { id: 'red', label: 'Красные' },
   { id: 'yellow', label: 'Жёлтые' },
   { id: 'green', label: 'Зелёные' },
@@ -163,7 +178,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [generation, setGeneration] = useState<DailyControlGeneration | null>(null)
   const [managerId, setManagerId] = useState('')
   const [dealId, setDealId] = useState('')
-  const [filter, setFilter] = useState<DailyTrafficFilter>('all')
+  const [activeStatuses, setActiveStatuses] = useState<Set<DailyTrafficStatus>>(() => new Set(ALL_DAILY_TRAFFIC_STATUSES))
   const reviewStarted = useRef(false)
   const historyPinned = useRef(false)
   const currentReportId = useRef<number | undefined>(undefined)
@@ -196,10 +211,10 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }, [selectedManager, searchedDeals])
   const visibleDeals = useMemo(
     () => sortDailyReviewDeals(
-      managerDeals.filter((deal) => filter === 'all' || deal.status === filter),
+      managerDeals.filter((deal) => dealMatchesDailyTrafficStatus(deal, activeStatuses)),
       reviewedDealIds,
     ),
-    [filter, managerDeals, reviewedDealIds],
+    [activeStatuses, managerDeals, reviewedDealIds],
   )
   const selectedDeal = visibleDeals.find((deal) => deal.deal_id === dealId) || visibleDeals[0] || null
 
@@ -249,7 +264,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   useEffect(() => {
     setAsked({})
     setSearch('')
-    setFilter('all')
+    setActiveStatuses(new Set(ALL_DAILY_TRAFFIC_STATUSES))
   }, [report?.id])
 
   useEffect(() => {
@@ -326,11 +341,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
     }, { root })
     observer.observe(row)
     return () => observer.disconnect()
-  }, [dealId, filter, managerId, report?.id, reviewedDealIds, search, selectedDeal, visibleDeals])
+  }, [activeStatuses, dealId, managerId, report?.id, reviewedDealIds, search, selectedDeal, visibleDeals])
 
   useLayoutEffect(() => {
     dealScrollRef.current?.scrollTo({ top: 0 })
-  }, [filter, managerId, search])
+  }, [activeStatuses, managerId, search])
 
   useEffect(() => {
     if (!dragging) return
@@ -354,12 +369,14 @@ export function DailyControl({ user }: { user: AuthUser }) {
 
   function selectManager(next: DailyControlManager) {
     reviewStarted.current = true
-    setManagerId(String(next.manager_id || ''))
-    setFilter('all')
     const wanted = String(next.manager_id || '')
+    setManagerId(wanted)
     const first = firstUnreviewedDeal(
       sortDailyReviewDeals(
-        searchedDeals.filter((deal) => String(deal.manager_id || '') === wanted),
+        searchedDeals.filter((deal) => (
+          String(deal.manager_id || '') === wanted
+          && dealMatchesDailyTrafficStatus(deal, activeStatuses)
+        )),
         reviewedDealIds,
       ),
       reviewedDealIds,
@@ -367,11 +384,12 @@ export function DailyControl({ user }: { user: AuthUser }) {
     setDealId(first?.deal_id || '')
   }
 
-  function selectFilter(next: DailyTrafficFilter) {
+  function selectStatus(status: DailyTrafficStatus) {
     reviewStarted.current = true
-    setFilter(next)
+    const nextStatuses = toggleDailyTrafficStatus(activeStatuses, status)
+    setActiveStatuses(nextStatuses)
     const deals = sortDailyReviewDeals(
-      managerDeals.filter((deal) => next === 'all' || deal.status === next),
+      managerDeals.filter((deal) => dealMatchesDailyTrafficStatus(deal, nextStatuses)),
       reviewedDealIds,
     )
     setDealId(firstUnreviewedDeal(deals, reviewedDealIds)?.deal_id || '')
@@ -393,7 +411,12 @@ export function DailyControl({ user }: { user: AuthUser }) {
     const currentHits = hits.filter((deal) => String(deal.manager_id || '') === wanted)
     const stillVisible = currentHits.find((deal) => deal.deal_id === dealId)
     if (stillVisible) {
-      setFilter((current) => (current === 'all' || stillVisible.status === current ? current : 'all'))
+      if (stillVisible.status !== 'neutral') {
+        const status = stillVisible.status
+        if (!activeStatuses.has(status)) {
+          setActiveStatuses((current) => new Set([...current, status]))
+        }
+      }
       return
     }
     const target = currentHits[0] || hits[0]
@@ -402,7 +425,12 @@ export function DailyControl({ user }: { user: AuthUser }) {
       setManagerId(String(target.manager_id || ''))
     }
     setDealId(target.deal_id)
-    setFilter((current) => (current === 'all' || target.status === current ? current : 'all'))
+    if (target.status !== 'neutral') {
+      const status = target.status
+      if (!activeStatuses.has(status)) {
+        setActiveStatuses((current) => new Set([...current, status]))
+      }
+    }
   }
 
   async function openReport(id: number | null | undefined) {
@@ -492,7 +520,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const heading = report ? reportHeading(report) : 'Ежедневный контроль'
   const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
   const managerCounts = {
-    all: managerDeals.length,
     red: managerDeals.filter((deal) => deal.status === 'red').length,
     yellow: managerDeals.filter((deal) => deal.status === 'yellow').length,
     green: managerDeals.filter((deal) => deal.status === 'green').length,
@@ -503,7 +530,10 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }
 
   return (
-    <section className="dc-daily">
+    <section
+      className="dc-daily"
+      style={{ '--dc-daily-left': `${leftWidth}px` } as CSSProperties}
+    >
       <header className="dc-daily-head">
         <div className="dc-daily-head-copy">
           <h1>{heading}</h1>
@@ -534,11 +564,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
             <h2>Итог команды за день</h2>
             <small>Срез {formatClock(report?.cutoff_at) || 'нет'} · {managerCountLabel(managers.length)}</small>
           </div>
-          <article className="dc-daily-lights">
-            <header>
-              <span>Светофор сделок</span>
-              <small>приоритет РОПа</small>
-            </header>
+          <article className="dc-daily-lights" aria-label="Светофор сделок">
             <div className="dc-daily-traffic">
               <div className="dc-daily-lamp" aria-hidden="true">
                 <span className="red">{team.traffic_light.red}</span>
@@ -552,11 +578,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               </ul>
             </div>
           </article>
-          <article className="dc-daily-metrics">
-            <header>
-              <span>Итог за день</span>
-              <small>сделки и активность</small>
-            </header>
+          <article className="dc-daily-metrics" aria-label="Сводка за день">
             <div>
               <div>
                 <span className="dc-daily-metric-icon"><DailyIcon name="briefcase" /></span>
@@ -588,6 +610,45 @@ export function DailyControl({ user }: { user: AuthUser }) {
           {managers.length ? managers.map((manager) => {
             const id = String(manager.manager_id || '')
             const selected = id === String(selectedManager?.manager_id || '')
+            const statusItems = STATUS_FILTERS.map((item) => {
+              const active = activeStatuses.has(item.id)
+              const label = item.id === 'red' ? 'срочно' : item.id === 'yellow' ? 'проверить' : 'в норме'
+              if (!selected) {
+                return (
+                  <span
+                    key={item.id}
+                    className={`dc-daily-manager-count ${item.id}`}
+                    aria-label={`${label}: ${manager[item.id]}`}
+                  >
+                    <i className={item.id} aria-hidden="true" />
+                    {manager[item.id]}
+                  </span>
+                )
+              }
+              return (
+                <span
+                  key={item.id}
+                  className={`dc-daily-manager-status ${item.id}${active ? ' active' : ''}`}
+                  role="switch"
+                  aria-checked={active}
+                  aria-label={`${label}: ${active ? 'включён' : 'отключён'}`}
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    selectStatus(item.id)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    selectStatus(item.id)
+                  }}
+                >
+                  <i className={item.id} aria-hidden="true" />
+                  {manager[item.id]} {label}
+                </span>
+              )
+            })
             return (
               <button
                 type="button"
@@ -599,13 +660,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               >
                 <strong>{manager.manager_name}</strong>
                 <small>{manager.deals_count} сделок · {manager.calls} звонков · {manager.messages} сообщений · {talkDuration(manager.talk_seconds)}</small>
-                <em aria-label={`${manager.red} срочно, ${manager.yellow} проверить, ${manager.green} в норме`}>
-                  <i className="red" aria-hidden="true" />{manager.red} срочно
-                  <b aria-hidden="true">·</b>
-                  <i className="yellow" aria-hidden="true" />{manager.yellow} проверить
-                  <b aria-hidden="true">·</b>
-                  <i className="green" aria-hidden="true" />{manager.green} в норме
-                </em>
+                <em>{statusItems}</em>
               </button>
             )
           }) : <p className="dc-daily-empty-list">В этом отчёте сделок нет.</p>}
@@ -614,43 +669,34 @@ export function DailyControl({ user }: { user: AuthUser }) {
         <div
           className={`dc-daily-split ${dragging ? 'dragging' : ''}`}
           ref={layoutRef}
-          style={{ '--dc-daily-left': `${leftWidth}px` } as CSSProperties}
         >
           <section className="dc-daily-list" aria-label="Сделки менеджера">
-            <header>
-              <div>
-                <div className="dc-daily-list-head-row">
-                  <h2>{selectedManager?.manager_name || 'Сделки отчёта'}</h2>
-                  <input
-                    className="dc-daily-search"
-                    type="search"
-                    aria-label="Поиск по сделкам всего отчёта"
-                    placeholder="Найти сделку, ID или задачу"
-                    value={search}
-                    onChange={(event) => applySearch(event.target.value)}
-                    onClick={(event) => event.stopPropagation()}
-                  />
-                </div>
-                {selectedManager ? (
-                  <>
-                    <p>{selectedManager.deals_count} сделок · {selectedManager.calls} звонков · {selectedManager.messages} сообщений · {talkTime(selectedManager.talk_seconds)}</p>
-                    <p>Работа за {formatMoscowDateTime(report!.business_date, { day: 'numeric', month: 'long' })} · до {formatClock(report?.cutoff_at)} МСК</p>
-                  </>
-                ) : null}
+            <div className="dc-daily-manager-integrated" aria-label="Выбранный менеджер и фильтры сделок">
+              <div className="dc-daily-manager-integrated-head">
+                <strong>{selectedManager?.manager_name || 'Выбранный менеджер'}</strong>
+                <small>{selectedManager?.deals_count || 0} сделок · {selectedManager?.calls || 0} звонков · {selectedManager?.messages || 0} сообщений · {talkDuration(selectedManager?.talk_seconds || 0)}</small>
               </div>
-            </header>
-            <div className="dc-daily-filters">
-              {STATUS_FILTERS.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={filter === item.id ? 'active' : ''}
-                  aria-pressed={filter === item.id}
-                  onClick={() => selectFilter(item.id)}
-                >
-                  {item.label} · {managerCounts[item.id]}
-                </button>
-              ))}
+              <div className="dc-daily-manager-filters">
+                {STATUS_FILTERS.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={activeStatuses.has(item.id) ? 'active' : ''}
+                    aria-pressed={activeStatuses.has(item.id)}
+                    onClick={() => selectStatus(item.id)}
+                  >
+                    {item.label} · {managerCounts[item.id]}
+                  </button>
+                ))}
+                <input
+                  type="search"
+                  aria-label="Поиск по сделкам всего отчёта"
+                  placeholder="Найти сделку, ID или задачу"
+                  value={search}
+                  onChange={(event) => applySearch(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </div>
             </div>
             {offscreenDealId === selectedDeal?.deal_id && selectedDeal ? <button
               type="button"
@@ -679,7 +725,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
                     ? 'По поиску сделок нет.'
                     : search.trim() && !managerDeals.length
                       ? 'У этого менеджера таких сделок нет.'
-                      : 'В этой категории сделок нет. Выберите другой фильтр.'}
+                      : 'В выбранных статусах сделок нет. Включите нужный фильтр.'}
                 </p>
               )}
             </div>
@@ -702,6 +748,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               onToggleAsked={toggleAsked}
               onCopyScript={() => void copyScript()}
               copyNotice={copyNotice}
+              showStatus={false}
               snapshotDay
               snapshotCutoffAt={report.cutoff_at}
             />
@@ -731,6 +778,7 @@ function DealRow({
 }) {
   const communications = deal.communications_today
   const dayLabels = reportDayLabels(deal, cutoffAt)
+  const attentionReason = meaningfulAttentionReason(deal.attention_reason)
   return (
     <div
       ref={rowRef}
@@ -776,7 +824,9 @@ function DealRow({
         {dayLabels.length ? <div className="dc-daily-day-labels" aria-label="Почему сделка в отчёте и какая работа зафиксирована">
           {dayLabels.map((item) => <span className={item.kind} key={item.text}>{item.text}</span>)}
         </div> : null}
-        <p className={selected ? 'full' : 'clamp'}>{snapshotDayText(deal.attention_reason)}</p>
+        {attentionReason
+          ? <p className={selected ? 'full' : 'clamp'}>{attentionReason}</p>
+          : null}
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>

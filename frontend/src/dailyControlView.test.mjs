@@ -5,7 +5,37 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ts from 'typescript'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView.ts'
-import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DEFAULT_TIME_FILTER, dealMatchesTime, firstReviewDeal, firstUnreviewedDeal, matchesDailySearch, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDailyReviewDeals, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary } from './dailyControlView.ts'
+import { businessReportWarnings, canFilterReport, communicationDayLabels, dailyTaskTotals, DAILY_TRAFFIC_STATUSES, DEFAULT_TIME_FILTER, dealMatchesDailyTrafficStatus, dealMatchesTime, firstReviewDeal, firstUnreviewedDeal, matchesDailySearch, meaningfulAttentionReason, reportDayLabels, reportHeading, shouldOpenLatestReport, sortDailyReviewDeals, sortDayTasks, taskDeadlineLabel, taskStripStatus, tasksStripSummary, toggleDailyTrafficStatus } from './dailyControlView.ts'
+
+test('traffic filters start with all three statuses and toggle independently', () => {
+  const original = new Set(DAILY_TRAFFIC_STATUSES)
+  const withoutRed = toggleDailyTrafficStatus(original, 'red')
+  const onlyGreen = toggleDailyTrafficStatus(withoutRed, 'yellow')
+  const allOff = toggleDailyTrafficStatus(onlyGreen, 'green')
+  const redBack = toggleDailyTrafficStatus(allOff, 'red')
+  const yellowBack = toggleDailyTrafficStatus(redBack, 'yellow')
+  const allBack = toggleDailyTrafficStatus(yellowBack, 'green')
+
+  assert.deepEqual([...original], ['red', 'yellow', 'green'])
+  assert.deepEqual([...withoutRed], ['yellow', 'green'])
+  assert.deepEqual([...onlyGreen], ['green'])
+  assert.deepEqual([...allOff], [])
+  assert.deepEqual([...redBack], ['red'])
+  assert.deepEqual([...yellowBack], ['red', 'yellow'])
+  assert.deepEqual([...allBack], ['red', 'yellow', 'green'])
+  assert.deepEqual([...original], ['red', 'yellow', 'green'])
+})
+
+test('traffic filters combine statuses and never expose neutral deals as green', () => {
+  const statusDeals = ['red', 'yellow', 'green', 'neutral'].map((status) => ({ status }))
+  const greenOnly = new Set(['green'])
+  assert.deepEqual(statusDeals.filter((deal) => dealMatchesDailyTrafficStatus(deal, greenOnly)).map((deal) => deal.status), ['green'])
+  assert.deepEqual(
+    statusDeals.filter((deal) => dealMatchesDailyTrafficStatus(deal, new Set(['red', 'green']))).map((deal) => deal.status),
+    ['red', 'green'],
+  )
+  assert.deepEqual(statusDeals.filter((deal) => dealMatchesDailyTrafficStatus(deal, new Set())).map((deal) => deal.status), [])
+})
 
 const deals = ['today', 'overdue', 'missing', 'tomorrow', 'future', 'unscheduled'].map((bucket, index) => ({
   deal_id: String(index), manager_id: '1', status: index === 3 ? 'red' : 'yellow', bitrix_task_time_bucket: bucket,
@@ -94,14 +124,34 @@ test('untouched obligation stays in the report without a separate badge', () => 
   assert.equal(dealMatchesTime(deal, 'today'), true)
 })
 
+test('template attention reasons stay hidden while a real deal reason survives', () => {
+  for (const placeholder of [
+    'На этот день нет актуальной задачи или контрольной точки; содержательной коммуникации не было.',
+    'На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.',
+    'В этот день по актуальной задаче не было содержательной клиентской коммуникации. Попытки дозвона не дают единицы.',
+    'В этот день коммуникаций нет',
+    'Ожидает корректной AI-оценки работы этого дня.',
+    'AI не подтвердил содержательную работу в коммуникациях этого дня.',
+  ]) assert.equal(meaningfulAttentionReason(placeholder), '', placeholder)
+
+  assert.equal(meaningfulAttentionReason('Клиент просит отсрочку платежа до 20 сентября.'), 'Клиент просит отсрочку платежа до 20 сентября.')
+  assert.equal(meaningfulAttentionReason('Просрочена к срезу'), 'Просрочена к срезу')
+  assert.equal(meaningfulAttentionReason(''), '')
+  assert.equal(meaningfulAttentionReason(null), '')
+})
+
 test('report heading puts date and cutoff time in the title', () => {
   assert.equal(
     reportHeading({ creation_kind: 'automatic_planning', business_date: '2026-08-27', cutoff_at: '2026-08-27T15:45:00+03:00' }),
-    'Состояние команды на четверг, 27 августа 2026 — срез на 15:45 МСК',
+    'Состояние команды на 27.08.26 — срез на 15:45 МСК',
   )
   assert.equal(
     reportHeading({ creation_kind: 'automatic_day_end', business_date: '2026-08-27', cutoff_at: '2026-08-27T23:00:00+03:00' }),
-    'Итог команды за четверг, 27 августа 2026 — срез на 23:00 МСК',
+    'Итог команды за 27.08.26 — срез на 23:00 МСК',
+  )
+  assert.equal(
+    reportHeading({ creation_kind: 'manual', business_date: '2026-09-04', cutoff_at: '2026-09-04T11:58:00+03:00' }),
+    'Ручной слепок за 04.09.26 — на 11:58 МСК',
   )
   assert.equal(reportHeading({ heading: 'Сохранённый заголовок' }), 'Сохранённый заголовок')
 })
@@ -409,6 +459,27 @@ test('pending quality keeps confirmed scores and shows the evaluated boundary', 
   assert.match(html, /Новую дату пока не назначаем/)
   assert.equal((html.match(/dc-daily-criterion good/g) || []).length, 2)
   assert.equal((html.match(/dc-daily-criterion bad/g) || []).length, 1)
+})
+
+test('daily review card can omit the duplicate status pill without hiding the deal title', () => {
+  const deal = {
+    ...communicationDeal([]),
+    title: 'Тестовая сделка',
+    status: 'red',
+    status_label: 'Требует решения РОПа',
+    summary_for_rop: 'Нужен разбор.',
+    generic_question: 'Вопрос 1',
+    direct_question: 'Вопрос 2',
+    ai_context: { manager_coaching: '', known: [], unknowns: [] },
+    quality: { status: 'insufficient_evidence', insufficient_reason: 'Нет данных', zero_reasons: [], criteria: {
+      next_action: { score: null }, value_development: { score: null }, data_collection: { score: null },
+    } },
+  }
+  const html = renderToStaticMarkup(createElement(DealReviewCard, {
+    deal, asked: [false, false], onToggleAsked() {}, onCopyScript() {}, copyNotice: '', showStatus: false,
+  }))
+  assert.doesNotMatch(html, /Требует решения РОПа/)
+  assert.match(html, /<h2>Тестовая сделка<\/h2>/)
 })
 
 test('review card shows quality, then today communications, then focus, with per-criterion argumentation', () => {

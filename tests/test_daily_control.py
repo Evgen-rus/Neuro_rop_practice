@@ -1039,11 +1039,11 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(first["cutoff_at"][:16], "2026-08-31T15:45")
         self.assertEqual(
             report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
-            "Состояние команды на понедельник, 31 августа 2026 — срез на 15:45 МСК",
+            "Состояние команды на 31.08.26 — срез на 15:45 МСК",
         )
         self.assertEqual(
             report_payload(int(first["id"]), {"role": "admin"}, db_path=self.db_path, now=due)["heading"],
-            "Состояние команды на понедельник, 31 августа 2026 — срез на 15:45 МСК",
+            "Состояние команды на 31.08.26 — срез на 15:45 МСК",
         )
         self.crm_refresh.assert_called()
 
@@ -1072,7 +1072,7 @@ class DailyControlStorageTests(unittest.TestCase):
         self.assertEqual(first["cutoff_at"][:16], "2026-08-18T23:00")
         self.assertEqual(
             report_heading(first["creation_kind"], first["business_date"], first["cutoff_at"]),
-            "Итог команды за вторник, 18 августа 2026 — срез на 23:00 МСК",
+            "Итог команды за 18.08.26 — срез на 23:00 МСК",
         )
         self.assertEqual(len(list_daily_control_reports(self.db_path)), 2)
 
@@ -1310,9 +1310,9 @@ class DailySnapshotSelectionTests(unittest.TestCase):
     def test_heading_uses_kind_date_and_cutoff_time(self) -> None:
         planning = datetime(2026, 8, 27, 15, 45, tzinfo=MSK_TZ)
         final = datetime(2026, 8, 27, 23, 0, tzinfo=MSK_TZ)
-        self.assertEqual(report_heading("automatic_planning", "2026-08-27", planning), "Состояние команды на четверг, 27 августа 2026 — срез на 15:45 МСК")
-        self.assertEqual(report_heading("automatic_day_end", "2026-08-27", final), "Итог команды за четверг, 27 августа 2026 — срез на 23:00 МСК")
-        self.assertEqual(report_heading("manual", "2026-08-27", NOW), "Ручной слепок за четверг, 27 августа 2026 — на 16:00 МСК")
+        self.assertEqual(report_heading("automatic_planning", "2026-08-27", planning), "Состояние команды на 27.08.26 — срез на 15:45 МСК")
+        self.assertEqual(report_heading("automatic_day_end", "2026-08-27", final), "Итог команды за 27.08.26 — срез на 23:00 МСК")
+        self.assertEqual(report_heading("manual", "2026-08-27", NOW), "Ручной слепок за 27.08.26 — на 16:00 МСК")
 
     def test_future_deal_with_internal_activity_stays_out_unless_client_contact(self) -> None:
         from storage.rop_db import record_manager_trajectory_event

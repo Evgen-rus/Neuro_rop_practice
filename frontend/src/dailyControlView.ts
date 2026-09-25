@@ -3,6 +3,26 @@ import { formatMoscowDateTime, moscowDateInputValue, parseMoscowDateTime } from 
 
 export type DailyControlTimeFilter = 'all' | 'today' | 'tomorrow' | 'future'
 export const DEFAULT_TIME_FILTER: DailyControlTimeFilter = 'all'
+export type DailyTrafficStatus = 'red' | 'yellow' | 'green'
+export const DAILY_TRAFFIC_STATUSES: readonly DailyTrafficStatus[] = ['red', 'yellow', 'green']
+
+export function toggleDailyTrafficStatus(
+  activeStatuses: ReadonlySet<DailyTrafficStatus>,
+  status: DailyTrafficStatus,
+) {
+  const next = new Set(activeStatuses)
+  if (next.has(status)) next.delete(status)
+  else next.add(status)
+  return next
+}
+
+export function dealMatchesDailyTrafficStatus(
+  deal: Pick<DailyControlDeal, 'status'>,
+  activeStatuses: ReadonlySet<DailyTrafficStatus>,
+) {
+  return deal.status !== 'neutral' && activeStatuses.has(deal.status)
+}
+
 const CLIENT_CONTACT_KINDS = new Set(['call', 'message'])
 
 const NO_DAY_CONTACT_LABEL = 'В этот день коммуникаций нет'
@@ -45,6 +65,31 @@ export function snapshotDayText(value?: string | null): string {
     if (text.includes(from)) text = text.split(from).join(to)
   }
   return text
+}
+
+// Шаблонные пояснения слепка не несут сведений о конкретной сделке: они одинаковы
+// для всего портфеля. В списке сделок такую строку не выводим, реальную причину оставляем.
+const PLACEHOLDER_ATTENTION_REASONS = [
+  'На этот день нет актуальной задачи или контрольной точки; содержательной коммуникации не было.',
+  'На этот день нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.',
+  'На сегодня нет актуальной задачи или контрольной точки; содержательной коммуникации пока нет.',
+  'В этот день по актуальной задаче не было содержательной клиентской коммуникации',
+  'Сегодня по актуальной задаче ещё нет содержательной клиентской коммуникации',
+  'Попытки дозвона не дают единицы',
+  'В этот день коммуникаций нет',
+  'Сегодня коммуникаций нет',
+  'На этот день нет актуальной задачи',
+  'На сегодня нет актуальной задачи',
+  'Ожидает корректной AI-оценки работы этого дня.',
+  'Ожидает корректной AI-оценки сегодняшней работы.',
+  'AI не подтвердил содержательную работу в коммуникациях этого дня.',
+  'AI не подтвердил содержательную работу в сегодняшних коммуникациях.',
+]
+
+export function meaningfulAttentionReason(reason?: string | null): string {
+  const text = snapshotDayText(reason).trim()
+  if (!text) return ''
+  return PLACEHOLDER_ATTENTION_REASONS.some((placeholder) => text.includes(placeholder)) ? '' : text
 }
 
 export function dailyQualityCaption(quality: DailyControlDeal['quality'], snapshotDay = false) {
@@ -218,21 +263,18 @@ export function reportHeading(report: {
   business_date?: string | null
   cutoff_at?: string | null
 }) {
-  if (report.heading) return report.heading
   const dateMatch = String(report.business_date || report.cutoff_at || '').match(/(\d{4})-(\d{2})-(\d{2})/)
   const timeMatch = String(report.cutoff_at || '').match(/T(\d{2}):(\d{2})/)
-  if (!dateMatch) return 'Ежедневный контроль'
+  if (!dateMatch) return report.heading || 'Ежедневный контроль'
   const year = Number(dateMatch[1])
   const month = Number(dateMatch[2])
   const day = Number(dateMatch[3])
-  const date = new Date(Date.UTC(year, month - 1, day))
-  const weekdays = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу']
-  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
-  const stamp = `${weekdays[date.getUTCDay()]}, ${day} ${months[month - 1]} ${year}`
+  const stamp = `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${String(year).slice(-2)}`
   const cutoff = timeMatch ? `${timeMatch[1]}:${timeMatch[2]} МСК` : 'время не указано'
   if (report.creation_kind === 'automatic_planning') return `Состояние команды на ${stamp} — срез на ${cutoff}`
   if (report.creation_kind === 'automatic_day_end') return `Итог команды за ${stamp} — срез на ${cutoff}`
   if (report.creation_kind === 'manual') return `Ручной слепок за ${stamp} — на ${cutoff}`
+  if (report.heading) return report.heading
   return `Ежедневный контроль за ${stamp} — срез на ${cutoff}`
 }
 

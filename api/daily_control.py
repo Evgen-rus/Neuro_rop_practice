@@ -177,12 +177,7 @@ def report_heading(
         day = cutoff.date()
     if day is None:
         return "Ежедневный контроль"
-    weekdays = ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье")
-    months = (
-        "января", "февраля", "марта", "апреля", "мая", "июня",
-        "июля", "августа", "сентября", "октября", "ноября", "декабря",
-    )
-    stamp = f"{weekdays[day.weekday()]}, {day.day} {months[day.month - 1]} {day.year}"
+    stamp = f"{day.day:02d}.{day.month:02d}.{day.year % 100:02d}"
     cutoff_label = f"{cutoff.strftime('%H:%M')} МСК" if cutoff is not None else "время не указано"
     kind = str(creation_kind or "")
     if kind == "automatic_planning":

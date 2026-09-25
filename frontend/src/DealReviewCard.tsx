@@ -495,6 +495,7 @@ export function DealReviewCard(props: {
   onCopyScript: () => void
   copyNotice: string
   showHeader?: boolean
+  showStatus?: boolean
   emptyText?: string
   scriptHint?: string
   snapshotDay?: boolean
@@ -519,7 +520,7 @@ export function DealReviewCard(props: {
             <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
             <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {formatDealPipelineStage(deal)}</p>
           </div>
-          <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>
+          {props.showStatus === false ? null : <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>}
         </header>
       ) : null}
 
