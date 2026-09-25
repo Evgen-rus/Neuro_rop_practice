@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from 'react'
 import {
   fetchDailyControlHistory,
   fetchDailyControlReport,
@@ -175,6 +175,8 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [copyNotice, setCopyNotice] = useState('')
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const dealScrollRef = useRef<HTMLDivElement | null>(null)
+  const selectedDealRowRef = useRef<HTMLDivElement | null>(null)
+  const [offscreenDealId, setOffscreenDealId] = useState('')
   const generating = generation?.status === 'running' || generation?.status === 'queued'
 
   const snapshot = report?.snapshot
@@ -310,6 +312,21 @@ export function DailyControl({ user }: { user: AuthUser }) {
     const nextDeal = selectedDeal?.deal_id || ''
     if (nextDeal && nextDeal !== dealId) setDealId(nextDeal)
   }, [dealId, managerId, selectedDeal, selectedManager, snapshot])
+
+  useEffect(() => {
+    const root = dealScrollRef.current
+    const row = selectedDealRowRef.current
+    if (!root || !row || !selectedDeal) {
+      setOffscreenDealId('')
+      return
+    }
+    const selectedId = selectedDeal.deal_id
+    const observer = new IntersectionObserver(([entry]) => {
+      setOffscreenDealId(entry.isIntersecting ? '' : selectedId)
+    }, { root })
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [dealId, filter, managerId, report?.id, reviewedDealIds, search, selectedDeal, visibleDeals])
 
   useLayoutEffect(() => {
     dealScrollRef.current?.scrollTo({ top: 0 })
@@ -635,6 +652,15 @@ export function DailyControl({ user }: { user: AuthUser }) {
                 </button>
               ))}
             </div>
+            {offscreenDealId === selectedDeal?.deal_id && selectedDeal ? <button
+              type="button"
+              className="dc-selected-anchor"
+              onClick={() => selectedDealRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })}
+            >
+              <span>Открыта</span>
+              <b>{selectedDeal.title || `Сделка #${selectedDeal.deal_id}`}</b>
+              <small>#{selectedDeal.deal_id}</small>
+            </button> : null}
             <div className="dc-daily-deal-scroll" ref={dealScrollRef}>
               {visibleDeals.length ? visibleDeals.map((deal) => (
                 <DealRow
@@ -643,6 +669,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
                   cutoffAt={report?.cutoff_at}
                   selected={deal.deal_id === selectedDeal?.deal_id}
                   reviewed={reviewedDealIds.has(deal.deal_id)}
+                  rowRef={deal.deal_id === selectedDeal?.deal_id ? selectedDealRowRef : undefined}
                   onSelect={() => selectDeal(deal.deal_id)}
                   onToggleReviewed={() => void toggleReviewed(deal.deal_id, !reviewedDealIds.has(deal.deal_id))}
                 />
@@ -690,6 +717,7 @@ function DealRow({
   cutoffAt,
   selected,
   reviewed,
+  rowRef,
   onSelect,
   onToggleReviewed,
 }: {
@@ -697,6 +725,7 @@ function DealRow({
   cutoffAt?: string
   selected: boolean
   reviewed: boolean
+  rowRef?: Ref<HTMLDivElement>
   onSelect: () => void
   onToggleReviewed: () => void
 }) {
@@ -704,6 +733,7 @@ function DealRow({
   const dayLabels = reportDayLabels(deal, cutoffAt)
   return (
     <div
+      ref={rowRef}
       className={`dc-daily-deal ${deal.status} ${selected ? 'selected' : ''}${reviewed ? ' reviewed' : ''}`}
       role="tab"
       tabIndex={0}

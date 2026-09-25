@@ -1317,11 +1317,30 @@ function TaskTable({
   const [columns, setColumns] = useState(DEFAULT_PLAN_COLUMNS)
   const tableRef = useRef<HTMLDivElement | null>(null)
   const selectedRowRef = useRef<HTMLElement | null>(null)
+  const [selectedOffscreen, setSelectedOffscreen] = useState(false)
+  const selectedDeal = deals.find((deal) => deal.deal_id === selectedId) || null
   useEffect(() => {
     selectedRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [selectedId, deals])
+  }, [view, selectedId, deals])
+  useEffect(() => {
+    const node = selectedRowRef.current
+    if (!node) {
+      setSelectedOffscreen(false)
+      return
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      setSelectedOffscreen(!entry.isIntersecting)
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [view, selectedId, deals])
   const dragRef = useRef<{ index: number; startX: number; widths: number[] } | null>(null)
   const gridTemplateColumns = `42px ${columns.map((value) => `${value}fr`).join(' ')}`
+  const selectedAnchor = selectedOffscreen && selectedDeal ? <button type="button" className="dc-selected-anchor" onClick={() => selectedRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>
+    <span>Открыта</span>
+    <b>{selectedDeal.title || `Сделка #${selectedDeal.deal_id}`}</b>
+    <small>#{selectedDeal.deal_id}</small>
+  </button> : null
 
   useEffect(() => {
     const move = (event: PointerEvent) => {
@@ -1351,7 +1370,7 @@ function TaskTable({
     dragRef.current = { index, startX: event.clientX, widths: [...columns] }
   }
 
-  if (view !== 'rop') return <div className="dc-table-wrap task-table">
+  if (view !== 'rop') return <>{selectedAnchor}<div className="dc-table-wrap task-table">
     <div className="dc-table-scroll">
       <div className="dc-task-columns"><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
@@ -1369,9 +1388,9 @@ function TaskTable({
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
     </div>
-  </div>
+  </div></>
 
-  return <div className="dc-table-wrap task-table dc-rop-plan" ref={tableRef}>
+  return <>{selectedAnchor}<div className="dc-table-wrap task-table dc-rop-plan" ref={tableRef}>
     <div className="dc-table-scroll">
       <div className="dc-task-columns dc-rop-columns" style={{ gridTemplateColumns }}>
         <span />
@@ -1433,7 +1452,7 @@ function TaskTable({
       })}
       {!deals.length ? <p className="dc-empty">В выбранном периоде задач нет.</p> : null}
     </div>
-  </div>
+  </div></>
 }
 
 function fileSize(value: number) {
