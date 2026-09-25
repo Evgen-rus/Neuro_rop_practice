@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-25T07:50:00Z",
+  "title": "Design System: НейроРОП",
+  "extensions": {
+    "colorMeta": {
+      "briefing-blue": {
+        "role": "primary",
+        "displayName": "Синий планёрки",
+        "canonical": "#1768f2",
+        "tonalRamp": [
+          "oklch(15% 0.06 255)",
+          "oklch(26% 0.1 255)",
+          "oklch(38% 0.14 255)",
+          "oklch(49% 0.17 255)",
+          "oklch(58% 0.19 255)",
+          "oklch(72% 0.12 255)",
+          "oklch(84% 0.06 255)",
+          "oklch(95% 0.02 255)"
+        ]
+      },
+      "briefing-blue-deep": {
+        "role": "primary",
+        "displayName": "Глубокий синий планёрки",
+        "canonical": "#0d5ed8",
+        "tonalRamp": [
+          "oklch(15% 0.06 258)",
+          "oklch(26% 0.1 258)",
+          "oklch(38% 0.14 258)",
+          "oklch(48% 0.17 258)",
+          "oklch(54% 0.18 258)",
+          "oklch(68% 0.12 258)",
+          "oklch(82% 0.06 258)",
+          "oklch(95% 0.02 258)"
+        ]
+      },
+      "briefing-blue-weak": {
+        "role": "primary",
+        "displayName": "Слабый синий планёрки",
+        "canonical": "#edf4ff",
+        "tonalRamp": [
+          "oklch(22% 0.04 255)",
+          "oklch(34% 0.05 255)",
+          "oklch(46% 0.06 255)",
+          "oklch(58% 0.06 255)",
+          "oklch(70% 0.05 255)",
+          "oklch(80% 0.04 255)",
+          "oklch(90% 0.03 255)",
+          "oklch(96% 0.015 255)"
+        ]
+      },
+      "desk-navy": {
+        "role": "neutral",
+        "displayName": "Тёмно-синий стол",
+        "canonical": "#0f1f3a",
+        "tonalRamp": [
+          "oklch(12% 0.04 260)",
+          "oklch(22% 0.05 260)",
+          "oklch(32% 0.05 260)",
+          "oklch(42% 0.04 260)",
+          "oklch(54% 0.03 260)",
+          "oklch(68% 0.02 260)",
+          "oklch(82% 0.015 260)",
+          "oklch(95% 0.008 260)"
+        ]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Холст",
+        "canonical": "#f4f7fb",
+        "tonalRamp": [
+          "oklch(20% 0.02 250)",
+          "oklch(32% 0.02 250)",
+          "oklch(44% 0.02 250)",
+          "oklch(56% 0.02 250)",
+          "oklch(68% 0.015 250)",
+          "oklch(80% 0.012 250)",
+          "oklch(90% 0.01 250)",
+          "oklch(96% 0.008 250)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Поверхность",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(18% 0 0)",
+          "oklch(30% 0 0)",
+          "oklch(42% 0 0)",
+          "oklch(54% 0 0)",
+          "oklch(66% 0 0)",
+          "oklch(78% 0 0)",
+          "oklch(90% 0 0)",
+          "oklch(99% 0 0)"
+        ]
+      },
+      "surface-cool": {
+        "role": "neutral",
+        "displayName": "Прохладная поверхность",
+        "canonical": "#f8fbff",
+        "tonalRamp": [
+          "oklch(20% 0.02 250)",
+          "oklch(32% 0.02 250)",
+          "oklch(44% 0.02 250)",
+          "oklch(56% 0.015 250)",
+          "oklch(68% 0.012 250)",
+          "oklch(80% 0.01 250)",
+          "oklch(90% 0.008 250)",
+          "oklch(97% 0.006 250)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Приглушённый",
+        "canonical": "#697a95",
+        "tonalRamp": [
+          "oklch(18% 0.03 260)",
+          "oklch(28% 0.035 260)",
+          "oklch(38% 0.04 260)",
+          "oklch(48% 0.04 260)",
+          "oklch(58% 0.035 260)",
+          "oklch(70% 0.025 260)",
+          "oklch(82% 0.015 260)",
+          "oklch(94% 0.008 260)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Линия",
+        "canonical": "#d9e4f0",
+        "tonalRamp": [
+          "oklch(22% 0.02 250)",
+          "oklch(34% 0.025 250)",
+          "oklch(46% 0.03 250)",
+          "oklch(58% 0.03 250)",
+          "oklch(70% 0.025 250)",
+          "oklch(80% 0.02 250)",
+          "oklch(88% 0.015 250)",
+          "oklch(95% 0.01 250)"
+        ]
+      },
+      "status-green": {
+        "role": "status",
+        "displayName": "Зелёный статуса",
+        "canonical": "#159454",
+        "tonalRamp": [
+          "oklch(16% 0.04 155)",
+          "oklch(28% 0.07 155)",
+          "oklch(40% 0.1 155)",
+          "oklch(50% 0.12 155)",
+          "oklch(58% 0.13 155)",
+          "oklch(72% 0.1 155)",
+          "oklch(84% 0.06 155)",
+          "oklch(95% 0.03 155)"
+        ]
+      },
+      "status-green-weak": {
+        "role": "status",
+        "displayName": "Слабый зелёный",
+        "canonical": "#effaf4",
+        "tonalRamp": [
+          "oklch(20% 0.03 155)",
+          "oklch(32% 0.04 155)",
+          "oklch(44% 0.05 155)",
+          "oklch(56% 0.05 155)",
+          "oklch(68% 0.04 155)",
+          "oklch(80% 0.03 155)",
+          "oklch(90% 0.02 155)",
+          "oklch(97% 0.015 155)"
+        ]
+      },
+      "status-orange": {
+        "role": "status",
+        "displayName": "Оранжевый статуса",
+        "canonical": "#e99000",
+        "tonalRamp": [
+          "oklch(18% 0.05 75)",
+          "oklch(30% 0.08 75)",
+          "oklch(42% 0.11 75)",
+          "oklch(54% 0.13 75)",
+          "oklch(68% 0.14 75)",
+          "oklch(78% 0.12 75)",
+          "oklch(88% 0.07 75)",
+          "oklch(96% 0.03 75)"
+        ]
+      },
+      "status-orange-weak": {
+        "role": "status",
+        "displayName": "Слабый оранжевый",
+        "canonical": "#fff7e7",
+        "tonalRamp": [
+          "oklch(22% 0.04 80)",
+          "oklch(34% 0.05 80)",
+          "oklch(46% 0.06 80)",
+          "oklch(58% 0.06 80)",
+          "oklch(70% 0.05 80)",
+          "oklch(80% 0.04 80)",
+          "oklch(90% 0.03 80)",
+          "oklch(97% 0.02 80)"
+        ]
+      },
+      "status-red": {
+        "role": "status",
+        "displayName": "Красный статуса",
+        "canonical": "#df4040",
+        "tonalRamp": [
+          "oklch(16% 0.05 25)",
+          "oklch(28% 0.09 25)",
+          "oklch(40% 0.13 25)",
+          "oklch(50% 0.16 25)",
+          "oklch(60% 0.17 25)",
+          "oklch(72% 0.12 25)",
+          "oklch(84% 0.06 25)",
+          "oklch(95% 0.025 25)"
+        ]
+      },
+      "status-red-weak": {
+        "role": "status",
+        "displayName": "Слабый красный",
+        "canonical": "#fff2f2",
+        "tonalRamp": [
+          "oklch(20% 0.04 25)",
+          "oklch(32% 0.06 25)",
+          "oklch(44% 0.07 25)",
+          "oklch(56% 0.07 25)",
+          "oklch(68% 0.05 25)",
+          "oklch(80% 0.04 25)",
+          "oklch(90% 0.025 25)",
+          "oklch(97% 0.012 25)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Заголовок страницы контроля."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Заголовок секции."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Контрол, строка, кнопка."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Текст карточек и пояснений."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Мета и кикер."
+      }
+    },
+    "shadows": [
+      {
+        "name": "rail-air",
+        "value": "12px 0 32px rgba(30, 61, 104, .09)",
+        "purpose": "Тихий воздух у раскрытой рейки."
+      },
+      {
+        "name": "button-air",
+        "value": "0 7px 18px rgba(33, 62, 105, .1)",
+        "purpose": "Воздух вторичной кнопки при наведении."
+      },
+      {
+        "name": "action-air",
+        "value": "0 7px 18px rgba(23, 104, 242, .22)",
+        "purpose": "Воздух активного пункта рейки."
+      },
+      {
+        "name": "window-air",
+        "value": "0 28px 80px rgba(6, 20, 38, .38)",
+        "purpose": "Воздух большого модального окна."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 4px rgba(23, 104, 242, 0.11)",
+        "purpose": "Кольцо фокуса поля."
+      }
+    ],
+    "motion": [
+      {
+        "name": "lift",
+        "value": "transform 150ms ease, box-shadow 150ms ease",
+        "purpose": "Подъём кнопки на 1px при наведении."
+      },
+      {
+        "name": "rail",
+        "value": "width .2s ease",
+        "purpose": "Раскрытие рейки с 58px до 235px."
+      }
+    ],
+    "breakpoints": [
+      { "name": "wide", "value": "1200px" },
+      { "name": "medium", "value": "900px" },
+      { "name": "compact", "value": "760px" },
+      { "name": "auth", "value": "520px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Главное действие: плоское в покое, поднимается при наведении.",
+      "html": "<button class=\"ds-btn-primary\">Обновить</button>",
+      "css": ".ds-btn-primary { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border: 1px solid #1768f2; border-radius: 10px; color: #fff; background: #1768f2; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; font-size: 14px; font-weight: 750; cursor: pointer; transition: transform 150ms ease, box-shadow 150ms ease; } .ds-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 7px 18px rgba(23, 104, 242, .22); } .ds-btn-primary:active { transform: translateY(0); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(23, 104, 242, 0.11); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Вторичное действие на белой поверхности с линией.",
+      "html": "<button class=\"ds-btn-secondary\">Отмена</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border: 1px solid #d9e4f0; border-radius: 10px; color: #0f1f3a; background: #fff; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; font-size: 14px; font-weight: 750; cursor: pointer; transition: transform 150ms ease, box-shadow 150ms ease; } .ds-btn-secondary:hover { transform: translateY(-1px); box-shadow: 0 7px 18px rgba(33, 62, 105, .1); } .ds-btn-secondary:active { transform: translateY(0); } .ds-btn-secondary:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(23, 104, 242, 0.11); }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Поле входа: линия в покое, синяя граница и кольцо в фокусе.",
+      "html": "<label class=\"ds-field\"><span>Логин</span><input class=\"ds-input\" placeholder=\"Ваш логин\" /></label>",
+      "css": ".ds-field { display: grid; gap: 8px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; } .ds-field span { color: #344760; font-size: 13px; font-weight: 750; } .ds-input { height: 48px; padding: 0 14px; border: 1px solid #d9e4f0; border-radius: 11px; color: #0f1f3a; background: #fff; font: inherit; font-size: 14px; } .ds-input::placeholder { color: #9aa8ba; } .ds-input:hover { border-color: #b7c8db; } .ds-input:focus { outline: none; border-color: #1768f2; background: #fff; box-shadow: 0 0 0 4px rgba(23, 104, 242, 0.11); }"
+    },
+    {
+      "name": "Rail Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Пункт левой рейки. Активный заливается синим и скругляется только справа.",
+      "html": "<nav class=\"ds-rail\"><button class=\"ds-rail-item\" type=\"button\"><span>▣</span><b>Дашборд</b></button><button class=\"ds-rail-item is-active\" type=\"button\"><span>◉</span><b>Контроль</b></button></nav>",
+      "css": ".ds-rail { display: grid; gap: 8px; width: 235px; padding: 12px 0; background: #f8fbff; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; } .ds-rail-item { display: grid; grid-template-columns: 58px 1fr; align-items: center; min-height: 48px; border: 1px solid transparent; border-radius: 0 12px 12px 0; color: #405574; background: transparent; text-align: left; cursor: pointer; } .ds-rail-item span { display: grid; place-items: center; font-size: 18px; } .ds-rail-item b { font-size: 13px; font-weight: 700; } .ds-rail-item.is-active { border-color: #0d2549; color: #fff; background: #1768f2; box-shadow: 0 7px 18px rgba(23, 104, 242, .22); } .ds-rail-item:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(23, 104, 242, 0.11); }"
+    },
+    {
+      "name": "Entry Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Карточка входа на белой поверхности с тихим воздухом.",
+      "html": "<article class=\"ds-card\"><span class=\"ds-kicker\">Личный кабинет</span><h2>Добро пожаловать</h2><p>Войдите, чтобы продолжить работу с продажами.</p></article>",
+      "css": ".ds-card { display: grid; gap: 8px; max-width: 420px; padding: 28px; border: 1px solid #d9e4f0; border-radius: 22px; color: #0f1f3a; background: #fff; box-shadow: 0 24px 60px rgba(31, 55, 87, 0.13), 0 3px 10px rgba(31, 55, 87, 0.05); font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; } .ds-kicker { color: #1768f2; font-size: 12px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; } .ds-card h2 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.035em; line-height: 1.15; } .ds-card p { margin: 0; color: #697a95; font-size: 14px; line-height: 1.5; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "Метка светофора. Цвет равен статусу и не становится кнопкой.",
+      "html": "<span class=\"ds-chip ds-chip-green\">Контакт</span><span class=\"ds-chip ds-chip-orange\">Срок</span><span class=\"ds-chip ds-chip-red\">Срыв</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; min-height: 26px; padding: 3px 7px; border-radius: 7px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; font-size: 10px; font-weight: 800; } .ds-chip-green { color: #159454; background: #effaf4; border: 1px solid #b7e4ca; } .ds-chip-orange { color: #e99000; background: #fff7e7; border: 1px solid #f3ddb0; } .ds-chip-red { color: #df4040; background: #fff2f2; border: 1px solid #efb9b9; }"
+    },
+    {
+      "name": "Error Alert",
+      "kind": "custom",
+      "refersTo": "chip-status",
+      "description": "Ошибка на слабом красном, без синей обводки.",
+      "html": "<div class=\"ds-alert\" role=\"alert\"><span>!</span>Не удалось загрузить срез.</div>",
+      "css": ".ds-alert { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border: 1px solid #f2c0c0; border-radius: 10px; color: #a72e35; background: #fff4f4; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, Arial, sans-serif; font-size: 13px; line-height: 1.4; } .ds-alert span { display: grid; flex: 0 0 19px; height: 19px; place-items: center; border-radius: 50%; color: #fff; background: #d94646; font-size: 12px; font-weight: 900; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Утренний стол планёрки",
+    "overview": "НейроРОП выглядит как спокойный внутренний кабинет, в котором ничего не кричит. Плотность служебная: за день РОП и менеджер должны прочитать светофор, карточку сделки и следующий шаг, а не рассматривать оформление. Синий планёрки отмечает действие и текущее место. Зелёный, оранжевый и красный говорят только о статусе.\n\nГлубина строится слоями тона: холст, прохладная поверхность, белая карточка. Тень — тихий воздух под уже приподнятым слоем, а не каркас, который держит экран. Кнопки при этом тактильные и уверенные: в покое они плоские, при наведении чуть поднимаются, и жест чувствуется.\n\nЭкран входа легче рабочей оболочки: карточка на бумажном градиенте, марка «Р», имя Neuro ROP и подпись Практик-М. После входа интерфейс становится рейкой слева и полем контроля.",
+    "keyCharacteristics": [
+      "Спокойный кабинет, без маркетинговой подачи.",
+      "Один рабочий синий для действия, фокуса и текущего пункта меню.",
+      "Статус только светофором: зелёный, оранжевый, красный на бледной заливке.",
+      "Слои тона; тень как тихий воздух.",
+      "Кнопка в покое плоская, при наведении поднимается на один пиксель.",
+      "Системный шрифт интерфейса, плотная шкала от 10px до заголовка страницы."
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "На экране один голос действия — синий планёрки. Зелёный, оранжевый и красный не красят кнопки, ссылки и навигацию.",
+        "section": "colors"
+      },
+      {
+        "name": "The Shell Wins Rule",
+        "body": "Внутри .dc-shell нормативны токены --dc-*. Старый :root --blue не становится вторым рабочим синим.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Face Rule",
+        "body": "Не подключать показной шрифт для заголовков. Лицо продукта — системный стек оболочки --dc-font-family.",
+        "section": "typography"
+      },
+      {
+        "name": "The Rail Rule",
+        "body": "Навигация контроля — левая рейка. Не заменять её верхней маркетинговой шапкой.",
+        "section": "layout"
+      },
+      {
+        "name": "The Quiet Air Rule",
+        "body": "Тень не рисует иерархию сама по себе. Сначала слой тона, потом короткий воздух. Не добавлять тяжёлую тень покоящейся строке таблицы.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Soft Control Rule",
+        "body": "Кнопка, поле и карточка делят одно семейство скругления. Не смешивать на одном экране капсулу и прямой угол.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do красить действие, фокус и текущий пункт меню только синим планёрки (`#1768f2`).",
+      "Do держать статус на паре «плотный цвет + слабая заливка» и не выносить статусный цвет на большие фоны.",
+      "Do поднимать кнопку на 1px при наведении и возвращать её в покое.",
+      "Do оставлять рейку слева: 58px в покое, 235px в открытом меню.",
+      "Do писать интерфейс по-русски системным стеком оболочки."
+    ],
+    "donts": [
+      "Don't вводить второй акцент, градиентный текст или показной шрифт заголовков.",
+      "Don't красить навигацию и главные кнопки зелёным, оранжевым или красным.",
+      "Don't вешать тяжёлую тень на покоящуюся строку, чип или вторичную кнопку.",
+      "Don't подменять левую рейку верхней маркетинговой шапкой.",
+      "Don't оживлять старый :root --blue как отдельный рабочий синий рядом с --dc-blue."
+    ]
+  }
+}
