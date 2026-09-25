@@ -1159,7 +1159,7 @@ function Kpis({ view, summary, ownTasks }: { view: DealControlView; summary: Dea
     ? [
         ['◇', 'Всего сделок', summary.active_deals, 'blue'],
         ['₽', 'Сумма портфеля', money(summary.portfolio_amount), 'green'],
-        ['▣', 'На сегодня', summary.tasks_today, 'blue'],
+        ['▣', 'Задачи на сегодня', summary.tasks_today, 'blue'],
         ['◷', 'Просрочено', summary.tasks_overdue, 'red'],
         ['%', 'Средняя вероятность', summary.average_probability == null ? '—' : `${summary.average_probability}%`, 'orange'],
       ]
@@ -1237,7 +1237,32 @@ function DealTable(props: {
   ) => Promise<void>
 }) {
   const monthOptions = paymentMonthOptions()
-  return <div className="dc-table-wrap">
+  const selectedRowRef = useRef<HTMLElement | null>(null)
+  const [selectedOffscreen, setSelectedOffscreen] = useState(false)
+  const selectedDeal = props.deals.find((deal) => deal.deal_id === props.selectedId) || null
+  useEffect(() => {
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [props.selectedId, props.deals])
+  useEffect(() => {
+    const node = selectedRowRef.current
+    if (!node) {
+      setSelectedOffscreen(false)
+      return
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      setSelectedOffscreen(!entry.isIntersecting)
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [props.selectedId, props.deals])
+  const revealSelected = () => selectedRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  return <>
+    {selectedOffscreen && selectedDeal ? <button type="button" className="dc-selected-anchor" onClick={revealSelected}>
+      <span>Открыта</span>
+      <b>{selectedDeal.title || `Сделка #${selectedDeal.deal_id}`}</b>
+      <small>#{selectedDeal.deal_id}</small>
+    </button> : null}
+    <div className="dc-table-wrap">
     <div className="dc-table-scroll">
       <div className="dc-deal-columns"><span>Сделка</span><span>Контроль</span><span>Этап</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
@@ -1249,7 +1274,8 @@ function DealTable(props: {
         const savePayment = (week: string, month: string) => void props.onSaveFields(deal, {
           expected_payment_period: formatPaymentPeriod(week, month),
         })
-        return <article className={['dc-deal-row', reviewStripeClass(deal), props.selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} onClick={() => props.onSelect(deal.deal_id)}>
+        const selected = props.selectedId === deal.deal_id
+        return <article aria-current={selected ? 'true' : undefined} className={['dc-deal-row', reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} ref={selected ? selectedRowRef : undefined} onClick={() => props.onSelect(deal.deal_id)}>
           <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
           <div className="dc-stage-cell">
@@ -1268,6 +1294,7 @@ function DealTable(props: {
       {!props.deals.length ? <p className="dc-empty">В выбранном разделе сделок нет.</p> : null}
     </div>
   </div>
+  </>
 }
 
 const DEFAULT_PLAN_COLUMNS = [21, 22, 18, 25, 14]
@@ -1289,6 +1316,10 @@ function TaskTable({
 }) {
   const [columns, setColumns] = useState(DEFAULT_PLAN_COLUMNS)
   const tableRef = useRef<HTMLDivElement | null>(null)
+  const selectedRowRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [selectedId, deals])
   const dragRef = useRef<{ index: number; startX: number; widths: number[] } | null>(null)
   const gridTemplateColumns = `42px ${columns.map((value) => `${value}fr`).join(' ')}`
 
@@ -1327,7 +1358,8 @@ function TaskTable({
         const bitrixTask = primaryBitrixTaskOf(deal)
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
-        return <article className={['dc-task-row', rowTone, reviewStripeClass(deal), selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} onClick={() => onSelect(deal.deal_id)}>
+        const selected = selectedId === deal.deal_id
+        return <article aria-current={selected ? 'true' : undefined} className={['dc-task-row', rowTone, reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} ref={selected ? selectedRowRef : undefined} onClick={() => onSelect(deal.deal_id)}>
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
           <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
@@ -1354,10 +1386,13 @@ function TaskTable({
         const preview = deal.manager_comments_preview
         const worklogPreview = managerWorklogPreview(deal.manager_worklogs)
         const hasPreviewRows = Boolean(worklogPreview.entries.length || preview?.items?.length)
+        const selected = selectedId === deal.deal_id
         return <article
-          className={['dc-task-row', 'dc-rop-task-row', rowTone, reviewStripeClass(deal), selectedId === deal.deal_id ? 'selected' : ''].filter(Boolean).join(' ')}
+          aria-current={selected ? 'true' : undefined}
+          className={['dc-task-row', 'dc-rop-task-row', rowTone, reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')}
           style={{ gridTemplateColumns }}
           key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`}
+          ref={selected ? selectedRowRef : undefined}
           onClick={() => onSelect(deal.deal_id)}
         >
           <div className="dc-plan-signal-cell">
