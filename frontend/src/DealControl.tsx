@@ -219,6 +219,22 @@ function money(value?: string | number | null, currency = 'RUB') {
   }).format(parsed)
 }
 
+// Компактная деньга для верхних KPI: полная сумма с точностью до рубля
+// не влезает в плитку и обрезается по ширине. Миллионы читаются целиком,
+// миллиарды на дашборде не возникают, поэтому порог только один.
+// Десятая доля million не теряет сотни тысяч: без неё 216 868 300
+// превращается в «217 млн» и метрика расходится с портфелем на 132 тыс.
+function moneyCompact(value?: string | number | null) {
+  const parsed = Number(String(value ?? '').replace(',', '.'))
+  if (!Number.isFinite(parsed)) return '—'
+  if (Math.abs(parsed) < 1_000_000) return money(parsed)
+  const millions = parsed / 1_000_000
+  return `${new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(millions)} млн ₽`
+}
+
 function dateTime(value?: string | null) {
   if (!value) return 'Не назначен'
   return formatMoscowDateTime(value, {
@@ -255,7 +271,10 @@ function paymentMonthOptions() {
     const month = PAYMENT_MONTHS[monthIndex][0]
     return {
       value: `${year}-${String(monthIndex + 1).padStart(2, '0')}`,
-      label: `${month}.${year === current.year ? '' : ` ${year}`}`,
+      // Год в подписи двухзначный: в списке месяцы идут подряд, полный
+      // «2027» занимал лишние 20px в строке с тремя селектами. `value`
+      // остаётся полным — от него зависит разбор сохранённого периода.
+      label: `${month}.${year === current.year ? '' : ` ${String(year).slice(2)}`}`,
     }
   })
 }
@@ -380,14 +399,6 @@ function reviewStripeClass(deal: DealControlDeal) {
   if (!deal.coaching.report_id) return ''
   if (status === 'red' || status === 'yellow' || status === 'green' || status === 'neutral') return `review-${status}`
   return ''
-}
-
-function taskPlanTitle(view: TimeView) {
-  if (view === 'overdue') return 'Просроченные задачи'
-  if (view === 'tomorrow') return 'План на завтра'
-  if (view === 'future') return 'Будущие задачи'
-  if (view === 'all') return 'Все задачи'
-  return 'План на сегодня'
 }
 
 function compactTaskText(value: string, maxLength = 120) {
@@ -516,6 +527,13 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [view, setView] = useState<DealControlView>(startView)
   const [selectedId, setSelectedId] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  // На мобильном меню — раскрывающаяся панель под кнопкой, поэтому выбор
+  // раздела должен её закрывать. На десктопе рейка постоянная, и закрывать
+  // её после клика нельзя, поэтому сверяемся с той же точкой перелома,
+  // что и `@media (max-width: 760px)` в index.css.
+  const closeMenuOnNarrow = () => {
+    if (window.matchMedia('(max-width: 760px)').matches) setMenuOpen(false)
+  }
   const [managerFilter, setManagerFilter] = useState(startFilters.managerFilter)
   const [stageFilter, setStageFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -986,48 +1004,54 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     : VIEW_COPY[view]
 
   return <main className={`dc-shell ${menuOpen ? 'menu-open' : ''}`}>
+    {menuOpen ? <button className="dc-scrim" aria-label="Закрыть меню" onClick={() => setMenuOpen(false)} /> : null}
     <aside className="dc-sidebar">
-      <button className="dc-menu-button" onClick={() => setMenuOpen((value) => !value)} title="Развернуть меню">
-        <span>☰</span><b>Меню</b>
-      </button>
-      <nav>
-        <button className={view === 'dashboard' ? 'active' : ''} onClick={openDashboard} title="Дашборд">
-          <span>▦</span><b>Дашборд</b><small>Общий контроль сделок</small>
+      <div className="dc-menu-head">
+        <button className="dc-menu-button" onClick={() => setMenuOpen((value) => !value)} title="Развернуть меню" aria-expanded={menuOpen} aria-label="Меню">
+          <span>☰</span>
         </button>
-        {canOpenRopView ? <button className={view === 'rop' ? 'active' : ''} onClick={openRopView} title="Контроль РОПа">
-          <span>◎</span><b>Контроль РОПа</b><small>План и просрочки команды</small>
+        <b className="dc-menu-logo">НейроРОП</b>
+      </div>
+      <nav onClick={closeMenuOnNarrow}>
+        <span className="dc-nav-group" aria-hidden="true">РОП</span>
+        <button className={view === 'dashboard' ? 'active' : ''} onClick={openDashboard} title="Общий контроль сделок">
+          <span>▦</span><b>Дашборд</b>
+        </button>
+        {canOpenRopView ? <button className={view === 'rop' ? 'active' : ''} onClick={openRopView} title="План и просрочки команды">
+          <span>◎</span><b>Контроль РОПа</b>
         </button> : null}
-        {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Ежедневный контроль">
-          <span>▣</span><b>Ежедневный контроль</b><small>Разбор команды к планёрке</small>
+        {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Разбор команды к планёрке">
+          <span>▣</span><b>Ежедневный контроль</b>
         </button> : null}
-        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title={managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}>
-          <span>✓</span><b>{managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}</b><small>Подготовка к касаниям</small>
+        {canOpenManagerView ? <span className="dc-nav-group" aria-hidden="true">Менеджер</span> : null}
+        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title="Подготовка к касаниям">
+          <span>✓</span><b>{managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Траектория">
-          <span>⌁</span><b>Траектория</b><small>Рабочий день менеджеров</small>
+        {user.role === 'admin' ? <span className="dc-nav-group" aria-hidden="true">Админ</span> : null}
+        {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Рабочий день менеджеров">
+          <span>⌁</span><b>Траектория</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Learning Shadow">
-          <span>↯</span><b>Learning Shadow</b><small>Рекомендации → действия</small>
+        {user.role === 'admin' ? <button className={view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Рекомендации → действия">
+          <span>↯</span><b>Learning Shadow</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'spend' ? 'active' : ''} onClick={openSpendView} title="Расходы AI">
-          <span>₽</span><b>Расходы AI</b><small>Стоимость работы НейроРОПа</small>
+        {user.role === 'admin' ? <button className={view === 'spend' ? 'active' : ''} onClick={openSpendView} title="Стоимость работы НейроРОПа">
+          <span>₽</span><b>Расходы AI</b>
         </button> : null}
-        {user.role === 'admin' ? <span className="dc-sidebar-split" aria-hidden="true" /> : null}
-        {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Команда">
-          <span>◍</span><b>Команда</b><small>Логины и Bitrix ID</small>
+        {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Логины и Bitrix ID">
+          <span>◍</span><b>Команда</b>
         </button> : null}
       </nav>
-      {onExit ? <button className="dc-exit" onClick={onExit}><span>←</span><b>К основному интерфейсу</b></button> : null}
-      {onLogout ? <button className="dc-exit" onClick={() => void onLogout()}><span>⇥</span><b>Выйти</b></button> : null}
+      {onExit ? <button className="dc-exit" onClick={onExit} title="Сводка и отчёты"><span>⌂</span><b>К основному интерфейсу</b></button> : null}
+      {onLogout ? <button className="dc-exit" onClick={() => void onLogout()} title="Завершить сеанс"><span>⎋</span><b>Выйти</b></button> : null}
     </aside>
 
     <section className="dc-content">
       {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
-        {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}
-        <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />
-        <div className="dc-refresh">
+      {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}
+      <Kpis view={view} summary={filteredSummary} ownTasks={managerViewOwnTasks} />
+      <div className="dc-refresh">
           <button className="dc-button" disabled={syncing} onClick={() => void sync()}>
             {syncing ? <><span className="dc-spinner" />Обновляем Bitrix…</> : <><span>⟳</span>Обновить Bitrix</>}
           </button>
@@ -1070,16 +1094,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
             active={timeView}
             onChange={setTimeView}
             totalDeals={filteredSummary.active_deals}
-            attention={filteredSummary.tasks_missing + filteredSummary.tasks_overdue}
+            overdue={timeCounts.overdue}
             today={filteredSummary.tasks_plan_today}
             tomorrow={filteredSummary.tasks_tomorrow}
             future={filteredSummary.tasks_future}
             countForPlan={(bucket) => timeCounts[bucket as keyof typeof timeCounts] || 0}
           />
-          <div className="dc-board-title">
-            <div><h2>{view === 'dashboard' ? 'Обзор портфеля' : taskPlanTitle(timeView)}</h2></div>
-            <span>{view === 'dashboard' ? 'Сначала критичные ›' : 'Фокус дня ›'}</span>
-          </div>
           {view === 'dashboard'
             ? <DealTable deals={visibleDeals} selectedId={selected?.deal_id || ''} onSelect={selectDealExplicitly} onSaveFields={saveFields} />
             : <TaskTable
@@ -1157,11 +1177,10 @@ function Kpis({ view, summary, ownTasks }: { view: DealControlView; summary: Dea
   const dashboard = view === 'dashboard'
   const values = dashboard
     ? [
-        ['◇', 'Всего сделок', summary.active_deals, 'blue'],
-        ['₽', 'Сумма портфеля', money(summary.portfolio_amount), 'green'],
+        ['◇', 'Сделок', summary.active_deals, 'blue'],
+        ['₽', 'Портфель', moneyCompact(summary.portfolio_amount), 'green'],
         ['▣', 'Задачи на сегодня', summary.tasks_today, 'blue'],
         ['◷', 'Просрочено', summary.tasks_overdue, 'red'],
-        ['%', 'Средняя вероятность', summary.average_probability == null ? '—' : `${summary.average_probability}%`, 'orange'],
       ]
     : [
         ['◇', view === 'rop' || !ownTasks ? 'Всего задач на контроле' : 'Всего моих задач', summary.tasks_total, 'blue'],
@@ -1172,7 +1191,11 @@ function Kpis({ view, summary, ownTasks }: { view: DealControlView; summary: Dea
         ['↪', 'Перенесено сегодня', summary.tasks_rescheduled_today ?? 0, 'orange'],
       ]
   return <section className={`dc-kpis ${dashboard ? 'dashboard' : 'tasks'}`}>
-    {values.map(([icon, label, value, tone]) => <article key={String(label)} className={String(tone)}>
+    {values.map(([icon, label, value, tone]) => <article
+      key={String(label)}
+      className={String(tone)}
+      title={label === 'Портфель' ? money(summary.portfolio_amount) : undefined}
+    >
       <span>{icon}</span><div><small>{label}</small><strong>{value}</strong></div>
     </article>)}
   </section>
@@ -1213,14 +1236,14 @@ function TimeTabs(props: {
   active: TimeView
   onChange: (view: TimeView) => void
   totalDeals: number
-  attention: number
+  overdue: number
   today: number
   tomorrow: number
   future: number
   countForPlan: (view: TimeView) => number
 }) {
   const tabs: Array<[TimeView, string, number]> = props.view === 'dashboard'
-    ? [['all', 'Все сделки', props.totalDeals], ['attention', 'Требуют внимания', props.attention], ['today', 'На сегодня', props.today], ['tomorrow', 'На завтра', props.tomorrow], ['future', 'Будущие', props.future]]
+    ? [['all', 'Все', props.totalDeals], ['overdue', 'Просроченные', props.overdue], ['today', 'Сегодня', props.today], ['tomorrow', 'Завтра', props.tomorrow], ['future', 'Будущие', props.future]]
     : [['overdue', 'Просроченные', props.countForPlan('overdue')], ['today', 'Сегодня', props.countForPlan('today')], ['tomorrow', 'Завтра', props.countForPlan('tomorrow')], ['future', 'Будущие', props.countForPlan('future')], ['all', 'Все', props.countForPlan('all')]]
   return <nav className="dc-time-tabs">
     {tabs.map(([key, label, count]) => <button className={props.active === key ? 'active' : ''} key={key} onClick={() => props.onChange(key)}>{label}<span>{count}</span></button>)}
@@ -1286,7 +1309,7 @@ function DealTable(props: {
           </div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select aria-label="Вероятность оплаты" value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
-            <select aria-label="Неделя оплаты" value={payment.week} onChange={(event) => savePayment(event.target.value, payment.month)}><option value="">— нед.</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select>
+            <select aria-label="Неделя оплаты" value={payment.week} onChange={(event) => savePayment(event.target.value, payment.month)}><option value="">—</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select>
             <select aria-label="Месяц оплаты" value={payment.month} onChange={(event) => savePayment(payment.week, event.target.value)}><option value="">— мес.</option>{monthOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select>
           </div></div></div>
         </article>

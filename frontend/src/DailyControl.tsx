@@ -517,13 +517,17 @@ export function DailyControl({ user }: { user: AuthUser }) {
 
   const newerReportAvailable = Boolean(report && history?.latest_id && history.latest_id > report.id)
   const visibleWarnings = businessReportWarnings(report?.warnings).map(snapshotDayText)
+  // Разбор общий на весь срез, а не на выбранного менеджера: `reviewed_deal_ids`
+  // приходит одним полем на отчёт. Знаменатель — сумма светофора, чтобы
+  // «Разобрано N из 29» сходилось с «21 + 8 + 0» над ним же.
+  const reviewQueueTotal = allDeals.filter((deal) => deal.status !== 'neutral').length
+  const reviewQueueReviewed = useMemo(
+    () => allDeals.filter((deal) => deal.status !== 'neutral' && reviewedDealIds.has(deal.deal_id)).length,
+    [allDeals, reviewedDealIds],
+  )
+  const reviewDone = reviewQueueTotal > 0 && reviewQueueReviewed >= reviewQueueTotal
   const heading = report ? reportHeading(report) : 'Ежедневный контроль'
   const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
-  const managerCounts = {
-    red: managerDeals.filter((deal) => deal.status === 'red').length,
-    yellow: managerDeals.filter((deal) => deal.status === 'yellow').length,
-    green: managerDeals.filter((deal) => deal.status === 'green').length,
-  }
 
   if (loading && !report && !history) {
     return <div className="dc-daily-empty"><span className="dc-spinner" />Загружается ежедневный контроль…</div>
@@ -539,6 +543,14 @@ export function DailyControl({ user }: { user: AuthUser }) {
           <h1>{heading}</h1>
         </div>
         <div className="dc-daily-head-actions">
+          <input
+            type="search"
+            className="dc-daily-search"
+            aria-label="Поиск по сделкам всего отчёта"
+            placeholder="Найти сделку, ID или задачу"
+            value={search}
+            onChange={(event) => applySearch(event.target.value)}
+          />
           <nav className="dc-daily-history" aria-label="История отчётов">
             <button type="button" disabled={!report?.previous_id} onClick={() => void openReport(report?.previous_id)} aria-label="Предыдущий отчёт">←</button>
             <span>{report?.position || 0} из {report?.total || history?.total || 0}</span>
@@ -562,7 +574,14 @@ export function DailyControl({ user }: { user: AuthUser }) {
         <section className="dc-daily-team" aria-label="Итог команды за день">
           <div className="dc-daily-team-head">
             <h2>Итог команды за день</h2>
-            <small>Срез {formatClock(report?.cutoff_at) || 'нет'} · {managerCountLabel(managers.length)}</small>
+            <div className="dc-daily-team-meta">
+              <small>Срез {formatClock(report?.cutoff_at) || 'нет'} · {managerCountLabel(managers.length)}</small>
+              <small className="dc-daily-review-progress" role="status">
+                {reviewQueueTotal > 0
+                  ? <>Разобрано <b>{reviewQueueReviewed}</b> из {reviewQueueTotal}{reviewDone ? ' · разбор завершён' : ''}</>
+                  : 'Нет сделок в разборе'}
+              </small>
+            </div>
           </div>
           <article className="dc-daily-lights" aria-label="Светофор сделок">
             <div className="dc-daily-traffic">
@@ -671,33 +690,6 @@ export function DailyControl({ user }: { user: AuthUser }) {
           ref={layoutRef}
         >
           <section className="dc-daily-list" aria-label="Сделки менеджера">
-            <div className="dc-daily-manager-integrated" aria-label="Выбранный менеджер и фильтры сделок">
-              <div className="dc-daily-manager-integrated-head">
-                <strong>{selectedManager?.manager_name || 'Выбранный менеджер'}</strong>
-                <small>{selectedManager?.deals_count || 0} сделок · {selectedManager?.calls || 0} звонков · {selectedManager?.messages || 0} сообщений · {talkDuration(selectedManager?.talk_seconds || 0)}</small>
-              </div>
-              <div className="dc-daily-manager-filters">
-                {STATUS_FILTERS.map((item) => (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className={activeStatuses.has(item.id) ? 'active' : ''}
-                    aria-pressed={activeStatuses.has(item.id)}
-                    onClick={() => selectStatus(item.id)}
-                  >
-                    {item.label} · {managerCounts[item.id]}
-                  </button>
-                ))}
-                <input
-                  type="search"
-                  aria-label="Поиск по сделкам всего отчёта"
-                  placeholder="Найти сделку, ID или задачу"
-                  value={search}
-                  onChange={(event) => applySearch(event.target.value)}
-                  onClick={(event) => event.stopPropagation()}
-                />
-              </div>
-            </div>
             {offscreenDealId === selectedDeal?.deal_id && selectedDeal ? <button
               type="button"
               className="dc-selected-anchor"
@@ -751,6 +743,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
               showStatus={false}
               snapshotDay
               snapshotCutoffAt={report.cutoff_at}
+              reviewed={reviewedDealIds.has(selectedDeal?.deal_id || '')}
             />
           </div>
         </div>
@@ -827,6 +820,7 @@ function DealRow({
         {attentionReason
           ? <p className={selected ? 'full' : 'clamp'}>{attentionReason}</p>
           : null}
+        {reviewed ? <span className="dc-daily-reviewed-mark">Проверено</span> : null}
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
           <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>

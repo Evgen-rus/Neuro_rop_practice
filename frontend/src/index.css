@@ -488,6 +488,36 @@ textarea {
   box-shadow: 12px 0 32px rgba(30, 61, 104, .09);
 }
 
+/* Затемнение под мобильной панелью. На десктопе рейка и так сдвигает
+   контент, поэтому элемент скрыт и включается только в медиазапросе. */
+.dc-scrim {
+  display: none;
+}
+
+/* Подпись группы разделов навигации. Скрыта, пока рейка свёрнута (58px) —
+   подписи там не помещаются, и видна в раскрытой рейке на десктопе и
+   в мобильной панели. */
+.dc-nav-group {
+  display: none;
+}
+
+.dc-shell.menu-open .dc-nav-group {
+  display: block;
+  grid-column: 1 / -1;
+  margin: 16px 0 2px;
+  padding: 0 14px;
+  color: var(--dc-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dc-shell.menu-open .dc-nav-group:first-child {
+  margin-top: 4px;
+}
+
 .dc-menu-button,
 .dc-sidebar nav button,
 .dc-exit {
@@ -500,37 +530,70 @@ textarea {
   text-align: left;
 }
 
-.dc-menu-button {
-  grid-template-columns: 40px 1fr;
+/* Шапка рейки: кнопка-бургер и логотип рядом. Кнопка остаётся
+   кликабельной только по иконке, а логотип — обычный текст без рамки,
+   поэтому нажатие рядом с ним ничего не делает. */
+.dc-menu-head {
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
+  gap: 10px;
   min-height: 58px;
-  padding: 8px;
-  border-bottom: 1px solid var(--dc-line);
+  padding: 0 8px;
+}
+
+/* Кнопка-бургер: кликабельна только иконка. Раньше кнопка была
+   `grid: 40px 1fr` во всю ширину рейки с рамкой вокруг иконки, поэтому
+   кликалась вся полоса и у иконки был свой «карман» с обводкой. */
+.dc-menu-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  flex: 0 0 auto;
 }
 
 .dc-menu-button span {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--dc-line);
+  width: 44px;
+  height: 44px;
+  border: 0;
   border-radius: 11px;
-  background: #fff;
+  background: transparent;
   font-size: 22px;
 }
 
-.dc-menu-button b,
+.dc-menu-button:hover span,
+.dc-shell.menu-open .dc-menu-button span {
+  background: #e9edf4;
+}
+
+/* Логотип «НейроРОП» рядом с бургером. Виден только в раскрытом меню:
+   в свёрнутой рейке 58px для него нет места, и он уезжал бы за край. */
+.dc-menu-logo {
+  display: none;
+  color: var(--dc-blue);
+  font-size: 15px;
+  font-weight: 850;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+}
+
+.dc-shell.menu-open .dc-menu-logo {
+  display: block;
+}
+
 .dc-sidebar nav b,
-.dc-sidebar nav small,
 .dc-exit b {
   opacity: 0;
   white-space: nowrap;
   transition: opacity .1s ease;
 }
 
-.dc-shell.menu-open .dc-menu-button b,
 .dc-shell.menu-open .dc-sidebar nav b,
-.dc-shell.menu-open .dc-sidebar nav small,
 .dc-shell.menu-open .dc-exit b {
   opacity: 1;
 }
@@ -543,37 +606,25 @@ textarea {
   padding: 12px 0;
 }
 
-.dc-sidebar-split {
-  display: block;
-  height: 1px;
-  margin: auto 14px 4px;
-  background: var(--dc-line);
-}
-
 .dc-sidebar nav button {
   grid-template-columns: 58px 1fr;
-  grid-template-rows: 24px 18px;
+  grid-template-rows: 1fr;
   min-height: 48px;
   padding: 0;
   border: 1px solid transparent;
 }
 
 .dc-sidebar nav button > span {
-  grid-row: 1 / 3;
+  grid-row: 1;
   display: grid;
   place-items: center;
   font-size: 19px;
 }
 
 .dc-sidebar nav button b {
-  align-self: end;
+  align-self: center;
   color: var(--dc-text);
   font-size: 13px;
-}
-
-.dc-sidebar nav button small {
-  color: var(--dc-muted);
-  font-size: 10px;
 }
 
 .dc-sidebar nav button.active {
@@ -589,17 +640,33 @@ textarea {
   color: #fff;
 }
 
+/* Нижние пункты держим в той же сетке, что и разделы, и без разделителя.
+   `padding: 0` и рамка `1px solid transparent` повторяют разделы: браузер
+   даёт кнопке отступ `1px 6px` по умолчанию, из-за чего иконки и подписи
+   нижних пунктов уезжали вправо на 6px и не совпадали с колонкой
+   разделов. `align-items: normal` — как у разделов, иначе строка
+   центрировалась и давала тот же сдвиг по вертикали. */
 .dc-exit {
   grid-template-columns: 58px 1fr;
-  align-items: center;
+  grid-template-rows: 1fr;
+  align-items: normal;
   min-height: 48px;
   margin-top: auto;
-  border-top: 1px solid var(--dc-line);
+  padding: 0;
+  border: 1px solid transparent;
 }
 
 .dc-exit span {
-  text-align: center;
-  font-size: 20px;
+  grid-row: 1;
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+}
+
+.dc-exit b {
+  align-self: center;
+  color: var(--dc-text);
+  font-size: 13px;
 }
 
 .dc-content {
@@ -903,8 +970,15 @@ textarea {
 
 .dc-kpis {
   display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  /* Плитки тянутся на всю свободную ширину шапки. `flex: 1 1 auto` здесь
+     давал контентную ширину — панель занимала 942px из 1463px, и на широком
+     экране метрики выглядели разными.
+     Рост 4.75:1 подобран так, чтобы ширина тизера совпала с одной плиткой.
+     Идеальная математика — 4:1 (четыре плитки против одной колонки), но
+     колонку съедают `gap: 8px` между плитками и padding с border самой
+     плитки, поэтому на практике нужно чуть большее отношение. */
+  flex: 4.75 1 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   min-width: 0;
   margin: 0;
@@ -3166,7 +3240,11 @@ textarea {
 
 .dc-forecast-cell .dc-cell-card > div {
   display: grid;
-  grid-template-columns: minmax(52px, .8fr) minmax(62px, 1fr) minmax(64px, 1fr);
+  /* Минимумы подогнаны под фактические подписи. Неделя оставлена с
+     словом «нед.» — голое «4» не читается, а колонка всё равно помещается
+     (45px текста + 16px оформления против 79px доступных). Год в месяце
+     двухзначный: «фев. 27» вместо «фев. 2027». */
+  grid-template-columns: minmax(46px, .8fr) minmax(50px, .85fr) minmax(56px, .95fr);
   gap: 4px;
   margin-top: auto;
 }
@@ -3674,9 +3752,13 @@ textarea {
 .ai-spend-teaser {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  /* Тизер расходов — такая же плитка, как метрики, и стоит в одной шапке.
+     Раньше он был `flex: 0 0 auto; width: auto` и получал 115px против 230px
+     у остальных: глаз считал его отдельным мелким элементом. Теперь делим
+     шапку с панелью KPI в отношении 1:4 — по одной колонке на элемент. */
+  flex: 1 1 0;
+  min-width: 0;
   gap: 10px;
-  width: auto;
   margin: 0;
   padding: 9px 12px;
   border: 1px solid var(--dc-line);
@@ -4134,38 +4216,148 @@ textarea {
     border-bottom: 1px solid var(--dc-line);
   }
 
-  .dc-menu-button,
+  /* Затемнение контента под открытой панелью (скрин 2). Это кнопка, а не
+     псевдоэлемент: по затемнению нужно уметь закрыть панель, иначе на
+     телефоне (где нет кнопки «назад» рядом) меню закрыть было бы нечем.
+     Базовая строка ниже — вне медиазапроса: без неё элемент получал
+     стили браузера по умолчанию и был виден на десктопе. */
+  .dc-shell.menu-open .dc-scrim {
+    position: fixed;
+    display: block;
+    inset: 0;
+    z-index: 25;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(11, 26, 48, .38);
+  }
+
+  /* Мобильное меню по образцу соседнего приложения (скрины 1-3).
+     Кнопка — квадратная иконка-бургер, панель — выезжающий сбоку оверлей
+     на всю высоту экрана: контент не сдвигается, а закрывается панелью.
+     Список вертикальный, иконка слева, подпись справа, группировка через
+     разделители-подписи. Заголовок экрана и бургер остаются на своих
+     местах (бургер в рейке, заголовок в `.dc-header` контента). */
+  .dc-sidebar {
+    display: block;
+    min-height: 0;
+    overflow: visible;
+    background: var(--dc-surface);
+  }
+
+  .dc-menu-button {
+    display: flex;
+    width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 11px;
+    background: var(--dc-surface-2);
+    color: var(--dc-text);
+  }
+
+  /* Свёрнуто: панели нет, видна только кнопка. */
+  .dc-sidebar nav,
   .dc-exit {
     display: none;
   }
 
-  .dc-sidebar nav {
+  /* Раскрыто: панель выезжает сбоку и перекрывает контент.
+     `position: fixed` вместо потока: в потоке панель заняла бы место в
+     сетке `.dc-shell` и сдвинула контент вниз, а не закрыла его. */
+  .dc-shell.menu-open .dc-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(84vw, 300px);
+    height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-right: 1px solid var(--dc-line);
+    box-shadow: 12px 0 32px rgba(30, 61, 104, .09);
+  }
+
+  .dc-shell.menu-open .dc-sidebar nav {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    padding: 6px;
+    align-content: start;
+    gap: 8px;
+    padding: 12px 0;
   }
 
-  .dc-sidebar-split {
-    grid-column: 1 / -1;
-    margin: 2px 8px;
-  }
-
-  .dc-sidebar nav button {
-    display: flex;
-    min-height: 42px;
+  /* Мобильная панель повторяет десктопную рейку: тот же пункт 48px,
+     та же сетка `58px 1fr`, та же синяя подсветка активного. Раньше
+     здесь был отдельный вид — подложка 9px, высота 44px, иконка 24px, —
+     и меню выглядело «как в другом приложении». */
+  .dc-shell.menu-open .dc-sidebar nav button {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    grid-template-rows: 1fr;
+    min-height: 48px;
     align-items: center;
-    justify-content: center;
-    border-radius: 9px !important;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0 12px 12px 0;
   }
 
-  .dc-sidebar nav button > span {
+  .dc-shell.menu-open .dc-sidebar nav button > span {
+    display: grid;
+    grid-row: 1;
+    place-items: center;
+    width: auto;
+    font-size: 19px;
+  }
+
+  .dc-shell.menu-open .dc-sidebar nav b {
     display: block;
+    align-self: center;
+    opacity: 1;
+    font-size: 13px;
   }
 
-  .dc-sidebar nav b,
-  .dc-sidebar nav small {
-    display: none;
+  /* Активный пункт — тот же синий, что на десктопе. */
+  .dc-shell.menu-open .dc-sidebar nav button.active {
+    border-color: #0d2549;
+    border-radius: 0 12px 12px 0;
+    color: #fff;
+    background: var(--dc-blue);
+    box-shadow: 0 7px 18px rgba(23, 104, 242, .22);
   }
+
+  .dc-shell.menu-open .dc-sidebar nav button.active b {
+    color: #fff;
+  }
+
+  /* Нижние пункты — та же сетка и та же высота, что у разделов. */
+  .dc-shell.menu-open .dc-exit {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    grid-template-rows: 1fr;
+    min-height: 48px;
+    align-items: normal;
+    margin: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0;
+  }
+
+  .dc-shell.menu-open .dc-exit span {
+    display: grid;
+    grid-row: 1;
+    place-items: center;
+    width: auto;
+    font-size: 19px;
+  }
+
+  .dc-shell.menu-open .dc-exit b {
+    display: block;
+    align-self: center;
+    opacity: 1;
+    font-size: 13px;
+  }
+
+  /* Разделитель-подпись группы перед «Команда» заменён на `.dc-nav-group`. */
 
   .dc-content {
     padding: 16px 12px 24px;
@@ -8015,6 +8207,7 @@ ul.facts.bad li:before {
   --daily-amber-soft: #fff7e8;
   --daily-ink: #263447;
   --daily-soft: #f7f9fc;
+  --daily-card-label: #5b6b85;
   --line-soft: #e7edf5;
 }
 
@@ -8075,6 +8268,22 @@ ul.facts.bad li:before {
 
 .dc-daily-purpose { font-size: 18px; line-height: 22px; font-weight: 700; color: var(--text); }
 .dc-daily-search { min-width: 180px; max-width: 260px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); color: inherit; font-size: var(--dc-type-control); }
+
+.dc-daily-head-actions .dc-daily-search {
+  min-width: 200px;
+  max-width: 280px;
+  height: 32px;
+  padding: 0 10px;
+  border-color: var(--dc-line);
+  border-radius: 8px;
+  color: var(--dc-text);
+  font: 400 12px/16px var(--dc-font-family);
+}
+
+.dc-daily-head-actions .dc-daily-search:focus-visible {
+  outline: 2px solid var(--daily-blue);
+  outline-offset: 2px;
+}
 .dc-daily-filters .dc-daily-search {
   flex: 1 1 160px;
   min-width: 140px;
@@ -8230,6 +8439,26 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-team-head small { color: var(--muted); }
+
+.dc-daily-team-meta {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 12px;
+}
+
+/* Прогресс разбора — общий на весь срез, поэтому стоит рядом со «Срез»,
+   а не в карточке менеджера. Числа выделяем, чтобы «7 из 29» читалось
+   с одного взгляда. */
+.dc-daily-review-progress {
+  color: var(--daily-card-label);
+  white-space: nowrap;
+}
+
+.dc-daily-review-progress b {
+  color: var(--text);
+  font-weight: 750;
+}
 
 .dc-daily-lights,
 .dc-daily-metrics,
@@ -8440,9 +8669,24 @@ ul.facts.bad li:before {
   transition: background 150ms ease-out, color 150ms ease-out;
 }
 
-.dc-daily-managers button:last-child:not(.selected) {
-  flex: 1 0 auto;
+.dc-daily-managers button:not(.selected) {
+  opacity: .58;
 }
+
+.dc-daily-managers button:not(.selected):hover,
+.dc-daily-managers button:not(.selected):focus-visible {
+  opacity: 1;
+}
+
+.dc-daily-managers button:not(.selected) strong {
+  color: var(--text);
+}
+
+/* Раньше здесь было `button:last-child:not(.selected) { flex: 1 0 auto }`.
+   Оно растягивало вкладку, которая последняя в DOM, а не последняя
+   визуально: при выборе первого менеджера невыбранный «раздувался» на всю
+   длину, а при выборе вторнего — обрезался, потому что растягиваемый сам
+   становился выбранным. Теперь все вкладки по содержимому. */
 
 .dc-daily-managers button:hover {
   background: #eef3fa;
@@ -8463,7 +8707,7 @@ ul.facts.bad li:before {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   background: #fff;
-  color: var(--daily-ink);
+  color: var(--text);
 }
 
 .dc-daily-managers strong {
@@ -8480,7 +8724,7 @@ ul.facts.bad li:before {
   min-width: 0;
   grid-column: 1 / -1;
   overflow: hidden;
-  color: var(--text);
+  color: var(--daily-card-label);
   font-size: 12px;
   line-height: 17px;
   text-overflow: ellipsis;
@@ -8516,7 +8760,7 @@ ul.facts.bad li:before {
   min-width: 0;
   align-items: center;
   gap: 4px;
-  color: var(--dc-muted);
+  color: var(--daily-card-label);
   font: 750 12px/16px var(--dc-font-family);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -8571,93 +8815,12 @@ ul.facts.bad li:before {
   outline-offset: 2px;
 }
 
-.dc-daily-manager-integrated {
-  position: absolute;
-  z-index: 4;
-  right: 0;
-  bottom: calc(100% + 14px);
-  left: 0;
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--daily-blue);
-  border-bottom-color: #fff;
-  border-radius: 10px 10px 3px 3px;
-  background: #fff;
-  color: var(--daily-ink);
-  box-shadow: inset 0 3px 0 var(--daily-blue);
-}
-
-.dc-daily-manager-integrated-head,
-.dc-daily-manager-filters {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.dc-daily-manager-integrated-head strong {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: var(--daily-ink);
-  font-size: 15px;
-  line-height: 20px;
-  font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dc-daily-manager-integrated-head small {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--dc-muted);
-  font-size: 11px;
-  line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dc-daily-manager-filters {
-  flex-wrap: wrap;
-}
-
-.dc-daily-manager-filters button {
-  min-height: 32px;
-  flex: 0 0 auto;
-  padding: 5px 9px;
-  border: 1px solid var(--dc-line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--dc-muted);
-  font: 700 11px/16px var(--dc-font-family);
-  cursor: pointer;
-}
-
-.dc-daily-manager-filters button.active {
-  border-color: var(--daily-blue);
-  background: var(--daily-blue);
-  color: #fff;
-}
-
-.dc-daily-manager-filters button:focus-visible,
-.dc-daily-manager-filters input:focus-visible {
-  outline: 2px solid var(--daily-blue);
-  outline-offset: 2px;
-}
-
-.dc-daily-manager-filters input {
-  min-width: 150px;
-  height: 32px;
-  flex: 1 1 180px;
-  padding: 0 10px;
-  border: 1px solid var(--dc-line);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--dc-text);
-  font: 400 12px/16px var(--dc-font-family);
-}
+/* Панель «выбранный менеджер + фильтры + поиск» удалена: имя и метаданные
+   дублировали выбранную вкладку, а фильтры дублировали её же кнопки
+   статусов. Поиск живёт в шапке отчёта (`.dc-daily-head-actions`), потому
+   что `applySearch` ищет по всему отчёту, а не по одному менеджеру.
+   Сварка выбранной вкладки с панелью сделок держится геометрией: белый фон
+   вкладки + нулевые нижние радиусы + белая нижняя граница. */
 
 .dc-daily-split {
   display: grid;
@@ -8782,6 +8945,33 @@ ul.facts.bad li:before {
   gap: 8px;
 }
 
+/* Отмеченная сделка гаснет и подписывается: без этого строка молча
+   уезжает в низ списка (sortDailyReviewDeals ведёт неразобранные вверх)
+   и выглядит так, будто её не было. Чип «Проверено» рендерится в разметке
+   в контентной колонке: в колонке чекбокса (22px) он не помещается. */
+.dc-daily-deal.reviewed {
+  opacity: .62;
+}
+
+.dc-daily-deal.reviewed > div > strong,
+.dc-daily-deal.reviewed .dc-deal-pipeline-stage {
+  color: var(--daily-card-label);
+}
+
+.dc-daily-reviewed-mark {
+  display: inline-flex;
+  align-items: center;
+  margin: 6px 0 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--daily-green-soft);
+  color: #17613b;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
 .dc-daily-reviewed {
   display: grid;
   place-items: center;
@@ -8848,6 +9038,41 @@ ul.facts.bad li:before {
 .dc-daily-deal footer a { color: var(--daily-blue); }
 
 .dc-daily-card { min-width: 0; overflow: auto; }
+
+/* Разобранная сделка справа: карточка приглушается, но текст остаётся
+   читаемым. `opacity` на всей карточке роняет контраст ниже AA, поэтому
+   гасим цвет текста до `--daily-card-label` (5.03:1). `--dc-muted`
+   (4.06:1) не годится: заголовок карточки 13.5px/700 не считается
+   крупным текстом по WCAG, порог всё равно 4.5:1. */
+.dc-daily-card.reviewed {
+  background: var(--dc-card-soft, #f5f7fa);
+}
+
+.dc-daily-card.reviewed .dc-daily-card-head h2,
+.dc-daily-card.reviewed .dc-daily-block-title h3,
+.dc-daily-card.reviewed .dc-daily-card-head p,
+.dc-daily-card.reviewed .dc-daily-block-title small,
+.dc-daily-card.reviewed .dc-daily-block-note {
+  color: var(--daily-card-label);
+}
+
+.dc-daily-card-reviewed-mark {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.dc-daily-card-reviewed-mark span {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--daily-green-soft);
+  color: #17613b;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 .dc-daily-card-head {
   display: flex;
   align-items: flex-start;

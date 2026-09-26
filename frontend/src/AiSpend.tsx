@@ -286,7 +286,7 @@ export function AiSpendDashboardCard({ onOpen }: { onOpen: () => void }) {
   return <button type="button" className="ai-spend-teaser" onClick={onOpen}>
     <span>₽</span>
     <div>
-      <small>Расходы AI сегодня</small>
+      <small>AI сегодня</small>
       <strong>{summary?.today.estimated_cost_rub_label || '…'}</strong>
     </div>
   </button>

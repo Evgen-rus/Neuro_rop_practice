@@ -500,6 +500,7 @@ export function DealReviewCard(props: {
   scriptHint?: string
   snapshotDay?: boolean
   snapshotCutoffAt?: string | null
+  reviewed?: boolean
 }) {
   const [eventsOpen, setEventsOpen] = useState(false)
   const { openCommunication } = useCommunicationDialog()
@@ -513,7 +514,12 @@ export function DealReviewCard(props: {
   const scriptHint = props.scriptHint ?? DEFAULT_SCRIPT_HINT
   const script = meetingScript(deal)
   return (
-    <section className="dc-daily-card">
+    <section className={`dc-daily-card${props.reviewed ? ' reviewed' : ''}`}>
+      {props.reviewed ? (
+        <div className="dc-daily-card-reviewed-mark">
+          <span>Проверено</span>
+        </div>
+      ) : null}
       {props.showHeader !== false ? (
         <header className="dc-daily-card-head">
           <div>
