@@ -329,22 +329,25 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }, [dealId, managerId, selectedDeal, selectedManager, snapshot])
 
   useEffect(() => {
-    const root = dealScrollRef.current
     const row = selectedDealRowRef.current
-    if (!root || !row || !selectedDeal) {
+    if (!row || !selectedDeal) {
       setOffscreenDealId('')
       return
     }
     const selectedId = selectedDeal.deal_id
+    // Без `root` наблюдатель смотрит во вьюпорт, а не внутрь панели:
+    // список теперь растёт вместе со страницей, внутреннего скролла нет.
     const observer = new IntersectionObserver(([entry]) => {
       setOffscreenDealId(entry.isIntersecting ? '' : selectedId)
-    }, { root })
+    })
     observer.observe(row)
     return () => observer.disconnect()
   }, [activeStatuses, dealId, managerId, report?.id, reviewedDealIds, search, selectedDeal, visibleDeals])
 
   useLayoutEffect(() => {
-    dealScrollRef.current?.scrollTo({ top: 0 })
+    // Скролл теперь у документа, поэтому сбрасываем его целиком, а не
+    // только внутренний контейнер списка.
+    window.scrollTo({ top: 0 })
   }, [activeStatuses, managerId, search])
 
   useEffect(() => {

@@ -8028,8 +8028,15 @@ ul.facts.bad li:before {
 .dc-deal-context-section.warning p, .dc-deal-context-section.warning small { margin: 0; font-size: 10.5px; }
 .dc-deal-context-markdown { display: grid; gap: 7px; padding-top: 4px; }
 .dc-markdown-report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+/* Раскрытый блок с текстом: свои действия «Скопировать» и «Скачать»
+   живут внутри блока, а не в общем списке сверху, чтобы в свёрнутом виде
+   не было кнопок, которыми нечего пользоваться. */
+.dc-markdown-report-block { display: grid; gap: 7px; min-width: 0; }
+/* Селектор по классу, а не `> pre`: после переноса в
+   `.dc-markdown-report-block` `pre` перестал быть прямым потомком
+   `.dc-deal-context-markdown` и правило с `>` перестало бы работать. */
+.dc-markdown-report-block > pre,
 .dc-deal-context-markdown > pre { max-height: 520px; padding: 12px; border: 1px solid #d6e1eb; border-radius: 9px; color: #344d69; background: #fbfdff; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: auto; }
-.dc-analysis-trace-note { color: #6d8096; font-size: 10.5px; line-height: 1.45; }
 .dc-analysis-trace-text { white-space: pre-wrap; }
 .dc-manager-followups { display: grid; gap: 12px; }
 .dc-manager-followups > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
@@ -8849,14 +8856,15 @@ ul.facts.bad li:before {
   outline: 2px solid var(--blue);
 }
 
+/* Левая панель больше не прибита к вьюпорту: список растёт вместе с
+   контентом и прокручивается вместе со страницей — как на дашборде.
+   Раньше здесь были `position: sticky` + `height: calc(100dvh - 16px)`,
+   из-за чего страница оставалась втрое короче контента и колесо
+   прокручивало только список (4625px контента в 692px окна). */
 .dc-daily-list {
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 8px;
-  height: calc(100dvh - 16px);
-  max-height: calc(100dvh - 16px);
-  overflow: hidden;
+  overflow: visible;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
@@ -8869,14 +8877,19 @@ ul.facts.bad li:before {
 .dc-daily-deal-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 0 0 10px;
-  overscroll-behavior: contain;
 }
 
+/* Правая карточка прибита к вьюпорту и прокручивается внутри себя,
+   пока слева идёт список — ровно как `.dc-detail` на дашборде. */
 .dc-daily-card-anchor {
   min-width: 0;
-  scroll-margin-top: 8px;
+  position: sticky;
+  top: 14px;
+  max-height: calc(100vh - 28px);
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .dc-daily-filters {
@@ -10094,10 +10107,14 @@ ul.facts.bad li:before {
     position: static;
   }
 
-  .dc-daily-list {
+  /* На мобиле карточка идёт после списка обычным потоком, а не
+     прибивается: sticky в одно-колоночной раскладке только мешает.
+     Ограничение `min(52vh, 520px)` оставлено, иначе длинный список
+     без возможности домотать уходит за экран. */
+  .dc-daily-card-anchor {
     position: static;
-    height: auto;
-    max-height: min(52vh, 520px);
+    max-height: none;
+    overflow: visible;
   }
 
   .dc-daily-resizer { display: none; }
