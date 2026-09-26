@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { lockBodyScroll } from './bodyScrollLock'
 
 const FOCUSABLE = [
   'a[href]',
@@ -88,12 +89,11 @@ export function DealDetailOverlay({ title, subtitle, onClose, children }: {
     // Страница под оверлеем оставалась прокручиваемой: свайп по карточке
     // уводил список, и «Назад к списку» возвращал не туда. Блокируем
     // прокрутку и возвращаем позицию при закрытии.
-    const { body, documentElement } = document
-    const previousOverflow = body.style.overflow
-    const previousPaddingRight = body.style.paddingRight
-    const scrollbarWidth = window.innerWidth - documentElement.clientWidth
-    body.style.overflow = 'hidden'
-    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`
+    //
+    // Через общий счётчик, а не «запомнить и вернуть»: оверлей открывается
+    // вместе с «Дожимом», и при закрытии в обратном порядке старая схема
+    // оставляла `body` заблокированным навсегда.
+    const releaseScroll = lockBodyScroll()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!panel) return
@@ -127,8 +127,7 @@ export function DealDetailOverlay({ title, subtitle, onClose, children }: {
     document.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
-      body.style.overflow = previousOverflow
-      body.style.paddingRight = previousPaddingRight
+      releaseScroll()
       // Возвращаем фокус инициатору, только если он ещё в документе: после
       // смены вида или фильтра React мог размонтировать строку, и фокус на
       // отсоединённый узел оставлял страницу без активного элемента.

@@ -111,6 +111,7 @@ import {
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { DealDetailOverlay } from './DealDetailOverlay'
+import { lockBodyScroll } from './bodyScrollLock'
 import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
 import { ManagerTrajectory } from './ManagerTrajectory'
 import { LearningShadow } from './LearningShadow'
@@ -2853,12 +2854,11 @@ function ManagerFullScriptModal(props: {
 }) {
   const onClose = props.onClose
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScroll = lockBodyScroll()
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKeyDown)
     return () => {
-      document.body.style.overflow = previousOverflow
+      releaseScroll()
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])
@@ -3017,12 +3017,11 @@ function ManagerAssistantModal(props: {
   const visibleEntryId = visibleEntry?.id
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScroll = lockBodyScroll()
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKeyDown)
     return () => {
-      document.body.style.overflow = previousOverflow
+      releaseScroll()
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])

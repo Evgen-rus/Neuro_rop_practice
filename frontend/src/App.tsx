@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import './index.css'
+import { lockBodyScroll } from './bodyScrollLock'
 import { DealControl } from './DealControl'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
 import {
@@ -2399,8 +2400,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   }, [reportDetail?.id, reportDetail?.workflow])
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const releaseScroll = lockBodyScroll()
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (materialTab) setMaterialTab(null)
@@ -2408,7 +2408,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => {
-      document.body.style.overflow = previousOverflow
+      releaseScroll()
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [materialTab, onCloseLeadWorkspace])
