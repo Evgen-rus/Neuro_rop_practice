@@ -1,6 +1,55 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+/** Фокусируемые элементы панели в порядке обхода. */
+function focusableWithin(panel: HTMLElement) {
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
+    .filter((node) => node.offsetParent !== null || node === document.activeElement)
+}
+
+/**
+    * Слои, которые могут перекрыть карточку сделки. Все они `position: fixed`
+    * и порталятся в `document.body`.
+    */
+const MODAL_LAYERS = [
+  '.dc-deal-overlay',
+  '.dc-manager-assistant-layer',
+  '.dc-manager-full-script-layer',
+  '.dc-modal-layer',
+  '.dc-comments-modal',
+].join(',')
+
+/** Вычисленный z-index слоя; `auto` и мусор трактуем как 0. */
+function layerZIndex(node: HTMLElement) {
+  const value = Number.parseInt(getComputedStyle(node).zIndex, 10)
+  return Number.isNaN(value) ? 0 : value
+}
+
+/**
+    * Есть ли модальный слой выше карточки.
+    *
+    * Сравнение идёт по z-index, а не по порядку DOM: карточка смонтирована
+    * раньше «Дожима», но «Дожим» её перекрывает и должен первым получать
+    * Escape и фокус. Порядок задаётся токенами `--dc-layer-*` в `index.css`,
+    * и это единственное место, где он записан.
+    */
+function hasModalAbove(panel: HTMLElement) {
+  const overlay = panel.closest<HTMLElement>('.dc-deal-overlay')
+  if (!overlay) return false
+  const own = layerZIndex(overlay)
+  return Array.from(document.querySelectorAll<HTMLElement>(MODAL_LAYERS))
+    .some((node) => node !== overlay && node.isConnected && layerZIndex(node) > own)
+}
+
 /**
  * Полноэкранный оверлей карточки сделки для мобильной раскладки.
  *
@@ -16,26 +65,88 @@ export function DealDetailOverlay({ title, subtitle, onClose, children }: {
   onClose: () => void
   children: ReactNode
 }) {
+  const panelRef = useRef<HTMLElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
+  // Инициатор — то, что открыло карточку. Фокус возвращается на него при
+  // закрытии, иначе после 60+ интерактивных элементов внутри карточки
+  // навигация начинается заново от шапки.
+  const openerRef = useRef<HTMLElement | null>(null)
+  // `onClose` приходит новой стрелкой на каждом рендере. Если оставить его
+  // в зависимостях, эффект перезапускается, а его cleanup возвращает
+  // `overflow` и фокус — оверлей «моргает» и страница под ним оживает.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
+    openerRef.current = document.activeElement as HTMLElement | null
+    const panel = panelRef.current
+
     // Фокус на кнопке закрытия: с клавиатуры и со скринридера карточка
     // открывается как диалог, а не как блок в конце страницы.
     closeRef.current?.focus()
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+
+    // Страница под оверлеем оставалась прокручиваемой: свайп по карточке
+    // уводил список, и «Назад к списку» возвращал не туда. Блокируем
+    // прокрутку и возвращаем позицию при закрытии.
+    const { body, documentElement } = document
+    const previousOverflow = body.style.overflow
+    const previousPaddingRight = body.style.paddingRight
+    const scrollbarWidth = window.innerWidth - documentElement.clientWidth
+    body.style.overflow = 'hidden'
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!panel) return
+      // Над карточкой открыт «Дожим», сценарий или подтверждение анализа.
+      // Их клавиши обрабатывают их же компоненты; если оверлей продолжит
+      // ловить клавиши, Escape закроет карточку вместо верхнего диалога,
+      // а ловушка фокуса вытащит фокус из «Дожима» обратно в оверлей.
+      if (hasModalAbove(panel)) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      // Ловушка фокуса: `aria-modal="true"` объявляет фон неактивным, но
+      // без неё Tab уводил на элементы страницы под оверлеем.
+      const items = focusableWithin(panel)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !panel.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      body.style.overflow = previousOverflow
+      body.style.paddingRight = previousPaddingRight
+      // Возвращаем фокус инициатору, только если он ещё в документе: после
+      // смены вида или фильтра React мог размонтировать строку, и фокус на
+      // отсоединённый узел оставлял страницу без активного элемента.
+      const opener = openerRef.current
+      if (opener && opener.isConnected) opener.focus()
+    }
+  }, [])
 
   return createPortal(
     <div
       className="dc-deal-overlay"
       role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}
+      // `onPointerDown`, а не `onMouseDown`: тот же приём уже используется
+      // для ресайзера панелей, и он одинаково работает мышью и пальцем.
+      onPointerDown={(event) => { if (event.target === event.currentTarget) onClose() }}
     >
       <section
+        ref={panelRef}
         className="dc-deal-overlay-panel"
         role="dialog"
         aria-modal="true"

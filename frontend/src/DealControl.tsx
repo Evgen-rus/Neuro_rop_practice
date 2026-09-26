@@ -1189,7 +1189,7 @@ function AnalysisConfirmModal(props: {
     hasReport: Boolean(props.deal.coaching.report_id),
   })
   return <div className="dc-modal-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose() }}>
-    <section className="dc-modal dc-analysis-confirm">
+    <section className="dc-modal dc-analysis-confirm" role="dialog" aria-modal="true" aria-label={copy.title}>
       <span>✦</span>
       <h2>{copy.title}</h2>
       <p>{copy.body}</p>
@@ -1328,7 +1328,9 @@ function DealTable(props: {
           expected_payment_period: formatPaymentPeriod(week, month),
         })
         const selected = props.selectedId === deal.deal_id
-        return <article aria-current={selected ? 'true' : undefined} className={['dc-deal-row', reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} ref={selected ? selectedRowRef : undefined} onClick={() => props.onSelect(deal.deal_id)}>
+        return <article aria-current={selected ? 'true' : undefined} className={['dc-deal-row', reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} ref={selected ? selectedRowRef : undefined} tabIndex={0} role="button" onClick={() => props.onSelect(deal.deal_id)}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); props.onSelect(deal.deal_id) } }}
+        >
           <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
           <div className="dc-stage-cell">
@@ -1431,7 +1433,9 @@ function TaskTable({
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
         const deadline = dateTimeParts(bitrixTask?.deadline)
         const selected = selectedId === deal.deal_id
-        return <article aria-current={selected ? 'true' : undefined} className={['dc-task-row', rowTone, reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} ref={selected ? selectedRowRef : undefined} onClick={() => onSelect(deal.deal_id)}>
+        return <article aria-current={selected ? 'true' : undefined} className={['dc-task-row', rowTone, reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`} ref={selected ? selectedRowRef : undefined} tabIndex={0} role="button" onClick={() => onSelect(deal.deal_id)}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(deal.deal_id) } }}
+        >
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
           <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
           <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
@@ -1465,7 +1469,10 @@ function TaskTable({
           style={{ gridTemplateColumns }}
           key={`${deal.deal_id}-${bitrixTask?.activity_id || 'missing'}`}
           ref={selected ? selectedRowRef : undefined}
+          tabIndex={0}
+          role="button"
           onClick={() => onSelect(deal.deal_id)}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(deal.deal_id) } }}
         >
           <div className="dc-plan-signal-cell">
             {deal.review ? <DealStatusIndicator status={deal.review.status} label={deal.review.status_label} /> : <span className="dc-deal-status-indicator neutral">–</span>}

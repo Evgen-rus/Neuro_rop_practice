@@ -109,7 +109,7 @@ textarea {
 .dc-manager-format-icons button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid #c9d9e8; border-radius: 8px; color: #365b7e; background: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
 .dc-manager-format-icons button:hover { border-color: #7eace0; background: #edf5ff; }
 .dc-manager-format-icons button.active { border-color: #1768f2; color: #fff; background: #1768f2; }
-.dc-manager-full-script-layer { position: fixed; z-index: 1250; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; background: rgba(12, 24, 41, .72); }
+.dc-manager-full-script-layer { position: fixed; z-index: var(--dc-layer-script, 1500); inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; background: rgba(12, 24, 41, .72); }
 .dc-manager-full-script-modal { display: grid; width: min(1500px, 98vw); max-width: calc(100vw - 32px); min-width: 0; height: min(920px, 96vh); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border-radius: 18px; background: #f4f7fb; box-shadow: 0 28px 80px rgba(6, 20, 38, .38); }
 .dc-manager-full-script-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #d9e2ec; background: #fff; }
 .dc-manager-full-script-modal > header small { color: #6b7e95; font-size: 10px; }
@@ -890,7 +890,7 @@ textarea {
   position: fixed;
   top: 18px;
   right: 18px;
-  z-index: 1600;
+  z-index: var(--dc-layer-toast, 2300);
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2793,13 +2793,60 @@ textarea {
   text-align: center;
 }
 
+/* Слои интерфейса — единственный источник правды по z-index.
+   Раньше числа были разбросаны по файлу (30, 900, 1000, 1200, 1250, 1400
+   ×2, 1600, 2200), и модальные слои открывали друг друга в произвольном
+   порядке. Теперь порядок читается по именам: базовые слои и то, что
+   открывается из карточки сделки, получает значение ВЫШЕ, чем карточка.
+
+   Реальный баг на мобильном: «Дожим сделки» открывался из карточки сделки
+   мобильного оверлея, но `.dc-manager-assistant-layer` был 1100, а
+   `.dc-deal-overlay` — 1400. Оба порталятся в `document.body`, поэтому
+   модалка уезжала ПОД оверлей: в DOM она есть, но на 390px её закрывал
+   непрозрачный `.dc-deal-overlay` (z-index 1400, фон rgba(15,31,58,.35) +
+   blur), и тап ничего не давал. На десктопе оверлея сделки нет — там
+   работало. Теперь карточка сделки — БАЗОВЫЙ слой, а всё, что открывается
+   изнутри неё, строго выше:
+
+     1. комментарии и контроль   (1000) — открываются из карточки
+     2. карточка сделки          (1400) — базовый модальный слой
+     2a. «Дожим сделки» / Prompt Lab (1450) — изнутри карточки
+     2b. сценарий звонка/сообщения (1500) — изнутри карточки
+     2c. подтверждение анализа    (1550) — изнутри карточки
+     3. диалог коммуникации      (2200) — поверх всего
+     4. тосты                    (2300) — поверх всего
+
+   Комментарии (1000) ниже карточки (1400) — это осознанно: `.dc-comments-modal`
+   рендерится в DOM у верхнего уровня и в мобильном оверлее карточки сделки
+   повторно не рендерится, поэтому перекрытия не возникает. */
+:root {
+  --dc-layer-comments: 1000;
+  --dc-layer-deal: 1400;
+  --dc-layer-assistant: 1450;
+  --dc-layer-script: 1500;
+  --dc-layer-confirm: 1550;
+  --dc-layer-toast: 2300;
+}
+
 .dc-modal-layer {
+  --dc-bg: #f4f7fb;
+  --dc-surface: #fff;
+  --dc-surface-2: #f8fbff;
   --dc-text: #0f1f3a;
   --dc-muted: #697a95;
   --dc-line: #d9e4f0;
   --dc-blue: #1768f2;
+  --dc-blue-weak: #edf4ff;
+  --dc-red: #df4040;
+  --dc-red-weak: #fff2f2;
+  --dc-green: #159454;
+  --dc-green-weak: #effaf4;
+  --dc-orange: #e99000;
+  --dc-orange-weak: #fff7e7;
   position: fixed;
-  z-index: 1400;
+  /* Подтверждение анализа открывается из карточки сделки, поэтому идёт
+     выше оверлея: карточка — базовый слой, её потомки перекрывают её. */
+  z-index: var(--dc-layer-confirm, 1550);
   inset: 0;
   display: grid;
   place-items: center;
@@ -2824,12 +2871,31 @@ textarea {
    к списку — одно касание. Оверлей рендерится в `document.body`, поэтому
    его ширина не зависит от раскладки страницы. */
 .dc-deal-overlay {
+  /* Оверлей порталится в `document.body`, то есть ВНЕ `.dc-shell`, где
+     объявлены токены темы. Раньше здесь дублировались только 4 из них,
+     и всё остальное (`--dc-green`, `--dc-red`, `--dc-orange`) не резолвилось:
+     `background: var(--dc-green)` превращался в `transparent`, а белый
+     текст на прозрачном фоне давал «пустую» кнопку «Ситуация подтверждена».
+     Дублируем весь набор — источник правды `.dc-shell` на строке ниже. */
+  --dc-bg: #f4f7fb;
+  --dc-surface: #fff;
+  --dc-surface-2: #f8fbff;
   --dc-text: #0f1f3a;
   --dc-muted: #697a95;
   --dc-line: #d9e4f0;
   --dc-blue: #1768f2;
+  --dc-blue-weak: #edf4ff;
+  --dc-red: #df4040;
+  --dc-red-weak: #fff2f2;
+  --dc-green: #159454;
+  --dc-green-weak: #effaf4;
+  --dc-orange: #e99000;
+  --dc-orange-weak: #fff7e7;
   position: fixed;
-  z-index: 1400;
+  /* Базовый модальный слой. «Дожим» (1450), сценарий (1500) и
+     подтверждение анализа (1550) открываются изнутри карточки и идут
+     выше неё, иначе на мобильном они уезжали под оверлей. */
+  z-index: var(--dc-layer-deal, 1400);
   inset: 0;
   display: grid;
   /* Без явной строки `1fr` грид отдаёт ребёнку его контентную высоту,
@@ -2877,8 +2943,8 @@ textarea {
   font-size: 12px;
 }
 
-/* Крестик и «Назад к списку» — в нижней трети экрана, куда достаёт
-   большой палец; 48px вместо привычных 32px. */
+/* 48px вместо привычных 32px: крестик в шапке, «Назад к списку» — в
+   подвале панели, в нижней трети экрана, куда достаёт большой палец. */
 .dc-deal-overlay-close {
   flex: 0 0 auto;
   width: 48px;
@@ -3851,10 +3917,18 @@ textarea {
     display: none;
   }
 
-  /* Карточки сделки в потоке страницы на мобильном больше нет: ниже
-     1050px она открывается оверлеем поверх списка. Правила, которые
-     сбрасывали `.dc-detail` в обычный блок после списка, убраны — они
-     ломали бы карточку внутри оверлея. В потоке её не рендерим. */
+  /* Якорь «Открыта» показывает, где в списке выбранная сделка, и тап по
+     нему возвращает к строке. На мобиле это лишнее и вредное: карточка
+     открывается оверлеем поверх списка, а возврат идёт кнопкой «Назад к
+     списку». Якорь же увёл бы вниз, к строке под оверлеем. */
+  .dc-selected-anchor {
+    display: none;
+  }
+
+  /* Карточка сделки в потоке страницы на мобильном больше не рендерится —
+     она живёт в оверлее. Здесь снимаем с неё десктопное `position: sticky`
+     и `max-height`, иначе внутри оверлея она снова станет прибитой и
+     перестанет отдавать прокрутку телу панели. */
   .dc-deal-overlay-body > .dc-detail {
     position: static;
     max-height: none;
@@ -7906,12 +7980,22 @@ ul.facts.bad li:before {
 .dc-manager-assistant-open { width: 100%; margin-top: 4px; }
 
 .dc-manager-assistant-layer {
+  --dc-bg: #f4f7fb;
+  --dc-surface: #fff;
+  --dc-surface-2: #f8fbff;
   --dc-text: #0f1f3a;
   --dc-muted: #697a95;
   --dc-line: #d9e4f0;
   --dc-blue: #1768f2;
+  --dc-blue-weak: #edf4ff;
+  --dc-red: #df4040;
+  --dc-red-weak: #fff2f2;
+  --dc-green: #159454;
+  --dc-green-weak: #effaf4;
+  --dc-orange: #e99000;
+  --dc-orange-weak: #fff7e7;
   position: fixed;
-  z-index: 1200;
+  z-index: var(--dc-layer-assistant, 1450);
   inset: 0;
   display: grid;
   place-items: center;
@@ -8268,7 +8352,15 @@ ul.facts.bad li:before {
   .dc-manager-answer-columns,
   .dc-manager-recommendation-columns { grid-template-columns: 1fr; }
   .dc-manager-answer-heading { display: grid; }
-  .dc-manager-situation-actions .dc-button,
+  /* Кнопки ситуации на 375px наследовали десктопные 9.5px: текст
+     «Ситуация подтверждена» и «Добавить контекст» ложились в 1–2 пикселя
+     и читался как пустая кнопка. На узком экране поднимаем кегль и высоту
+     до тач-таргета, десктоп не трогаем. */
+  .dc-manager-situation-actions .dc-button {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
   .dc-manager-quick-help-actions .dc-button { width: 100%; }
   .dc-manager-context-persist { grid-template-columns: 1fr; }
   .dc-manager-context-persist-actions { justify-content: flex-start; }
@@ -10242,15 +10334,9 @@ ul.facts.bad li:before {
     position: static;
   }
 
-  /* Карточка разбора на мобильном открывается оверлеем поверх списка
-     (`.dc-deal-overlay`), поэтому в потоке её нет. Сбросы оставлены на
-     случай узкого экрана шириной с оверлеем — sticky в одно-колоночной
-     раскладке всё равно только мешает. */
-  .dc-daily-card-anchor {
-    position: static;
-    max-height: none;
-    overflow: visible;
-  }
+  /* `.dc-daily-card-anchor` здесь больше не нужен: на мобильном карточка
+     разбора открывается оверлеем `.dc-deal-overlay`, и в потоке страницы
+     её нет — правило описывало бы нерендеримый элемент. */
 
   .dc-daily-resizer { display: none; }
 
@@ -10477,7 +10563,7 @@ ul.facts.bad li:before {
 
 .dc-comments-modal {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--dc-layer-comments, 1000);
   inset: 0;
   display: grid;
   place-items: center;
