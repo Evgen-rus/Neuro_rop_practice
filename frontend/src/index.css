@@ -1240,6 +1240,13 @@ textarea {
 .dc-table-scroll {
   min-height: 360px;
   padding: 6px;
+  /* Таблица сделок шире телефона (min-width 700px по колонкам), а
+     `.dc-table-wrap` режет по `overflow: hidden` — колонка «Сумма и
+     прогноз оплаты» была недоступна целиком. Горизонтальная прокрутка
+     уже применялась для `.dc-rop-plan`; здесь распространяем её на
+     все списки сделок. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dc-deal-columns,
@@ -2810,6 +2817,122 @@ textarea {
   box-shadow: 0 24px 70px rgba(12, 34, 67, .25);
 }
 
+/* Полноэкранная карточка сделки для мобильной раскладки.
+   Ниже 1050px `.dc-workspace` становится `display: block`, и карточка
+   оказывалась после всего списка сделок — на 390px это ~7000px свайпа
+   от тапа по строке. Здесь карточка открывается поверх списка, а возврат
+   к списку — одно касание. Оверлей рендерится в `document.body`, поэтому
+   его ширина не зависит от раскладки страницы. */
+.dc-deal-overlay {
+  --dc-text: #0f1f3a;
+  --dc-muted: #697a95;
+  --dc-line: #d9e4f0;
+  --dc-blue: #1768f2;
+  position: fixed;
+  z-index: 1400;
+  inset: 0;
+  display: grid;
+  /* Без явной строки `1fr` грид отдаёт ребёнку его контентную высоту,
+     и панель вырастает до 1372px вместо вьюпорта — «Назад к списку»
+     уезжает за нижний край. */
+  grid-template-rows: 100%;
+  background: rgba(15, 31, 58, .35);
+  backdrop-filter: blur(3px);
+}
+
+.dc-deal-overlay-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  background: #f4f7fb;
+}
+
+.dc-deal-overlay-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--dc-line);
+  background: #fff;
+}
+
+.dc-deal-overlay-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dc-deal-overlay-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-deal-overlay-heading small {
+  color: var(--dc-muted);
+  font-size: 12px;
+}
+
+/* Крестик и «Назад к списку» — в нижней трети экрана, куда достаёт
+   большой палец; 48px вместо привычных 32px. */
+.dc-deal-overlay-close {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--dc-line);
+  border-radius: 12px;
+  color: var(--dc-text);
+  background: #fff;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.dc-deal-overlay-body {
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Карточка приходит из `.dc-detail` со своим `overflow: auto`. Внутри
+   оверлея рамка лишняя (её даёт панель), а высоту задаёт тело оверлея:
+   без `height: auto` карточка занимала ровно 100% и не давала телу расти,
+   из-за чего длинный разбор не прокручивался. */
+.dc-deal-overlay-body > .dc-detail {
+  height: auto;
+  border: 0;
+  border-radius: 12px;
+}
+
+/* Обёртка нужна, чтобы карточка «Разбора» отдавала прокрутку телу
+   оверлея, а не своему собственному `overflow: hidden`. */
+.dc-daily-card-overlay-card > .dc-daily-card {
+  overflow: visible;
+}
+
+.dc-deal-overlay-foot {
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--dc-line);
+  background: #fff;
+}
+
+.dc-deal-overlay-back {
+  width: 100%;
+  min-height: 48px;
+  font-size: 15px;
+}
+
+.dc-deal-overlay-close:focus-visible,
+.dc-deal-overlay-back:focus-visible {
+  outline: 2px solid var(--dc-blue);
+  outline-offset: 2px;
+}
+
 .dc-modal h2 {
   margin: 0 0 5px;
   font-size: 19px;
@@ -3728,10 +3851,14 @@ textarea {
     display: none;
   }
 
-  .dc-detail {
+  /* Карточки сделки в потоке страницы на мобильном больше нет: ниже
+     1050px она открывается оверлеем поверх списка. Правила, которые
+     сбрасывали `.dc-detail` в обычный блок после списка, убраны — они
+     ломали бы карточку внутри оверлея. В потоке её не рендерим. */
+  .dc-deal-overlay-body > .dc-detail {
     position: static;
     max-height: none;
-    margin-top: 14px;
+    margin-top: 0;
   }
 
 }
@@ -8361,9 +8488,17 @@ ul.facts.bad li:before {
 .dc-reschedule-from { color: #596e8b; }
 .dc-reschedule-arrow { color: #426fae; }
 .dc-reschedule-popover li > strong { font-weight: 600; }
+/* Тач-цели. Замер на 390px показал 25 из 26 интерактивных элементов
+   первого экрана меньше 44px: ссылки `#id` на Bitrix (47.8×17.6px) и
+   селекты в строке сделки (32px по высоте). Расширяем точечно — общий
+   `min-height: 44px` на все кнопки раздул бы плотную строку сделки,
+   где высота считается от `min-height: 112px`. */
 @media (pointer: coarse) {
   .dc-shell .dc-reschedule-trigger { min-height: 44px; }
   .dc-shell .dc-reschedule-popover > header > button { width: 44px; height: 44px; }
+  .dc-shell .dc-bitrix-detail-link { min-height: 44px; padding-inline: 12px; }
+  .dc-shell .dc-deal-row select { min-height: 44px; }
+  .dc-shell .dc-selected-anchor { min-height: 44px; }
 }
 
 .dc-daily-source,
@@ -10107,10 +10242,10 @@ ul.facts.bad li:before {
     position: static;
   }
 
-  /* На мобиле карточка идёт после списка обычным потоком, а не
-     прибивается: sticky в одно-колоночной раскладке только мешает.
-     Ограничение `min(52vh, 520px)` оставлено, иначе длинный список
-     без возможности домотать уходит за экран. */
+  /* Карточка разбора на мобильном открывается оверлеем поверх списка
+     (`.dc-deal-overlay`), поэтому в потоке её нет. Сбросы оставлены на
+     случай узкого экрана шириной с оверлеем — sticky в одно-колоночной
+     раскладке всё равно только мешает. */
   .dc-daily-card-anchor {
     position: static;
     max-height: none;

@@ -15,6 +15,8 @@ import {
 import { copyTextToClipboard } from './contextPersist'
 import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
+import { DealDetailOverlay } from './DealDetailOverlay'
+import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
 import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
 import { DealStatusIndicator } from './dealPresentation'
 import {
@@ -192,6 +194,8 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const dealScrollRef = useRef<HTMLDivElement | null>(null)
   const selectedDealRowRef = useRef<HTMLDivElement | null>(null)
   const [offscreenDealId, setOffscreenDealId] = useState('')
+  const [cardOverlayOpen, setCardOverlayOpen] = useState(false)
+  const narrowDealLayout = useNarrowDealLayout()
   const generating = generation?.status === 'running' || generation?.status === 'queued'
 
   const snapshot = report?.snapshot
@@ -401,6 +405,9 @@ export function DailyControl({ user }: { user: AuthUser }) {
   function selectDeal(nextId: string) {
     reviewStarted.current = true
     setDealId(nextId)
+    // На мобильном карточка уходит в оверлей поверх списка: иначе тап по
+    // строке не даёт отклика, а карточка ждёт в самом низу страницы.
+    if (isNarrowDealLayout()) setCardOverlayOpen(true)
   }
 
   // Поиск идёт по всему отчёту. Если совпадение у другого менеджера — открываем его и эту сделку.
@@ -736,7 +743,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
             onKeyDown={onSplitterKey}
           />
 
-          <div className="dc-daily-card-anchor">
+          {narrowDealLayout ? null : <div className="dc-daily-card-anchor">
             <DealReviewCard
               deal={selectedDeal}
               asked={askedState}
@@ -748,9 +755,29 @@ export function DailyControl({ user }: { user: AuthUser }) {
               snapshotCutoffAt={report.cutoff_at}
               reviewed={reviewedDealIds.has(selectedDeal?.deal_id || '')}
             />
-          </div>
+          </div>}
         </div>
       </> : null}
+
+      {narrowDealLayout && cardOverlayOpen && selectedDeal && report ? <DealDetailOverlay
+        title={selectedDeal.title || `Сделка #${selectedDeal.deal_id}`}
+        subtitle={`#${selectedDeal.deal_id} · ${selectedDeal.manager_name || 'Ответственный не указан'}`}
+        onClose={() => setCardOverlayOpen(false)}
+      >
+        <div className="dc-daily-card-overlay-card">
+          <DealReviewCard
+            deal={selectedDeal}
+            asked={askedState}
+            onToggleAsked={toggleAsked}
+            onCopyScript={() => void copyScript()}
+            copyNotice={copyNotice}
+            showStatus={false}
+            snapshotDay
+            snapshotCutoffAt={report.cutoff_at}
+            reviewed={reviewedDealIds.has(selectedDeal?.deal_id || '')}
+          />
+        </div>
+      </DealDetailOverlay> : null}
     </section>
   )
 }

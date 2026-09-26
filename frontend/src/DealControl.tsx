@@ -110,6 +110,8 @@ import {
 } from './dealControlTimeView'
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
+import { DealDetailOverlay } from './DealDetailOverlay'
+import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
 import { ManagerTrajectory } from './ManagerTrajectory'
 import { LearningShadow } from './LearningShadow'
 import { AiSpend, AiSpendDashboardCard } from './AiSpend'
@@ -541,6 +543,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [timeView, setTimeView] = useState<TimeView>(startFilters.timeView)
   const [leftWidth, setLeftWidth] = useState(65)
   const [dragging, setDragging] = useState(false)
+  // На мобильном карточка открывается оверлеем поверх списка: ниже 1050px
+  // `.dc-workspace` становится `display: block`, и карточка уезжает вниз
+  // документа на тысячи пикселей. Держим флаг открытия отдельно от
+  // выбранной сделки, чтобы десктопное поведение не изменилось.
+  const [dealOverlayOpen, setDealOverlayOpen] = useState(false)
+  const narrowDealLayout = useNarrowDealLayout()
   const layoutRef = useRef<HTMLDivElement | null>(null)
   const [initialIds, setInitialIds] = useState('')
   const [managerIds, setManagerIds] = useState('')
@@ -771,6 +779,10 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
   const selectDealExplicitly = useCallback((dealId: string) => {
     setSelectedId(dealId)
+    // На мобильном тап по строке обязан открыть карточку: иначе выбор
+    // сделки не даёт отклика в зоне рук, а карточка остаётся на тысячи
+    // пикселей ниже. На десктопе карточка всегда в кадре, оверрей не нужен.
+    if (isNarrowDealLayout()) setDealOverlayOpen(true)
     const deal = data?.deals.find((item) => item.deal_id === dealId)
     const recommendation = deal ? neuroRopTaskOf(deal) : null
     if (user.role === 'manager' && deal?.is_own && recommendation) {
@@ -1114,7 +1126,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
 
         <div className="dc-resizer" onPointerDown={(event) => { event.preventDefault(); setDragging(true) }} title="Потяните, чтобы изменить ширину">⋮</div>
 
-        <DealDetail
+        {narrowDealLayout ? null : <DealDetail
           view={view}
           userRole={user.role}
           deal={selected}
@@ -1124,7 +1136,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           analysisJob={analysisJob}
           analyzingDealId={analyzingDealId}
           onAnalyze={analyzeDeal}
-        />
+        />}
       </div>
       </>}
     </section>
@@ -1136,6 +1148,24 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       onCheck={(deal) => { setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true, false) }}
       onFull={(deal) => { setAnalysisConfirmDeal(null); void runAnalyzeDeal(deal, true, true) }}
     /> : null}
+
+    {narrowDealLayout && dealOverlayOpen && selected ? <DealDetailOverlay
+      title={selected.title || `Сделка #${selected.deal_id}`}
+      subtitle={`#${selected.deal_id} · ${selected.manager_name || 'Ответственный не указан'}`}
+      onClose={() => setDealOverlayOpen(false)}
+    >
+      <DealDetail
+        view={view}
+        userRole={user.role}
+        deal={selected}
+        onReload={reloadDeal}
+        onCopy={copy}
+        onNotice={(message) => { setError(''); setNotice(message) }}
+        analysisJob={analysisJob}
+        analyzingDealId={analyzingDealId}
+        onAnalyze={analyzeDeal}
+      />
+    </DealDetailOverlay> : null}
 
     {commentsDealId ? <DealCommentsModal
       deal={data?.deals.find((item) => item.deal_id === commentsDealId) || null}
