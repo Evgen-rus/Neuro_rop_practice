@@ -3055,19 +3055,13 @@ textarea {
   --dc-blue: #1768f2;
 }
 
-.dc-setup,
-.dc-loading {
+.dc-setup {
   display: grid;
   min-height: 100vh;
   place-items: center;
   padding: 24px;
   color: #10213c;
   background: #f4f7fb;
-}
-
-.dc-loading {
-  display: flex;
-  gap: 10px;
 }
 
 .dc-setup > section {
@@ -4211,12 +4205,36 @@ textarea {
   min-width: 0;
   min-height: 0;
 }
-.ai-spend-chart-canvas svg { display: block; flex: 1 1 auto; width: 100%; min-height: 148px; height: 168px; }
-.ai-spend-chart-axis { stroke: #e3ebf3; stroke-width: 1; }
+.ai-spend-chart-plot svg { display: block; flex: 1 1 auto; width: 100%; min-height: 148px; height: 168px; }
+.ai-spend-chart-axis { stroke: #d7e0ea; stroke-width: 1; }
 .ai-spend-chart-area { fill: rgba(23, 104, 242, .12); }
 .ai-spend-chart-line { stroke: #1768f2; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
-.ai-spend-chart-dot { fill: #1768f2; }
-.ai-spend-chart-dot.active { fill: #0b58c8; }
+/* Сетка серая и пунктирная, как на обычных графиках: синяя сетка спорила
+   бы с линией и читалась как её подсветка. `#dfe7ef` — светлее оси, чтобы
+   координатная сетка не путалась с границей области построения. */
+.ai-spend-chart-grid line { stroke: #dfe7ef; stroke-width: 1; stroke-dasharray: 2 3; }
+/* Радиус приходит в разметке как `r="4px"`, поэтому круг остаётся круглым
+   при любой ширине. Обводке то же самое делает `non-scaling-stroke`: без него
+   толщина считалась бы в единицах `viewBox` и на телефоне, где график сжат
+   примерно в 2.5 раза, кольцо стало бы тоньше нити. */
+/* Область построения. Точка вынесена из SVG отдельным слоем: `viewBox` с
+   `preserveAspectRatio="none"` растягивает оси неравномерно, и круг внутри
+   неизбежно становится овалом — тем сильнее, чем уже окно. */
+.ai-spend-chart-plot { position: relative; display: flex; min-height: 148px; }
+.ai-spend-chart-plot svg { display: block; flex: 1 1 auto; width: 100%; min-height: 148px; height: 168px; }
+/* Кольцо: белая середина и тонкая обводка. Задано в CSS-пикселях, поэтому
+   радиус не зависит от растяжения графика и остаётся круглым на телефоне. */
+.ai-spend-chart-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border: 2px solid #1768f2;
+  border-radius: 50%;
+  background: #fff;
+  pointer-events: none;
+}
+.ai-spend-chart-dot.active { border-color: #0b58c8; }
 /* `#7b8ea3` на белом давал ~3.4:1 и не проходил AA для 11px подписей
    оси. Оси — то, что читают в первую очередь, поэтому контраст выше. */
 .ai-spend-chart-labels { position: relative; height: 14px; margin-top: 2px; color: #5f7386; font-size: 11px; line-height: 1.2; }
@@ -4589,7 +4607,7 @@ textarea {
   .ai-spend-chart .ai-spend-pills.compact { width: 100%; justify-content: flex-start; }
   .ai-spend-chart-body { grid-template-columns: 1fr; }
   .ai-spend-day-list { height: auto; max-height: 208px; }
-  .ai-spend-chart-canvas svg { flex: none; height: 132px; }
+  .ai-spend-chart-plot svg { flex: none; height: 132px; }
   /* График — единственная форма на экране, и после раскладки в одну
      колонку он оказывался под двумястами пикселями списка дней. */
   /* Тултип дня на телефоне: заголовок и одна строка цифр.
@@ -4632,7 +4650,7 @@ textarea {
   .ai-spend-card.ai-spend-chart > header .ai-spend-pills,
   .ai-spend-card.ai-spend-chart > header .ai-spend-pills.compact { display: none; }
   .ai-spend-chart-canvas { order: -1; }
-  .ai-spend-chart-canvas svg { height: 160px; }
+  .ai-spend-chart-plot svg { height: 160px; }
 }
 @media (max-width: 800px) {
   .ai-spend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4650,7 +4668,7 @@ textarea {
   .ai-spend-row.compact strong { grid-column: 2; grid-row: 1; text-align: right; }
   .ai-spend-row.compact em { grid-column: 1 / -1; }
   .ai-spend-row.compact span:first-child { grid-column: 1; grid-row: 1; }
-  .ai-spend-chart-canvas svg { height: 160px; }
+  .ai-spend-chart-plot svg { height: 160px; }
 }
 
 /* Телефон: одна полоса на всё, что нажимается. Оболочка давно решила

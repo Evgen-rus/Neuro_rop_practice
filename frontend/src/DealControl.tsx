@@ -110,6 +110,7 @@ import {
 } from './dealControlTimeView'
 import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
+import { DealControlSkeleton } from './DealControlSkeleton'
 import { DealDetailOverlay } from './DealDetailOverlay'
 import { lockBodyScroll } from './bodyScrollLock'
 import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
@@ -522,6 +523,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const startFilters = initialDealControlFilters(user.role, startView, user.manager_id)
   const [data, setData] = useState<DealControlDashboard | null>(null)
   const [loading, setLoading] = useState(true)
+  // Момент старта первой загрузки: каркас считает от него, сколько мы
+  // уже ждём, и честно меняет текст вместо выдуманного процента.
+  const [loadStartedAt, setLoadStartedAt] = useState(() => Date.now())
+  // Отвечал ли хоть один `reload`. Держим в ref, чтобы `reload` не
+  // пересоздавался: от него зависит эффект первой загрузки.
+  const hasLoadedRef = useRef(false)
   const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
@@ -622,6 +629,12 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     setLoading(true)
     setError('')
     setLoadErrorStatus(null)
+    // Отсчёт ожидания нужен только показываемому каркасу, то есть до
+    // первых данных. Фоновый `reload` при уже загруженном экране идёт
+    // без каркаса, и трогать здесь таймер незачем. Через ref, а не через
+    // `data` в зависимостях: иначе `reload` пересоздавался бы на каждом
+    // ответе и унёс с собой эффект первой загрузки.
+    if (!hasLoadedRef.current) setLoadStartedAt(Date.now())
     try {
       const response = await fetchDealControl()
       setData(response)
@@ -635,6 +648,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       setLoadErrorStatus(reason instanceof ApiError ? reason.status : null)
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      hasLoadedRef.current = true
       setLoading(false)
     }
   }, [])
@@ -967,7 +981,17 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }
 
   if (loading && !data) {
-    return <main className="dc-shell dc-loading"><span className="dc-spinner" />Загружается контроль сделок…</main>
+    // Первым кадром показываем оболочку с заглушками, а не спиннер на
+    // голом холсте: приложение уже открылось, и видно, что оно почти
+    // готово. Раздел известен из sessionStorage, поэтому рейка и заголовок
+    // сразу те же, что и у живого экрана.
+    return <DealControlSkeleton
+      role={user.role}
+      section={view === 'dashboard' ? 'dashboard' : ['rop', 'manager'].includes(view) ? 'tasks' : 'other'}
+      activeNav={view}
+      title={VIEW_COPY[view]?.title || 'Контроль сделок'}
+      startedAt={loadStartedAt}
+    />
   }
 
   if (!data) {

@@ -128,6 +128,44 @@ export function shareWidth(share: number | null | undefined): string {
 export const SPEND_CHART_WIDTH = 800
 export const SPEND_CHART_HEIGHT = 140
 export const SPEND_CHART_PAD_X = 10
+/** Отступ по вертикали: та же величина, что и `padY` в компоненте графика. */
+export const SPEND_CHART_PAD_Y = 4
+/** Горизонтальных делений на всю высоту, вместе с осью у низа. */
+export const SPEND_CHART_GRID_ROWS = 5
+
+/**
+ * Координаты линий сетки в системе `viewBox` графика.
+ *
+ * Вертикали повторяют подписанные дни: `spendChartLabelIndexes` уже считает
+ * шаг так, чтобы подписи не наезжали друг на друга, и линия сетки встаёт
+ * ровно под подписью. Считать отдельно «сколько влезет» означало бы
+ * разрешить графику и подписям разойтись: подпись окажется без линии.
+ *
+ * Горизонтали равномерны и идут от нуля к максимуму периода. Их число
+ * фиксировано, а не выводится из диапазона значений: прижатая к потолку
+ * линия читалась бы как «максимум», а на пустых днях дала бы деления
+ * «0,00 ₽» с шагом в копейки, которых на графике нет.
+ */
+export function spendChartGrid(
+  pointCount: number,
+  height = SPEND_CHART_HEIGHT,
+  padY = SPEND_CHART_PAD_Y,
+  width = SPEND_CHART_WIDTH,
+  padX = SPEND_CHART_PAD_X,
+  verticalIndexes = spendChartLabelIndexes(pointCount),
+  horizontalRows = SPEND_CHART_GRID_ROWS,
+): { verticals: number[]; horizontals: number[] } {
+  const innerH = Math.max(height - padY * 2, 1)
+  const innerW = Math.max(width - padX * 2, 1)
+  const horizontals: number[] = []
+  for (let row = 1; row < horizontalRows; row += 1) {
+    horizontals.push(padY + (innerH / horizontalRows) * row)
+  }
+  const verticals = verticalIndexes.map((index) => (
+    pointCount <= 1 ? padX + innerW / 2 : padX + (index / Math.max(pointCount - 1, 1)) * innerW
+  ))
+  return { verticals, horizontals }
+}
 
 export function spendChartIndexFromSvgX(
   svgX: number,
@@ -234,8 +272,27 @@ export function spendChartLabelIndexes(
   return indexes
 }
 
-export function spendShiftIsoDate(iso: string, days: number): string {
-  const [year, month, day] = iso.split('-').map(Number)
+/**
+ * Позиция активной точки в процентах от левого верхнего угла области построения.
+ *
+ * Точка рисуется HTML-элементом поверх SVG, потому что `viewBox` с
+ * `preserveAspectRatio="none"` сплющивает круг в овал. Но проценты берутся от
+ * той же системы координат, что и сами точки графика, — иначе кольцо уехало бы
+ * с вершины на длинных периодах, где ошибка накапливается по всему `viewBox`.
+ */
+export function spendChartDotStyle(
+  x: number,
+  y: number,
+  width = SPEND_CHART_WIDTH,
+  height = SPEND_CHART_HEIGHT,
+): { left: string; top: string } {
+  return {
+    left: `${(x / width) * 100}%`,
+    top: `${(y / height) * 100}%`,
+  }
+}
+
+export function spendShiftIsoDate(iso: string, days: number): string {  const [year, month, day] = iso.split('-').map(Number)
   const utc = new Date(Date.UTC(year, month - 1, day + days))
   return [
     utc.getUTCFullYear(),

@@ -21,11 +21,14 @@ import {
   SPEND_CHART_HEIGHT,
   SPEND_CHART_METRICS,
   SPEND_CHART_PAD_X,
+  SPEND_CHART_PAD_Y,
   SPEND_CHART_WIDTH,
   buildAiSpendEventsQuery,
   buildAiSpendPeriodQuery,
   formatSpendDelta,
   shareWidth,
+  spendChartDotStyle,
+  spendChartGrid,
   spendChartIndexFromSvgX,
   spendChartLabelIndexes,
   spendChartLabelPosition,
@@ -86,7 +89,10 @@ function SpendChart({
   const width = SPEND_CHART_WIDTH
   const height = SPEND_CHART_HEIGHT
   const padX = SPEND_CHART_PAD_X
-  const padY = 4
+  // Отступ по вертикали берётся из общей константы, а не пишется здесь
+  // числом: сетка строится по нему же, и две копии величины разъехались бы
+  // на доли единицы — линии встали бы не туда.
+  const padY = SPEND_CHART_PAD_Y
   const innerW = width - padX * 2
   const innerH = height - padY * 2
   const points = series.map((point, index) => {
@@ -102,6 +108,7 @@ function SpendChart({
   const activeIndex = hover ?? scrubIndex ?? (points.length ? points.length - 1 : 0)
   const active = points[activeIndex]
   const labelledIndexes = new Set(spendChartLabelIndexes(series.length))
+  const grid = spendChartGrid(series.length)
 
   function updateHover(event: { currentTarget: SVGSVGElement; clientX: number }) {
     const svgX = pointerToSvgX(event.currentTarget, event.clientX)
@@ -144,21 +151,40 @@ function SpendChart({
       <span>{active.point.total_tokens_label} токенов</span>
       {active.point.unknown_cost_calls ? <span className="ai-spend-chart-tooltip-note">есть вызовы без оценки</span> : null}
     </div> : null}
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="Динамика расходов"
-      onMouseLeave={() => setHover(null)}
-      onMouseMove={updateHover}
-      onPointerDown={scrubTo}
-      onPointerMove={(event) => { if (event.pointerType !== 'mouse') scrubTo(event) }}
-    >
-      <line className="ai-spend-chart-axis" x1={padX} y1={padY + innerH} x2={padX + innerW} y2={padY + innerH} />
-      {area ? <polygon className="ai-spend-chart-area" points={area} /> : null}
-      {line ? <polyline className="ai-spend-chart-line" fill="none" points={line} /> : null}
-      {active ? <circle className="ai-spend-chart-dot active" cx={active.x} cy={active.y} r={4} /> : null}
-    </svg>
+    {/* Точка вынесена из SVG в HTML: `viewBox` с `preserveAspectRatio="none"`
+        растягивает оси неравномерно, и любой круг внутри сплющивается в овал —
+        тем сильнее, чем уже окно. Написать радиус в пикселях (`r="4px"`) не
+        помогает: `px` в атрибуте SVG значит единицу локальной системы, а она
+        потом растягивается тем же неравномерным преобразованием. Слой с точками
+        находится над `viewBox`, поэтому круг остаётся круглым на любой ширине. */}
+    <div className="ai-spend-chart-plot">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Динамика расходов"
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={updateHover}
+        onPointerDown={scrubTo}
+        onPointerMove={(event) => { if (event.pointerType !== 'mouse') scrubTo(event) }}
+      >
+        {/* Сетка рисуется до заливки, а не после. Иначе пунктир оказывается
+            поверх голубой подложки и читается как штриховка области, а не как
+            координатная сетка. Вертикали совпадают с подписями дней. */}
+        <g className="ai-spend-chart-grid">
+          {grid.verticals.map((x) => <line key={`v${x}`} x1={x} y1={padY} x2={x} y2={padY + innerH} />)}
+          {grid.horizontals.map((y) => <line key={`h${y}`} x1={padX} y1={y} x2={padX + innerW} y2={y} />)}
+        </g>
+        <line className="ai-spend-chart-axis" x1={padX} y1={padY + innerH} x2={padX + innerW} y2={padY + innerH} />
+        {area ? <polygon className="ai-spend-chart-area" points={area} /> : null}
+        {line ? <polyline className="ai-spend-chart-line" fill="none" points={line} /> : null}
+      </svg>
+      {active ? <span
+        className="ai-spend-chart-dot active"
+        aria-hidden="true"
+        style={spendChartDotStyle(active.x, active.y)}
+      /> : null}
+    </div>
     <div className="ai-spend-chart-labels" aria-hidden="true">
       {series.map((point, index) => {
         const last = series.length - 1

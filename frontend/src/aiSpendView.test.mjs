@@ -5,6 +5,8 @@ import {
   buildAiSpendPeriodQuery,
   formatSpendDelta,
   spendChartIndexFromSvgX,
+  spendChartDotStyle,
+  spendChartGrid,
   spendChartLabelIndexes,
   spendChartLabelPosition,
   spendChartSeries,
@@ -16,6 +18,9 @@ import {
   SPEND_CHART_LABEL_MIN_LABEL_PX,
   SPEND_CHART_LABEL_REFERENCE_PX,
   SPEND_CHART_PAD_X,
+  SPEND_CHART_PAD_Y,
+  SPEND_CHART_GRID_ROWS,
+  SPEND_CHART_HEIGHT,
   SPEND_CHART_WIDTH,
 } from './aiSpendView.ts'
 
@@ -159,10 +164,79 @@ test('every period keeps both boundary dates and never collides captions', () =>
   }
 })
 
+test('точка поверх графика встаёт ровно на свою вершину', () => {
+  // Точка рисуется HTML-элементом, потому что `viewBox` сплющивает круг в овал.
+  // Её позиция обязана считаться от той же системы координат, что и точки
+  // графика, иначе кольцо уехало бы с вершины — тем дальше, чем длиннее период.
+  for (const total of [1, 2, 7, 30, 90, 365]) {
+    for (const index of [0, Math.floor(total / 2), total - 1]) {
+      const padX = SPEND_CHART_PAD_X
+      const innerW = SPEND_CHART_WIDTH - padX * 2
+      const svgX = total <= 1 ? padX + innerW / 2 : padX + (index / Math.max(total - 1, 1)) * innerW
+      const { left, top } = spendChartDotStyle(svgX, SPEND_CHART_HEIGHT / 2)
+      assert.ok(Math.abs(Number.parseFloat(left) - (svgX / SPEND_CHART_WIDTH) * 100) < 1e-9)
+      assert.ok(Math.abs(Number.parseFloat(top) - 50) < 1e-9)
+    }
+  }
+})
+
+test('точка не выходит за углы области построения', () => {
+  assert.deepEqual(spendChartDotStyle(0, 0), { left: '0%', top: '0%' })
+  assert.deepEqual(spendChartDotStyle(SPEND_CHART_WIDTH, SPEND_CHART_HEIGHT), { left: '100%', top: '100%' })
+})
+
 test('day titles mark today yesterday and the day before', () => {
   assert.equal(spendShiftIsoDate('2026-09-10', -1), '2026-09-09')
   assert.equal(spendDayTitle('2026-09-10', '2026-09-10', '10 сентября'), 'Сегодня · 10 сентября')
   assert.equal(spendDayTitle('2026-09-09', '2026-09-10', '09 сентября'), 'Вчера · 09 сентября')
   assert.equal(spendDayTitle('2026-09-08', '2026-09-10', '08 сентября'), 'Позавчера · 08 сентября')
   assert.equal(spendDayTitle('2026-08-01', '2026-09-10', '01 августа'), '01 августа')
+})
+
+test('сетка встаёт ровно под подписи и не выходит за область построения', () => {
+  const padX = SPEND_CHART_PAD_X
+  const padY = SPEND_CHART_PAD_Y
+
+  for (const total of [1, 2, 7, 14, 30, 60, 90, 180, 365]) {
+    const grid = spendChartGrid(total)
+
+    // Вертикаль обязана совпасть с подписью дня: подпись без линии и линия
+    // без подписи читаются как две разные сетки, и одна из них врёт.
+    // Подпись стоит в процентах, сетка — в единицах `viewBox`, поэтому
+    // сравнение идёт через обратный пересчёт: допуск берётся много меньше
+    // пикселя, иначе проверка прошла бы и при линии, уехавшей на полпикселя.
+    const labelled = spendChartLabelIndexes(total)
+    assert.equal(grid.verticals.length, labelled.length, `вертикалей не столько, сколько подписей, при ${total}`)
+    for (let k = 0; k < labelled.length; k += 1) {
+      const percent = spendChartLabelPosition(labelled[k], total)
+      const fromLabel = (percent / 100) * SPEND_CHART_WIDTH
+      assert.ok(
+        Math.abs(grid.verticals[k] - fromLabel) < 0.01,
+        `вертикаль ${labelled[k]} ушла от своей подписи на ${(grid.verticals[k] - fromLabel).toFixed(4)} при ${total}`,
+      )
+    }
+
+    // Ни одна линия не выходит за пределы области построения, иначе
+    // пунктир стрится в заливке области.
+    for (const x of grid.verticals) {
+      assert.ok(x >= padX - 1e-9 && x <= SPEND_CHART_WIDTH - padX + 1e-9, `вертикаль ${x} вне графика при ${total}`)
+    }
+    for (const y of grid.horizontals) {
+      assert.ok(y > padY && y < SPEND_CHART_HEIGHT - padY, `горизонталь ${y} вне графика при ${total}`)
+    }
+  }
+})
+
+test('горизонтали сетки равномерны и не залезают на ось', () => {
+  // Ось у низа рисуется отдельно, поэтому линия сетки на той же высоте
+  // получилась бы в два ряда и сетка читалась бы как двойная рамка.
+  const { horizontals } = spendChartGrid(30)
+  assert.equal(horizontals.length, SPEND_CHART_GRID_ROWS - 1)
+
+  const innerH = SPEND_CHART_HEIGHT - SPEND_CHART_PAD_Y * 2
+  const gaps = horizontals.map((y, k) => y - (k === 0 ? SPEND_CHART_PAD_Y : horizontals[k - 1]))
+  for (const gap of gaps) {
+    assert.ok(Math.abs(gap - innerH / SPEND_CHART_GRID_ROWS) < 1e-9, 'горизонтали сетки идут неравномерно')
+  }
+  assert.equal(horizontals[horizontals.length - 1], SPEND_CHART_PAD_Y + (innerH / SPEND_CHART_GRID_ROWS) * (SPEND_CHART_GRID_ROWS - 1))
 })

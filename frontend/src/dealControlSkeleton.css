@@ -1,0 +1,229 @@
+/* Каркас контроля сделок на время первой загрузки.
+   Живёт отдельным файлом, потому что `index.css` — общий большой лист, в
+   котором идёт работа по расходам. Здесь только классы `.dc-skeleton-*`:
+   прежний полноэкранный блок `.dc-loading` из `index.css` удалён вместе
+   со спиннером, который он оформлял.
+
+   Словарь — тот же, что и в оболочке: холст `#f4f7fb`, линия `#d9e4f0`,
+   приглушённый `#697a95`, рабочий синий `#1768f2`. Ничего нового. */
+
+.dc-skeleton {
+  --dc-skeleton-fill: #e8eff8;
+  --dc-skeleton-fill-strong: #dde7f3;
+}
+
+/* Статус под заголовком: процесс идёт, но процент выдумывать нечем —
+   эндпоинт синхронный и прогресс не отдаёт. */
+.dc-skeleton-status {
+  margin: 4px 0 0;
+  color: var(--dc-muted);
+  font-size: 12px;
+}
+
+.dc-skeleton-nav-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 58px 1fr;
+  grid-template-rows: 1fr;
+  min-height: 48px;
+  border: 1px solid transparent;
+  align-items: center;
+  color: #405574;
+  opacity: .55;
+}
+
+/* Активный пункт повторяет заливку рабочего синего, но без тени и без
+   рамки фокуса: это не кнопка, а силуэт будущего пункта. */
+.dc-skeleton-nav-item.active {
+  border-color: #0d2549;
+  border-radius: 0 12px 12px 0;
+  color: #fff;
+  background: var(--dc-blue);
+  opacity: 1;
+}
+
+.dc-skeleton-nav-item > span {
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+}
+
+.dc-skeleton-nav-item b {
+  align-self: center;
+  color: var(--dc-text);
+  font-size: 13px;
+}
+
+.dc-skeleton-nav-item.active b {
+  color: #fff;
+}
+
+.dc-skeleton-tile {
+  cursor: default;
+}
+
+.dc-skeleton-tile small {
+  opacity: 1;
+}
+
+/* Полоса-заглушка. Мерцание медленное и низкоконтрастное: каркас стоит
+   несколько секунд, и заметная анимация быстро начинает раздражать. */
+.dc-skeleton-bar {
+  display: block;
+  height: 11px;
+  border-radius: 7px;
+  background: var(--dc-skeleton-fill);
+  animation: dc-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.dc-kpis .dc-skeleton-bar {
+  height: 14px;
+  margin-top: 4px;
+}
+
+@keyframes dc-skeleton-pulse {
+  0%, 100% { background: var(--dc-skeleton-fill); }
+  50% { background: var(--dc-skeleton-fill-strong); }
+}
+
+.dc-skeleton-field {
+  display: block;
+  width: 148px;
+  min-height: 40px;
+  border: 1px solid var(--dc-line);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.dc-skeleton-field.wide {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dc-skeleton-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--dc-line);
+  border-radius: 10px;
+  color: var(--dc-muted);
+  background: #fff;
+  font-size: 11px;
+}
+
+.dc-skeleton-tab b {
+  color: inherit;
+  font-weight: 700;
+}
+
+.dc-skeleton-tab span {
+  display: grid;
+  min-width: 18px;
+  height: 16px;
+  place-items: center;
+  border-radius: 7px;
+  color: #7f90a8;
+  background: #eef3f9;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.dc-skeleton-table {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+/* Строка-силуэт повторяет сетку настоящей таблицы, поэтому колонки
+   совпадают и при переходе ничего не прыгает. */
+.dc-skeleton-row {
+  min-height: 84px;
+  padding: 0;
+  border: 1px solid #dce6f1;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(31, 60, 98, .035);
+  cursor: default;
+  overflow: hidden;
+}
+
+.dc-task-row.dc-skeleton-row {
+  min-height: 88px;
+  border-radius: 0;
+  border-width: 0 0 1px;
+  box-shadow: none;
+}
+
+/* Полосы внутри строки: отступы повторяют ячейки, иначе силуэт липнет к
+   рамке и не читается как таблица. */
+.dc-skeleton-row > .dc-skeleton-bar {
+  align-self: center;
+  height: 10px;
+  margin: 0 12px;
+}
+
+.dc-skeleton-detail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+}
+
+.dc-skeleton-detail-head {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* Разделы без таблицы сделок (расходы, команда, траектория): вместо
+   колонок — широкие полосы, повторяющие строки их собственных списков. */
+.dc-skeleton-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-height: 260px;
+  padding: 18px;
+  border: 1px solid var(--dc-line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.dc-skeleton-panel .dc-skeleton-bar {
+  height: 13px;
+}
+
+/* Полная ширина карточки на телефоне: ниже 1050px `.dc-workspace`
+   становится `display: block`, и вторая колонка уехала бы под таблицу. */
+@media (max-width: 1050px) {
+  .dc-skeleton-detail {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .dc-skeleton-nav-item {
+    grid-template-columns: 58px 1fr;
+  }
+  .dc-skeleton-nav-item b {
+    display: none;
+  }
+  .dc-skeleton-field {
+    width: 100%;
+  }
+  .dc-skeleton-field.wide {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Смысл — «данные едут», а не «что-то мигает». При сниженном движении
+     оставляем спокойную заливку вместо мерцания и полностью убираем
+     сдвиг, но не гасим сам факт загрузки. */
+  .dc-skeleton-bar {
+    animation: none;
+    background: var(--dc-skeleton-fill-strong);
+  }
+}
