@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import {
   fetchAiSpendAnalytics,
   fetchAiSpendDay,
@@ -11,25 +11,29 @@ import {
   type AiSpendDay,
   type AiSpendEvent,
   type AiSpendEventsPage,
-  type AiSpendPeriodPreset,
   type AiSpendSummary,
   type AiSpendTopEntity,
 } from './api'
-import { moscowDateInputValue } from './dateTime'
+import { isoToShortDate, moscowDateInputValue, moscowMonthStart, shortDateToIso } from './dateTime'
+import { lockBodyScroll } from './bodyScrollLock'
+import { SpendFilterSheet } from './SpendFilterSheet'
 import {
   SPEND_CHART_HEIGHT,
   SPEND_CHART_METRICS,
   SPEND_CHART_PAD_X,
   SPEND_CHART_WIDTH,
-  SPEND_PERIOD_PRESETS,
   buildAiSpendEventsQuery,
   buildAiSpendPeriodQuery,
   formatSpendDelta,
   shareWidth,
   spendChartIndexFromSvgX,
+  spendChartLabelIndexes,
+  spendChartLabelPosition,
   spendChartSeries,
   spendChartValue,
   spendDayTitle,
+  spendFilterButtonLabel,
+  spendFilterKindOptions,
   type SpendChartMetric,
   type SpendKindFilter,
 } from './aiSpendView'
@@ -47,14 +51,6 @@ function formatUsd(value: number | null | undefined) {
 function formatPercent(value: number | null | undefined) {
   if (value == null) return '—'
   return `${String(value).replace('.', ',')}%`
-}
-
-function kindFilters(analytics: AiSpendAnalytics | null): { id: SpendKindFilter; label: string }[] {
-  const groups = analytics?.kind_groups || []
-  return [
-    { id: 'all', label: 'Все' },
-    ...groups.map((item) => ({ id: item.id as SpendKindFilter, label: item.label })),
-  ]
 }
 
 function Delta({ value, compact }: { value: number | null | undefined; compact?: boolean }) {
@@ -80,6 +76,11 @@ function SpendChart({
   metric: SpendChartMetric
 }) {
   const [hover, setHover] = useState<number | null>(null)
+  // На телефоне у SVG нет мыши: `hover` никогда не меняется, и график
+  // навсегда замирает на последнем дне. `scrubIndex` — та же точка,
+  // выбранная пальцем или стрелками клавиатуры, а `hover` остаётся
+  // для мыши. Активной считается мышиная точка, если она есть.
+  const [scrubIndex, setScrubIndex] = useState<number | null>(null)
   const values = series.map((point) => spendChartValue(point, metric))
   const max = Math.max(...values, 0)
   const width = SPEND_CHART_WIDTH
@@ -98,9 +99,9 @@ function SpendChart({
   const area = points.length
     ? `${padX},${padY + innerH} ${line} ${padX + innerW},${padY + innerH}`
     : ''
-  const activeIndex = hover ?? (points.length ? points.length - 1 : 0)
+  const activeIndex = hover ?? scrubIndex ?? (points.length ? points.length - 1 : 0)
   const active = points[activeIndex]
-  const labelStep = series.length > 20 ? 6 : series.length > 10 ? 3 : 1
+  const labelledIndexes = new Set(spendChartLabelIndexes(series.length))
 
   function updateHover(event: { currentTarget: SVGSVGElement; clientX: number }) {
     const svgX = pointerToSvgX(event.currentTarget, event.clientX)
@@ -108,7 +109,41 @@ function SpendChart({
     setHover(spendChartIndexFromSvgX(svgX, series.length, width, padX))
   }
 
+  function scrubTo(event: { currentTarget: SVGSVGElement; clientX: number }) {
+    const svgX = pointerToSvgX(event.currentTarget, event.clientX)
+    if (svgX == null) return
+    setScrubIndex(spendChartIndexFromSvgX(svgX, series.length, width, padX))
+  }
+
+  // Стрелки двигают ту же точку, что и палец, — иначе график недоступен
+  // с клавиатуры: `onMouseMove` туда не попадает.
+  function moveScrub(step: number) {
+    if (!points.length) return
+    setScrubIndex((current) => {
+      const from = current ?? points.length - 1
+      return Math.max(0, Math.min(points.length - 1, from + step))
+    })
+  }
+
+  const scrubLabel = active
+    ? `${active.point.label}: ${active.point.estimated_cost_rub_label}, ${active.point.paid_calls_label}, ${active.point.total_tokens_label} токенов`
+    : 'Нет данных за период'
+
   return <div className="ai-spend-chart-canvas">
+    {/* Тултип стоит над графиком, а не под ним: под осью он занимал отдельную
+        строку, и график прыгал вверх-вниз при смене выбранного дня.
+        Значения идут в потоке, а не отдельными боксами: на телефоне четыре
+        бокса переносились на четыре строки, а здесь строка переносится
+        как текст — заголовок плюс одна строка цифр. */}
+    {active ? <div className="ai-spend-chart-tooltip">
+      <strong>{active.point.label}</strong>
+      <span>{active.point.estimated_cost_rub_label}</span>
+      <span aria-hidden="true">·</span>
+      <span>{active.point.paid_calls_label}</span>
+      <span aria-hidden="true">·</span>
+      <span>{active.point.total_tokens_label} токенов</span>
+      {active.point.unknown_cost_calls ? <span className="ai-spend-chart-tooltip-note">есть вызовы без оценки</span> : null}
+    </div> : null}
     <svg
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
@@ -116,24 +151,52 @@ function SpendChart({
       aria-label="Динамика расходов"
       onMouseLeave={() => setHover(null)}
       onMouseMove={updateHover}
+      onPointerDown={scrubTo}
+      onPointerMove={(event) => { if (event.pointerType !== 'mouse') scrubTo(event) }}
     >
       <line className="ai-spend-chart-axis" x1={padX} y1={padY + innerH} x2={padX + innerW} y2={padY + innerH} />
       {area ? <polygon className="ai-spend-chart-area" points={area} /> : null}
       {line ? <polyline className="ai-spend-chart-line" fill="none" points={line} /> : null}
       {active ? <circle className="ai-spend-chart-dot active" cx={active.x} cy={active.y} r={4} /> : null}
     </svg>
-    <div className="ai-spend-chart-labels">
-      {series.map((point, index) => (
-        <span key={point.date} className={index % labelStep === 0 ? '' : 'hidden'}>{point.short_label}</span>
-      ))}
+    <div className="ai-spend-chart-labels" aria-hidden="true">
+      {series.map((point, index) => {
+        const last = series.length - 1
+        // Сетка подписей идёт от последнего дня назад (см. `spendChartLabelIndexes`),
+        // поэтому крайние даты не липнут друг к другу на длинном периоде.
+        const visible = labelledIndexes.has(index)
+        const atStart = index === 0
+        const atEnd = index === last
+        return <span
+          key={point.date}
+          className={visible ? '' : 'hidden'}
+          style={{
+            left: `${spendChartLabelPosition(index, series.length)}%`,
+            transform: `translateX(${atStart ? '0' : atEnd ? '-100%' : '-50%'})`,
+          }}
+        >{point.short_label}</span>
+      })}
     </div>
-    {active ? <div className="ai-spend-chart-tooltip">
-      <strong>{active.point.label}</strong>
-      <span>{active.point.estimated_cost_rub_label}</span>
-      <span>{active.point.paid_calls_label}</span>
-      <span>{active.point.total_tokens_label} токенов</span>
-      {active.point.unknown_cost_calls ? <span>есть вызовы без оценки</span> : null}
-    </div> : null}
+    {/* График читается пальцем и стрелками: ползунок подсказывает, что
+        значение меняется, и получает фокус с клавиатуры. */}
+    <input
+      className="ai-spend-chart-scrub"
+      type="range"
+      min={0}
+      max={Math.max(points.length - 1, 0)}
+      step={1}
+      value={activeIndex}
+      onChange={(event) => {
+        setScrubIndex(Number(event.target.value))
+        setHover(null)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') { moveScrub(-1); event.preventDefault() }
+        if (event.key === 'ArrowRight') { moveScrub(1); event.preventDefault() }
+      }}
+      aria-label={`День на графике. ${scrubLabel}`}
+      aria-valuetext={scrubLabel}
+    />
   </div>
 }
 
@@ -196,19 +259,50 @@ function DayList({
 }) {
   const days = [...series].reverse()
   if (!days.length) return <p className="ai-spend-empty">За период дней с данными нет.</p>
-  return <ul className="ai-spend-day-list">
-    {days.map((point) => (
-      <li key={point.date}>
-        <button type="button" onClick={() => onOpenDay(point)}>
-          <span>
-            <strong>{spendDayTitle(point.date, today, point.label)}</strong>
-            <small>{point.paid_calls_label}</small>
-          </span>
-          <b>{point.estimated_cost_rub_label}</b>
-        </button>
-      </li>
-    ))}
-  </ul>
+  return <>
+    <ul className="ai-spend-day-list">
+      {days.map((point) => (
+        <li key={point.date}>
+          <button type="button" onClick={() => onOpenDay(point)}>
+            <span>
+              <strong>{spendDayTitle(point.date, today, point.label)}</strong>
+              <small>{point.paid_calls_label}</small>
+            </span>
+            <b>{point.estimated_cost_rub_label}</b>
+          </button>
+        </li>
+      ))}
+    </ul>
+  </>
+}
+
+/** Одна строка вызова: журнал и дневное окно показывают одни и те же
+ *  шесть значений, поэтому разметка живёт здесь, а не дублируется.
+ *  `compact` раскладывает строку в подписанную карточку на узком экране. */
+function EventRow({
+  event,
+  open,
+  compact,
+  onToggle,
+}: {
+  event: AiSpendEvent
+  open: boolean
+  compact?: boolean
+  onToggle: () => void
+}) {
+  return <button
+    type="button"
+    className={compact ? 'ai-spend-row compact' : 'ai-spend-row'}
+    onClick={onToggle}
+    aria-expanded={open}
+  >
+    <span><i className="ai-spend-cell-label">Время</i>{event.datetime_label || event.time}</span>
+    <span><i className="ai-spend-cell-label">Сущность</i>{event.entity_label || 'Без сущности'}</span>
+    <span><i className="ai-spend-cell-label">Операция</i>{event.kind_label}</span>
+    <span><i className="ai-spend-cell-label">Модель</i>{event.model_label || event.model || '—'}</span>
+    <strong><i className="ai-spend-cell-label">Стоимость</i>{event.estimated_cost_rub_label}</strong>
+    <em className={event.status === 'error' ? 'error' : 'ok'}><i className="ai-spend-cell-label">Статус</i>{event.status_label || event.status || '—'}</em>
+  </button>
 }
 
 function DayJournalModal({
@@ -224,6 +318,7 @@ function DayJournalModal({
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [openKey, setOpenKey] = useState('')
+  const dialogRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -237,16 +332,52 @@ function DayJournalModal({
     return () => { cancelled = true }
   }, [point.date])
 
+  useEffect(() => lockBodyScroll(), [])
+
+  // `aria-modal="true"` — обещание, которое DOM сам не держит: без ловушки
+  // Tab уходит на 30 строк журнала под окном, а фокус в окно не приходит.
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previous = document.activeElement as HTMLElement | null
+    dialog.focus()
+    return () => { previous?.focus?.() }
+  }, [])
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') { onClose(); return }
+      if (event.key !== 'Tab') return
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ))
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        last.focus()
+        event.preventDefault()
+      } else if (!event.shiftKey && active === last) {
+        first.focus()
+        event.preventDefault()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
   return <div className="ai-spend-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="ai-spend-modal" role="dialog" aria-modal="true" aria-labelledby="ai-spend-day-title">
+    <section
+      className="ai-spend-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ai-spend-day-title"
+      ref={dialogRef}
+      tabIndex={-1}
+    >
       <header>
         <div>
           <h2 id="ai-spend-day-title">{spendDayTitle(point.date, today, point.label)}</h2>
@@ -262,14 +393,7 @@ function DayJournalModal({
           const key = event.event_key || `${event.at}-${event.kind}-${event.entity_id}-${index}`
           const open = openKey === key
           return <article key={key} className="ai-spend-day-event">
-            <button type="button" className="ai-spend-row" onClick={() => setOpenKey(open ? '' : key)}>
-              <span>{event.time}</span>
-              <span>{event.entity_label || 'Без сущности'}</span>
-              <span>{event.kind_label}</span>
-              <span>{event.model_label || event.model || '—'}</span>
-              <strong>{event.estimated_cost_rub_label}</strong>
-              <em className={event.status === 'error' ? 'error' : 'ok'}>{event.status_label || event.status || '—'}</em>
-            </button>
+            <EventRow event={event} open={open} compact onToggle={() => setOpenKey(open ? '' : key)} />
             {open ? <EventDetails event={event} /> : null}
           </article>
         })}
@@ -292,13 +416,41 @@ export function AiSpendDashboardCard({ onOpen }: { onOpen: () => void }) {
   </button>
 }
 
+/**
+ * Поднимает календарь ОС для невидимного нативного входа.
+ *
+ * `showPicker()` разрешён только из пользовательского жеста, поэтому он
+ * вызывается прямо в обработчике клика, а не после setState. Firefox
+ * и старые WebKit его не дают — там пользователь открывает календарь,
+ * тапнув по самому полю.
+ */
+function openNativePicker(picker: RefObject<HTMLInputElement | null>) {
+  try {
+    picker.current?.showPicker()
+  } catch {
+    picker.current?.focus()
+  }
+}
+
 export function AiSpend() {
   const today = moscowDateInputValue()
-  const [preset, setPreset] = useState<AiSpendPeriodPreset>('30')
-  const [fromDate, setFromDate] = useState(today)
-  const [toDate, setToDate] = useState(today)
+  // Относительных пресетов нет: период всегда задан датами, по умолчанию —
+  // с первого числа текущего месяца по сегодня. Считать это на клиенте
+  // можно было бы, но период принадлежит серверу: он же строит график и
+  // суммы по тем же правилам, а вторая копия правила рано или поздно
+  // разъезжается с первой.
+  const [fromText, setFromText] = useState(() => isoToShortDate(moscowMonthStart(today)))
+  const [toText, setToText] = useState(() => isoToShortDate(today))
+  const fromIso = shortDateToIso(fromText)
+  const toIso = shortDateToIso(toText)
+  const datesInvalid = !fromIso || !toIso || fromIso > toIso
+  const fromPickerRef = useRef<HTMLInputElement>(null)
+  const toPickerRef = useRef<HTMLInputElement>(null)
   const [metric, setMetric] = useState<SpendChartMetric>('cost')
   const [kindFilter, setKindFilter] = useState<SpendKindFilter>('all')
+  // Панель фильтров живёт только на мобильном; на десктопе обе группы
+  // переключателей видны сразу и открывать нечего.
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -319,15 +471,18 @@ export function AiSpend() {
     return () => window.clearTimeout(timer)
   }, [search])
 
+  // Пока строка даты не разобралась, запрос уходить не должен: сервер на
+  // пустые `from`/`to` молча отдал бы дефолтные 30 дней, и на экране
+  // «31.02.2026» выглядело бы как «период принят».
+  const datesPending = datesInvalid
   const periodQuery = useMemo(
-    () => buildAiSpendPeriodQuery(preset, fromDate, toDate),
-    [preset, fromDate, toDate],
+    () => buildAiSpendPeriodQuery(fromIso ?? '', toIso ?? ''),
+    [fromIso, toIso],
   )
   const eventsQuery = useMemo(
     () => buildAiSpendEventsQuery({
-      preset,
-      fromDate,
-      toDate,
+      fromDate: fromIso ?? '',
+      toDate: toIso ?? '',
       q: debouncedSearch,
       kindGroup: kindGroupFilter,
       status: statusFilter,
@@ -335,13 +490,18 @@ export function AiSpend() {
       page,
       pageSize: 20,
     }),
-    [preset, fromDate, toDate, debouncedSearch, kindGroupFilter, statusFilter, attentionFilter, page],
+    [fromIso, toIso, debouncedSearch, kindGroupFilter, statusFilter, attentionFilter, page],
   )
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
+    if (datesPending) {
+      setAnalytics(null)
+      setLoading(false)
+      return () => { cancelled = true }
+    }
     void fetchAiSpendAnalytics(periodQuery)
       .then((payload) => {
         if (cancelled) return
@@ -357,11 +517,15 @@ export function AiSpend() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [periodQuery])
+  }, [periodQuery, datesPending])
 
   useEffect(() => {
     let cancelled = false
     setEventsError('')
+    if (datesPending) {
+      setEvents(null)
+      return () => { cancelled = true }
+    }
     void fetchAiSpendEvents(eventsQuery)
       .then((payload) => { if (!cancelled) setEvents(payload) })
       .catch((reason) => {
@@ -370,13 +534,28 @@ export function AiSpend() {
         setEventsError(reason instanceof Error ? reason.message : String(reason))
       })
     return () => { cancelled = true }
-  }, [eventsQuery])
+  }, [eventsQuery, datesPending])
 
-  useEffect(() => { setPage(1) }, [preset, fromDate, toDate, debouncedSearch, kindGroupFilter, statusFilter, attentionFilter])
-  useEffect(() => { setOpenDay(null) }, [preset, fromDate, toDate, kindFilter])
+  useEffect(() => { setPage(1) }, [fromIso, toIso, debouncedSearch, kindGroupFilter, statusFilter, attentionFilter])
+  // `kindFilter` раньше закрывал открытый дневной модал: смена вида
+  // графика выбрасывала окно, которое читатель только что открыл.
+  useEffect(() => { setOpenDay(null) }, [fromIso, toIso])
 
   const series = spendChartSeries(analytics, kindFilter)
+  // Поля показывают период, который сервер реально применил, — тот же, по
+  // которому построены график и суммы. Иначе при обрезанном сервером `to`
+  // (выбранная дата в будущем) поле обещало бы больше, чем показано.
+  const shownFromIso = analytics?.period.from || fromIso || ''
+  const shownToIso = analytics?.period.to || toIso || ''
+  const shownFrom = shownFromIso ? isoToShortDate(shownFromIso) : fromText
+  const shownTo = shownToIso ? isoToShortDate(shownToIso) : toText
   const hasChart = series.some((point) => spendChartValue(point, metric) > 0 || point.unknown_cost_calls > 0)
+  const kindOptions = spendFilterKindOptions(analytics?.kind_groups || [])
+  const filterButtonLabel = spendFilterButtonLabel(
+    kindOptions.find((item) => item.id === kindFilter)?.label || '',
+    kindFilter,
+    metric,
+  )
   const totals = analytics?.totals
   const filtersActive = Boolean(debouncedSearch || kindGroupFilter || statusFilter || attentionFilter)
 
@@ -389,6 +568,17 @@ export function AiSpend() {
     }
     window.setTimeout(() => journalRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
   }
+
+  // Подписи плашек берём из тех же списков, что и контролы, чтобы
+  // «Транскрибация» на карточке и в плашке назывались одинаково.
+  const kindGroupLabel = analytics?.kind_groups.find((item) => item.id === kindGroupFilter)?.label
+  const attentionLabel = analytics?.attention.find((item) => item.id === attentionFilter)?.title
+  const activeFilterChips = [
+    attentionFilter ? { id: 'attention', label: `Сигнал: ${attentionLabel || attentionFilter}`, onClear: () => setAttentionFilter('') } : null,
+    kindGroupFilter ? { id: 'kind', label: `Операции: ${kindGroupLabel || kindGroupFilter}`, onClear: () => setKindGroupFilter('') } : null,
+    statusFilter ? { id: 'status', label: `Статус: ${statusFilter === 'error' ? 'ошибка' : 'успешно'}`, onClear: () => setStatusFilter('') } : null,
+    debouncedSearch ? { id: 'search', label: `Поиск: ${debouncedSearch}`, onClear: () => { setSearch(''); setDebouncedSearch('') } } : null,
+  ].filter((chip): chip is { id: string; label: string; onClear: () => void } => chip !== null)
 
   return <div className="ai-spend-page">
     <header className="dc-header ai-spend-header">
@@ -426,22 +616,75 @@ export function AiSpend() {
         </article>
       </section> : null}
       <div className="ai-spend-period">
-        <div className="ai-spend-pills" role="tablist" aria-label="Период">
-          {SPEND_PERIOD_PRESETS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={preset === item.id ? 'active' : ''}
-              onClick={() => setPreset(item.id)}
-            >{item.label}</button>
-          ))}
+        <div className="ai-spend-custom">
+          {/* Относительных пресетов больше нет: единственный вход в период —
+              эти два поля, по умолчанию с первого числа месяца по сегодня. */}
+          <span className="ai-spend-date">
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              aria-label="С какой даты"
+              placeholder="дд.мм.гггг"
+              value={shownFrom}
+              maxLength={10}
+              aria-invalid={datesInvalid}
+              aria-describedby={datesInvalid ? 'ai-spend-date-error' : undefined}
+              onChange={(event) => setFromText(event.target.value)}
+              onClick={() => openNativePicker(fromPickerRef)}
+            />
+            {/* Невидимный нативный вход: поднимает календарь ОС и хранит ISO,
+                а пользователь продолжает видеть `дд.мм.гггг`.
+                Только `max={today}`: с перекрёстными `min`/`max` календарь
+                сужался до единственной доступной даты и переставал
+                переключаться — обратный порядок честно показывает ошибка
+                под полями, а не блокировкой выбора. */}
+            <input
+              ref={fromPickerRef}
+              type="date"
+              className="ai-spend-date-overlay"
+              tabIndex={-1}
+              aria-hidden="true"
+              value={shownFromIso}
+              max={today}
+              onChange={(event) => {
+                if (!event.target.value) return
+                setFromText(isoToShortDate(event.target.value))
+              }}
+            />
+          </span>
+          <span className="ai-spend-date">
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              aria-label="По какую дату"
+              placeholder="дд.мм.гггг"
+              value={shownTo}
+              maxLength={10}
+              aria-invalid={datesInvalid}
+              aria-describedby={datesInvalid ? 'ai-spend-date-error' : undefined}
+              onChange={(event) => setToText(event.target.value)}
+              onClick={() => openNativePicker(toPickerRef)}
+            />
+            <input
+              ref={toPickerRef}
+              type="date"
+              className="ai-spend-date-overlay"
+              tabIndex={-1}
+              aria-hidden="true"
+              value={shownToIso}
+              max={today}
+              onChange={(event) => {
+                if (!event.target.value) return
+                setToText(isoToShortDate(event.target.value))
+              }}
+            />
+          </span>
         </div>
-        {preset === 'custom' ? <div className="ai-spend-custom">
-          <input type="date" value={fromDate} max={toDate || today} onChange={(event) => setFromDate(event.target.value)} />
-          <span>—</span>
-          <input type="date" value={toDate} min={fromDate} max={today} onChange={(event) => setToDate(event.target.value)} />
-        </div> : null}
-        <small>{analytics?.period.label || '…'}</small>
+        {datesInvalid
+          ? <small id="ai-spend-date-error" className="ai-spend-date-error">Период не выбран или перепутан: сначала более ранняя дата.</small>
+          : null}
       </div>
     </header>
 
@@ -456,17 +699,27 @@ export function AiSpend() {
         <header>
           <div className="ai-spend-chart-heading">
             <h2>Динамика расходов</h2>
-            <div className="ai-spend-pills" aria-label="Тип операций">
-              {kindFilters(analytics).map((item) => (
-                <button key={item.id} type="button" className={kindFilter === item.id ? 'active' : ''} onClick={() => setKindFilter(item.id)}>
+            <div className="ai-spend-pills" role="group" aria-label="Какие операции показывать на графике">
+              {kindOptions.map((item) => (
+                <button key={item.id} type="button" className={kindFilter === item.id ? 'active' : ''} aria-pressed={kindFilter === item.id} onClick={() => setKindFilter(item.id)}>
                   {item.label}
                 </button>
               ))}
             </div>
           </div>
-          <div className="ai-spend-pills compact">
+          {/* На телефоне плашки показателя скрыты, и справа от заголовка
+              зияло пустое место. Кнопка занимает именно его, а не добавляет
+              новую строку, поэтому высота карточки не меняется. */}
+          <button
+            type="button"
+            className="ai-spend-filter-trigger"
+            aria-haspopup="dialog"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen(true)}
+          ><span aria-hidden="true">⚙</span> {filterButtonLabel}</button>
+          <div className="ai-spend-pills compact" role="group" aria-label="Что показывать на графике">
             {SPEND_CHART_METRICS.map((item) => (
-              <button key={item.id} type="button" className={metric === item.id ? 'active' : ''} onClick={() => setMetric(item.id)}>
+              <button key={item.id} type="button" className={metric === item.id ? 'active' : ''} aria-pressed={metric === item.id} onClick={() => setMetric(item.id)}>
                 {item.label}
               </button>
             ))}
@@ -551,73 +804,72 @@ export function AiSpend() {
           <div>
             <h2>Журнал вызовов</h2>
           </div>
-          <span>{events ? `${events.total} записей` : ''}</span>
+          <span aria-live="polite">{events ? `${events.total} записей` : ''}</span>
         </header>
         <div className="ai-spend-journal-tools">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Сделка, лид, модель, run_id, job_id"
-          />
-          <select value={kindGroupFilter} onChange={(event) => setKindGroupFilter(event.target.value)}>
-            <option value="">Все операции</option>
-            {analytics.kind_groups.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option value="">Все статусы</option>
-            <option value="success">успешно</option>
-            <option value="error">ошибка</option>
-          </select>
+          <label className="ai-spend-field">
+            <span>Поиск по сделке, лиду, модели или run_id</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Сделка, лид, модель, run_id, job_id"
+            />
+          </label>
+          <label className="ai-spend-field">
+            <span>Тип операции</span>
+            <select value={kindGroupFilter} onChange={(event) => setKindGroupFilter(event.target.value)}>
+              <option value="">Все операции</option>
+              {analytics.kind_groups.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="ai-spend-field">
+            <span>Статус вызова</span>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <option value="">Все статусы</option>
+              <option value="success">успешно</option>
+              <option value="error">ошибка</option>
+            </select>
+          </label>
           {filtersActive ? <button type="button" className="ai-spend-clear" onClick={() => {
             setSearch('')
             setDebouncedSearch('')
             setKindGroupFilter('')
             setStatusFilter('')
             setAttentionFilter('')
-          }}>Сбросить</button> : null}
+          }}>Сбросить всё</button> : null}
         </div>
-        {attentionFilter ? <p className="ai-spend-filter-note">Показаны события: {analytics.attention.find((item) => item.id === attentionFilter)?.title || attentionFilter}.</p> : null}
+        {/* Каждый активный фильтр виден отдельной подписанной плашкой.
+            Раньше только `attention` показывал, что журнал отфильтрован;
+            переход из «Расходы по операциям» менял журнал молча, и
+            нельзя было понять, применился фильтр или нет. */}
+        {activeFilterChips.length ? <ul className="ai-spend-chips" aria-label="Действующие фильтры журнала">
+          {activeFilterChips.map((chip) => <li key={chip.id}>
+            <span>{chip.label}</span>
+            <button type="button" onClick={chip.onClear} aria-label={`Убрать фильтр «${chip.label}»`}>×</button>
+          </li>)}
+        </ul> : null}
         {eventsError ? <p className="dc-alert error">{eventsError}</p> : null}
         {!events && !eventsError ? <p className="ai-spend-empty">Загружаем журнал…</p> : null}
         {events && !events.events.length ? <p className="ai-spend-empty">
           {events.empty_reason === 'search' ? 'По текущему поиску и фильтрам записей нет.' : 'За выбранный период платных вызовов нет.'}
         </p> : null}
         {events?.events.length ? <div className="ai-spend-table-wrap">
-          <table className="ai-spend-table">
-            <thead>
-              <tr>
-                <td>
-                  <div className="ai-spend-row head">
-                    <span>Время</span>
-                    <span>Сущность</span>
-                    <span>Операция</span>
-                    <span>Модель</span>
-                    <span>Стоимость</span>
-                    <span>Статус</span>
-                  </div>
-                </td>
-              </tr>
-            </thead>
-            <tbody>
-              {events.events.map((event) => {
-                const key = event.event_key || `${event.at}-${event.kind}-${event.entity_id}`
-                const open = openKey === key
-                return <tr key={key} className={open ? 'open' : ''}>
-                  <td>
-                    <button type="button" className="ai-spend-row" onClick={() => setOpenKey(open ? '' : key)}>
-                      <span>{event.datetime_label || event.time}</span>
-                      <span>{event.entity_label || 'Без сущности'}</span>
-                      <span>{event.kind_label}</span>
-                      <span>{event.model_label || event.model || '—'}</span>
-                      <strong>{event.estimated_cost_rub_label}</strong>
-                      <em className={event.status === 'error' ? 'error' : 'ok'}>{event.status_label || event.status || '—'}</em>
-                    </button>
-                    {open ? <EventDetails event={event} /> : null}
-                  </td>
-                </tr>
-              })}
-            </tbody>
-          </table>
+          {/* Раньше это была таблица с одной ячейкой на строку: `<thead>`
+              со списком из шести подписей в одном `<td>`. Скринридер
+              объявлял список из шести пунктов без шапки и без связи со
+              строками. Теперь это список событий, а подписи ячеек
+              добавляются в `.ai-spend-row.compact` на узком экране. */}
+          <ul className="ai-spend-events">
+            {events.events.map((event) => {
+              const key = event.event_key || `${event.at}-${event.kind}-${event.entity_id}`
+              const open = openKey === key
+              return <li key={key} className={open ? 'ai-spend-event-row open' : 'ai-spend-event-row'}>
+                <EventRow event={event} open={open} onToggle={() => setOpenKey(open ? '' : key)} />
+                {open ? <EventDetails event={event} /> : null}
+              </li>
+            })}
+          </ul>
         </div> : null}
         {events && events.pages > 1 ? <nav className="ai-spend-pager">
           <button type="button" disabled={events.page <= 1} onClick={() => setPage(events.page - 1)}>Назад</button>
@@ -627,6 +879,14 @@ export function AiSpend() {
       </section>
     </> : null}
     {openDay ? <DayJournalModal point={openDay} today={analytics?.period.today || today} onClose={() => setOpenDay(null)} /> : null}
+    {filtersOpen ? <SpendFilterSheet
+      kindOptions={kindOptions}
+      kindFilter={kindFilter}
+      metric={metric}
+      onKind={setKindFilter}
+      onMetric={setMetric}
+      onClose={() => setFiltersOpen(false)}
+    /> : null}
   </div>
 }
 

@@ -3995,7 +3995,12 @@ textarea {
 .ai-spend-header .dc-header-title h1 { white-space: normal; }
 .ai-spend-header .dc-header-title p { margin-top: 4px; font-size: 13px; }
 .ai-spend-period { display: grid; justify-items: end; gap: 6px; margin-left: 0; flex: 0 0 auto; }
-.ai-spend-period > small { color: #63778e; font-size: 12px; }
+/* Подпись периода (`22.09.2026 — 28.09.2026`) убрана: у пресетов период назван
+   самим чипом, а у своего периода даты стоят в полях. Дублировала то же самое
+   третьим местом и на телефоне сбивала поля вниз. */
+/* Шапка прижата вправо, а подсказка об ошибке периода — к полям, откуда
+   её и ищут. Иначе текст уезжал под правый край карточки. */
+.ai-spend-date-error { justify-self: end; color: #b24a4a; font-size: 12px; line-height: 1.3; }
 .ai-spend-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-spend-pills.compact { justify-content: flex-end; }
 .ai-spend-pills.wrap { margin: 0 0 12px; }
@@ -4016,17 +4021,60 @@ textarea {
   color: #fff;
   background: #1768f2;
 }
-.ai-spend-custom { display: flex; align-items: center; gap: 8px; }
-.ai-spend-custom input {
+.ai-spend-custom { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+/* Поля периода — единственный контрол шапки. Поля компактнее остальных:
+   это вспомогательный ввод, а не основной фильтр журнала, и на телефоне
+   он не должен вытеснять сам график. */
+/* Каждое поле — это текстовый ввод с русским форматом и невидимый нативный
+   слой под ним: клик и тап поднимают календарь ОС, а пользователь
+   продолжает видеть `дд.мм.гггг`. */
+.ai-spend-custom .ai-spend-date {
+  position: relative;
+  display: block;
   min-height: 34px;
-  padding: 4px 8px;
+  width: 8.5em;
+}
+.ai-spend-custom .ai-spend-date input[type="text"] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 34px;
+  padding: 3px 7px;
   border: 1px solid #d9e3ee;
   border-radius: 8px;
   color: #24384f;
   background: #fff;
   font: inherit;
   font-size: 13px;
+  letter-spacing: .02em;
+  text-align: center;
 }
+.ai-spend-custom .ai-spend-date input[aria-invalid="true"] { border-color: #d76a6a; box-shadow: 0 0 0 3px rgba(215, 106, 106, 0.12); }
+/* Слой невидим, но не `display: none`: скрытый нативный вход браузер
+   отказывается показывать. Прозрачность и нулевая тень убирают его вид,
+   оставляя мишень для тапа и системный календарь. */
+/* Невидимый нативный вход лежит ПОД текстом, а не поверх: если положить его
+   сверху, он перехватит клик и в поле станет невозможно ввести дату вручную.
+   Календарь поднимается из обработчика клика по тексту через `showPicker()`. */
+.ai-spend-custom .ai-spend-date-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  z-index: 0;
+  opacity: 0;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* Значок ОС повторил бы «09/28/2026» поверх нашего текста. */
+.ai-spend-custom .ai-spend-date-overlay::-webkit-calendar-picker-indicator { display: none; }
+.ai-spend-custom .ai-spend-date-overlay::-webkit-datetime-edit { display: none; }
 .ai-spend-note { margin: 0 0 12px; max-width: 54rem; color: #6c7f95; font-size: 13px; }
 .ai-spend-kpis {
   display: grid;
@@ -4041,7 +4089,9 @@ textarea {
 .ai-spend-kpis strong { color: #14263c; font-size: 18px; line-height: 1.15; letter-spacing: -.03em; }
 .ai-spend-kpis span { color: #63778e; font-size: 12px; }
 .ai-spend-delta { color: #5b6f86; font-size: 11px; font-style: normal; font-weight: 700; }
-.ai-spend-delta span { color: #8a9bb0; font-weight: 600; }
+/* `#8a9bb0` на белом давал ~2.8:1 и не проходил AA для 11px. Хвост
+   «к предыдущему периоду» — тот же приглушённый синий, что и у `.dc-muted`. */
+.ai-spend-delta span { color: #5b6f86; font-weight: 600; }
 .ai-spend-delta.down { color: #17803d; }
 .ai-spend-delta.up { color: #c05621; }
 .ai-spend-delta.flat { color: #5b6f86; }
@@ -4150,8 +4200,10 @@ textarea {
 .ai-spend-day-list button > span { display: grid; gap: 1px; min-width: 0; }
 .ai-spend-day-list button:hover { background: #f7f9fc; }
 .ai-spend-day-list strong { display: block; color: #14263c; font-size: 13px; line-height: 1.2; }
-.ai-spend-day-list small { color: #6c7f95; font-size: 11px; line-height: 1.2; }
+.ai-spend-day-list small { color: #5f7386; font-size: 11px; line-height: 1.2; }
 .ai-spend-day-list b { color: #14263c; font-size: 13px; line-height: 1.2; white-space: nowrap; }
+/* Свернутая тишина: за 30 дней типичный хвост из трёх недель пустых
+   дней занимал двадцать одну одинаковую строку. */
 .ai-spend-chart-canvas {
   display: flex;
   flex-direction: column;
@@ -4165,13 +4217,36 @@ textarea {
 .ai-spend-chart-line { stroke: #1768f2; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
 .ai-spend-chart-dot { fill: #1768f2; }
 .ai-spend-chart-dot.active { fill: #0b58c8; }
-.ai-spend-chart-labels { display: flex; justify-content: space-between; gap: 4px; margin-top: 2px; color: #7b8ea3; font-size: 11px; line-height: 1.2; }
+/* `#7b8ea3` на белом давал ~3.4:1 и не проходил AA для 11px подписей
+   оси. Оси — то, что читают в первую очередь, поэтому контраст выше. */
+.ai-spend-chart-labels { position: relative; height: 14px; margin-top: 2px; color: #5f7386; font-size: 11px; line-height: 1.2; }
+/* Подписи больше не идут в потоке, а стоят под своей точкой. Раньше это был
+   flex-ряд из span'ов на каждый день, и `visibility: hidden` не убирает ширину:
+   на длинном периоде суммарная ширина превышала карточку, и дни выталкивались
+   вправо за границу. Первая и последняя подписи прижаты к краю, поэтому
+   текст не свисает за карточку. */
 .ai-spend-chart-labels .hidden { visibility: hidden; }
+.ai-spend-chart-labels span { position: absolute; top: 0; white-space: nowrap; }
+/* Ползунок под графиком: на телефоне это единственный способ прочитать
+   произвольный день — пальцем по шкале или стрелками с клавиатуры.
+   Сама шкала скрыта от глаз, но не от вспомогательных технологий. */
+.ai-spend-chart-scrub {
+  position: absolute;
+  inset: 0 0 auto 0;
+  width: 100%;
+  height: 44px;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+  touch-action: pan-y;
+}
+.ai-spend-chart-scrub:focus-visible { opacity: 1; height: 20px; margin-top: 2px; }
+/* Тултип стоит над графиком. Значения идут в потоке строки, а не
+   отдельными боксами: на телефоне четыре бокса переносились на четыре
+   строки, и блок скакал при смене дня. */
 .ai-spend-chart-tooltip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 4px;
+  display: block;
+  margin-bottom: 4px;
   padding: 4px 8px;
   border: 1px solid #e0e7ef;
   border-radius: 8px;
@@ -4180,7 +4255,55 @@ textarea {
   font-size: 11px;
   line-height: 1.25;
 }
-.ai-spend-chart-tooltip strong { color: #14263c; }
+.ai-spend-chart-tooltip strong { display: block; color: #14263c; }
+.ai-spend-chart-tooltip > span[aria-hidden] { margin: 0 5px; }
+.ai-spend-chart-tooltip-note { display: block; color: #8a5b12; }
+/* Кнопка фильтров — только для телефона. На десктопе обе группы
+   переключателей видны сразу, и вторая кнопка к ним же была бы лишним
+   шагом к тому, что уже на экране. */
+.ai-spend-filter-trigger { display: none; }
+.ai-spend-filter-layer {
+  position: fixed;
+  z-index: 1300;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(15, 31, 58, .38);
+  backdrop-filter: blur(2px);
+}
+.ai-spend-filter-sheet {
+  width: 100%;
+  max-height: 86dvh;
+  overflow: auto;
+  border-radius: 16px 16px 0 0;
+  background: #fff;
+  box-shadow: 0 -14px 40px rgba(20, 42, 67, .18);
+  padding: 10px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+.ai-spend-filter-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.ai-spend-filter-sheet h2 { margin: 0; font-size: 17px; }
+.ai-spend-filter-sheet h3 { margin: 14px 0 8px; color: #5f7386; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.ai-spend-filter-close { width: 44px; height: 44px; border: 0; border-radius: 10px; color: #5f7386; background: #f2f5f9; font-size: 22px; line-height: 1; cursor: pointer; }
+.ai-spend-filter-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-spend-filter-options button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid #d9e3ee;
+  border-radius: 999px;
+  color: #40526e;
+  background: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ai-spend-filter-options button.active { border-color: #1768f2; color: #fff; background: #1768f2; }
+.ai-spend-filter-reset { width: 100%; min-height: 44px; margin-top: 18px; border: 0; border-radius: 10px; color: #245ba6; background: #edf4ff; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
 .ai-spend-bars { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .ai-spend-bars li { display: grid; gap: 5px; }
 .ai-spend-bars button {
@@ -4270,18 +4393,53 @@ textarea {
 }
 .ai-spend-entities em { margin-left: auto; color: #14263c; font-size: 14px; font-style: normal; font-weight: 700; white-space: nowrap; }
 .ai-spend-entities a { color: #1d5fbf; font-size: 12px; font-weight: 700; }
-.ai-spend-journal-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-.ai-spend-journal-tools input, .ai-spend-journal-tools select {
-  min-height: 36px;
+.ai-spend-journal-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
+/* Подпись поля видна всегда, а не только на телефоне: `placeholder`
+   не заменяет имя поля, и после выбора значения имя поля пропадало
+   совсем — доступное имя «Все операции» превращалось в «ошибка». */
+.ai-spend-field { display: grid; gap: 4px; min-width: 0; }
+.ai-spend-field > span { color: #5f7386; font-size: 11px; font-weight: 700; line-height: 1.2; }
+.ai-spend-field input, .ai-spend-field select, .ai-spend-journal-tools input, .ai-spend-journal-tools select {
+  min-height: 44px;
   padding: 6px 10px;
   border: 1px solid #d9e3ee;
   border-radius: 8px;
   color: #24384f;
   background: #fff;
   font: inherit;
-  font-size: 13px;
+  /* 13px заставляет iOS приближать вьюпорт при фокусе на поле. */
+  font-size: 16px;
 }
 .ai-spend-journal-tools input { flex: 1 1 240px; }
+.ai-spend-field input:focus-visible, .ai-spend-field select:focus-visible {
+  border-color: #1768f2;
+  outline: 0;
+  box-shadow: 0 0 0 4px rgba(23, 104, 242, 0.11);
+}
+/* Активные фильтры — видимые и снимаемые по одному. Раньше только
+   «сигнал» показывал, что журнал отфильтрован, а переход из
+   «Расходы по операциям» менял журнал молча. */
+.ai-spend-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
+.ai-spend-chips li { display: flex; align-items: center; gap: 4px; padding: 3px 4px 3px 9px; border: 1px solid #c9dbf3; border-radius: 999px; color: #245ba6; background: #edf4ff; font-size: 12px; font-weight: 700; }
+.ai-spend-chips button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: #245ba6;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-spend-chips button:hover { background: #dbe9ff; }
+.ai-spend-events { margin: 0; padding: 0; list-style: none; }
+.ai-spend-event-row { border-bottom: 1px solid #edf1f5; }
+.ai-spend-event-row.open .ai-spend-row { background: #f7f9fc; }
 .ai-spend-filter-note { margin: 0 0 10px; color: #5b7390; font-size: 13px; }
 .ai-spend-table-wrap { overflow-x: auto; }
 .ai-spend-table { width: 100%; border-collapse: collapse; }
@@ -4315,6 +4473,34 @@ textarea {
 .ai-spend-row em { font-size: 12px; font-style: normal; font-weight: 700; }
 .ai-spend-row em.ok { color: #17803d; }
 .ai-spend-row em.error { color: #dc2626; }
+/* Подпись ячейки видна только там, где колонок больше нет. На широком
+   экране колонки сами себя называют шапкой, и лишняя подпись в каждой
+   строке только шумит. */
+.ai-spend-cell-label { display: none; }
+.ai-spend-row.compact { min-width: 0; }
+.ai-spend-row.compact > * { min-width: 0; overflow-wrap: anywhere; }
+.ai-spend-row.compact span, .ai-spend-row.compact strong, .ai-spend-row.compact em { display: grid; gap: 1px; }
+.ai-spend-row.compact .ai-spend-cell-label {
+  display: block;
+  color: #5f7386;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: .04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.ai-spend-row.compact strong .ai-spend-cell-label { color: #5f7386; }
+.ai-spend-row.compact em .ai-spend-cell-label { color: #5f7386; }
+/* Вся строка — одна цель нажатия, а не шесть: кольцо фокуса идёт по строке. */
+.ai-spend-row:focus-visible, .ai-spend-bars button:focus-visible, .ai-spend-entities button:focus-visible,
+.ai-spend-day-list button:focus-visible, .ai-spend-entities a:focus-visible,
+.ai-spend-attention button:focus-visible, .ai-spend-clear:focus-visible, .ai-spend-pager button:focus-visible,
+.ai-spend-pills button:focus-visible, .ai-spend-modal-close:focus-visible, .ai-spend-chips button:focus-visible {
+  outline: 2px solid #1768f2;
+  outline-offset: -2px;
+  border-radius: 6px;
+}
 .ai-spend-pager { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; color: #63778e; font-size: 13px; }
 .ai-spend-pager button:disabled { opacity: .45; cursor: default; }
 .ai-spend-modal-layer {
@@ -4329,31 +4515,42 @@ textarea {
 .ai-spend-modal {
   display: grid;
   width: min(920px, 100%);
-  max-height: min(780px, 92vh);
+  max-height: min(780px, 92dvh);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 18px 50px rgba(12, 28, 48, .22);
 }
+.ai-spend-modal:focus { outline: 0; }
+/* Шапка не уезжает: при прокрутке длинного дня сумма дня и кнопка
+   закрытия остаются на месте. */
 .ai-spend-modal > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid #e0e7ef;
+  background: #fff;
 }
 .ai-spend-modal h2 { margin: 0; color: #102037; font-size: 18px; }
-.ai-spend-modal header p { margin: 4px 0 0; color: #6c7f95; font-size: 13px; }
+.ai-spend-modal header p { margin: 4px 0 0; color: #5f7386; font-size: 13px; }
 .ai-spend-modal-close {
-  width: 32px;
-  height: 32px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
-  color: #52677f;
+  border-radius: 10px;
+  color: #40566f;
   background: #edf2f7;
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
 }
@@ -4393,13 +4590,125 @@ textarea {
   .ai-spend-chart-body { grid-template-columns: 1fr; }
   .ai-spend-day-list { height: auto; max-height: 208px; }
   .ai-spend-chart-canvas svg { flex: none; height: 132px; }
+  /* График — единственная форма на экране, и после раскладки в одну
+     колонку он оказывался под двумястами пикселями списка дней. */
+  /* Тултип дня на телефоне: заголовок и одна строка цифр.
+     Прошлый вариант резервировал место под две строки сетки и обрезал
+     третью и четвёртую — цифры просто не читались. Теперь значения
+     идут в потоке, а `min-height` держит место под две строки: длинная
+     подпись перенесётся, но блок не схлопнется в одну. */
+  .ai-spend-chart-tooltip {
+    display: block;
+    min-height: calc(2 * 1.25em + 8px + 2px);
+  }
+  .ai-spend-chart-tooltip > * { display: inline; }
+  .ai-spend-chart-tooltip strong { display: block; }
+  /* Одиннадцать плашек занимали три строки и вытесняли график, поэтому на
+     телефоне вместо них одна кнопка. `display: none` на десктопе и в этом
+     правиле — оба выхода из состояния, где видны обе группы. */
+  .ai-spend-filter-trigger {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    gap: 7px;
+    flex: 0 1 auto;
+    margin: 0;
+    padding: 0 14px;
+    border: 1px solid #d9e3ee;
+    border-radius: 999px;
+    color: #40526e;
+    background: #fff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  /* Плашек на телефоне нет вообще: тип операции и показатель меняются
+     только в панели. Скрывать нужно оба ряда, и селектор здесь обязан быть
+     не слабее базовых правил 4143 и 4152 — у compact там три класса
+     (`.ai-spend-chart .ai-spend-pills.compact`), поэтому `display: none`
+     с двумя классами проигрывал по каскаду, и «Расходы / Вызовы / Токены»
+     оставались на экране. */
+  .ai-spend-card.ai-spend-chart > header .ai-spend-pills,
+  .ai-spend-card.ai-spend-chart > header .ai-spend-pills.compact { display: none; }
+  .ai-spend-chart-canvas { order: -1; }
+  .ai-spend-chart-canvas svg { height: 160px; }
 }
 @media (max-width: 800px) {
   .ai-spend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ai-spend-period { justify-items: start; margin-left: 0; width: 100%; }
+  /* Поля периода — единственный контрол в рейке, и на телефоне он встаёт
+     слева: пустая правая половина строки выглядела бы незаполненной,
+     а прижатый вправо контрол спорил бы с чтением слева направо. */
+  .ai-spend-period { justify-items: stretch; margin-left: 0; width: 100%; }
   .ai-spend-tech { grid-template-columns: 1fr; }
-  .ai-spend-row { grid-template-columns: 1fr 1fr; }
-  .ai-spend-chart-canvas svg { height: 132px; }
+  /* Шесть колонок в две — это не таблица, а облако безымянных значений:
+     стоимость оказывалась пятой ячейкой, и её нельзя было отличить от
+     модели. Вместо этого строка раскладывается в подписанную карточку,
+     а подписи ячеек становятся видимыми. */
+  .ai-spend-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; }
+  .ai-spend-row.compact { padding: 10px 8px; }
+  .ai-spend-row.compact strong { grid-column: 2; grid-row: 1; text-align: right; }
+  .ai-spend-row.compact em { grid-column: 1 / -1; }
+  .ai-spend-row.compact span:first-child { grid-column: 1; grid-row: 1; }
+  .ai-spend-chart-canvas svg { height: 160px; }
+}
+
+/* Телефон: одна полоса на всё, что нажимается. Оболочка давно решила
+   это для себя (`.dc-menu-button` 44px, пункты меню 48px), а «Расходы
+   AI» держали 24–36px — и самые мелкие цели на экране были у основных
+   фильтров графика. */
+@media (max-width: 760px) {
+  .ai-spend-pills button,
+  .ai-spend-chart .ai-spend-pills button,
+  .ai-spend-attention button,
+  .ai-spend-clear,
+  .ai-spend-pager button,
+  .ai-spend-custom .ai-spend-date input[type="text"] {
+    min-height: 44px;
+  }
+  /* Поля остаются в ряд: границы периода видно сразу, а не после скролла.
+     Каждое делит ширину поровну, и обе мишени остаются 44px. */
+  .ai-spend-custom { flex-wrap: nowrap; gap: 6px; }
+  .ai-spend-custom .ai-spend-date { flex: 1 1 0; width: auto; min-width: 0; min-height: 44px; }
+  .ai-spend-chart .ai-spend-pills button { padding: 6px 12px; font-size: 13px; }
+  .ai-spend-day-list button,
+  .ai-spend-bars button,
+  .ai-spend-entities button { padding: 11px 10px; }
+  .ai-spend-entities li { gap: 10px; }
+  /* Ссылка «Bitrix» стояла рядом со строкой с общей мишенью: промах
+     мимо ссылки попадал в строку. Отступ увеличивает мишень ссылки
+     без растягивания самой строки. */
+  .ai-spend-entities a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; }
+  .ai-spend-journal-tools { align-items: stretch; }
+  .ai-spend-field { flex: 1 1 100%; }
+  .ai-spend-journal-tools input { flex: 1 1 100%; }
+  .ai-spend-clear { align-self: center; }
+  .ai-spend-pager { justify-content: space-between; }
+  /* Период — глобальный контроль, как и меню: он остаётся под рукой
+     после прокрутки в журнал. Рейка выше уже `position: sticky`. */
+  .ai-spend-period {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding-bottom: 8px;
+    background: var(--dc-surface);
+  }
+  .ai-spend-custom { flex-wrap: wrap; }
+  /* Ниже узкого порога окно занимает весь вьюпорт — так же, как сценарий
+     звонка в соседних экранах. 92dvh с полями 24px было не окном, а
+     листом со скруглением и тёмной каймой в 12px. */
+  .ai-spend-modal-layer { padding: 0; }
+  .ai-spend-modal {
+    width: 100%;
+    max-height: 100dvh;
+    height: 100dvh;
+    border-radius: 0;
+  }
+  .ai-spend-modal > header {
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px;
+  }
+  .ai-spend-modal-body { padding: 8px 10px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .ai-spend-page { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 }
 
 @media (max-width: 760px) {
@@ -8877,23 +9186,21 @@ ul.facts.bad li:before {
   background: #fff;
 }
 
-/* Задачи — те же метрики в том же блоке, что и CRM-счётчики, но их две, и
-   на 1920 база 210px давала форму 6 + 1: шесть плиток, а «Задач перенесено»
-   одна на всю ширину. Половинная база без роста держит задачи всегда в паре,
-   поэтому хвост блока — либо 3 + 2 + 2, либо 5 + 2, но никогда не одиночка.
-   Рост при этом отключён (`flex-grow: 0`), иначе плитка снова растянулась бы
-   на всю строку и вернула одиночку. */
-.dc-daily-metrics > div > div.dc-daily-metric-task {
-  flex: 0 0 calc(50% - 1px);
-  grid-template-columns: 38px minmax(0, 1fr);
-}
-
 /* Задачи — те же метрики в том же блоке, что и CRM-счётчики: тот же формат,
    та же рамка, те же разделители, тот же перенос. Отличает их только
    источник — план менеджера, а не CRM за день, и это видно по иконкам
    `check` / `reschedule`. Отдельный тон фона раньше делал две плитки из семи
    «числом другого рода» и ронял контраст подписи до ~4.5:1, поэтому
-   различия на фоне больше нет. */
+   различия на фоне больше нет.
+
+   Собственной базы у задач нет — и это осознанно. Половинная
+   `flex: 0 0 calc(50% - 1px)` держала «выполнено» и «перенесено» в паре,
+   но при 4 плитках в ряд семь метрик дают хвост 4 + 2 + 1, и одиночная
+   «Задач перенесено» занимала ровно половину, оставляя справа пустую
+   полосу фона-разделителя до края карточки — на десктопе и на мобильном
+   одинаково. Теперь задачи унаследуют базовую `flex: 1 1 210px`, и
+   одиночка в последнем ряду добивается ростом до всей строки тем же
+   заполнением по остатку, что и CRM-счётчики. */
 
 .dc-daily-metric-icon {
   display: grid;

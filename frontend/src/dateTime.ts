@@ -48,6 +48,36 @@ export function moscowDateInputValue(value: DateTimeValue = new Date()): string 
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+const SHORT_DATE_RE = /^(\d{2})\.(\d{2})\.(\d{4})$/
+
+/** `дд.мм.гггг` в ISO-значение, которым API и `min`/`max` оперируют.
+ *  Возвращает `null`, если строка не дата или если такого дня в календаре нет:
+ *  `31.02.2026` — опечатка, а не 3 марта. */
+export function shortDateToIso(value: string): string | null {
+  const match = SHORT_DATE_RE.exec(value.trim())
+  if (!match) return null
+  const [, day, month, year] = match
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+  if (
+    date.getUTCFullYear() !== Number(year)
+    || date.getUTCMonth() !== Number(month) - 1
+    || date.getUTCDate() !== Number(day)
+  ) return null
+  return `${year}-${month}-${day}`
+}
+
+/** ISO-значение в `дд.мм.гггг` для показа. */
+export function isoToShortDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : value
+}
+
+/** Первый день месяца по ISO-значению даты: `2026-09-28` → `2026-09-01`. */
+export function moscowMonthStart(isoDate: string): string {
+  const match = /^(\d{4})-(\d{2})-\d{2}$/.exec(isoDate)
+  return match ? `${match[1]}-${match[2]}-01` : isoDate
+}
+
 export function formatMoscowReviewStamp(value: DateTimeValue, now: DateTimeValue = new Date()): string | null {
   const date = formatMoscowDateTime(value, { day: 'numeric', month: 'long' })
   const time = formatMoscowDateTime(value, { hour: '2-digit', minute: '2-digit' })
