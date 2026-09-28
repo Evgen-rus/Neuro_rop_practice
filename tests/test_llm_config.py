@@ -174,12 +174,13 @@ class LlmConfigTests(unittest.TestCase):
             OPENROUTER_LEARNING_SHADOW_MODEL="provider/shadow",
             OPENROUTER_LEARNING_SHADOW_REASONING_EFFORT="max",
             OPENROUTER_PROMPT_LAB_MODELS="provider/manager,provider/analysis",
+            TRANSCRIPTION_MODEL="gpt-transcribe",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), [
             "openrouter", True, "https://router.example/v1", "provider/analysis", "medium",
             "provider/repair", "high", "provider/manager", "xhigh", "provider/shadow", "max",
-            "gpt-6-luna", ["provider/manager", "provider/analysis"], "gpt-4o-mini-transcribe",
+            "gpt-6-luna", ["provider/manager", "provider/analysis"], "gpt-transcribe",
         ])
 
     def test_invalid_provider_fails_fast(self) -> None:

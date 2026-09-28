@@ -141,6 +141,40 @@ class DealTranscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("секретный transcript", logged)
         self.assertNotIn("байт", logged)
 
+    async def test_gpt_transcribe_uses_languages_and_keeps_transport_retry(self) -> None:
+        from openai_api.audio.audio_handler import transcribe_voice
+
+        response = MagicMock(text="готовый текст")
+        create = AsyncMock(side_effect=[TimeoutError(), response])
+        fake_client = MagicMock()
+        fake_client.audio.transcriptions.create = create
+        events = []
+        with patch("openai_api.audio.audio_handler.TRANSCRIPTION_MODEL", "gpt-transcribe"), \
+             patch("openai_api.audio.audio_handler.client", fake_client), \
+             patch("reliability.retry.asyncio.sleep", new=AsyncMock()):
+            result = await transcribe_voice(b"audio", language="ru", retry_callback=events.append)
+
+        self.assertEqual(result, "готовый текст")
+        self.assertEqual(create.await_count, 2)
+        for call in create.await_args_list:
+            self.assertEqual(call.kwargs["model"], "gpt-transcribe")
+            self.assertEqual(call.kwargs["extra_body"], {"languages": ["ru"]})
+            self.assertNotIn("language", call.kwargs)
+        self.assertIn("retry_wait", [event["status"] for event in events])
+
+    async def test_gpt_transcribe_error_does_not_fall_back(self) -> None:
+        from openai_api.audio.audio_handler import transcribe_voice
+
+        create = AsyncMock(side_effect=RuntimeError("invalid model ID"))
+        fake_client = MagicMock()
+        fake_client.audio.transcriptions.create = create
+        with patch("openai_api.audio.audio_handler.TRANSCRIPTION_MODEL", "gpt-transcribe"), \
+             patch("openai_api.audio.audio_handler.client", fake_client):
+            with self.assertRaisesRegex(RuntimeError, "invalid model ID"):
+                await transcribe_voice(b"audio")
+
+        self.assertEqual(create.await_count, 1)
+
     async def test_uploaded_recording_streams_to_temp_file_and_deletes_it(self) -> None:
         paths: list[str] = []
 

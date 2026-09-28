@@ -629,8 +629,14 @@ export function DailyControl({ user }: { user: AuthUser }) {
                 <span className="dc-daily-metric-icon"><DailyIcon name="clock" /></span>
                 <span><strong>{talkTime(team.talk_seconds)}</strong><small>В разговорах</small></span>
               </div>
-              <div><span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_completed : '—'}</strong><small>Задач выполнено за день</small></span></div>
-              <div><span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_rescheduled : '—'}</strong><small>Задач перенесено за день</small></span></div>
+              <div className="dc-daily-metric-task">
+                <span className="dc-daily-metric-icon"><DailyIcon name="check" /></span>
+                <span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_completed : '—'}</strong><small>Задач выполнено за день</small></span>
+              </div>
+              <div className="dc-daily-metric-task">
+                <span className="dc-daily-metric-icon"><DailyIcon name="reschedule" /></span>
+                <span><strong>{allDeals?.some((deal) => deal.task_results !== undefined) ? team.tasks_rescheduled : '—'}</strong><small>Задач перенесено за день</small></span>
+              </div>
             </div>
           </article>
         </section>

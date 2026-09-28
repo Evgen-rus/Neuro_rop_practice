@@ -25,6 +25,7 @@ const ICON_PATHS = {
   audit: <path d="M5 4h14v16H5zM8 8h8M8 12h5M8 16h7" />,
   briefcase: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M8 7V5h8v2M3 12h18M10 12v2h4v-2" /></>,
   check: <path d="m5 12 4 4L19 6" />,
+  reschedule: <><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 1.8M15.5 4.5 17 3" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   mail: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m4 7 8 6 8-6" /></>,
   message: <><path d="M4 4h16v13H8l-4 3V4Z" /><path d="M8 9h8M8 13h5" /></>,

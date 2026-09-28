@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from openai_api.pricing import estimate_analysis_cost
+from openai_api.pricing import estimate_analysis_cost, estimate_transcription_cost
 
 
 class PricingTests(unittest.TestCase):
+    def test_gpt_transcribe_price_per_minute(self) -> None:
+        self.assertEqual(estimate_transcription_cost("gpt-transcribe", 120, 1)["estimated_cost_usd"], 0.009)
+
     def test_gpt_54_mini_standard_short_context_price(self) -> None:
         result = estimate_analysis_cost(
             "gpt-5.4-mini",

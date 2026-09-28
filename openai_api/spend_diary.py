@@ -53,6 +53,7 @@ MODEL_LABELS = {
     "gpt-5.4": "GPT-5.4",
     "gpt-5.4-mini": "GPT-5.4 Mini",
     "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe",
+    "gpt-transcribe": "GPT Transcribe",
 }
 
 MONTH_GENITIVE = (

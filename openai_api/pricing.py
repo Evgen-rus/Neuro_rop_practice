@@ -59,6 +59,7 @@ ANALYSIS_MODEL_PRICES_USD_PER_1M: dict[str, dict[str, float]] = {
 
 TRANSCRIPTION_ESTIMATED_USD_PER_MINUTE: dict[str, float] = {
     "gpt-4o-mini-transcribe": 0.003,
+    "gpt-transcribe": 0.0045,
 }
 
 

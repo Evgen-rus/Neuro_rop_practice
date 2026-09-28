@@ -48,7 +48,7 @@ OPENAI_REQUEST_TIMEOUT_SECONDS = max(
     30.0,
     float(os.getenv("OPENAI_REQUEST_TIMEOUT_SECONDS", "600") or "600"),
 )
-TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
+TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-transcribe").strip() or "gpt-transcribe"
 OPENAI_ANALYSIS_MODEL = _read_openai_profile_env("OPENAI_ANALYSIS_MODEL", "ANALYSIS_MODEL", "gpt-6-luna")
 OPENAI_ANALYSIS_REASONING_EFFORT = _read_openai_profile_env(
     "OPENAI_ANALYSIS_REASONING_EFFORT", "ANALYSIS_REASONING_EFFORT", "high",

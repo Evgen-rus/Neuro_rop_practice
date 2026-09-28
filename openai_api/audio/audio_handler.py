@@ -42,11 +42,16 @@ async def transcribe_voice(
         logger.info("Начинаю транскрибацию голосового сообщения")
         
         # Отправляем запрос на транскрибацию
+        language_params = (
+            {"extra_body": {"languages": [language]}}
+            if TRANSCRIPTION_MODEL == "gpt-transcribe"
+            else {"language": language}
+        )
         transcript = await run_with_retry_async(
             lambda: client.audio.transcriptions.create(
                 model=TRANSCRIPTION_MODEL,
                 file=(file_name, voice_data),
-                language=language,
+                **language_params,
             ),
             operation_name=f"openai:audio.transcriptions.create:{file_name}",
             policy=DEFAULT_TRANSPORT_RETRY,
@@ -60,27 +65,5 @@ async def transcribe_voice(
         return text
         
     except Exception as e:
-        # Если произошла ошибка с моделью, пробуем запасную модель
-        if "invalid model ID" in str(e):
-            logger.warning("Основная модель транскрибации недоступна, используем запасную")
-            try:
-                transcript = await run_with_retry_async(
-                    lambda: client.audio.transcriptions.create(
-                        model="whisper-1",  # Запасная модель
-                        file=(file_name, voice_data),
-                        language=language,
-                    ),
-                    operation_name=f"openai:audio.transcriptions.create:whisper-1:{file_name}",
-                    policy=DEFAULT_TRANSPORT_RETRY,
-                    on_event=retry_callback,
-                )
-                text = transcript.text
-                logger.info("Голосовое сообщение транскрибировано запасной моделью")
-                return text
-                
-            except Exception as inner_e:
-                logger.error("Ошибка при использовании запасной модели: %s", inner_e.__class__.__name__)
-                raise
-        else:
-            logger.error("Ошибка при транскрибации: %s", e.__class__.__name__)
-            raise 
+        logger.error("Ошибка при транскрибации: %s", e.__class__.__name__)
+        raise
