@@ -917,6 +917,10 @@ def _init_db_unlocked(db_path: str | Path) -> None:
                 ON deal_control_task_events(task_id, event_key)
                 WHERE event_key IS NOT NULL;
 
+            CREATE INDEX IF NOT EXISTS idx_deal_control_task_events_system_outcome
+                ON deal_control_task_events(task_id, id DESC)
+                WHERE event_type = 'system_outcome';
+
             CREATE TABLE IF NOT EXISTS manager_trajectory_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 entity_type TEXT NOT NULL CHECK(entity_type IN ('deal', 'lead')),
