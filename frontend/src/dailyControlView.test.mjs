@@ -84,7 +84,7 @@ test('only client contact brings a future-task deal into the today slice', () =>
   const completed = { ...deals[2], day_scope: { ...deals[2].day_scope, activity_kinds: ['bitrix_task_completed'] } }
   assert.equal(dealMatchesTime(completed, 'today'), false)
   assert.deepEqual(reportDayLabels(deals[0]).filter((item) => item.kind === 'due'), [{ kind: 'due', text: 'Задача на этот день' }])
-  assert.deepEqual(reportDayLabels(deals[1]).filter((item) => item.kind === 'due'), [{ kind: 'due', text: 'Просрочена к срезу' }])
+  assert.deepEqual(reportDayLabels(deals[1]).filter((item) => item.kind === 'overdue'), [{ kind: 'overdue', text: 'Просрочена к срезу' }])
   assert.deepEqual(reportDayLabels(deals[4]), [{ kind: 'unavailable', text: 'Данные о коммуникациях недоступны' }])
 })
 

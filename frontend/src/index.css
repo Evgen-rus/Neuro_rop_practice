@@ -9730,10 +9730,13 @@ ul.facts.bad li:before {
 
 .dc-daily-day-labels { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .dc-daily-day-labels span { padding: 3px 7px; border-radius: 6px; font-size: 11px; line-height: 1.4; }
-.dc-daily-day-labels .due { background: #fff3d9; color: #795000; }
-.dc-daily-day-labels .work { background: #e8f5ee; color: #17613b; }
+/* Daily facts and task states share a palette; blue remains an interaction accent. */
+.dc-daily-day-labels .due,
 .dc-daily-day-labels .rescheduled { background: #fff8e8; color: #996000; }
-.dc-daily-day-labels .no-contact { background: #fceeee; color: #a44545; }
+.dc-daily-day-labels .completed { background: #f0faf5; color: #00845c; }
+.dc-daily-day-labels .overdue { background: #fff3f4; color: #ce2940; }
+.dc-daily-day-labels .work,
+.dc-daily-day-labels .no-contact,
 .dc-daily-day-labels .unavailable { background: #edf0f4; color: #596779; }
 .dc-daily-work-note { display: block; margin-top: 6px; color: #526981; }
 .dc-deal-pipeline-stage { display: block; margin-top: 2px; }
@@ -10319,9 +10322,9 @@ ul.facts.bad li:before {
 .dc-daily-task-fold.overdue > summary { color: #ce2940; background: #fff3f4; }
 .dc-daily-task-fold.completed > summary { color: #00845c; background: #f0faf5; }
 .dc-daily-task-fold.rescheduled > summary { color: #996000; background: #fff8e8; }
-.dc-daily-task-fold.waiting > summary { color: #38516d; background: #f5f8fc; }
+.dc-daily-task-fold.waiting > summary { color: #996000; background: #fff8e8; }
 .dc-daily-task-fold.unknown > summary,
-.dc-daily-task-fold.empty > summary { color: #526981; }
+.dc-daily-task-fold.empty > summary { color: #596779; background: #edf0f4; }
 .dc-daily-task-fold-body { display: grid; gap: 8px; padding: 8px 10px; }
 .dc-daily-task-fold-body > div { display: grid; gap: 3px; }
 .dc-daily-task-fold-body .dc-reschedule-trigger { justify-self: start; }
@@ -10329,7 +10332,8 @@ ul.facts.bad li:before {
 .dc-daily-task-fold-body b.completed { color: #00845c; }
 .dc-daily-task-fold-body b.overdue { color: #ce2940; }
 .dc-daily-task-fold-body b.rescheduled { color: #996000; }
-.dc-daily-task-fold-body b.waiting { color: #38516d; }
+.dc-daily-task-fold-body b.waiting { color: #996000; }
+.dc-daily-task-fold-body b.unknown { color: #596779; }
 
 .dc-daily-comm-summary {
   display: grid;
