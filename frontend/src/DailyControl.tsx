@@ -17,8 +17,8 @@ import { formatMoscowDateTime } from './dateTime'
 import { DailyIcon, DealReviewCard } from './DealReviewCard'
 import { DealDetailOverlay } from './DealDetailOverlay'
 import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
-import { bitrixDealUrl, formatDealPipelineStage } from './dealDisplay'
-import { DealStatusIndicator } from './dealPresentation'
+import { formatDealPipelineStage } from './dealDisplay'
+import { BitrixDealIdLink, DealStatusIndicator } from './dealPresentation'
 import {
   businessReportWarnings,
   dailyTaskTotals,
@@ -38,6 +38,7 @@ import {
 } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
 import './dailyControlLoading.css'
+import { readStoredDetailHidden, writeStoredDetailHidden } from './dealControlStartView'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
 const SPLITTER_DEFAULT = 380
@@ -181,6 +182,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [generation, setGeneration] = useState<DailyControlGeneration | null>(null)
   const [managerId, setManagerId] = useState('')
   const [dealId, setDealId] = useState('')
+  const [detailHidden, setDetailHidden] = useState(() => readStoredDetailHidden(user.id, 'daily'))
+  function setCardHidden(hidden: boolean) {
+    setDetailHidden(hidden)
+    writeStoredDetailHidden(user.id, 'daily', hidden)
+  }
   const [activeStatuses, setActiveStatuses] = useState<Set<DailyTrafficStatus>>(() => new Set(ALL_DAILY_TRAFFIC_STATUSES))
   const reviewStarted = useRef(false)
   const historyPinned = useRef(false)
@@ -197,6 +203,16 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const [offscreenDealId, setOffscreenDealId] = useState('')
   const [cardOverlayOpen, setCardOverlayOpen] = useState(false)
   const narrowDealLayout = useNarrowDealLayout()
+  const previousHiddenRef = useRef(detailHidden)
+  useEffect(() => {
+    const wasHidden = previousHiddenRef.current
+    previousHiddenRef.current = detailHidden
+    if (!wasHidden || detailHidden || narrowDealLayout
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const panel = layoutRef.current?.querySelector<HTMLElement>('.dc-daily-card-anchor')
+    const animation = panel?.animate?.([{ opacity: 0.92, transform: 'translateX(8px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 160, easing: 'ease-out' })
+    return () => animation?.cancel()
+  }, [detailHidden, narrowDealLayout])
   const generating = generation?.status === 'running' || generation?.status === 'queued'
 
   const snapshot = report?.snapshot
@@ -404,6 +420,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
   }
 
   function selectDeal(nextId: string) {
+    setCardHidden(false)
     reviewStarted.current = true
     setDealId(nextId)
     // На мобильном карточка уходит в оверлей поверх списка: иначе тап по
@@ -737,7 +754,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
         </section>
 
         <div
-          className={`dc-daily-split ${dragging ? 'dragging' : ''}`}
+          className={`dc-daily-split ${dragging ? 'dragging' : ''} ${detailHidden && !narrowDealLayout ? 'detail-hidden' : ''}`}
           ref={layoutRef}
         >
           <section className="dc-daily-list" aria-label="Сделки менеджера">
@@ -775,6 +792,7 @@ export function DailyControl({ user }: { user: AuthUser }) {
           </section>
 
           <div
+            hidden={detailHidden && !narrowDealLayout}
             className="dc-daily-resizer"
             role="separator"
             aria-orientation="vertical"
@@ -784,7 +802,11 @@ export function DailyControl({ user }: { user: AuthUser }) {
             onKeyDown={onSplitterKey}
           />
 
-          {narrowDealLayout ? null : <div className="dc-daily-card-anchor">
+          {narrowDealLayout ? null : <div className="dc-daily-card-anchor" hidden={detailHidden}>
+            <button type="button" className="dc-detail-hide" title="Скрыть карточку" aria-label="Скрыть карточку" onClick={() => {
+              setCardHidden(true)
+              selectedDealRowRef.current?.focus({ preventScroll: true })
+            }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
             <DealReviewCard
               deal={selectedDeal}
               asked={askedState}
@@ -894,7 +916,7 @@ function DealRow({
         {reviewed ? <span className="dc-daily-reviewed-mark">Проверено</span> : null}
         <footer>
           <span>{communications.unavailable ? 'Коммуникации недоступны' : `${communications.calls} звонков · ${communications.messages} сообщений за день среза${communications.conversation_duration_seconds != null ? ` · ${talkTime(communications.conversation_duration_seconds)} разговоров` : ''}`}</span>
-          <a href={bitrixDealUrl(deal.deal_id)} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Сделка #{deal.deal_id}</a>
+          <BitrixDealIdLink dealId={deal.deal_id} />
         </footer>
         <TaskDayResults tasks={deal.task_results} cutoffAt={cutoffAt || deal.day_scope?.cutoff_at} />
       </div>

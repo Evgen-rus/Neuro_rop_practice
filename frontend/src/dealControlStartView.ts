@@ -6,6 +6,22 @@ export const DEAL_CONTROL_VIEWS: DealControlView[] = ['dashboard', 'rop', 'daily
 
 const VIEW_STORAGE_PREFIX = 'rop-assistant:deal-control-view:'
 
+export function readStoredDetailHidden(userId: number, view: DealControlView): boolean {
+  try {
+    return window.sessionStorage.getItem(`rop-assistant:detail-hidden:${userId}:${view}`) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function writeStoredDetailHidden(userId: number, view: DealControlView, hidden: boolean) {
+  try {
+    window.sessionStorage.setItem(`rop-assistant:detail-hidden:${userId}:${view}`, String(hidden))
+  } catch {
+    /* private mode / blocked storage */
+  }
+}
+
 export function readStoredDealSelection(userId: number, view: DealControlView): string {
   try {
     return window.sessionStorage.getItem(`rop-assistant:deal-selection:${userId}:${view}`) || ''

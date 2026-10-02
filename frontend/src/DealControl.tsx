@@ -132,6 +132,8 @@ import { PromptLabWorkspace } from './PromptLab'
 import { CallScriptResultView, CompanionResultView, EmailScriptResultView, FollowupsResultView, QuickHelpResultView } from './managerResults'
 import {
   initialDealControlFilters,
+  readStoredDetailHidden,
+  writeStoredDetailHidden,
   readStoredDealControlView,
   readStoredDealSelection,
   resolveDealControlView,
@@ -550,6 +552,16 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }, [view])
   const [selectedId, setSelectedId] = useState('')
   const selectionsRef = useRef<Partial<Record<DealControlView, string>>>({})
+  const [hiddenDetails, setHiddenDetails] = useState(() => ({
+    dashboard: readStoredDetailHidden(user.id, 'dashboard'),
+    rop: readStoredDetailHidden(user.id, 'rop'),
+    manager: readStoredDetailHidden(user.id, 'manager'),
+  }))
+  const detailHidden = view === 'dashboard' || view === 'rop' || view === 'manager' ? hiddenDetails[view] : false
+  const setDetailHidden = useCallback((hidden: boolean) => {
+    setHiddenDetails((current) => ({ ...current, [view]: hidden }))
+    writeStoredDetailHidden(user.id, view, hidden)
+  }, [user.id, view])
   const [menuOpen, setMenuOpen] = useState(false)
   // На мобильном меню — раскрывающаяся панель под кнопкой, поэтому выбор
   // раздела должен её закрывать. На десктопе рейка постоянная, и закрывать
@@ -572,6 +584,16 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [dealOverlayOpen, setDealOverlayOpen] = useState(false)
   const narrowDealLayout = useNarrowDealLayout()
   const layoutRef = useRef<HTMLDivElement | null>(null)
+  const previousDetailRef = useRef({ view, hidden: detailHidden })
+  useEffect(() => {
+    const previous = previousDetailRef.current
+    previousDetailRef.current = { view, hidden: detailHidden }
+    if (previous.view !== view || !previous.hidden || detailHidden || narrowDealLayout
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const panel = layoutRef.current?.querySelector<HTMLElement>('.dc-detail')
+    const animation = panel?.animate?.([{ opacity: 0.92, transform: 'translateX(8px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 160, easing: 'ease-out' })
+    return () => animation?.cancel()
+  }, [detailHidden, narrowDealLayout, view])
   const [initialIds, setInitialIds] = useState('')
   const [managerIds, setManagerIds] = useState('')
   const [analysisJob, setAnalysisJob] = useState<JobState | null>(null)
@@ -803,6 +825,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const selected = visibleDeals.find((deal) => deal.deal_id === selectedId) || null
 
   const selectDealExplicitly = useCallback((dealId: string) => {
+    setDetailHidden(false)
     selectionsRef.current[view] = dealId
     writeStoredDealSelection(user.id, view, dealId)
     setSelectedId(dealId)
@@ -816,7 +839,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       void recordRecommendationEvent(dealId, 'viewed', 'deal_task', recommendation.id)
         .catch(() => undefined)
     }
-  }, [data, user.role, user.id, view])
+  }, [data, user.role, user.id, view, setDetailHidden])
 
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const bitrixTasks = filteredDeals
@@ -1134,11 +1157,11 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       </div> : null}
 
       <div
-        className={`dc-workspace ${dragging ? 'dragging' : ''}`}
+        className={`dc-workspace ${dragging ? 'dragging' : ''} ${detailHidden && !narrowDealLayout ? 'detail-hidden' : ''}`}
         ref={layoutRef}
         style={{ '--dc-left-width': `${leftWidth}%` } as CSSProperties}
       >
-        <section className="dc-board">
+        <section className="dc-board" tabIndex={-1}>
           <TimeTabs
             view={view}
             active={timeView}
@@ -1162,9 +1185,14 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
           }
         </section>
 
-        <div className="dc-resizer" onPointerDown={(event) => { event.preventDefault(); setDragging(true) }} title="Потяните, чтобы изменить ширину">⋮</div>
+        <div hidden={detailHidden && !narrowDealLayout} className="dc-resizer" onPointerDown={(event) => { event.preventDefault(); setDragging(true) }} title="Потяните, чтобы изменить ширину">⋮</div>
 
         {narrowDealLayout ? null : <DealDetail
+          hidden={detailHidden}
+          onHide={() => {
+            setDetailHidden(true)
+            layoutRef.current?.querySelector<HTMLElement>('.dc-board')?.focus({ preventScroll: true })
+          }}
           view={view}
           userRole={user.role}
           deal={selected}
@@ -1355,7 +1383,7 @@ function DealTable(props: {
     </button> : null}
     <div className="dc-table-wrap">
     <div className="dc-table-scroll">
-      <div className="dc-deal-columns"><span>Сделка</span><span>Контроль</span><span>Этап</span><span>Сумма и прогноз оплаты</span></div>
+      <div className="dc-deal-columns"><span>Сделка</span><span>Контроль</span><span>Воронка / этап</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
         const task = currentTaskOf(deal)
         const bitrixTask = primaryBitrixTaskOf(deal)
@@ -1369,15 +1397,13 @@ function DealTable(props: {
         return <article aria-current={selected ? 'true' : undefined} className={['dc-deal-row', reviewStripeClass(deal), selected ? 'selected' : ''].filter(Boolean).join(' ')} key={deal.deal_id} ref={selected ? selectedRowRef : undefined} tabIndex={0} role="button" onClick={() => props.onSelect(deal.deal_id)}
           onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); props.onSelect(deal.deal_id) } }}
         >
-          <div className="dc-deal-main"><div className="dc-cell-card plain"><small>Сделка</small><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
+          <div className="dc-deal-main"><div className="dc-cell-card plain"><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><span className="dc-deal-owner">{deal.manager_name || 'Ответственный не назначен'}</span><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
-          <div className="dc-stage-cell">
-            <span className="dc-stage-pill" title={stageLabel}><span>{stageLabel}</span></span>
-            <div className="dc-stage-meta-group">
-              <span className="dc-stage-meta">♟ {deal.manager_name || 'Не назначен'}</span>
-            </div>
+          <div className="dc-stage-cell dc-stage-summary" title={stageLabel}>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : 'Воронка не указана')}</span>
+            <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || 'Этап не указан'}</strong>
           </div>
-          <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><small>Сумма договора</small><strong>{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
+          <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><strong aria-label="Сумма договора">{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select aria-label="Вероятность оплаты" value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
             <select aria-label="Неделя оплаты" value={payment.week} onChange={(event) => savePayment(event.target.value, payment.month)}><option value="">—</option>{[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value} нед.</option>)}</select>
             <select aria-label="Месяц оплаты" value={payment.month} onChange={(event) => savePayment(payment.week, event.target.value)}><option value="">— мес.</option>{monthOptions.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select>
@@ -1463,9 +1489,9 @@ function TaskTable({
     dragRef.current = { index, startX: event.clientX, widths: [...columns] }
   }
 
-  if (view !== 'rop') return <>{selectedAnchor}<div className="dc-table-wrap task-table">
+  if (view !== 'rop') return <>{selectedAnchor}<div className="dc-table-wrap task-table dc-manager-plan">
     <div className="dc-table-scroll">
-      <div className="dc-task-columns"><span>Сделка</span><span>Этап</span><span>Текущая задача</span><span>Срок</span><span>Выполнение</span></div>
+      <div className="dc-task-columns"><span>Сделка</span><span>Воронка / этап</span><span>Задача / срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
         const bitrixTask = primaryBitrixTaskOf(deal)
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
@@ -1475,9 +1501,17 @@ function TaskTable({
           onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(deal.deal_id) } }}
         >
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
-          <div><span className="dc-stage-pill">{formatDealPipelineStage(deal)}</span></div>
-          <div className={`dc-task-name ${bitrixTask ? '' : 'missing'}`}><strong>{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</strong></div>
-          <div className="dc-task-deadline-cell"><time className="dc-task-deadline">{deadline ? <><strong>{deadline.date}</strong>{deadline.time ? <span>{deadline.time}</span> : null}</> : <span>Не назначен</span>}</time></div>
+          <div className="dc-stage-cell dc-stage-summary" title={formatDealPipelineStage(deal)}>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
+            <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || '—'}</strong>
+          </div>
+          <div className={`dc-task-compact ${bitrixTask ? '' : 'missing'}`}>
+            <div className="dc-task-compact-title">{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</div>
+            <div className="dc-task-compact-meta">
+              <span className="dc-task-compact-meta-label">СРОК</span>
+              {deadline ? <time><span className="dc-task-deadline-date">{deadline.date}</span>{deadline.time ? <strong className="dc-task-deadline-time">{deadline.time}</strong> : null}</time> : <span className="dc-task-deadline-date">Не назначен</span>}
+            </div>
+          </div>
           <div className="dc-task-result-cell"><ControlTimeChip task={null} bitrixTask={bitrixTask} /></div>
         </article>
       })}
@@ -1517,7 +1551,7 @@ function TaskTable({
           </div>
           <div className="dc-plan-deal-cell">
             <strong>{deal.title || `Сделка #${deal.deal_id}`}</strong>
-            <small>♟ {deal.manager_name || 'Ответственный не указан'}</small>
+            <small>{deal.manager_name || 'Ответственный не указан'}</small>
             <BitrixDealIdLink dealId={deal.deal_id} />
           </div>
           <div className="dc-manager-comments-cell">
@@ -1534,9 +1568,9 @@ function TaskTable({
               </> : <span className="dc-comment-preview-empty">Комментариев нет</span>}
             </div>
           </div>
-          <div className="dc-stage-compact">
-            <div className="dc-stage-line funnel"><strong>{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</strong></div>
-            <div className="dc-stage-line stage"><strong>{deal.stage_name || deal.stage_id || '—'}</strong></div>
+          <div className="dc-stage-cell dc-stage-summary" title={formatDealPipelineStage(deal)}>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
+            <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || '—'}</strong>
           </div>
           <div className={`dc-task-compact ${bitrixTask ? '' : 'missing'}`}>
             <div className="dc-task-compact-title">{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</div>
@@ -1830,6 +1864,8 @@ function TaskCommunicationProgress({ summary }: { summary?: DealControlCommunica
 }
 
 function DealDetail(props: {
+  hidden?: boolean
+  onHide?: () => void
   view: DealControlView
   userRole: AuthUser['role']
   deal: DealControlDeal | null
@@ -2266,7 +2302,7 @@ function DealDetail(props: {
     window.setTimeout(() => setScriptCopyNotice(''), 2500)
   }
 
-  if (!props.deal) return <aside className="dc-detail"><p className="dc-empty">Выберите сделку в таблице.</p></aside>
+  if (!props.deal) return <aside className="dc-detail" hidden={props.hidden}><p className="dc-empty">Выберите сделку в таблице.</p></aside>
   const deal = props.deal
   const coaching = deal.coaching
   const hasAnalysis = Boolean(coaching.report_id)
@@ -2329,21 +2365,15 @@ function DealDetail(props: {
     </div>
   )
 
-  return <aside className="dc-detail">
+  return <aside className="dc-detail" hidden={props.hidden}>
     <header className="dc-detail-top">
       <div className="dc-detail-heading">
         <div className="dc-deal-title-row">
           <h2>Сделка</h2>
-          <a
-            className="dc-button primary dc-bitrix-detail-link"
-            href={bitrixDealUrl(deal.deal_id)}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={`Открыть сделку #${deal.deal_id} в Bitrix`}
-            title="Открыть в Bitrix"
-          >
-            #{deal.deal_id}
-          </a>
+          {props.onHide ? <button type="button" className="dc-detail-hide" onClick={props.onHide} title="Скрыть карточку" aria-label="Скрыть карточку">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          </button> : null}
+          <BitrixDealIdLink dealId={deal.deal_id} />
           <section className="dc-detail-stats dc-detail-stats-compact" aria-label="Основные данные сделки">
             <div className="dc-detail-stat-grow" title={`Воронка и этап: ${formatDealPipelineStage(deal)}`} aria-label={`Воронка и этап: ${formatDealPipelineStage(deal)}`}><span aria-hidden="true">◆</span><strong>{formatDealPipelineStage(deal)}</strong></div>
             <div className="dc-detail-stat-fixed" title={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`} aria-label={`Вероятность: ${deal.probability == null ? 'не указана' : `${deal.probability}%`}`}><span aria-hidden="true">◔</span><strong>{deal.probability == null ? '—' : `${deal.probability}%`}</strong></div>

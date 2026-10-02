@@ -1108,6 +1108,65 @@ textarea {
   user-select: none;
 }
 
+.dc-workspace.detail-hidden { grid-template-columns: minmax(0, 1fr); }
+.dc-workspace > [hidden] { display: none; }
+.dc-daily-split.detail-hidden { grid-template-columns: minmax(0, 1fr); }
+.dc-daily-split > [hidden] { display: none; }
+.dc-detail-top .dc-deal-title-row { padding-right: 26px; }
+.dc-daily-card-anchor .dc-daily-card-head { padding-right: 38px; }
+.dc-detail-hide {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dc-blue);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dc-detail-hide:hover { background: #1256cc; }
+
+.dc-deal-owner {
+  display: block;
+  margin-top: 6px;
+  color: #526783;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 400;
+}
+.dc-stage-cell.dc-stage-summary {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+}
+.dc-stage-funnel {
+  color: #526783;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dc-stage-cell.dc-stage-summary > .dc-stage-name {
+  color: #1256cc;
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 .dc-board,
 .dc-detail {
   min-width: 0;
@@ -1451,7 +1510,10 @@ textarea {
 .dc-task-row {
   position: relative;
   min-height: 70px;
-  border-bottom: 1px solid #dde6f0;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid #dce6f1;
+  border-radius: 11px;
   background: #fff;
   cursor: pointer;
 }
@@ -3274,8 +3336,8 @@ textarea {
 
 .dc-deal-main .dc-cell-card > p {
   flex-wrap: nowrap;
-  margin-top: auto;
-  padding-top: 10px;
+  margin-top: 6px;
+  padding-top: 0;
 }
 
 .dc-deal-created {
@@ -9589,7 +9651,7 @@ ul.facts.bad li:before {
   margin: 8px 8px 0;
   padding: 12px 12px 12px 10px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 11px;
   background: var(--daily-soft);
   color: inherit;
   text-align: left;
@@ -9648,9 +9710,9 @@ ul.facts.bad li:before {
 }
 
 .dc-daily-deal.selected {
-  border-color: #c7d9f4;
-  background: var(--daily-blue-soft);
-  box-shadow: inset 3px 0 0 var(--daily-blue);
+  border-color: var(--dc-blue);
+  background: #f2f7ff;
+  box-shadow: 0 0 0 2px rgba(23, 104, 242, .28);
 }
 
 .dc-daily-deal:focus-visible {
@@ -10878,7 +10940,11 @@ ul.facts.bad li:before {
   min-height: 104px;
   background: #fff !important;
 }
-.dc-rop-task-row.selected { background: #f8fbff !important; }
+.dc-rop-task-row.selected {
+  border-color: var(--dc-blue);
+  background: #f2f7ff !important;
+  box-shadow: 0 0 0 2px rgba(23, 104, 242, .28);
+}
 .dc-rop-task-row > * { padding: 9px 10px; }
 .dc-rop-task-row > .dc-plan-signal-cell {
   display: flex;
@@ -10972,7 +11038,8 @@ ul.facts.bad li:before {
 .dc-comment-preview-empty { padding: 9px; color: #8a99aa; font-size: 10px; text-align: center; }
 
 .dc-rop-task-row > .dc-stage-compact,
-.dc-rop-task-row > .dc-task-compact {
+.dc-rop-task-row > .dc-task-compact,
+.dc-manager-plan .dc-task-row > .dc-task-compact {
   display: grid;
   grid-template-rows: 1fr 1fr;
   align-content: stretch;
@@ -11007,6 +11074,11 @@ ul.facts.bad li:before {
 .dc-stage-line strong,
 .dc-task-compact-title { font-size: 10px; line-height: 13px; font-weight: 600; }
 .dc-task-compact.missing { border-color: #e6c9c7; }
+.dc-manager-plan .dc-task-columns,
+.dc-manager-plan .dc-task-row {
+  grid-template-columns: minmax(180px, 1.15fr) minmax(125px, .75fr) minmax(240px, 1.3fr) 140px;
+  min-width: 714px;
+}
 .dc-task-compact.missing .dc-task-compact-title { color: #a8463e; background: #fff8f7; }
 .dc-task-compact-meta { display: flex; justify-content: space-between; gap: 7px; }
 .dc-task-compact-meta-label { color: #8a98a9; font-size: 7.5px; font-weight: 700; }

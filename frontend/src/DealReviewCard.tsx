@@ -4,6 +4,7 @@ import type { DailyControlDeal, DealControlCommunicationItem, DealControlCommuni
 import { useCommunicationDialog } from './communicationDialogContext'
 import { formatMoscowDateTime } from './dateTime'
 import { formatDealPipelineStage } from './dealDisplay'
+import { BitrixDealIdLink } from './dealPresentation'
 import { dailyQualityCaption, snapshotDayText } from './dailyControlView'
 
 const QUALITY_LABELS = {
@@ -525,7 +526,7 @@ export function DealReviewCard(props: {
         <header className="dc-daily-card-head">
           <div>
             <h2>{deal.title || `Сделка #${deal.deal_id}`}</h2>
-            <p>#{deal.deal_id} · {money(deal.amount, deal.currency_id || 'RUB')} · {formatDealPipelineStage(deal)}</p>
+            <p><BitrixDealIdLink dealId={deal.deal_id} /> · {money(deal.amount, deal.currency_id || 'RUB')} · {formatDealPipelineStage(deal)}</p>
           </div>
           {props.showStatus === false ? null : <span className={`dc-daily-pill ${deal.status}`}>{deal.status_label}</span>}
         </header>
