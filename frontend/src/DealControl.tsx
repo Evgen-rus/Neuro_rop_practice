@@ -1383,7 +1383,7 @@ function DealTable(props: {
     </button> : null}
     <div className="dc-table-wrap">
     <div className="dc-table-scroll">
-      <div className="dc-deal-columns"><span>Сделка</span><span>Контроль</span><span>Воронка / этап</span><span>Сумма и прогноз оплаты</span></div>
+      <div className="dc-deal-columns"><span>Сделка</span><span>Контроль</span><span>Этап / воронка</span><span>Сумма и прогноз оплаты</span></div>
       {props.deals.map((deal) => {
         const task = currentTaskOf(deal)
         const bitrixTask = primaryBitrixTaskOf(deal)
@@ -1400,8 +1400,8 @@ function DealTable(props: {
           <div className="dc-deal-main"><div className="dc-cell-card plain"><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><span className="dc-deal-owner">{deal.manager_name || 'Ответственный не назначен'}</span><p><BitrixDealIdLink dealId={deal.deal_id} /><span className="dc-deal-created">Создана {dateOnly(deal.created_at_crm)}</span></p></div></div>
           <div className="dc-control-cell"><div className="dc-cell-card"><time className="dc-control-deadline" aria-label="Контроль">{controlDeadline ? <><strong>{controlDeadline.date}</strong>{controlDeadline.time ? <span>{controlDeadline.time}</span> : null}</> : <span>Не назначен</span>}</time><ControlTimeChip task={task} bitrixTask={bitrixTask} /></div></div>
           <div className="dc-stage-cell dc-stage-summary" title={stageLabel}>
-            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : 'Воронка не указана')}</span>
             <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || 'Этап не указан'}</strong>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : 'Воронка не указана')}</span>
           </div>
           <div className="dc-forecast-cell" onClick={(event) => event.stopPropagation()}><div className="dc-cell-card"><strong aria-label="Сумма договора">{money(deal.amount, deal.currency_id || 'RUB')}</strong><div>
             <select aria-label="Вероятность оплаты" value={deal.probability ?? ''} onChange={(event) => void props.onSaveFields(deal, { probability: event.target.value ? Number(event.target.value) : null })}><option value="">—%</option>{[0, 10, 25, 50, 60, 70, 80, 100].map((value) => <option value={value} key={value}>{value}%</option>)}</select>
@@ -1491,7 +1491,7 @@ function TaskTable({
 
   if (view !== 'rop') return <>{selectedAnchor}<div className="dc-table-wrap task-table dc-manager-plan">
     <div className="dc-table-scroll">
-      <div className="dc-task-columns"><span>Сделка</span><span>Воронка / этап</span><span>Задача / срок</span><span>Выполнение</span></div>
+      <div className="dc-task-columns"><span>Сделка</span><span>Этап / воронка</span><span>Задача / срок</span><span>Выполнение</span></div>
       {deals.map((deal) => {
         const bitrixTask = primaryBitrixTaskOf(deal)
         const rowTone = bitrixTask ? bitrixTaskTone(bitrixTask) : 'missing'
@@ -1502,8 +1502,8 @@ function TaskTable({
         >
           <div><strong>{deal.title || `Сделка #${deal.deal_id}`}</strong><BitrixDealIdLink dealId={deal.deal_id} /></div>
           <div className="dc-stage-cell dc-stage-summary" title={formatDealPipelineStage(deal)}>
-            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
             <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || '—'}</strong>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
           </div>
           <div className={`dc-task-compact ${bitrixTask ? '' : 'missing'}`}>
             <div className="dc-task-compact-title">{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</div>
@@ -1523,7 +1523,7 @@ function TaskTable({
     <div className="dc-table-scroll">
       <div className="dc-task-columns dc-rop-columns" style={{ gridTemplateColumns }}>
         <span />
-        {['Сделка', 'Комментарии менеджера', 'Воронка / этап', 'Задача / срок', 'Выполнение'].map((label, index) => (
+        {['Сделка', 'Комментарии менеджера', 'Этап / воронка', 'Задача / срок', 'Выполнение'].map((label, index) => (
           <span key={label}>{label}{index < 4 ? <i className="dc-col-resizer" onPointerDown={(event) => startResize(event, index)} /> : null}</span>
         ))}
       </div>
@@ -1569,8 +1569,8 @@ function TaskTable({
             </div>
           </div>
           <div className="dc-stage-cell dc-stage-summary" title={formatDealPipelineStage(deal)}>
-            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
             <strong className="dc-stage-name">{deal.stage_name || deal.stage_id || '—'}</strong>
+            <span className="dc-stage-funnel">{deal.pipeline_name || (deal.pipeline_id ? `Воронка ${deal.pipeline_id}` : '—')}</span>
           </div>
           <div className={`dc-task-compact ${bitrixTask ? '' : 'missing'}`}>
             <div className="dc-task-compact-title">{bitrixTask ? compactTaskText(bitrixTask.subject).replace(/^CRM:\s*/i, '') : 'В B24 нет открытой задачи'}</div>

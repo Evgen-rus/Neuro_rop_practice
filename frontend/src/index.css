@@ -1160,7 +1160,7 @@ textarea {
   overflow-wrap: anywhere;
 }
 .dc-stage-cell.dc-stage-summary > .dc-stage-name {
-  color: #1256cc;
+  color: var(--dc-ink);
   font-size: 13px;
   line-height: 1.4;
   font-weight: 600;
