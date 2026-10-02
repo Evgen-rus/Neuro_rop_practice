@@ -75,7 +75,7 @@ test('only client contact brings a future-task deal into the today slice', () =>
       communications_today: { date: '2026-08-27', available: true, calls: activity === 'call' ? 1 : 0, messages: activity === 'message' ? 1 : 0, items: [] } }
     assert.equal(dealMatchesTime(deal, 'today'), true, activity)
     assert.equal(dealMatchesTime(deal, 'future'), true)
-    assert.equal(reportDayLabels(deal).filter((item) => item.kind === 'work').length, 1)
+    assert.equal(reportDayLabels(deal).filter((item) => ['work', 'activity'].includes(item.kind)).length, 1)
   }
   for (const activity of ['stage_change', 'comment', 'bitrix_task_completed', 'bitrix_task_rescheduled', 'local_task_completed', 'checklist_completed']) {
     const deal = { ...deals[4], day_scope: { ...deals[4].day_scope, activity_kinds: [activity] } }
@@ -369,6 +369,7 @@ test('production task block distinguishes absent legacy details from no tasks', 
 
 const { DealReviewCard, DealQualityAndFocus } = await import(componentModule('./DealReviewCard.tsx', {
   './communicationDialogContext': componentModule('./communicationDialogContext.ts'),
+  './dealPresentation': componentModule('./dealPresentation.tsx'),
 }))
 
 test('communication rows omit unknown direction without hiding channel, delivery or known directions', () => {

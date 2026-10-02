@@ -9733,6 +9733,7 @@ ul.facts.bad li:before {
 /* Daily facts and task states share a palette; blue remains an interaction accent. */
 .dc-daily-day-labels .due,
 .dc-daily-day-labels .rescheduled { background: #fff8e8; color: #996000; }
+.dc-daily-day-labels .activity { background: #e8f5ee; color: #17613b; }
 .dc-daily-day-labels .completed { background: #f0faf5; color: #00845c; }
 .dc-daily-day-labels .overdue { background: #fff3f4; color: #ce2940; }
 .dc-daily-day-labels .work,

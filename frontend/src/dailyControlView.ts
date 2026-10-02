@@ -179,7 +179,7 @@ export function communicationDayLabels(deal: DailyControlDeal, cutoffAt?: string
   return labels.length ? labels : [NO_DAY_CONTACT_LABEL]
 }
 
-type DayLabel = { kind: 'due' | 'overdue' | 'completed' | 'work' | 'rescheduled' | 'no-contact' | 'unavailable'; text: string }
+type DayLabel = { kind: 'due' | 'overdue' | 'completed' | 'activity' | 'work' | 'rescheduled' | 'no-contact' | 'unavailable'; text: string }
 
 export function reportDayLabels(deal: DailyControlDeal, cutoffAt?: string): DayLabel[] {
   const scope = deal.day_scope
@@ -190,7 +190,8 @@ export function reportDayLabels(deal: DailyControlDeal, cutoffAt?: string): DayL
   if (scope?.task_buckets.includes('overdue')) labels.push({ kind: 'overdue', text: 'Просрочена к срезу' })
   labels.push(...communicationDayLabels(deal, cutoffAt).map((text): DayLabel => ({
     kind: text === NO_DAY_CONTACT_LABEL ? 'no-contact'
-      : text === 'Данные о коммуникациях недоступны' ? 'unavailable' : 'work',
+      : text === 'Данные о коммуникациях недоступны' ? 'unavailable'
+      : /попытк|результат не определён/.test(text) ? 'work' : 'activity',
     text,
   })))
   const activityLabels: Record<string, DayLabel> = {
