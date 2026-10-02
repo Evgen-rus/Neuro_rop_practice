@@ -728,6 +728,7 @@ function SharedReportCard({ report }: { report: UiReportDetail }) {
 
 function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<void> }) {
   const [tab, setTab] = useState<Tab>('deals')
+  const [legacyOpened, setLegacyOpened] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   const [analysisProfiles, setAnalysisProfiles] = useState<AnalysisProfile[]>([])
@@ -1038,8 +1039,9 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
     }
   }
 
-  // Первая загрузка: справочник воронок + сохранённый фильтр из БД.
+  // Данные legacy нужны только после первого выхода из Контроля сделок.
   useEffect(() => {
+    if (!legacyOpened) return
     let cancelled = false
     void (async () => {
       setCandidatesLoading(true)
@@ -1079,7 +1081,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [legacyOpened])
 
   const jobId = job?.job_id
   const jobStatus = job?.status
@@ -1402,8 +1404,8 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
 
   if (tab === 'deals') {
     return <DealControl user={user} onLogout={onLogout} onExit={user.role === 'admin' ? () => {
+      setLegacyOpened(true)
       setTab('summary')
-      void loadHistory()
     } : undefined} />
   }
 
