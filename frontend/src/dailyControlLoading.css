@@ -1,0 +1,87 @@
+.dc-daily-loading {
+  --dc-daily-loading-fill: #e8eff8;
+  --dc-daily-loading-strong: #dde7f3;
+}
+
+.dc-daily-loading-head {
+  min-height: 52px;
+}
+
+.dc-daily-loading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dc-daily-loading-line {
+  display: block;
+  border-radius: 7px;
+  background: var(--dc-daily-loading-fill);
+}
+
+.dc-daily-loading-line.title { width: 220px; height: 19px; }
+.dc-daily-loading-line.search { width: 200px; height: 32px; }
+.dc-daily-loading-line.history { width: 76px; height: 32px; }
+.dc-daily-loading-line.button { width: 150px; height: 32px; }
+
+.dc-daily-loading-status {
+  margin: 0 clamp(16px, 2.2vw, 42px);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dc-daily-loading-workspace {
+  display: grid;
+  grid-template-columns: var(--dc-daily-left, 380px) 10px minmax(0, 1fr);
+  gap: 14px;
+  margin-inline: clamp(16px, 2.2vw, 42px);
+}
+
+.dc-daily-loading-divider {
+  width: 10px;
+  min-height: 280px;
+  border-radius: 999px;
+  background: #d9e4ef;
+}
+
+.dc-daily-loading-list,
+.dc-daily-loading-detail {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dc-daily-loading-row,
+.dc-daily-loading-detail {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.dc-daily-loading-row {
+  display: grid;
+  gap: 10px;
+  min-height: 72px;
+}
+
+.dc-daily-loading-line.name { width: 58%; height: 13px; }
+.dc-daily-loading-line.meta { width: 82%; height: 10px; }
+.dc-daily-loading-line.detail-title { width: 46%; height: 17px; margin-bottom: 8px; }
+.dc-daily-loading-line.detail-text { width: 88%; height: 11px; }
+.dc-daily-loading-line.detail-text.short { width: 61%; }
+.dc-daily-loading-line.detail-block { height: 130px; margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .dc-daily-loading-head { flex-wrap: wrap; }
+  .dc-daily-loading-workspace { grid-template-columns: 1fr; }
+  .dc-daily-loading-divider { display: none; }
+  .dc-daily-loading-detail { display: none; }
+}
+
+@media (max-width: 520px) {
+  .dc-daily-loading-actions { width: 100%; }
+  .dc-daily-loading-line.search { flex: 1; min-width: 0; }
+  .dc-daily-loading-line.button { display: none; }
+}

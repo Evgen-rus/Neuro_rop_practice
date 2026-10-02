@@ -172,3 +172,41 @@ Targeted readpath: 6 tests OK. Новых тестов не добавлено �
 Deployment code review: `api/app.py:217` выполняет init до создания app/lifespan. CREATE INDEX IF NOT EXISTS входит в штатный schema script, поэтому при старте с обновлённым кодом создаст индекс до health readiness; при повторном старте не пересоздаст существующий. Штатный deploy пересоздаёт API и WEB, health loop около 30 попыток по 1 секунде (каждый health timeout до 2 секунд). Если построение/другой init задержится, readiness может не пройти; длительность production без замера не подтверждена. Deployment script для health проверки не менялся.
 
 Повтор полного suite с явно разрешённым расширенным локальным доступом завершился успешно: **1025 tests, 239,133 s, OK, exit 0**. DAYTIME_CYCLE_ENABLED=false задан для процесса проверки, штатный API/server не запускался. В этом запуске прежние readonly errors и timeout не повторились. Большее число тестов связано с успешным импортом ранее недоступных test modules. Таким образом, локальные contract/regression и startup-init проверки пройдены; production-copy measurement сознательно пропущен пользователем. Коммит/push/deployment не выполнялись.
+
+## Проверка production после deployment пользователя
+
+На VPS подтверждён SHA `95c45e667d84292321796019751700f49e91ae58`, checkout чистый, API/WEB Up (7–9 минут на момент проверки). Production не перезапускался и не изменялся этой проверкой. Штатный API health из контейнера и через HTTPS: 200.
+
+Индекс `idx_deal_control_task_events_system_outcome` существует; EXPLAIN использует `SEARCH ... USING INDEX ... (task_id=?)`.
+
+Измерения тем же изолированным read-only storage методом (mode=ro, query_only, без api.app/import/init, три последовательных runs):
+
+| Метрика | До, median мс | После, три runs мс | После, median мс |
+|---|---:|---|---:|
+| Portfolio tasks reader | 668,048 | 124,661 / 135,502 / 124,874 | 124,874 |
+| SQLite внутри reader | 579,129 | 58,836 / 62,622 / 55,672 | 58,836 |
+| Отдельные system_outcome lookups | 418,777 | 4,076 / 2,787 / 2,570 | 2,787 |
+
+Reader быстрее примерно в 5,35 раза (−81,3% времени), конкретная lookup-группа — примерно в 150 раз (−99,3%). Это эффект измеренной storage части, не доказанная latency всего сайта. Между before/after данные живые и немного изменились: reader after 473 tasks, 2366 SELECT, 3751 materialized rows, 1374676 read bytes, storage-result JSON 1987396 bytes. Events 17534 против 17527 before; tasks во время baseline 471–472. N+1 остался, но scan bottleneck устранён. Третья серия query groups: system outcome 4,455 мс, CRM facts 26,143 мс; следующую оптимизацию в рамках проверки не делали.
+
+Дополнительно в одной read transaction сравнили результаты существующего запроса с `NOT INDEXED` по всем актуальным 474 tasks: полное равенство payload результата, 344 найденных результата. Значения не выводились. После проверки rollback read transaction, записей в DB не выполняли.
+
+HTTPS /api/health: 131,950 / 79,752 / 60,475 мс, median 79,752 мс, 200, response 582 bytes. Содержимое health не выводилось. Это запросы с VPS через публичный HTTPS, не user browser network.
+
+Авторизованные бизнес-API и browser waterfall в этой проверке не измерены: доступна Basic Auth, но нет доступной application session. Никакие auth credentials/token digest не извлекались, login/session не создавались. Несмотря на разрешение пользователя server testing, авторизованные GET фактически не выполнялись; DB writes не было. Для полной API latency нужна пользовательская application session. Не подменять её health latency.
+
+Локально обновлён только отчёт; `git diff --check` прошёл. Production checkout после проверки чистый, контейнеры продолжали работать.
+
+## Production gzip acceptance — 2026-10-02
+
+Deployment SHA `50584fd18645d0480c54e5fc59f8df092a102a36`, GitHub workflow 36946993479 success; API/WEB Up. Проверка только HTTP GET, без изменения production.
+
+| Asset | identity bytes | gzip bytes | Экономия |
+|---|---:|---:|---:|
+| index-DeRIVvJl.js | 648850 | 176151 | 72,9% |
+| index-CaQ6JlzB.css | 254434 | 49496 | 80,5% |
+| Всего | 903284 | 225647 | 75,0% |
+
+По три последовательных identity/gzip пары для каждого файла: все 200, `Content-Encoding: gzip`, распакованные bytes полностью совпадают с identity. MIME корректны, `Vary: Accept-Encoding`, immutable cache и security headers сохранены. Без Basic Auth HTML и assets возвращают 401; приватный API без application session также 401. API health 200, gzip на API не включился.
+
+С VPS через публичный HTTPS median JS identity/gzip 9,803/29,318 мс, CSS 8,793/14,013 мс. На серверной быстрой сети gzip добавляет расходы сжатия; эти цифры не свидетельствуют об ускорении браузера. Подтверждена экономия transfer bytes, пользовательский waterfall/render с application session не измерялся. Нельзя считать этой проверкой все сценарии интерфейса проверенными.

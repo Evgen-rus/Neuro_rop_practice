@@ -1,21 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { lockBodyScroll } from './bodyScrollLock'
-
-const FOCUSABLE = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',')
-
-/** Фокусируемые элементы панели в порядке обхода. */
-function focusableWithin(panel: HTMLElement) {
-  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE))
-    .filter((node) => node.offsetParent !== null || node === document.activeElement)
-}
+import { focusableWithin } from './modalFocus'
 
 /**
     * Слои, которые могут перекрыть карточку сделки. Все они `position: fixed`

@@ -37,6 +37,7 @@ import {
   type DailyTrafficStatus,
 } from './dailyControlView'
 import { TaskDayResults } from './TaskDayResults'
+import './dailyControlLoading.css'
 
 const SPLITTER_KEY = 'neurorop-daily-control-v11-left-width'
 const SPLITTER_DEFAULT = 380
@@ -539,8 +540,42 @@ export function DailyControl({ user }: { user: AuthUser }) {
   const heading = report ? reportHeading(report) : 'Ежедневный контроль'
   const askedState: [boolean, boolean] = selectedDeal ? asked[selectedDeal.deal_id] || [false, false] : [false, false]
 
-  if (loading && !report && !history) {
-    return <div className="dc-daily-empty"><span className="dc-spinner" />Загружается ежедневный контроль…</div>
+  if (loading && !report) {
+    return (
+      <section
+        className="dc-daily dc-daily-loading"
+        style={{ '--dc-daily-left': `${leftWidth}px` } as CSSProperties}
+        aria-busy="true"
+        aria-label="Загружается ежедневный контроль"
+      >
+        <header className="dc-daily-head dc-daily-loading-head" aria-hidden="true">
+          <span className="dc-daily-loading-line title" />
+          <div className="dc-daily-loading-actions">
+            <span className="dc-daily-loading-line search" />
+            <span className="dc-daily-loading-line history" />
+            {canGenerate ? <span className="dc-daily-loading-line button" /> : null}
+          </div>
+        </header>
+        <p className="dc-daily-loading-status" role="status">Загружается ежедневный контроль…</p>
+        <div className="dc-daily-loading-workspace" aria-hidden="true">
+          <div className="dc-daily-loading-list">
+            {[0, 1, 2, 3].map((row) => (
+              <div className="dc-daily-loading-row" key={row}>
+                <span className="dc-daily-loading-line name" />
+                <span className="dc-daily-loading-line meta" />
+              </div>
+            ))}
+          </div>
+          <span className="dc-daily-loading-divider" />
+          <div className="dc-daily-loading-detail">
+            <span className="dc-daily-loading-line detail-title" />
+            <span className="dc-daily-loading-line detail-text" />
+            <span className="dc-daily-loading-line detail-text short" />
+            <span className="dc-daily-loading-line detail-block" />
+          </div>
+        </div>
+      </section>
+    )
   }
 
   return (

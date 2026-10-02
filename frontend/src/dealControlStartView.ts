@@ -6,6 +6,22 @@ export const DEAL_CONTROL_VIEWS: DealControlView[] = ['dashboard', 'rop', 'daily
 
 const VIEW_STORAGE_PREFIX = 'rop-assistant:deal-control-view:'
 
+export function readStoredDealSelection(userId: number, view: DealControlView): string {
+  try {
+    return window.sessionStorage.getItem(`rop-assistant:deal-selection:${userId}:${view}`) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function writeStoredDealSelection(userId: number, view: DealControlView, dealId: string) {
+  try {
+    window.sessionStorage.setItem(`rop-assistant:deal-selection:${userId}:${view}`, dealId)
+  } catch {
+    /* private mode / blocked storage */
+  }
+}
+
 export function dealControlViewStorageKey(userId: number) {
   return `${VIEW_STORAGE_PREFIX}${userId}`
 }

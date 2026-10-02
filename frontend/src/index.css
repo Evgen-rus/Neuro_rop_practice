@@ -3158,6 +3158,23 @@ textarea {
   font-size: 12px;
 }
 
+@media (min-width: 761px) and (pointer: fine) {
+  .dc-filters {
+    min-height: 46px;
+    padding: 6px 15px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+
+  .dc-filters select,
+  .dc-filters input {
+    height: 32px;
+    min-height: 32px;
+    padding: 0 12px;
+    max-width: 100%;
+  }
+}
+
 .dc-board {
   padding: 16px;
 }
@@ -3177,6 +3194,17 @@ textarea {
   min-width: 21px;
   height: 21px;
   font-size: 10px;
+}
+
+@media (min-width: 761px) and (pointer: fine) {
+  .dc-time-tabs {
+    margin-bottom: 10px;
+  }
+
+  .dc-time-tabs button {
+    min-height: 32px;
+    padding: 4px 12px;
+  }
 }
 
 .dc-board-title {
@@ -11008,6 +11036,19 @@ ul.facts.bad li:before {
   border-radius: 18px;
   background: #fff;
   box-shadow: 0 24px 70px rgba(16, 31, 51, .28);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dc-comments-modal { animation: dc-comments-backdrop-in 140ms ease-out; }
+  .dc-comments-dialog { animation: dc-comments-dialog-in 180ms ease-out; }
+  .dc-deal-overlay-panel { animation: dc-comments-dialog-in 180ms ease-out; }
+}
+@keyframes dc-comments-backdrop-in {
+  from { background-color: rgba(25, 39, 57, 0); }
+  to { background-color: rgba(25, 39, 57, .48); }
+}
+@keyframes dc-comments-dialog-in {
+  from { opacity: .92; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .dc-comments-modal-head {
   display: flex;

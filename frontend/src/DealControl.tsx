@@ -112,6 +112,7 @@ import { CommunicationContent } from './CommunicationContent'
 import { DailyControl } from './DailyControl'
 import { DealControlSkeleton } from './DealControlSkeleton'
 import { DealDetailOverlay } from './DealDetailOverlay'
+import { focusableWithin } from './modalFocus'
 import { lockBodyScroll } from './bodyScrollLock'
 import { isNarrowDealLayout, useNarrowDealLayout } from './dealOverlayLayout'
 import { ManagerTrajectory } from './ManagerTrajectory'
@@ -132,8 +133,10 @@ import { CallScriptResultView, CompanionResultView, EmailScriptResultView, Follo
 import {
   initialDealControlFilters,
   readStoredDealControlView,
+  readStoredDealSelection,
   resolveDealControlView,
   writeStoredDealControlView,
+  writeStoredDealSelection,
   type DealControlView,
 } from './dealControlStartView'
 
@@ -535,7 +538,18 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [view, setView] = useState<DealControlView>(startView)
+  const contentRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || !content.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = content.animate([{ opacity: 0.92 }, { opacity: 1 }], {
+      duration: 160,
+      easing: 'ease-out',
+    })
+    return () => animation.cancel()
+  }, [view])
   const [selectedId, setSelectedId] = useState('')
+  const selectionsRef = useRef<Partial<Record<DealControlView, string>>>({})
   const [menuOpen, setMenuOpen] = useState(false)
   // На мобильном меню — раскрывающаяся панель под кнопкой, поэтому выбор
   // раздела должен её закрывать. На десктопе рейка постоянная, и закрывать
@@ -640,10 +654,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       setData(response)
       setInitialIds(response.scope.initial_deal_ids.join('\n'))
       setManagerIds(response.scope.manager_ids.join('\n'))
-      setSelectedId((current) => {
-        if (current && response.deals.some((deal) => deal.deal_id === current && deal.can_open)) return current
-        return response.deals.find((deal) => deal.can_open)?.deal_id || ''
-      })
     } catch (reason) {
       setLoadErrorStatus(reason instanceof ApiError ? reason.status : null)
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -793,6 +803,8 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const selected = visibleDeals.find((deal) => deal.deal_id === selectedId) || null
 
   const selectDealExplicitly = useCallback((dealId: string) => {
+    selectionsRef.current[view] = dealId
+    writeStoredDealSelection(user.id, view, dealId)
     setSelectedId(dealId)
     // На мобильном тап по строке обязан открыть карточку: иначе выбор
     // сделки не даёт отклика в зоне рук, а карточка остаётся на тысячи
@@ -804,7 +816,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       void recordRecommendationEvent(dealId, 'viewed', 'deal_task', recommendation.id)
         .catch(() => undefined)
     }
-  }, [data, user.role])
+  }, [data, user.role, user.id, view])
 
   const filteredSummary = useMemo<DealControlDashboard['summary']>(() => {
     const bitrixTasks = filteredDeals
@@ -853,9 +865,14 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }, [filteredDeals, view])
 
   useEffect(() => {
-    const visibleIds = new Set(visibleDeals.map((deal) => deal.deal_id))
-    if (!visibleIds.has(selectedId)) setSelectedId(visibleDeals.find((deal) => deal.can_open)?.deal_id || '')
-  }, [selectedId, visibleDeals])
+    if (!data || !['dashboard', 'rop', 'manager'].includes(view)) return
+    const remembered = selectionsRef.current[view] ?? readStoredDealSelection(user.id, view)
+    const next = visibleDeals.find((deal) => deal.deal_id === remembered && deal.can_open)?.deal_id
+      || visibleDeals.find((deal) => deal.can_open)?.deal_id || ''
+    selectionsRef.current[view] = next
+    writeStoredDealSelection(user.id, view, next)
+    if (next !== selectedId) setSelectedId(next)
+  }, [data, selectedId, visibleDeals, view, user.id])
 
   useEffect(() => {
     if (!notice) return
@@ -875,10 +892,6 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     try {
       const response = await syncDealControl()
       setData(response)
-      setSelectedId((current) => {
-        if (current && response.deals.some((deal) => deal.deal_id === current && deal.can_open)) return current
-        return response.deals.find((deal) => deal.can_open)?.deal_id || ''
-      })
       setNotice(response.sync_message || 'Данные из Bitrix обновлены')
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason)
@@ -1082,7 +1095,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       {onLogout ? <button className="dc-exit" onClick={() => void onLogout()} title="Завершить сеанс"><span>⎋</span><b>Выйти</b></button> : null}
     </aside>
 
-    <section className="dc-content">
+    <section className="dc-content" ref={contentRef}>
       {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
@@ -1606,6 +1619,17 @@ function DealCommentsModal({
   const [copyNotice, setCopyNotice] = useState('')
   const [expandedWorklogs, setExpandedWorklogs] = useState<Set<string>>(() => new Set())
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const dialogRef = useRef<HTMLElement | null>(null)
+  const closeRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    closeRef.current?.focus({ preventScroll: true })
+    const releaseScroll = lockBodyScroll()
+    return () => {
+      releaseScroll()
+      if (opener?.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [])
   const worklogs = useMemo(() => visibleManagerWorklogs(deal?.manager_worklogs), [deal?.manager_worklogs])
 
   useEffect(() => {
@@ -1641,7 +1665,20 @@ function DealCommentsModal({
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Tab' && dialogRef.current) {
+        const panel = dialogRef.current.querySelector<HTMLElement>('.dc-image-preview') || dialogRef.current
+        const items = focusableWithin(panel)
+        const first = items[0]
+        const last = items.at(-1)
+        const active = document.activeElement
+        if (first && last && ((event.shiftKey && (active === first || !panel.contains(active))) || (!event.shiftKey && (active === last || !panel.contains(active))))) {
+          event.preventDefault()
+          ;(event.shiftKey ? last : first).focus()
+        }
+        return
+      }
       if (event.key !== 'Escape') return
+      event.preventDefault()
       if (previewFile) setPreviewFile(null)
       else onClose()
     }
@@ -1687,10 +1724,10 @@ function DealCommentsModal({
   }
   return createPortal(
     <div className="dc-comments-modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="dc-comments-dialog" role="dialog" aria-modal="true" aria-label={`Комментарии и контроль сделки #${deal.deal_id}`}>
+      <section ref={dialogRef} className="dc-comments-dialog" role="dialog" aria-modal="true" aria-label={`Комментарии и контроль сделки #${deal.deal_id}`}>
         <header className="dc-comments-modal-head">
           <div className="dc-comments-modal-title"><strong>Комментарии и контроль · #{deal.deal_id}</strong><small>{deal.title || `Сделка #${deal.deal_id}`} · {deal.manager_name || 'Ответственный не указан'}</small></div>
-          <button type="button" className="dc-comments-close" aria-label="Закрыть" onClick={onClose}>×</button>
+          <button ref={closeRef} type="button" className="dc-comments-close" aria-label="Закрыть" onClick={onClose}>×</button>
         </header>
         <div className={`dc-comments-modal-body ${resizing ? 'resizing' : ''}`} ref={bodyRef} style={{ '--comments-left': `${leftPercent}%` } as CSSProperties}>
           <aside className="dc-comments-pane">
@@ -2976,6 +3013,13 @@ function ManagerAssistantModal(props: {
 }) {
   const [view, setView] = useState<'answer' | 'history' | 'context' | 'followups' | 'companion'>('answer')
   const [workspaceMode, setWorkspaceMode] = useState<'work' | 'lab'>('work')
+  const paneRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const pane = paneRef.current
+    if (!pane?.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const animation = pane.animate([{ opacity: 0.92 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' })
+    return () => animation.cancel()
+  }, [view, workspaceMode])
   const [labUnsaved, setLabUnsaved] = useState(false)
   const [labLeaveTick, setLabLeaveTick] = useState(0)
   const assistantMode: ManagerAssistantMode = 'push'
@@ -3242,7 +3286,7 @@ function ManagerAssistantModal(props: {
           <span className="dc-manager-context-chip">Контекст учтён</span>
           <button onClick={props.onClose} aria-label="Закрыть">×</button>
         </header>
-        <div className="dc-manager-assistant-content">
+        <div className="dc-manager-assistant-content" ref={paneRef}>
           {workspaceMode === 'lab' ? <PromptLabWorkspace
             dealId={props.deal.deal_id}
             question={props.draft}
