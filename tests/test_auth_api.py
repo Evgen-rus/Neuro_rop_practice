@@ -189,7 +189,7 @@ class DealAuthorizationTests(unittest.TestCase):
                 access.require_deal("202", user=rop, action="paid_ai")
         self.assertEqual(error.exception.status_code, 403)
 
-    def test_rop_paid_analysis_scope_accepts_team_deal_but_not_lead(self) -> None:
+    def test_rop_analysis_scope_accepts_team_deal_and_explicit_lead(self) -> None:
         rop = _user("rop", user_id=2)
         with patch.object(app_api, "auth_current_user", return_value=rop), \
              patch.object(app_api, "require_deal") as require:
@@ -198,9 +198,7 @@ class DealAuthorizationTests(unittest.TestCase):
         require.assert_called_once_with("101", user=rop, action="open")
 
         with patch.object(app_api, "auth_current_user", return_value=rop):
-            with self.assertRaises(HTTPException) as error:
-                app_api._require_analyze_scope("lead", ["501"], paid=True)
-        self.assertEqual(error.exception.status_code, 403)
+            self.assertEqual(app_api._require_analyze_scope("lead", ["501"], paid=True), rop)
 
     def test_deal_comments_route_uses_existing_deal_access_guard(self) -> None:
         payload = {"deal_id": "7243", "available": True, "comments": [], "files": [], "archive_url": None}
@@ -220,6 +218,14 @@ class DealAuthorizationTests(unittest.TestCase):
         team_job = {"options": {"entity_type": "deal", "ids": ["101"]}}
         foreign_job = {"options": {"entity_type": "deal", "ids": ["202"]}}
         lead_job = {"options": {"entity_type": "lead", "ids": ["501"]}}
+        converted_team_lead_job = {
+            "options": {"entity_type": "lead", "ids": ["501"]},
+            "results": [{"entity_type": "lead", "entity_id": "501"}, {"entity_type": "deal", "entity_id": "101"}],
+        }
+        converted_foreign_lead_job = {
+            "options": {"entity_type": "lead", "ids": ["501"]},
+            "results": [{"entity_type": "lead", "entity_id": "501"}, {"entity_type": "deal", "entity_id": "202"}],
+        }
         auto_job = {"options": {"entity_type": "auto", "ids": ["101"]}}
 
         with patch.object(
@@ -234,7 +240,10 @@ class DealAuthorizationTests(unittest.TestCase):
             self.assertFalse(access.can_view_job(foreign_job, rop))
             self.assertTrue(access.can_view_job(team_job, manager))
             self.assertFalse(access.can_view_job(foreign_job, manager))
-            self.assertFalse(access.can_view_job(lead_job, rop))
+            self.assertTrue(access.can_view_job(lead_job, rop))
+            self.assertTrue(access.can_view_job(converted_team_lead_job, rop))
+            self.assertFalse(access.can_view_job(converted_foreign_lead_job, rop))
+            self.assertFalse(access.can_view_job(lead_job, manager))
             self.assertFalse(access.can_view_job(auto_job, manager))
 
     def test_foreign_deal_is_forbidden_for_open_and_metrics_scope_is_checked(self) -> None:

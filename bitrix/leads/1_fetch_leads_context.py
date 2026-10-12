@@ -185,6 +185,8 @@ def fetch_lead_bundle(
     sync_started_at = datetime.now(MSK_TZ).isoformat(timespec="seconds")
     lead_response = fetch_entity_by_id(client, "crm.lead.get", lead_id)
     lead = get_result(lead_response) or {}
+    if not lead_response.get("ok") or not isinstance(lead, dict) or str(lead.get("ID") or "") != str(lead_id) or not lead.get("STATUS_ID"):
+        raise RuntimeError("Не удалось получить актуальную карточку лида из Bitrix24; анализ остановлен")
 
     contact_ids = {str(item).strip() for item in as_list(lead.get("CONTACT_ID")) if is_real_id(item)}
     company_ids = {str(item).strip() for item in as_list(lead.get("COMPANY_ID")) if is_real_id(item)}

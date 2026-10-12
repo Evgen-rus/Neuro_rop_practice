@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import './index.css'
 import { lockBodyScroll } from './bodyScrollLock'
 import { DealControl } from './DealControl'
+import { LeadControl } from './LeadControl'
+import { LeadHistory } from './LeadHistory'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
 import {
   asRecord,
@@ -819,6 +821,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
     transcript_mode: 'all',
   })
   const [job, setJob] = useState<JobState | null>(null)
+  const leadControlJobRef = useRef(false)
   const [jobError, setJobError] = useState<string | null>(null)
   const [selectedResultIndex, setSelectedResultIndex] = useState(0)
   const [pendingAnalyzeMeta, setPendingAnalyzeMeta] = useState<{
@@ -830,11 +833,16 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedReport, setSelectedReport] = useState<UiReportDetail | null>(null)
   const [leadWorkspaceOpen, setLeadWorkspaceOpen] = useState(false)
+  const [leadHistoryId, setLeadHistoryId] = useState('')
+  const [leadHistoryRevision, setLeadHistoryRevision] = useState(0)
   const closeLeadWorkspace = useCallback(() => setLeadWorkspaceOpen(false), [])
   const [markdown, setMarkdown] = useState<string | null>(null)
   const [showMarkdown, setShowMarkdown] = useState(false)
 
   const activeAnalysis = useMemo(() => {
+    if (leadWorkspaceOpen && selectedReport?.entity_type === 'lead' && selectedReport.report_json) {
+      return unwrapAnalysis(selectedReport.report_json)
+    }
     if (tab === 'history' && selectedReport?.report_json) {
       return unwrapAnalysis(selectedReport.report_json)
     }
@@ -842,9 +850,21 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
       return unwrapAnalysis(job.results[selectedResultIndex].analysis)
     }
     return null
-  }, [tab, selectedReport, job, selectedResultIndex])
+  }, [tab, selectedReport, job, selectedResultIndex, leadWorkspaceOpen])
 
   const activeMeta = useMemo(() => {
+    if (leadWorkspaceOpen && selectedReport?.entity_type === 'lead') {
+      return {
+        entity_type: selectedReport.entity_type,
+        entity_id: selectedReport.entity_id,
+        report_id: selectedReport.id,
+        risk_level: selectedReport.risk_level,
+        attention_reason: selectedReport.attention_reason,
+        recommended_action: selectedReport.recommended_action,
+        bitrix_url: selectedReport.bitrix_url || null,
+        candidate_review: null,
+      }
+    }
     if (tab === 'history' && selectedReport) {
       return {
         entity_type: selectedReport.entity_type,
@@ -898,7 +918,7 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
       }
     }
     return null
-  }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex, pendingAnalyzeMeta])
+  }, [tab, selectedReport, selectedCandidate, activeAnalysis, job, selectedResultIndex, pendingAnalyzeMeta, leadWorkspaceOpen])
 
   const historyGroups = useMemo(() => {
     const groups = new Map<string, UiReportListItem[]>()
@@ -1092,13 +1112,15 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
         .then((next) => {
           setJob(next)
           if (next.status === 'done' || next.status === 'error') {
+            const fromLeadControl = leadControlJobRef.current
+            if (fromLeadControl) leadControlJobRef.current = false
             void fetchReports(50)
               .then((data) => {
                 setHistory(data.items)
                 if (next.status === 'done') {
                   const result = next.results?.[0]
                   const reportId = result?.report_id || next.report_ids?.[0]
-                  if (reportId) void openHistoryReport(Number(reportId))
+                  if (!fromLeadControl && reportId) void openHistoryReport(Number(reportId))
                 }
               })
               .catch((error) => setHistoryError(error instanceof Error ? error.message : String(error)))
@@ -1138,6 +1160,40 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
     setSelectedReport(detail)
     setLeadWorkspaceOpen(detail.entity_type === 'lead')
     setTab('history')
+  }
+
+  async function openLeadControlReport(reportId: number) {
+    const detail = await fetchReport(reportId, false)
+    if (detail.entity_type !== 'lead') throw new Error('Отчёт не относится к лиду')
+    setShowMarkdown(false)
+    setMarkdown(null)
+    setSelectedReport(detail)
+    setLeadWorkspaceOpen(true)
+  }
+
+  async function startLeadControlAnalysis(ids: string[]) {
+    if (!ids.length) return
+    const confirmed = window.confirm(`Запустить анализ для ${ids.length} лидов? При необходимости будет использован платный AI.`)
+    if (!confirmed) return
+    setJobError(null)
+    setSelectedResultIndex(0)
+    setPendingAnalyzeMeta({ entity_type: 'lead', entity_id: ids[0] })
+    leadControlJobRef.current = true
+    try {
+      const started = await startAnalyze({
+        ...options,
+        entity_type: 'lead',
+        ids: ids.join(','),
+        force_llm: false,
+        confirm_paid: true,
+      })
+      setJob(started)
+      if (['done', 'error'].includes(started.status)) leadControlJobRef.current = false
+      toast('Обработка лидов запущена', setToastMessage)
+    } catch (error) {
+      leadControlJobRef.current = false
+      throw error
+    }
   }
 
   async function copyReviewLink(reportId?: number | null) {
@@ -1403,10 +1459,49 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
       : []
 
   if (tab === 'deals') {
-    return <DealControl user={user} onLogout={onLogout} onExit={user.role === 'admin' ? () => {
-      setLegacyOpened(true)
-      setTab('summary')
-    } : undefined} />
+    return <>
+      <DealControl user={user} onLogout={onLogout} onExit={user.role === 'admin' ? () => {
+        setLegacyOpened(true)
+        setTab('summary')
+      } : undefined} renderLeadControl={({ managers }) => <LeadControl
+        user={user}
+        managers={managers}
+        job={job}
+        onOpenReport={openLeadControlReport}
+        onOpenHistory={(leadId) => setLeadHistoryId(leadId)}
+        historyRevision={leadHistoryRevision}
+        onStartAnalysis={startLeadControlAnalysis}
+      />} />
+      {leadHistoryId ? <LeadHistory key={leadHistoryId} leadId={leadHistoryId} onClose={() => { setLeadHistoryId(''); setLeadHistoryRevision((value) => value + 1) }} /> : null}
+      {leadWorkspaceOpen && selectedReport?.entity_type === 'lead' ? <ReportPanels
+        meta={activeMeta}
+        reportDetail={selectedReport?.id === activeMeta?.report_id ? selectedReport : null}
+        leadWorkspaceOpen={leadWorkspaceOpen}
+        onCloseLeadWorkspace={closeLeadWorkspace}
+        analysis={activeAnalysis}
+        facts={facts}
+        unknowns={unknowns}
+        closureReasons={closureReasons}
+        internalChecks={internalChecks}
+        recommendations={recommendations}
+        managerBrief={managerBrief}
+        showMarkdown={showMarkdown}
+        markdown={markdown}
+        onCopy={() => {
+          void navigator.clipboard?.writeText(copyText)
+          toast('Задача менеджеру скопирована', setToastMessage)
+        }}
+        onCopyReviewLink={() => void copyReviewLink(activeMeta?.report_id)}
+        onCopyLeadTableRow={() => void copyLeadTableRow(activeMeta?.report_id)}
+        onToggleMarkdown={() => void toggleMarkdown()}
+        onDecision={(value) => void onDecision(value)}
+        onOutcome={(value) => void onOutcome(value)}
+        onQualificationReview={(payload) => void onQualificationReview(payload)}
+        qualificationReviews={selectedReport?.qualification_reviews}
+        decisions={selectedReport?.decisions}
+        outcomes={selectedReport?.outcomes}
+      /> : null}
+    </>
   }
 
   return (
@@ -2570,6 +2665,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             {!readOnly && props.onCopyLeadTableRow ? <button onClick={props.onCopyLeadTableRow}>Скопировать строку для таблицы</button> : null}
             <button onClick={() => openMaterials('bant')}>Полный BANT</button>
             <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
+            {!readOnly ? <button onClick={() => openMaterials('history')}>История лида</button> : null}
             {!readOnly ? <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button> : null}
           </div>
         </header>
@@ -2684,7 +2780,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             <nav className="analysis-drawer-tabs">
               {([
                 ['summary', 'Краткий вывод'], ['bant', 'Полный BANT'], ['evidence', 'Доказательства'],
-                ['audit', 'Аудитный отчёт'], ['history', 'История'], ['technical', 'Техническая информация'],
+                ['audit', 'Аудитный отчёт'], ['history', 'История лида'], ['technical', 'Техническая информация'],
               ] as Array<[LeadMaterialTab, string]>).filter(([key]) => !readOnly || (key !== 'history' && key !== 'technical')).map(([key, label]) => <button className={materialTab === key ? 'active' : ''} onClick={() => openMaterials(key)} key={key}>{label}</button>)}
             </nav>
             <div className="analysis-drawer-content" onChange={(event) => {
@@ -2694,7 +2790,13 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article>{!readOnly ? <div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div> : null}</div> : null}
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
               {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(props.markdown)}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
-              {materialTab === 'history' ? <div><h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{asString(item.created_at)} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
+              {materialTab === 'history' ? <div>
+                <h3>История лида</h3>
+                <p className="muted">Сохранённая история CRM на момент анализа: {formatLeadDate(reportDetail?.created_at)}.</p>
+                {reportDetail?.model_context?.history_text
+                  ? <div className="lead-history-text">{reportDetail.model_context.history_text}</div>
+                  : <p className="muted">Для этого отчёта история CRM не сохранена.</p>}
+                <h3>История анализов и решений</h3><ul className="material-history">{reportDetail?.entity_history?.map((item) => <li key={asString(item.id)}><strong>Отчёт #{asString(item.id)}</strong><span>{formatLeadDate(asString(item.created_at))} · {riskLabelRu(asString(item.risk_level))}</span><p>{asString(item.attention_reason)}</p></li>)}</ul><h4>Решения РОПа</h4><ul>{props.decisions?.map((item) => <li key={asString(item.id)}>{asString(item.created_at)} · {asString(item.decision)}</li>)}{!props.decisions?.length ? <li>Решений пока нет.</li> : null}</ul><h4>Исходы</h4><ul>{props.outcomes?.map((item) => <li key={asString(item.id)}>{asString(item.checked_at)} · {asString(item.outcome_type)}</li>)}{!props.outcomes?.length ? <li>Исходы пока не зафиксированы.</li> : null}</ul></div> : null}
               {materialTab === 'technical' ? <div><h3>Техническая информация</h3><p><strong>Источник workflow:</strong> отчёт #{workflow.source_report_id || 'не указан'}</p><p><strong>Этап CRM:</strong> {reportMeta.stage_name || reportMeta.stage_id || 'Нет данных'}</p><h4>Контекст, переданный модели</h4>{reportDetail?.model_context ? <div className="model-context"><section><h5>История CRM</h5><pre>{reportDetail.model_context.history_text || 'История CRM не была доступна в момент анализа.'}</pre></section><section><h5>Транскрипт, использованный в анализе</h5><pre>{reportDetail.model_context.transcript_used ? reportDetail.model_context.transcript_text || 'Текст транскрипта не сохранён.' : 'Для этого анализа транскрипт не использовался.'}</pre></section></div> : <p className="muted">Для этого старого отчёта снимок фактического контекста не сохранялся.</p>}<h4>Технический snapshot</h4>{reportDetail?.technical_log ? <pre className="technical-log">{JSON.stringify(reportDetail.technical_log, null, 2)}</pre> : <p className="muted">Очищенный технический snapshot отсутствует в старом отчёте.</p>}</div> : null}
             </div>
           </aside>

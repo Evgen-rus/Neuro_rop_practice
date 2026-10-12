@@ -17,6 +17,7 @@ from api.candidates import (
 from api.jobs import unwrap_analysis_payload
 from api.deal_call_transcript import find_call_transcript
 from api.deal_manager_quick_help import load_local_communication_bundle
+from bitrix.client import fetch_user_names
 from bitrix.customer_history import (
     INTERNAL_CHANNELS,
     MESSENGER_CHANNELS,
@@ -869,16 +870,9 @@ def _manager_names(client: Any, manager_ids: set[str]) -> dict[str, str]:
         return {}
     try:
         with bitrix_trace_context(component="deal_control"):
-            rows = client.list_all("user.get", {"filter": {"ID": sorted(manager_ids)}})
+            return fetch_user_names(client, manager_ids)
     except Exception:  # noqa: BLE001 - the dashboard still works if the CRM user list is unavailable
         return {}
-    names: dict[str, str] = {}
-    for row in rows:
-        user_id = str(row.get("ID") or "")
-        name = " ".join(str(row.get(key) or "").strip() for key in ("LAST_NAME", "NAME")).strip()
-        if user_id and name:
-            names[user_id] = name
-    return names
 
 
 def _deal_row(deal: dict[str, Any], *, source: str, stage_names: dict[str, str], manager_names: dict[str, str]) -> dict[str, Any]:

@@ -360,6 +360,20 @@ class BitrixReadOnlyClient:
             return {"ok": False, "method": method, "payload": payload or {}, "error": str(error), "items": []}
 
 
+def fetch_user_names(client: Any, user_ids: set[str]) -> dict[str, str]:
+    ids = sorted({str(user_id).strip() for user_id in user_ids if str(user_id).strip()})
+    if not ids:
+        return {}
+    rows = client.list_all("user.get", {"filter": {"ID": ids}})
+    names: dict[str, str] = {}
+    for row in rows:
+        user_id = str(row.get("ID") or "")
+        name = " ".join(str(row.get(key) or "").strip() for key in ("LAST_NAME", "NAME")).strip()
+        if user_id and name:
+            names[user_id] = name
+    return names
+
+
 def get_env_required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:

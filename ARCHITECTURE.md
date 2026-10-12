@@ -16,6 +16,7 @@ ROP Assistant помогает руководителю продаж разби�
 | Фоновые задания, запуск CLI и дневной 45-минутный цикл | `api/jobs.py`; цикл — `api/daytime_cycle.py` |
 | Ранний CRM gate, накопительный контекст, source cursors и schema cache | `api/crm_change_gate.py`, `bitrix/context_sync.py`, `bitrix/deals/1_fetch_deals_context.py`, `storage/rop_db.py` |
 | Кандидаты, профили и daily summary | `api/candidates.py`, `storage/rop_db.py` |
+| Ручной контроль лидов: четыре проверенных этапа, 30 дней по созданию, до 10 за запуск | `api/candidates.py` (`LEAD_CONTROL_GROUPS`), `api/app.py`; UI — `frontend/src/LeadControl.tsx` и существующая карточка в `App.tsx` |
 | Локальное состояние SQLite | `storage/rop_db.py`; Prompt Lab — `storage/prompt_lab_db.py` (`prompt_lab.sqlite`) |
 | Пользователи, сессии и HTTP-авторизация | `storage/rop_db.py`, `api/auth.py`, `api/access.py`, `api/app.py` |
 | Bitrix REST, privacy-safe usage trace и customer history | `bitrix/client.py`, `bitrix/usage_trace.py`, `bitrix/customer_history.py` |
@@ -140,6 +141,8 @@ Evidence identity идентифицирует звонки, входящие em
 | Смена сущности | конвертированный лид передаётся сделке | может включать source lead context |
 
 Не переносить lead workflow, BANT-контракт, manager/client текст или lead playbook в deal-контур без отдельного решения. Аналогично не переносить deal qualification/closed-deal правила в lead.
+
+Раздел «Лиды» доступен `admin`/`rop` и использует существующие candidates/jobs/reports/workflow без автоматического lead-цикла. `lead_control_group` фиксирует две открытые либо две закрытые стадии и задаёт окно 30 дней по `DATE_CREATE`. Обычный поиск читает общий сохранённый список четырёх этапов из `crm_context_sync_state` (`lead_control:list:v1`), фильтрует группу/менеджера до лимита и подставляет актуальные сохранённые анализы. Только явный `refresh_crm=true` читает Bitrix, проверяет ID/имя/семантику по локальной карте и живому справочнику и сохраняет новый список через существующий CAS; для списка активности CRM не загружаются. Имена ответственных получаются общим `bitrix.client.fetch_user_names` через `user.get`, сохраняются вместе со списком и возвращаются полным каталогом независимо от фильтра и лимита. При недоступности справочника сохраняются ранее известные имена. Ошибка обновления сохраняет предыдущий список. Клиентская переписка включается в lead history из нормализованной ленты отдельно от внутренних записей. Полный lead-промпт кэширует общий контракт и knowledge перед `## ID ЛИДА`; конкретные клиентские факты остаются после границы.
 
 ## Where to change code
 

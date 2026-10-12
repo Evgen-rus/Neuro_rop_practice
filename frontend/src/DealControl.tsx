@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { canRefineManagerSituation, readyManagerAudioJobId } from './managerAudio'
 import {
@@ -523,7 +523,12 @@ function AutomaticAnalysisStatus({
   return <AutomaticAnalysisPanel snapshot={snapshot} role={role} />
 }
 
-export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; onLogout?: () => Promise<void>; user: AuthUser }) {
+export function DealControl({ onExit, onLogout, user, renderLeadControl }: {
+  onExit?: () => void
+  onLogout?: () => Promise<void>
+  user: AuthUser
+  renderLeadControl?: (context: { managers: Array<[string, string]> }) => ReactNode
+}) {
   const startView = resolveDealControlView(user.role, readStoredDealControlView(user.id))
   const startFilters = initialDealControlFilters(user.role, startView, user.manager_id)
   const [data, setData] = useState<DealControlDashboard | null>(null)
@@ -540,6 +545,7 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [view, setView] = useState<DealControlView>(startView)
+  const [leadControlOpen, setLeadControlOpen] = useState(false)
   const contentRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const content = contentRef.current
@@ -609,48 +615,56 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
   }, [user.id, view])
 
   function openDashboard() {
+    setLeadControlOpen(false)
     setView('dashboard')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openRopView() {
+    setLeadControlOpen(false)
     setView('rop')
     setManagerFilter('')
     setTimeView('today')
   }
 
   function openDailyView() {
+    setLeadControlOpen(false)
     setView('daily')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openTrajectoryView() {
+    setLeadControlOpen(false)
     setView('trajectory')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openShadowView() {
+    setLeadControlOpen(false)
     setView('shadow')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openSpendView() {
+    setLeadControlOpen(false)
     setView('spend')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openTeamView() {
+    setLeadControlOpen(false)
     setView('team')
     setManagerFilter('')
     setTimeView('all')
   }
 
   function openManagerView() {
+    setLeadControlOpen(false)
     setView('manager')
     // РОП сразу видит всю команду; менеджер — только себя; admin — выбранного или первого.
     setManagerFilter(user.role === 'manager'
@@ -1087,31 +1101,34 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
       </div>
       <nav onClick={closeMenuOnNarrow}>
         <span className="dc-nav-group" aria-hidden="true">РОП</span>
-        <button className={view === 'dashboard' ? 'active' : ''} onClick={openDashboard} title="Общий контроль сделок">
+        <button className={!leadControlOpen && view === 'dashboard' ? 'active' : ''} onClick={openDashboard} title="Общий контроль сделок">
           <span>▦</span><b>Дашборд</b>
         </button>
-        {canOpenRopView ? <button className={view === 'rop' ? 'active' : ''} onClick={openRopView} title="План и просрочки команды">
+        {canOpenRopView ? <button className={!leadControlOpen && view === 'rop' ? 'active' : ''} onClick={openRopView} title="План и просрочки команды">
           <span>◎</span><b>Контроль РОПа</b>
         </button> : null}
-        {canOpenRopView ? <button className={view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Разбор команды к планёрке">
+        {canOpenRopView ? <button className={!leadControlOpen && view === 'daily' ? 'active' : ''} onClick={openDailyView} title="Разбор команды к планёрке">
           <span>▣</span><b>Ежедневный контроль</b>
         </button> : null}
         {canOpenManagerView ? <span className="dc-nav-group" aria-hidden="true">Менеджер</span> : null}
-        {canOpenManagerView ? <button className={view === 'manager' ? 'active' : ''} onClick={openManagerView} title="Подготовка к касаниям">
+        {canOpenManagerView ? <button className={!leadControlOpen && view === 'manager' ? 'active' : ''} onClick={openManagerView} title="Подготовка к касаниям">
           <span>✓</span><b>{managerViewOwnTasks ? 'Мои задачи' : 'Задачи менеджера'}</b>
         </button> : null}
         {user.role === 'admin' ? <span className="dc-nav-group" aria-hidden="true">Админ</span> : null}
-        {user.role === 'admin' ? <button className={view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Рабочий день менеджеров">
+        {user.role === 'admin' ? <button className={!leadControlOpen && view === 'trajectory' ? 'active' : ''} onClick={openTrajectoryView} title="Рабочий день менеджеров">
           <span>⌁</span><b>Траектория</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Рекомендации → действия">
+        {user.role === 'admin' ? <button className={!leadControlOpen && view === 'shadow' ? 'active' : ''} onClick={openShadowView} title="Рекомендации → действия">
           <span>↯</span><b>Learning Shadow</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'spend' ? 'active' : ''} onClick={openSpendView} title="Стоимость работы НейроРОПа">
+        {user.role === 'admin' ? <button className={!leadControlOpen && view === 'spend' ? 'active' : ''} onClick={openSpendView} title="Стоимость работы НейроРОПа">
           <span>₽</span><b>Расходы AI</b>
         </button> : null}
-        {user.role === 'admin' ? <button className={view === 'team' ? 'active' : ''} onClick={openTeamView} title="Логины и Bitrix ID">
+        {user.role === 'admin' ? <button className={!leadControlOpen && view === 'team' ? 'active' : ''} onClick={openTeamView} title="Логины и Bitrix ID">
           <span>◍</span><b>Команда</b>
+        </button> : null}
+        {canOpenRopView && renderLeadControl ? <button className={`dc-nav-lead-control ${leadControlOpen ? 'active' : ''}`} onClick={() => setLeadControlOpen(true)} title="Лиды за последние 30 дней">
+          <span><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="5.5" cy="6.5" r="1.2" /><path d="M10 6.5h9M4.3 12h1.2m4.5 0h9M4.3 17.5h1.2m4.5 0h9" /></svg></span><b>Контроль лидов</b>
         </button> : null}
       </nav>
       {onExit ? <button className="dc-exit" onClick={onExit} title="Сводка и отчёты"><span>⌂</span><b>К основному интерфейсу</b></button> : null}
@@ -1119,7 +1136,9 @@ export function DealControl({ onExit, onLogout, user }: { onExit?: () => void; o
     </aside>
 
     <section className="dc-content" ref={contentRef}>
-      {view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
+      {leadControlOpen && renderLeadControl
+        ? renderLeadControl({ managers })
+        : view === 'daily' ? <DailyControl user={user} /> : view === 'trajectory' ? <ManagerTrajectory /> : view === 'shadow' ? <LearningShadow /> : view === 'spend' ? <AiSpend /> : view === 'team' ? <TeamAdmin user={user} scope={data.scope} syncing={syncing} flashError={error} flashNotice={notice} onScopeChanged={refreshScope} onSyncBitrix={sync} /> : <>
       <header className="dc-header">
         <div className="dc-header-title"><h1>{copyForView.title}</h1></div>
       {user.role === 'admin' && view === 'dashboard' ? <AiSpendDashboardCard onOpen={openSpendView} /> : null}

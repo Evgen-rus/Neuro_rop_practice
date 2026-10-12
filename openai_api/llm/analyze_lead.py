@@ -32,6 +32,8 @@ from setup import MSK_TZ
 
 
 DEFAULT_KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge" / "clients" / "praktikm"
+LEAD_ID_SECTION_MARKER = "## ID ЛИДА"
+LEAD_PROMPT_CACHE_KEY = "neuro-rop:full-lead:v1"
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,6 +104,8 @@ def load_lead_crm_state(lead_dir: Path) -> dict[str, Any]:
         lead = _response_result(context.get("lead"))
 
     status_id = str(lead.get("STATUS_ID") or "").strip()
+    if not status_id:
+        raise ValueError("Актуальный статус лида недоступен; обновите CRM-контекст перед анализом")
     semantic = str(lead.get("STATUS_SEMANTIC_ID") or "").strip().upper()
     status_name = ""
     pipeline_map = _load_json_object(PROJECT_ROOT / "crm_pipeline_map.json")
@@ -272,7 +276,7 @@ def build_prompt(
 
 Нужная JSON-структура:
 {{
-  "lead_id": "{lead_id}",
+  "lead_id": "ID из блока ID ЛИДА",
   "lead_state": {{
     "summary": "краткое состояние лида",
     "client": "имя/компания, если есть",
@@ -421,6 +425,14 @@ def build_prompt(
   }}
 }}
 
+## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
+
+{okf_text}
+
+{LEAD_ID_SECTION_MARKER}
+
+{lead_id}
+
 ## ИСТОРИЯ ЛИДА
 
 {history_text.strip()}
@@ -437,9 +449,6 @@ def build_prompt(
 
 {context_diagnostics_text.strip()}
 
-## ОБРАБОТАННАЯ OKF-БАЗА ПРАВИЛ
-
-{okf_text}
 """
 
 
@@ -903,8 +912,8 @@ def main() -> None:
             ),
             analysis_caller=call_analysis_json,
             call_type="full_lead_analysis",
-            prompt_cache_key="neuro-rop:full-lead:v1",
-            prompt_cache_marker="## ИСТОРИЯ ЛИДА",
+            prompt_cache_key=LEAD_PROMPT_CACHE_KEY,
+            prompt_cache_marker=LEAD_ID_SECTION_MARKER,
             trace_entity_type="lead",
             trace_entity_id=str(args.lead_id),
         )

@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import load_json, save_json
-from bitrix.customer_history import clean_text, result_item
+from bitrix.customer_history import build_normalized_communications, clean_text, result_item
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -254,6 +254,22 @@ def render_customer_history_markdown(bundle: dict[str, Any]) -> str:
         "- Открытые линии не используются как обязательный источник для ПрактикМ.",
         "- Если CONTACT_ID пустой, fallback по телефону/email применяется только после подтверждения найденного контакта через crm.contact.get.",
     ]
+    if root_type == "lead":
+        lines.extend(["", "## Содержание клиентской переписки", "",
+                      "Направление и подтверждённый контакт указаны по источнику; исходящее сообщение не доказывает ответ клиента.", ""])
+        messages = [item for item in (bundle.get("normalized_communications") or build_normalized_communications(bundle))
+                    if item.get("channel") in {"email", "message"} and item.get("contact_class") != "internal_information"]
+        for item in messages:
+            lines.extend([
+                f"### {item.get('channel')}: {item.get('event_id') or '-'}",
+                f"- Дата: {item.get('occurred_at') or '-'}; сущность: {item.get('entity_key') or '-'}",
+                f"- Источники: {', '.join(str(value) for value in item.get('source_ids') or []) or '-'}",
+                f"- Направление: {item.get('direction') or 'unknown'}; контакт: {item.get('contact_class') or 'unknown'}",
+                f"- Тема: {clean_text(item.get('subject')) or '-'}", "",
+                clean_text(item.get("content")) or "Текст сообщения недоступен; содержание нельзя восстановить по теме.", "",
+            ])
+        if not messages:
+            lines.append("Доступная клиентская переписка не найдена; это не доказывает отсутствие общения вне выгрузки.")
     return "\n".join(lines) + "\n"
 
 

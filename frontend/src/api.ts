@@ -475,6 +475,7 @@ export type Candidate = {
   stage_id?: string
   amount?: string
   manager_id?: string
+  manager_name?: string | null
   date_modify?: string
   date_create?: string
   stale_days?: number | null
@@ -502,6 +503,31 @@ export type Candidate = {
   lead_category?: string | null
   lead_analysis_available?: boolean
   lead_qualification?: LeadQualificationSummary | null
+  latest_report_id?: number | null
+  analyzed_at?: string | null
+  analysis_status?: 'not_analyzed' | 'ready' | 'error' | 'running'
+  lead_issue?: string | null
+  lead_next_action?: string | null
+  crm_task?: LeadControlTask | null
+  crm_task_checked?: boolean
+  lead_closure_verdict?: 'confirmed_correct' | 'disputed' | 'insufficient_evidence' | 'not_applicable' | null
+  lead_closure_reason?: string | null
+}
+
+export type LeadControlTask = {
+  subject: string
+  deadline?: string | null
+  status?: string | null
+}
+
+export type LeadControlHistory = {
+  lead_id: string
+  available: boolean
+  comments: Array<{ id: string; created_at?: string | null; text: string; author_id?: string | null }>
+  communications: Array<{ id: string; occurred_at?: string | null; channel: string; kind: string; text: string; transcript_available?: boolean }>
+  current_task: LeadControlTask | null
+  limitations: string[]
+  fetched_at?: string | null
 }
 
 export type AnalysisPeriodPreset = 'today_and_previous_workday' | 'today' | 'previous_workday' | 'custom'
@@ -600,6 +626,11 @@ export type CandidatesResponse = {
   days: number
   limit: number
   entity_type: string
+  lead_control_group?: 'active' | 'closed' | null
+  manager_id?: string | null
+  crm_updated_at?: string | null
+  crm_snapshot_available?: boolean
+  manager_names?: Record<string, string>
   pipeline_ids?: string[]
   stage_ids?: string[]
   review_view?: 'active' | 'reviewed' | 'all'
@@ -2058,6 +2089,10 @@ export function fetchDealCallTranscript(dealId: string, eventId: string) {
   )
 }
 
+export function fetchLeadControlHistory(leadId: string, refreshCrm = false) {
+  return api<LeadControlHistory>(`/api/lead-control/leads/${encodeURIComponent(leadId)}/history?refresh_crm=${refreshCrm}`)
+}
+
 export function fetchDealCommunicationContent(dealId: string, eventId: string) {
   return api<DealCommunicationContent>(
     `/api/deal-control/deals/${encodeURIComponent(dealId)}/communications/${encodeURIComponent(eventId)}/content`,
@@ -2722,6 +2757,9 @@ export function searchCandidates(body: {
   review_view?: 'active' | 'reviewed' | 'all'
   lead_categories?: string[]
   bant_filter?: string
+  lead_control_group?: 'active' | 'closed'
+  manager_id?: string | null
+  refresh_crm?: boolean
   save?: boolean
 }) {
   return api<CandidatesResponse>('/api/candidates/search', {

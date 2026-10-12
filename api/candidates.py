@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from bitrix.client import BitrixReadOnlyClient, get_env_required
+from bitrix.client import BitrixReadOnlyClient, fetch_user_names, get_env_required
+from bitrix.customer_history import (
+    build_history_sections,
+    build_normalized_communications,
+    clean_text,
+    result_items,
+)
+from bitrix.usage_trace import bitrix_trace_context
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.config import ANALYSIS_MAX_OUTPUT_TOKENS, ANALYSIS_MODEL, USD_RUB_RATE
 from openai_api.change_detection.stage_policy import (
@@ -29,8 +36,10 @@ from storage.rop_db import (
     daily_paid_capacity_used,
     default_analysis_profile,
     get_candidate_review_states,
+    get_crm_sync_state,
     get_entity_state,
     get_latest_ui_report,
+    put_crm_sync_state,
     reconcile_candidate_cases,
 )
 
@@ -38,6 +47,68 @@ from storage.rop_db import (
 DEFAULT_DAYS = 15
 DEFAULT_LIMIT = 20
 PIPELINE_MAP_PATH = BASE_DIR / "crm_pipeline_map.json"
+LEAD_CONTROL_SNAPSHOT_KEY = "lead_control:list:v1"
+LEAD_CONTROL_HISTORY_KEY_PREFIX = "lead_control:history:v1:"
+
+LEAD_CONTROL_GROUPS: dict[str, dict[str, dict[str, Any]]] = {
+    "active": {
+        "UC_W1ZZ1V": {"name": "Идентификация (BANT) (хол.отдел)", "semantics": None},
+        "UC_4QFNZN": {"name": "В проработке (B) (хол.отдел)", "semantics": None},
+    },
+    "closed": {
+        "UC_X6NW6I": {"name": "Нет производства/мечты", "semantics": "F"},
+        "UC_U1XO6U": {"name": "Срок покупки более 6 месяцев", "semantics": "F"},
+    },
+}
+
+
+class LeadControlConfigurationError(ValueError):
+    """Lead-control stage mapping differs from the verified CRM contract."""
+
+
+def resolve_lead_control_group(group: str) -> dict[str, Any]:
+    expected = LEAD_CONTROL_GROUPS.get(str(group))
+    if expected is None:
+        raise LeadControlConfigurationError("Неизвестная группа контроля лидов")
+    stages = (load_pipeline_map().get("lead_pipeline") or {}).get("stages") or []
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        status_id = str(stage.get("status_id") or stage.get("STATUS_ID") or "")
+        if status_id:
+            by_id.setdefault(status_id, []).append(stage)
+
+    for status_id, contract in expected.items():
+        rows = by_id.get(status_id) or []
+        if len(rows) != 1:
+            raise LeadControlConfigurationError(
+                f"Конфигурация контроля лидов не содержит уникальный статус {status_id}; проверьте crm_pipeline_map.json"
+            )
+        stage = rows[0]
+        name = str(stage.get("name") or stage.get("NAME") or "")
+        semantics = stage.get("semantics") if "semantics" in stage else (stage.get("raw") or {}).get("SEMANTICS")
+        if name != contract["name"] or semantics != contract["semantics"]:
+            raise LeadControlConfigurationError(
+                f"Конфигурация контроля лидов не совпадает со статусом {status_id}; проверьте crm_pipeline_map.json"
+            )
+    return {
+        "stage_ids": list(expected),
+        "required_statuses": expected,
+    }
+
+
+def resolve_auto_lead_ids(ids: list[str]) -> list[str]:
+    """Read only IDs in auto mode to enforce the lead batch cap before enqueue."""
+    wanted = _normalize_id_list(ids)
+    if not wanted:
+        return []
+    rows = make_client().list_all(
+        "crm.lead.list",
+        {"filter": {"ID": wanted}, "select": ["ID"]},
+    )
+    found = {str(row.get("ID") or "") for row in rows if row.get("ID") is not None}
+    return [entity_id for entity_id in wanted if entity_id in found]
 
 # Closed-lost priorities for v1 candidate list.
 HIGH_CLOSED_REASONS = {
@@ -513,26 +584,68 @@ def mark_analyzed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return candidates
 
 
-def attach_saved_lead_qualification(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Adds saved BANT metadata for display/filtering without calling CRM or LLM."""
-    from api.jobs import extract_lead_qualification_summary, extract_summary_fields
+def attach_saved_lead_qualification(
+    candidates: list[dict[str, Any]],
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Adds saved validated lead analysis metadata without calling CRM or LLM."""
+    from api.jobs import (
+        extract_lead_qualification_summary,
+        extract_summary_fields,
+        list_jobs,
+        unwrap_analysis_payload,
+    )
 
-    root = BASE_DIR / "reports" / "rop_assistant" / "leads"
+    running_ids: set[str] = set()
+    for job in list_jobs(limit=10000):
+        if str(job.get("status") or "") not in {"queued", "running"}:
+            continue
+        options = job.get("options") if isinstance(job.get("options"), dict) else {}
+        ids = {str(value) for value in options.get("ids") or []}
+        if str(options.get("entity_type") or "") == "lead":
+            running_ids.update(ids)
+        elif str(options.get("entity_type") or "") == "auto":
+            progress = job.get("entity_progress") if isinstance(job.get("entity_progress"), dict) else {}
+            running_ids.update(entity_id for entity_id in ids if f"lead:{entity_id}" in progress)
+
     for item in candidates:
         if item.get("entity_type") != "lead":
             continue
         entity_id = str(item.get("entity_id") or "")
-        path = root / f"lead_{entity_id}" / "analysis" / f"lead_{entity_id}_analysis.json"
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        report = get_latest_ui_report(db_path, entity_type="lead", entity_id=entity_id)
+        payload = report.get("report_json") if isinstance(report, dict) else None
+        analysis = unwrap_analysis_payload(payload) if isinstance(payload, dict) else {}
+        has_analysis = isinstance(analysis, dict) and bool(analysis)
+        item["latest_report_id"] = int(report["id"]) if report and report.get("id") is not None else None
+        item["analyzed_at"] = str(report.get("created_at") or "") or None if report else None
+        item["lead_analysis_available"] = has_analysis
+        if entity_id in running_ids:
+            item["analysis_status"] = "running"
+        elif str(item.get("analysis_freshness") or "") == "failed":
+            item["analysis_status"] = "error"
+        else:
+            item["analysis_status"] = "ready" if has_analysis else "not_analyzed"
+        if not has_analysis:
+            item["lead_category"] = None
+            item["lead_qualification"] = None
+            item["lead_issue"] = None
+            item["lead_next_action"] = None
+            item["lead_closure_verdict"] = None
+            item["lead_closure_reason"] = None
             continue
-        if not isinstance(payload, dict):
-            continue
-        item["lead_analysis_available"] = True
-        legacy_summary = extract_summary_fields(payload, "lead")
+
+        legacy_summary = extract_summary_fields(analysis, "lead")
         item["lead_category"] = legacy_summary.get("lead_category")
-        summary = extract_lead_qualification_summary(payload)
+        item["lead_issue"] = str(legacy_summary.get("attention_reason") or "").strip()[:320] or None
+        item["lead_next_action"] = str(legacy_summary.get("recommended_action") or "").strip()[:320] or None
+        closure = analysis.get("closure_review") if isinstance(analysis.get("closure_review"), dict) else {}
+        verdict = str(closure.get("verdict") or "")
+        item["lead_closure_verdict"] = verdict if verdict in {
+            "confirmed_correct", "disputed", "insufficient_evidence", "not_applicable"
+        } else None
+        item["lead_closure_reason"] = str(closure.get("reason") or "").strip()[:320] or None
+        summary = extract_lead_qualification_summary(analysis)
         if summary:
             item["lead_qualification"] = summary
             item["lead_category"] = summary.get("category")
@@ -743,11 +856,31 @@ def resolve_excluded_lead_sources(
 def resolve_excluded_lead_statuses(
     client: BitrixReadOnlyClient,
     lead_profile: dict[str, Any],
+    *,
+    required_statuses: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[set[str], list[dict[str, str]]]:
     excluded = {str(item) for item in lead_profile.get("excluded_status_ids") or [] if str(item)}
     requested = {str(item).strip().lower() for item in lead_profile.get("excluded_status_names") or [] if str(item)}
     resolved: list[dict[str, str]] = []
-    for row in client.list_all("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}}):
+    status_rows = client.list_all("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
+    if required_statuses:
+        by_id = {
+            str(row.get("STATUS_ID") or "").strip(): row
+            for row in status_rows
+            if str(row.get("STATUS_ID") or "").strip()
+        }
+        for status_id, contract in required_statuses.items():
+            row = by_id.get(status_id)
+            if (
+                row is None
+                or str(row.get("NAME") or "").strip() != str(contract.get("name") or "")
+                or "SEMANTICS" not in row
+                or row.get("SEMANTICS") != contract.get("semantics")
+            ):
+                raise LeadControlConfigurationError(
+                    f"Справочник Bitrix не совпадает со статусом {status_id} группы контроля лидов; поиск остановлен"
+                )
+    for row in status_rows:
         status_id = str(row.get("STATUS_ID") or "").strip()
         status_name = str(row.get("NAME") or "").strip()
         normalized = " ".join(status_name.lower().split())
@@ -763,12 +896,21 @@ def fetch_profile_leads(
     *,
     profile: dict[str, Any],
     period: dict[str, str],
+    required_statuses: dict[str, dict[str, Any]] | None = None,
+    manager_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     lead_profile = profile.get("lead") if isinstance(profile.get("lead"), dict) else {}
     if not lead_profile.get("enabled", True):
         return [], {"excluded_sources": [], "raw": 0, "selected": 0}
-    excluded_sources, resolved = resolve_excluded_lead_sources(client, lead_profile)
-    excluded_statuses, resolved_statuses = resolve_excluded_lead_statuses(client, lead_profile)
+    control_scope = bool(required_statuses)
+    excluded_sources, resolved = (
+        (set(), []) if control_scope else resolve_excluded_lead_sources(client, lead_profile)
+    )
+    excluded_statuses, resolved_statuses = resolve_excluded_lead_statuses(
+        client,
+        lead_profile,
+        required_statuses=required_statuses,
+    )
     filter_payload: dict[str, Any] = {
         ">=DATE_CREATE": period["period_from"],
         "<DATE_CREATE": period["period_to"],
@@ -776,6 +918,8 @@ def fetch_profile_leads(
     stages = _normalize_id_list(lead_profile.get("stage_ids"))
     if stages and not lead_profile.get("all_stages", False):
         filter_payload["STATUS_ID"] = stages
+    if manager_id:
+        filter_payload["ASSIGNED_BY_ID"] = str(manager_id)
     rows = client.list_all(
         "crm.lead.list",
         {
@@ -790,8 +934,9 @@ def fetch_profile_leads(
     )
     selected = [
         row for row in rows
-        if str(row.get("SOURCE_ID") or "") not in excluded_sources
+        if (control_scope or str(row.get("SOURCE_ID") or "") not in excluded_sources)
         and str(row.get("STATUS_ID") or "") not in excluded_statuses
+        and (not control_scope or str(row.get("STATUS_ID") or "") in required_statuses)
         and _in_period(row.get("DATE_CREATE"), period)
     ]
     return selected, {
@@ -1132,24 +1277,34 @@ def build_profile_candidate(
     activity_error: str | None,
     period: dict[str, str],
     db_path: str | Path = DEFAULT_DB_PATH,
+    include_without_signals: bool = False,
+    include_local_analysis_state: bool = True,
+    include_activity_signals: bool = True,
 ) -> dict[str, Any] | None:
     entity_id = str(entity.get("ID") or "")
     if not entity_id:
         return None
     stage_id = str(entity.get("STATUS_ID") if entity_type == "lead" else entity.get("STAGE_ID") or "")
     stage_name = (status_names if entity_type == "lead" else stage_names).get(stage_id) or stage_id or "не указан"
-    signals, call_method = detect_candidate_signals(
-        entity,
-        entity_type=entity_type,
-        stage_name=stage_name,
-        activities=activities,
-        period=period,
-    )
-    if not signals:
+    if include_activity_signals:
+        signals, call_method = detect_candidate_signals(
+            entity,
+            entity_type=entity_type,
+            stage_name=stage_name,
+            activities=activities,
+            period=period,
+        )
+    else:
+        signals, call_method = [], {"method_gap": False}
+    if not signals and not include_without_signals:
         return None
     signals.sort(key=lambda item: int(item["score"]), reverse=True)
-    top = signals[0]
-    freshness = candidate_freshness(entity_type, entity, activities=activities, db_path=db_path)
+    top = signals[0] if signals else {}
+    freshness = (
+        candidate_freshness(entity_type, entity, activities=activities, db_path=db_path)
+        if include_local_analysis_state
+        else "missing"
+    )
     lead_id = str(entity.get("LEAD_ID") or "") if entity_type == "deal" else entity_id
     journey_key = f"lead:{lead_id}" if lead_id else f"deal:{entity_id}"
     return {
@@ -1166,9 +1321,9 @@ def build_profile_candidate(
         "manager_id": str(entity.get("ASSIGNED_BY_ID") or ""),
         "date_create": str(entity.get("DATE_CREATE") or ""),
         "date_modify": str(entity.get("DATE_MODIFY") or ""),
-        "priority": top["priority"],
+        "priority": top.get("priority", "low"),
         "score": sum(int(item["score"]) for item in signals),
-        "attention_reason": top["label"],
+        "attention_reason": str(top.get("label") or ""),
         "reasons": [str(item["label"]) for item in signals],
         "reason_codes": [str(item["reason_code"]) for item in signals],
         "signals": signals,
@@ -1241,6 +1396,8 @@ def profile_candidates_preview(
     now: datetime | None = None,
     db_path: str | Path = DEFAULT_DB_PATH,
     period_override: dict[str, str] | None = None,
+    required_lead_statuses: dict[str, dict[str, Any]] | None = None,
+    lead_manager_id: str | None = None,
 ) -> dict[str, Any]:
     """Live read-only discovery профиля. Не вызывает OpenAI и ничего не пишет в Bitrix."""
     profile = profile_record.get("profile") if isinstance(profile_record.get("profile"), dict) else profile_record
@@ -1251,9 +1408,29 @@ def profile_candidates_preview(
         timezone_name=timezone_name,
     )
     crm = client or make_client()
-    leads, lead_scope = fetch_profile_leads(crm, profile=profile, period=period)
-    deals, deal_scope = fetch_profile_deals(crm, profile=profile, period=period)
-    handoff_deals, outside_handoffs = fetch_lead_handoffs(crm, leads, profile=profile)
+    leads, lead_scope = fetch_profile_leads(
+        crm,
+        profile=profile,
+        period=period,
+        required_statuses=required_lead_statuses,
+        manager_id=lead_manager_id,
+    )
+    control_scope = bool(required_lead_statuses)
+    manager_names: dict[str, str] = {}
+    if control_scope:
+        manager_ids = {str(item.get("ASSIGNED_BY_ID") or "").strip() for item in leads}
+        manager_ids.discard("")
+        if manager_ids:
+            try:
+                with bitrix_trace_context(component="lead_control_managers"):
+                    manager_names = fetch_user_names(crm, manager_ids)
+            except Exception:  # noqa: BLE001 - owner names are optional; retain prior snapshot values on refresh
+                manager_names = {}
+    if control_scope:
+        deals, deal_scope = [], {"fresh": 0, "portfolio": 0, "selected": 0}
+    else:
+        deals, deal_scope = fetch_profile_deals(crm, profile=profile, period=period)
+    handoff_deals, outside_handoffs = ([], []) if control_scope else fetch_lead_handoffs(crm, leads, profile=profile)
     deal_by_id = {str(item.get("ID") or ""): item for item in [*deals, *handoff_deals] if str(item.get("ID") or "")}
     deals = list(deal_by_id.values())
     outside_lead_ids = {str(item.get("LEAD_ID") or "") for item in outside_handoffs}
@@ -1261,9 +1438,13 @@ def profile_candidates_preview(
         leads = [item for item in leads if str(item.get("ID") or "") not in outside_lead_ids]
     deal_scope["lead_handoffs_in_scope"] = len(handoff_deals)
     deal_scope["selected"] = len(deals)
-    stage_names = load_pipeline_stage_names()
-    status_names = load_status_map(crm, "STATUS") if leads else {}
-    catalog = list_crm_pipelines()
+    stage_names = {} if control_scope else load_pipeline_stage_names()
+    status_names = (
+        {status_id: str(contract.get("name") or status_id) for status_id, contract in required_lead_statuses.items()}
+        if control_scope
+        else load_status_map(crm, "STATUS") if leads else {}
+    )
+    catalog = {} if control_scope else list_crm_pipelines()
     known_pipelines = {str(item.get("id") or "") for item in catalog.get("deal_pipelines") or []}
     known_stages = set(stage_names)
     deal_profile = profile.get("deal") if isinstance(profile.get("deal"), dict) else {}
@@ -1271,23 +1452,26 @@ def profile_candidates_preview(
     missing_stages = sorted(set(_normalize_id_list(deal_profile.get("stage_ids"))) - known_stages)
     entities = [(entity_type, row) for entity_type, rows in (("lead", leads), ("deal", deals)) for row in rows]
 
-    activity_lookup = fetch_candidate_activities_bulk(crm, entities)
-
-    def load_activity_context(pair: tuple[str, dict[str, Any]]) -> tuple[str, dict[str, Any], list[dict[str, Any]], str | None]:
-        entity_type, row = pair
-        entity_id = str(row.get("ID") or "")
-        activities, error = activity_lookup.get((entity_type, entity_id), ([], "activity bulk response missing"))
-        # Некоторые порталы не принимают OWNER_ID[]=...; только тогда делаем bounded fallback.
-        if error:
-            activities, error = fetch_candidate_activities(crm, entity_type, entity_id)
-        return entity_type, row, activities, error
-
-    failed_bulk = any(error for _, error in activity_lookup.values())
-    if failed_bulk:
-        with ThreadPoolExecutor(max_workers=min(6, max(1, len(entities)))) as executor:
-            activity_contexts = list(executor.map(load_activity_context, entities))
+    if control_scope:
+        activity_contexts = [(entity_type, row, [], None) for entity_type, row in entities]
     else:
-        activity_contexts = [load_activity_context(pair) for pair in entities]
+        activity_lookup = fetch_candidate_activities_bulk(crm, entities)
+
+        def load_activity_context(pair: tuple[str, dict[str, Any]]) -> tuple[str, dict[str, Any], list[dict[str, Any]], str | None]:
+            entity_type, row = pair
+            entity_id = str(row.get("ID") or "")
+            activities, error = activity_lookup.get((entity_type, entity_id), ([], "activity bulk response missing"))
+            # Некоторые порталы не принимают OWNER_ID[]=...; только тогда делаем bounded fallback.
+            if error:
+                activities, error = fetch_candidate_activities(crm, entity_type, entity_id)
+            return entity_type, row, activities, error
+
+        failed_bulk = any(error for _, error in activity_lookup.values())
+        if failed_bulk:
+            with ThreadPoolExecutor(max_workers=min(6, max(1, len(entities)))) as executor:
+                activity_contexts = list(executor.map(load_activity_context, entities))
+        else:
+            activity_contexts = [load_activity_context(pair) for pair in entities]
 
     cards: list[dict[str, Any]] = []
     activity_errors = 0
@@ -1302,12 +1486,22 @@ def profile_candidates_preview(
             activity_error=error,
             period=period,
             db_path=db_path,
+            include_without_signals=control_scope,
+            include_local_analysis_state=not control_scope,
+            include_activity_signals=not control_scope,
         )
         if card:
+            if control_scope:
+                manager_name = manager_names.get(str(row.get("ASSIGNED_BY_ID") or ""))
+                if manager_name:
+                    card["manager_name"] = manager_name
             cards.append(card)
-    cards = deduplicate_journeys(cards)
-    attach_saved_lead_qualification(cards)
-    cards, review_summary = apply_profile_review_states(cards, view=str(profile.get("review_view") or "active"), db_path=db_path)
+    if not control_scope:
+        cards = deduplicate_journeys(cards)
+        attach_saved_lead_qualification(cards, db_path=db_path)
+        cards, review_summary = apply_profile_review_states(cards, view=str(profile.get("review_view") or "active"), db_path=db_path)
+    else:
+        review_summary = {"reviewed_hidden": 0, "reviewed_visible": 0, "reactivated": 0}
     for item in cards:
         stable_signal = {
             "entity_type": item.get("entity_type"),
@@ -1319,7 +1513,8 @@ def profile_candidates_preview(
         item["signal_hash"] = hashlib.sha256(
             json.dumps(stable_signal, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
-    reconcile_candidate_cases(db_path, cards, as_of=period["as_of"])
+    if not control_scope:
+        reconcile_candidate_cases(db_path, cards, as_of=period["as_of"])
     cards.sort(
         key=lambda item: (
             {"high": 3, "medium": 2, "low": 1}.get(str(item.get("priority")), 0),
@@ -1328,6 +1523,31 @@ def profile_candidates_preview(
         ),
         reverse=True,
     )
+    if control_scope:
+        return {
+            "profile": {"id": profile_record.get("id"), "name": profile_record.get("name"), "version": profile_record.get("version")},
+            "period": period,
+            "scope": {
+                "lead": lead_scope,
+                "deal": deal_scope,
+                "activity_errors": 0,
+                "handoff_warning": {"outside_profile_count": 0, "lead_ids": [], "message": ""},
+                "profile_drift": {"has_drift": False, "missing_pipeline_ids": [], "missing_stage_ids": [], "message": ""},
+            },
+            "summary": {
+                "total": len(cards),
+                "workset": len(cards),
+                "reviewed_hidden": review_summary["reviewed_hidden"],
+                "reviewed_visible": review_summary["reviewed_visible"],
+                "reactivated": review_summary["reactivated"],
+                "estimated_paid_entities": 0,
+                "estimated_cost_rub": 0,
+            },
+            "candidates": cards,
+            "manager_names": manager_names,
+            "generated_at": period["as_of"],
+            "llm_called": False,
+        }
     select_workset(cards, profile.get("limits") if isinstance(profile.get("limits"), dict) else {})
     selected = [item for item in cards if item.get("workset_selected")]
     paid_run_limit = max(0, int((profile.get("limits") or {}).get("paid_per_run") or 5))
@@ -1444,6 +1664,496 @@ def apply_profile_review_states(
     return result, summary
 
 
+def _lead_control_period(*, now: datetime | None = None) -> dict[str, str]:
+    current = now or datetime.now(MOSCOW_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MOSCOW_TZ)
+    current = current.astimezone(MOSCOW_TZ)
+    return {
+        "timezone": "Europe/Moscow",
+        "period_from": (current - timedelta(days=30)).isoformat(),
+        "period_to": current.isoformat(),
+        "as_of": current.isoformat(timespec="seconds"),
+    }
+
+
+def _lead_control_snapshot_cards(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Store Bitrix-derived rows only; current reports, jobs, and reviews are reattached on reads.
+    mutable_fields = {
+        "analysis_freshness", "analysis_status", "latest_report_id", "analyzed_at",
+        "lead_analysis_available", "lead_category", "lead_qualification", "lead_issue",
+        "lead_next_action", "lead_closure_verdict", "lead_closure_reason", "analyzed",
+        "analysis_path", "review_state", "lifecycle", "workset_selected", "capacity_state",
+    }
+    return [
+        {key: value for key, value in item.items() if key not in mutable_fields}
+        for item in candidates
+        if isinstance(item, dict) and item.get("entity_type") == "lead" and str(item.get("entity_id") or "")
+    ]
+
+
+def _lead_control_snapshot_state(state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(state, dict) or not isinstance(state.get("payload"), dict):
+        return None
+    payload = state["payload"]
+    candidates = payload.get("candidates")
+    if payload.get("schema_version") != 1 or not isinstance(candidates, list):
+        return None
+    manager_names = {
+        str(user_id): str(name).strip()
+        for user_id, name in (payload.get("manager_names") or {}).items()
+        if str(user_id).strip() and str(name).strip()
+    } if isinstance(payload.get("manager_names"), dict) else {}
+    normalized_candidates = [dict(item) for item in candidates if isinstance(item, dict)]
+    for item in normalized_candidates:
+        manager_id = str(item.get("manager_id") or "").strip()
+        manager_name = str(item.get("manager_name") or "").strip()
+        if manager_id and manager_name:
+            manager_names.setdefault(manager_id, manager_name)
+    return {
+        "revision": int(state.get("revision") or 0),
+        "crm_updated_at": str(payload.get("crm_updated_at") or "") or None,
+        "candidates": normalized_candidates,
+        "manager_names": manager_names,
+    }
+
+
+def lead_control_snapshot_candidate(lead_id: str, *, db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    state = _lead_control_snapshot_state(get_crm_sync_state(db_path, LEAD_CONTROL_SNAPSHOT_KEY))
+    return next(
+        (item for item in (state or {}).get("candidates", []) if str(item.get("entity_id") or "") == str(lead_id)),
+        None,
+    )
+
+
+def _lead_control_history_key(lead_id: str) -> str:
+    return f"{LEAD_CONTROL_HISTORY_KEY_PREFIX}{lead_id}"
+
+
+def _lead_control_history_state(state: dict[str, Any] | None, *, lead_id: str) -> dict[str, Any] | None:
+    if not isinstance(state, dict) or not isinstance(state.get("payload"), dict):
+        return None
+    payload = state["payload"]
+    if payload.get("schema_version") != 1 or str(payload.get("lead_id") or "") != lead_id:
+        return None
+    comments = payload.get("comments")
+    communications = payload.get("communications")
+    if not isinstance(comments, list) or not isinstance(communications, list):
+        return None
+    task = payload.get("current_task")
+    return {
+        "lead_id": lead_id,
+        "available": bool(payload.get("available")),
+        "comments": [dict(item) for item in comments if isinstance(item, dict)],
+        "communications": [dict(item) for item in communications if isinstance(item, dict)],
+        "current_task": dict(task) if isinstance(task, dict) else None,
+        "task_checked": bool(payload.get("task_checked")),
+        "limitations": [str(item) for item in payload.get("limitations") or [] if str(item).strip()],
+        "fetched_at": str(payload.get("fetched_at") or "") or None,
+        "revision": int(state.get("revision") or 0),
+    }
+
+
+def _lead_control_current_task(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def raw_of(item: dict[str, Any]) -> dict[str, Any]:
+        raw = item.get("raw")
+        return raw if isinstance(raw, dict) else {}
+
+    def completed(item: dict[str, Any]) -> bool:
+        raw = raw_of(item)
+        value = str(item.get("completed") or raw.get("COMPLETED") or "").strip().upper()
+        return value in {"Y", "1", "TRUE", "COMPLETED"}
+
+    def task_time(item: dict[str, Any]) -> tuple[bool, str, str]:
+        raw = raw_of(item)
+        deadline = str(raw.get("DEADLINE") or "").strip()
+        fallback = str(item.get("when") or raw.get("START_TIME") or "").strip()
+        return (not bool(deadline), deadline or fallback, str(item.get("id") or ""))
+
+    open_tasks = [item for item in tasks if not completed(item)]
+    task = min(open_tasks, key=task_time, default=None)
+    if not isinstance(task, dict):
+        return None
+    raw = raw_of(task)
+    return {
+        "subject": str(task.get("subject") or raw.get("SUBJECT") or "").strip(),
+        "deadline": str(raw.get("DEADLINE") or "") or None,
+        "status": "open",
+    }
+
+
+def _project_lead_control_history(
+    lead_id: str,
+    activity_response: dict[str, Any],
+    comment_response: dict[str, Any],
+) -> dict[str, Any]:
+    activity_ok = bool(activity_response.get("ok"))
+    comments_ok = bool(comment_response.get("ok"))
+    history = {
+        "activities_by_entity": {
+            f"lead:{lead_id}": {
+                "entity_type": "lead",
+                "entity_id": lead_id,
+                "activities": activity_response,
+                "timeline_comments": [comment_response],
+            }
+        }
+    }
+    sections = build_history_sections(history)
+    bundle = {**sections, "lead": {}}
+    events = build_normalized_communications(bundle)
+    activity_text_by_id = {
+        str(item.get("ID") or ""): clean_text(item.get("DESCRIPTION"))
+        for item in result_items(activity_response)
+        if str(item.get("ID") or "")
+    }
+    comment_text_by_id = {
+        str(item.get("ID") or ""): clean_text(item.get("COMMENT") or item.get("TEXT") or item.get("DESCRIPTION"))
+        for item in result_items(comment_response)
+        if str(item.get("ID") or "")
+    }
+    communications: list[dict[str, Any]] = []
+    missing_transcript = False
+    truncated_text = False
+    for event in events:
+        channel = str(event.get("channel") or "unknown")
+        contact_class = str(event.get("contact_class") or "unknown")
+        transcript_available: bool | None = None
+        kind = (
+            "contact" if contact_class == "confirmed_contact"
+            else "internal" if contact_class == "internal_information"
+            else "attempt" if contact_class == "attempt"
+            else "unknown"
+        )
+        source_ids = event.get("source_ids") if isinstance(event.get("source_ids"), list) else []
+        source_id = str(source_ids[0] or "") if source_ids else ""
+        source_text = (
+            activity_text_by_id.get(source_id, "")
+            if event.get("source_type") == "crm_activity"
+            else comment_text_by_id.get(source_id, "")
+        )
+        text = source_text or str(event.get("content") or event.get("subject") or "")
+        if channel == "call":
+            transcript_available = False
+            call_id = str(event.get("call_id") or "")
+            if call_id:
+                try:
+                    from api.jobs import _call_transcript, _transcript_confirms_contact
+
+                    transcript = _call_transcript(lead_id, call_id)
+                    transcript_available = bool(transcript)
+                    if transcript:
+                        text = transcript
+                        if _transcript_confirms_contact(
+                            transcript,
+                            event.get("duration_seconds") if isinstance(event.get("duration_seconds"), (int, float)) else None,
+                        ):
+                            kind = "contact"
+                except Exception:  # noqa: BLE001 - local transcripts are optional history evidence
+                    transcript_available = False
+            missing_transcript = missing_transcript or not transcript_available
+        if len(text) > 20_000:
+            text = text[:20_000]
+            truncated_text = True
+        projected = {
+            "id": str(event.get("event_id") or ""),
+            "occurred_at": str(event.get("occurred_at") or "") or None,
+            "channel": channel,
+            "kind": kind,
+            "text": text,
+        }
+        if transcript_available is not None:
+            projected["transcript_available"] = transcript_available
+        communications.append(projected)
+    communications.sort(key=lambda item: (str(item.get("occurred_at") or ""), str(item.get("id") or "")), reverse=True)
+
+    comments = []
+    for item in sections.get("internal_context") or []:
+        if not isinstance(item, dict):
+            continue
+        comment_id = str(item.get("id") or "")
+        text = comment_text_by_id.get(comment_id) or str(item.get("text") or "")
+        if len(text) > 20_000:
+            text = text[:20_000]
+            truncated_text = True
+        comments.append({
+            "id": comment_id,
+            "created_at": str(item.get("when") or "") or None,
+            "text": text,
+            "author_id": str(item.get("author_id") or "") or None,
+        })
+    comments.sort(key=lambda item: (str(item.get("created_at") or ""), str(item.get("id") or "")), reverse=True)
+    limitations = []
+    if not activity_ok:
+        limitations.append("Не удалось загрузить активности лида из Bitrix.")
+    if not comments_ok:
+        limitations.append("Не удалось загрузить комментарии лида из Bitrix.")
+    if missing_transcript:
+        limitations.append("Для части звонков нет доступной локальной расшифровки.")
+    if truncated_text:
+        limitations.append("Текст отдельных записей сокращён до 20 000 символов.")
+    return {
+        "comments": comments,
+        "communications": communications,
+        "current_task": _lead_control_current_task(sections.get("tasks_and_control") or []) if activity_ok else None,
+        "task_checked": activity_ok,
+        "activity_ok": activity_ok,
+        "comments_ok": comments_ok,
+        "limitations": limitations,
+    }
+
+
+def load_lead_control_history(
+    lead_id: str,
+    *,
+    refresh_crm: bool = False,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    key = _lead_control_history_key(lead_id)
+    before = get_crm_sync_state(db_path, key)
+    cached = _lead_control_history_state(before, lead_id=lead_id)
+    if cached and not refresh_crm:
+        return {field: value for field, value in cached.items() if field not in {"revision", "task_checked"}}
+
+    try:
+        client = make_client()
+    except Exception:  # noqa: BLE001 - report source unavailability without exposing configuration details
+        limitations = ["Не удалось подключиться к Bitrix для чтения истории лида."]
+        if cached:
+            return {
+                field: value
+                for field, value in {
+                    **cached,
+                    "limitations": list(dict.fromkeys([*cached["limitations"], *limitations])),
+                }.items()
+                if field not in {"revision", "task_checked"}
+            }
+        return {
+            "lead_id": lead_id,
+            "available": False,
+            "comments": [],
+            "communications": [],
+            "current_task": None,
+            "limitations": limitations,
+            "fetched_at": None,
+        }
+    activity_payload = {
+        "order": {"START_TIME": "DESC", "DEADLINE": "DESC", "ID": "DESC"},
+        "filter": {"OWNER_TYPE_ID": 1, "OWNER_ID": lead_id},
+        "select": [
+            "ID", "TYPE_ID", "PROVIDER_ID", "PROVIDER_TYPE_ID", "PROVIDER_GROUP_ID", "SUBJECT",
+            "DESCRIPTION", "DIRECTION", "COMPLETED", "START_TIME", "CREATED", "DEADLINE", "END_TIME",
+        ],
+    }
+    comment_payload = {
+        "order": {"CREATED": "DESC", "ID": "DESC"},
+        "filter": {"ENTITY_TYPE": "lead", "ENTITY_ID": lead_id},
+        "select": ["ID", "CREATED", "ENTITY_ID", "ENTITY_TYPE", "AUTHOR_ID", "COMMENT"],
+    }
+
+    def read_source(method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = client.safe_list_all(method, payload)
+            return response if isinstance(response, dict) else {"ok": False, "items": []}
+        except Exception:  # noqa: BLE001 - keep source failures explicit and independent
+            return {"ok": False, "items": []}
+
+    with bitrix_trace_context(component="lead_control_history"):
+        activities = read_source("crm.activity.list", activity_payload)
+        comments = read_source("crm.timeline.comment.list", comment_payload)
+    projected = _project_lead_control_history(lead_id, activities, comments)
+    # Preserve last known source data when an individual Bitrix read fails.
+    if cached:
+        if not projected["activity_ok"]:
+            projected["communications"] = cached["communications"]
+            projected["current_task"] = cached["current_task"]
+            projected["task_checked"] = cached["task_checked"]
+        if not projected["comments_ok"]:
+            projected["comments"] = cached["comments"]
+    has_fresh_source = projected["activity_ok"] or projected["comments_ok"]
+    fetched_at = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds") if has_fresh_source else (cached or {}).get("fetched_at")
+    payload = {
+        "schema_version": 1,
+        "lead_id": lead_id,
+        "available": bool(has_fresh_source or (cached or {}).get("available")),
+        "comments": projected["comments"],
+        "communications": projected["communications"],
+        "current_task": projected["current_task"],
+        "task_checked": projected["task_checked"],
+        "limitations": projected["limitations"],
+        "fetched_at": fetched_at,
+    }
+    if has_fresh_source:
+        expected_revision = int(before.get("revision") or 0) if before else 0
+        try:
+            put_crm_sync_state(db_path, key, payload, expected_revision=expected_revision)
+        except RuntimeError:
+            newer = _lead_control_history_state(get_crm_sync_state(db_path, key), lead_id=lead_id)
+            if newer:
+                return {field: value for field, value in newer.items() if field not in {"revision", "task_checked"}}
+            raise
+    return {
+        "lead_id": lead_id,
+        "available": payload["available"],
+        "comments": payload["comments"],
+        "communications": payload["communications"],
+        "current_task": payload["current_task"],
+        "limitations": payload["limitations"],
+        "fetched_at": payload["fetched_at"],
+    }
+
+
+def _search_lead_control_candidates(
+    *,
+    group: str,
+    manager_id: str | None,
+    limit: int,
+    review_view: str,
+    refresh_crm: bool,
+    required_statuses: dict[str, dict[str, Any]],
+    db_path: str | Path,
+) -> dict[str, Any]:
+    period = _lead_control_period()
+    before_refresh = get_crm_sync_state(db_path, LEAD_CONTROL_SNAPSHOT_KEY)
+    state = _lead_control_snapshot_state(before_refresh)
+    if refresh_crm:
+        expected_statuses = {
+            status_id: contract
+            for group_statuses in LEAD_CONTROL_GROUPS.values()
+            for status_id, contract in group_statuses.items()
+        }
+        if required_statuses != expected_statuses:
+            raise LeadControlConfigurationError("Перед обновлением Bitrix требуется проверить все четыре статуса контроля лидов")
+        profile = default_analysis_profile()
+        profile["review_view"] = "all"
+        profile["lead"]["enabled"] = True
+        profile["lead"]["all_stages"] = False
+        profile["lead"]["stage_ids"] = list(required_statuses)
+        profile["deal"]["enabled"] = False
+        preview = profile_candidates_preview(
+            {"name": "Lead control snapshot", "version": 1, "profile": profile},
+            period_override=period,
+            required_lead_statuses=required_statuses,
+            db_path=db_path,
+        )
+        refreshed_names = {
+            str(user_id).strip(): str(name).strip()
+            for user_id, name in (preview.get("manager_names") or {}).items()
+            if str(user_id).strip() and str(name).strip()
+        } if isinstance(preview.get("manager_names"), dict) else {}
+        manager_names = {**(state or {}).get("manager_names", {}), **refreshed_names}
+        snapshot_cards = _lead_control_snapshot_cards(preview.get("candidates") or [])
+        snapshot_manager_names: dict[str, str] = {}
+        for item in snapshot_cards:
+            owner_id = str(item.get("manager_id") or "").strip()
+            manager_name = refreshed_names.get(owner_id) or manager_names.get(owner_id) or str(item.get("manager_name") or "").strip()
+            if owner_id and manager_name:
+                item["manager_name"] = manager_name
+                snapshot_manager_names[owner_id] = manager_name
+            else:
+                item.pop("manager_name", None)
+        payload = {
+            "schema_version": 1,
+            "crm_updated_at": period["as_of"],
+            "candidates": snapshot_cards,
+            "manager_names": snapshot_manager_names,
+        }
+        expected_revision = int(before_refresh.get("revision") or 0) if before_refresh else 0
+        try:
+            put_crm_sync_state(
+                db_path,
+                LEAD_CONTROL_SNAPSHOT_KEY,
+                payload,
+                expected_revision=expected_revision,
+            )
+        except RuntimeError as error:
+            newer = get_crm_sync_state(db_path, LEAD_CONTROL_SNAPSHOT_KEY)
+            if newer is not None and int(newer.get("revision") or 0) != expected_revision:
+                raise RuntimeError("Lead-control refresh conflicted with a newer snapshot; retry the refresh") from error
+            raise
+        state = _lead_control_snapshot_state(get_crm_sync_state(db_path, LEAD_CONTROL_SNAPSHOT_KEY))
+
+    crm_updated_at = state.get("crm_updated_at") if state else None
+    cached_cards = state.get("candidates") if state else []
+    manager_names = state.get("manager_names") if state else {}
+    wanted_statuses = set(LEAD_CONTROL_GROUPS[group])
+    matching = [
+        item
+        for item in cached_cards
+        if item.get("entity_type") == "lead"
+        and str(item.get("stage_id") or "") in wanted_statuses
+        and (not manager_id or str(item.get("manager_id") or "") == manager_id)
+        and _in_period(item.get("date_create"), period)
+    ]
+    matching.sort(
+        key=lambda item: (
+            {"high": 3, "medium": 2, "low": 1}.get(str(item.get("priority")), 0),
+            int(item.get("score") or 0),
+            str(item.get("date_create") or ""),
+        ),
+        reverse=True,
+    )
+    total_scored = len(matching)
+    top = [dict(item) for item in matching[:limit]]
+    for item in top:
+        manager_name = manager_names.get(str(item.get("manager_id") or ""))
+        if manager_name:
+            item["manager_name"] = manager_name
+        history_state = _lead_control_history_state(
+            get_crm_sync_state(db_path, _lead_control_history_key(str(item.get("entity_id") or ""))),
+            lead_id=str(item.get("entity_id") or ""),
+        )
+        item["crm_task"] = history_state.get("current_task") if history_state else None
+        item["crm_task_checked"] = bool(history_state and history_state.get("task_checked"))
+        item["analysis_freshness"] = candidate_freshness(
+            "lead",
+            {
+                "ID": str(item.get("entity_id") or ""),
+                "STATUS_ID": item.get("stage_id"),
+                "DATE_MODIFY": item.get("date_modify"),
+            },
+            db_path=db_path,
+        )
+    attach_saved_lead_qualification(top, db_path=db_path)
+    for item in top:
+        item["analyzed"] = bool(item.get("lead_analysis_available"))
+    top, review_summary = apply_profile_review_states(top, view=review_view, db_path=db_path)
+    summary = {
+        "total_scored": total_scored,
+        "returned": len(top),
+        "high": sum(1 for item in top if item.get("priority") == "high"),
+        "medium": sum(1 for item in top if item.get("priority") == "medium"),
+        "low": sum(1 for item in top if item.get("priority") == "low"),
+        "already_analyzed": sum(1 for item in top if item.get("analyzed")),
+        "reviewed_hidden": review_summary["reviewed_hidden"],
+        "reviewed_visible": review_summary["reviewed_visible"],
+        "changed_after_review": review_summary["reactivated"],
+        "crm_updated_after_review": 0,
+    }
+    return {
+        "created_days": 30,
+        "modified_days": 0,
+        "days": 30,
+        "limit": limit,
+        "entity_type": "lead",
+        "lead_control_group": group,
+        "manager_id": manager_id,
+        "pipeline_ids": [],
+        "stage_ids": list(LEAD_CONTROL_GROUPS[group]),
+        "review_view": review_view,
+        "lead_categories": [],
+        "bant_filter": "",
+        "ready": True,
+        "ready_message": "" if state else "Нажмите «Обновить Bitrix», чтобы загрузить список лидов.",
+        "generated_at": period["as_of"],
+        "crm_snapshot_available": state is not None,
+        "crm_updated_at": crm_updated_at,
+        "manager_names": manager_names,
+        "summary": summary,
+        "candidates": top,
+    }
+
+
 def search_candidates(
     *,
     entity_type: str = "lead",
@@ -1457,6 +2167,11 @@ def search_candidates(
     review_view: str = "active",
     lead_categories: list[str] | None = None,
     bant_filter: str = "",
+    lead_control_group: str | None = None,
+    lead_manager_id: str | None = None,
+    required_lead_statuses: dict[str, dict[str, Any]] | None = None,
+    refresh_crm: bool = False,
+    db_path: str | Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     # Обратная совместимость: старый параметр days задаёт окно CREATE.
     if days is not None:
@@ -1467,9 +2182,32 @@ def search_candidates(
     limit = max(1, min(int(limit), 100))
     pipelines = _normalize_id_list(pipeline_ids)
     stages = _normalize_id_list(stage_ids)
+    manager_id = str(lead_manager_id or "").strip() or None
+    if manager_id and (entity_type != "lead" or not lead_control_group):
+        raise LeadControlConfigurationError("Фильтр менеджера доступен только в контроле лидов")
+    if lead_control_group:
+        if entity_type != "lead" or str(lead_control_group) not in LEAD_CONTROL_GROUPS:
+            raise LeadControlConfigurationError("Неизвестная группа контроля лидов")
+        return _search_lead_control_candidates(
+            group=str(lead_control_group),
+            manager_id=manager_id,
+            limit=limit,
+            review_view=review_view,
+            refresh_crm=refresh_crm,
+            required_statuses=required_lead_statuses or {},
+            db_path=db_path,
+        )
     review_view = review_view if review_view in {"active", "reviewed", "all"} else "active"
-    categories = {str(value) for value in (lead_categories or []) if str(value) in {"A", "B", "C", "D", "E", "unknown"}}
-    bant_filter = bant_filter if bant_filter in {"", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"} else ""
+    categories = (
+        set()
+        if lead_control_group
+        else {str(value) for value in (lead_categories or []) if str(value) in {"A", "B", "C", "D", "E", "unknown"}}
+    )
+    bant_filter = "" if lead_control_group else (
+        bant_filter
+        if bant_filter in {"", "complete", "incomplete", "budget", "authority", "need", "timeframe", "negative", "unknown"}
+        else ""
+    )
 
     ready, ready_message = candidates_filter_ready(
         entity_type=entity_type,
@@ -1494,6 +2232,8 @@ def search_candidates(
         "days": created_days,
         "limit": limit,
         "entity_type": entity_type,
+        "lead_control_group": lead_control_group,
+        "manager_id": manager_id,
         "pipeline_ids": pipelines,
         "stage_ids": stages,
         "review_view": review_view,
@@ -1533,6 +2273,9 @@ def search_candidates(
     preview = profile_candidates_preview(
         {"name": "Совместимый фильтр кандидатов", "version": 1, "profile": profile},
         period_override=period_override,
+        required_lead_statuses=required_lead_statuses,
+        lead_manager_id=manager_id,
+        db_path=db_path,
     )
     scored = [item for item in preview["candidates"] if item.get("entity_type") == entity_type]
     if entity_type == "lead" and (categories or bant_filter):
@@ -1541,7 +2284,7 @@ def search_candidates(
             for item in scored
             if lead_qualification_matches(item, categories=categories, bant_filter=bant_filter)
         ]
-    if priority in {"high", "medium", "low"}:
+    if not lead_control_group and priority in {"high", "medium", "low"}:
         scored = [item for item in scored if item.get("priority") == priority]
     review_summary = {
         "reviewed_hidden": int(preview["summary"].get("reviewed_hidden") or 0),

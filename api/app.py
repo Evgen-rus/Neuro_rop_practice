@@ -20,10 +20,15 @@ from pydantic import BaseModel, Field
 from api.candidates import (
     DEFAULT_DAYS,
     DEFAULT_LIMIT,
+    LeadControlConfigurationError,
     custom_period_bounds,
+    lead_control_snapshot_candidate,
+    load_lead_control_history,
     list_crm_pipelines,
     profile_period_bounds,
     profile_candidates_preview,
+    resolve_auto_lead_ids,
+    resolve_lead_control_group,
     search_candidates,
 )
 from api.access import (
@@ -37,6 +42,7 @@ from api.access import (
     require_deal,
     require_report,
     require_task,
+    rop_team_manager_ids,
     scoped_automatic_analysis_items,
     scoped_deal_metrics,
     scoped_dashboard,
@@ -238,6 +244,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MAX_LEAD_ANALYZE_IDS = 10
 
 
 class AnalyzeRequest(BaseModel):
@@ -461,6 +469,9 @@ class DealControlTaskEventRequest(BaseModel):
 
 class CandidatesSearchRequest(BaseModel):
     entity_type: Literal["lead", "deal"] = "lead"
+    lead_control_group: Literal["active", "closed"] | None = None
+    manager_id: str | None = Field(default=None, max_length=40)
+    refresh_crm: bool = False
     created_days: int = Field(default=DEFAULT_DAYS, ge=0)
     modified_days: int = Field(default=DEFAULT_DAYS, ge=0)
     days: int | None = Field(default=None, ge=0, description="Устаревший alias для created_days")
@@ -676,6 +687,8 @@ def _require_analyze_scope(entity_type: str, ids: list[str], *, paid: bool) -> d
     if role == "admin":
         return user
     if role == "rop":
+        if entity_type == "lead":
+            return user
         if entity_type != "deal":
             raise HTTPException(status_code=403, detail="ROP analysis is limited to team deals")
         for entity_id in ids:
@@ -1054,6 +1067,26 @@ def deal_control_dashboard() -> dict[str, Any]:
 def deal_control_comments_get(deal_id: str) -> dict[str, Any]:
     require_deal(deal_id, action="open")
     return load_deal_comments(deal_id=deal_id)
+
+
+@app.get("/api/lead-control/leads/{lead_id}/history")
+def lead_control_history_get(lead_id: str, refresh_crm: bool = False) -> dict[str, Any]:
+    user = _require_admin_or_rop()
+    raw_id = str(lead_id or "").strip()
+    if not raw_id.isascii() or not raw_id.isdigit() or len(raw_id) > 20 or int(raw_id or "0") <= 0:
+        raise HTTPException(status_code=422, detail="Укажите числовой ID лида")
+    normalized_id = str(int(raw_id))
+    candidate = lead_control_snapshot_candidate(normalized_id, db_path=DEFAULT_DB_PATH)
+    if not candidate or candidate.get("entity_type") != "lead":
+        raise HTTPException(status_code=404, detail="Лид не найден в сохранённом списке контроля")
+    if str(user.get("role") or "") == "rop":
+        manager_id = str(candidate.get("manager_id") or "")
+        if not manager_id or manager_id not in rop_team_manager_ids():
+            raise HTTPException(status_code=403, detail="Лид вне зоны доступа команды")
+    try:
+        return load_lead_control_history(normalized_id, refresh_crm=refresh_crm, db_path=DEFAULT_DB_PATH)
+    except Exception as error:  # noqa: BLE001 - never expose CRM transport details to the UI
+        raise HTTPException(status_code=502, detail="Не удалось загрузить историю лида. Повторите попытку.") from error
 
 
 @app.get("/api/daily-control/reports")
@@ -2319,37 +2352,81 @@ def candidates(
 @app.post("/api/candidates/search")
 def candidates_search(body: CandidatesSearchRequest) -> dict[str, Any]:
     _require_admin_or_rop()
+    manager_id = str(body.manager_id or "").strip() or None
+    if body.lead_control_group and body.entity_type != "lead":
+        raise HTTPException(status_code=422, detail="Группа контроля лидов доступна только для entity_type=lead")
+    if body.refresh_crm and not body.lead_control_group:
+        raise HTTPException(status_code=422, detail="Обновление Bitrix доступно только для группы контроля лидов")
+    if manager_id and not body.lead_control_group:
+        raise HTTPException(status_code=422, detail="Фильтр менеджера доступен только в группе контроля лидов")
+    created_days = 30 if body.lead_control_group else body.created_days
+    modified_days = 0 if body.lead_control_group else body.modified_days
+    days = None if body.lead_control_group else body.days
+    stage_ids = body.stage_ids
+    required_statuses = None
+    if body.lead_control_group:
+        try:
+            control_groups = {
+                group: resolve_lead_control_group(group)
+                for group in ("active", "closed")
+            }
+        except LeadControlConfigurationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        control_group = control_groups[body.lead_control_group]
+        stage_ids = control_group["stage_ids"]
+        required_statuses = {
+            status_id: contract
+            for group_config in control_groups.values()
+            for status_id, contract in group_config["required_statuses"].items()
+        }
     try:
+        result = search_candidates(
+            entity_type=body.entity_type,
+            created_days=created_days,
+            modified_days=modified_days,
+            days=days,
+            limit=body.limit,
+            priority=body.priority,
+            pipeline_ids=body.pipeline_ids,
+            stage_ids=stage_ids,
+            review_view=body.review_view,
+            lead_categories=body.lead_categories,
+            bant_filter=body.bant_filter,
+            lead_control_group=body.lead_control_group,
+            lead_manager_id=manager_id,
+            required_lead_statuses=required_statuses,
+            refresh_crm=body.refresh_crm,
+            db_path=DEFAULT_DB_PATH,
+        )
         if body.save:
             save_candidate_filter(
                 DEFAULT_DB_PATH,
                 {
                     "entity_type": body.entity_type,
-                    "created_days": body.created_days,
-                    "modified_days": body.modified_days,
+                    "created_days": created_days,
+                    "modified_days": modified_days,
                     "limit": body.limit,
                     "priority": body.priority,
                     "pipeline_ids": body.pipeline_ids,
-                    "stage_ids": body.stage_ids,
+                    "stage_ids": stage_ids,
                     "review_view": body.review_view,
                     "lead_categories": body.lead_categories,
                     "bant_filter": body.bant_filter,
                 },
             )
-        return search_candidates(
-            entity_type=body.entity_type,
-            created_days=body.created_days,
-            modified_days=body.modified_days,
-            days=body.days,
-            limit=body.limit,
-            priority=body.priority,
-            pipeline_ids=body.pipeline_ids,
-            stage_ids=body.stage_ids,
-            review_view=body.review_view,
-            lead_categories=body.lead_categories,
-            bant_filter=body.bant_filter,
-        )
+        return result
+    except LeadControlConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except HTTPException:
+        raise
     except Exception as error:  # noqa: BLE001
+        if body.lead_control_group:
+            detail = (
+                "Не удалось обновить лиды из Bitrix. Сохранённый список не изменён. Повторите обновление."
+                if body.refresh_crm
+                else "Не удалось загрузить сохранённый список лидов. Попробуйте обновить Bitrix."
+            )
+            raise HTTPException(status_code=502, detail=detail) from error
         raise HTTPException(status_code=502, detail=str(error)) from error
 
 
@@ -2362,6 +2439,15 @@ def analyze(body: AnalyzeRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="Для принудительного LLM-анализа подтвердите платный запуск")
     paid = bool(body.force_llm or (body.analyze and body.confirm_paid) or (body.transcribe_audio and body.confirm_paid))
     user = _require_analyze_scope(body.entity_type, ids, paid=paid)
+    if body.entity_type == "lead" and len(ids) > MAX_LEAD_ANALYZE_IDS:
+        raise HTTPException(status_code=422, detail=f"За один запуск можно анализировать не более {MAX_LEAD_ANALYZE_IDS} лидов")
+    if body.entity_type == "auto" and len(ids) > MAX_LEAD_ANALYZE_IDS:
+        try:
+            lead_ids = resolve_auto_lead_ids(ids)
+        except Exception as error:  # noqa: BLE001 - fail closed when the lead count cannot be checked
+            raise HTTPException(status_code=502, detail="Не удалось проверить количество лидов для автоматического анализа") from error
+        if len(lead_ids) > MAX_LEAD_ANALYZE_IDS:
+            raise HTTPException(status_code=422, detail=f"За один запуск можно анализировать не более {MAX_LEAD_ANALYZE_IDS} лидов")
     if body.force_llm and str(user.get("role") or "") != "admin":
         raise HTTPException(status_code=403, detail="Принудительный полный LLM-анализ доступен только администратору")
     options = AnalyzeOptions(

@@ -417,6 +417,29 @@ def can_view_job(job: dict[str, Any], user: dict[str, Any]) -> bool:
     if role == "admin":
         return True
     entities = job_entity_ids(job)
+    options = job.get("options") if isinstance(job.get("options"), dict) else {}
+    if role == "rop" and str(options.get("entity_type") or "") == "lead":
+        # ROPs may poll explicitly requested lead jobs. Lead handoff can publish
+        # converted deals in the same result list, so keep those inside deal scope.
+        if not entities or any(entity_type != "lead" for entity_type, _ in entities):
+            return False
+        requested_lead_ids = {entity_id for _entity_type, entity_id in entities}
+        results = job.get("results") if isinstance(job.get("results"), list) else []
+        for result in results:
+            if not isinstance(result, dict):
+                return False
+            entity_type = str(result.get("entity_type") or "")
+            entity_id = str(result.get("entity_id") or "").strip()
+            if entity_type == "lead" and entity_id:
+                if entity_id not in requested_lead_ids:
+                    return False
+                continue
+            if entity_type != "deal" or not entity_id:
+                return False
+            deal = get_deal(entity_id)
+            if deal is None or not deal_access(user, deal).can_open:
+                return False
+        return True
     if not entities or any(entity_type != "deal" for entity_type, _ in entities):
         return False
     for _entity_type, entity_id in entities:

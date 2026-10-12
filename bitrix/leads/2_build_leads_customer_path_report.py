@@ -222,6 +222,14 @@ def render_lead_markdown(bundle: dict[str, Any]) -> str:
                 f"| {md_escape(item.get('START_TIME') or item.get('CREATED'))} | {activity_type(item)} | "
                 f"{md_escape(item.get('ID'))} | {md_escape(item.get('SUBJECT'))} |"
             )
+        for item in emails + messages:
+            detail = activity_details(bundle, item)
+            lines.extend([
+                "", f"### {activity_type(item)}: activity_id={item.get('ID') or '-'}",
+                f"- Направление: {detail.get('DIRECTION') or item.get('DIRECTION') or 'unknown'} (1 — входящее, 2 — исходящее)",
+                "", clean_text(detail.get('DESCRIPTION') or item.get('DESCRIPTION'))
+                or "Текст сообщения недоступен; содержание нельзя восстановить по теме.",
+            ])
     else:
         lines.append("Письма и сообщения не найдены.")
 
