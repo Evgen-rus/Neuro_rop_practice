@@ -521,6 +521,7 @@ export type Candidate = {
   crm_task_checked?: boolean
   lead_closure_verdict?: 'confirmed_correct' | 'disputed' | 'insufficient_evidence' | 'not_applicable' | null
   lead_closure_reason?: string | null
+  lead_closure_confirmed?: boolean | null
 }
 
 export type LeadControlTask = {

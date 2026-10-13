@@ -361,6 +361,9 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
             <div className="lead-control-title-line">
               <h2>{candidate.title || `Лид #${candidate.entity_id}`}</h2>
             </div>
+            {reportId && state.kind === 'ready' ? <span className={`lead-control-attention ${candidate.lead_closure_confirmed === true ? 'verified' : ''}`}>
+              {candidate.lead_closure_confirmed === true ? 'Закрытие проверено' : 'Требует внимания РОПа'}
+            </span> : null}
             <div className="lead-control-id">
               <span>Лид #{candidate.entity_id}</span>
               <time dateTime={candidate.date_create || undefined}>Создан {dateLabel(candidate.date_create)}</time>

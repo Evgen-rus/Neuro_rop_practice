@@ -219,6 +219,8 @@
 .lead-control-select input:disabled { cursor: default; }
 
 .lead-control-main { min-width: 0; }
+.lead-control-attention { align-self: flex-start; margin-top: 5px; padding: 3px 7px; border: 1px solid #f2c99b; border-radius: 6px; color: #934009; background: var(--dc-orange-weak, #fff7e8); font-size: 11px; font-weight: 600; line-height: 1.4; }
+.lead-control-attention.verified { border-color: #bde1cf; color: #176044; background: var(--dc-green-weak, #eef9f3); }
 .lead-control-title-line { justify-content: flex-start; min-width: 0; }
 .lead-control-title-line h2 { min-width: 0; margin: 0; overflow: hidden; color: var(--dc-text); font-size: var(--dc-type-card-title); font-weight: 750; line-height: 1.35; text-overflow: ellipsis; }
 

@@ -633,6 +633,7 @@ def attach_saved_lead_qualification(
             item["lead_next_action"] = None
             item["lead_closure_verdict"] = None
             item["lead_closure_reason"] = None
+            item["lead_closure_confirmed"] = None
             continue
 
         legacy_summary = extract_summary_fields(analysis, "lead")
@@ -641,6 +642,11 @@ def attach_saved_lead_qualification(
         item["lead_next_action"] = str(legacy_summary.get("recommended_action") or "").strip()[:320] or None
         closure = analysis.get("closure_review") if isinstance(analysis.get("closure_review"), dict) else {}
         verdict = str(closure.get("verdict") or "")
+        item["lead_closure_confirmed"] = (
+            verdict == "confirmed_correct"
+            and closure.get("manager_task_required") is False
+            and closure.get("client_contact_required") is False
+        )
         item["lead_closure_verdict"] = verdict if verdict in {
             "confirmed_correct", "disputed", "insufficient_evidence", "not_applicable"
         } else None
@@ -1682,7 +1688,7 @@ def _lead_control_snapshot_cards(candidates: list[dict[str, Any]]) -> list[dict[
     mutable_fields = {
         "analysis_freshness", "analysis_status", "latest_report_id", "analyzed_at",
         "lead_analysis_available", "lead_category", "lead_qualification", "lead_issue",
-        "lead_next_action", "lead_closure_verdict", "lead_closure_reason", "analyzed",
+        "lead_next_action", "lead_closure_verdict", "lead_closure_reason", "lead_closure_confirmed", "analyzed",
         "analysis_path", "review_state", "lifecycle", "workset_selected", "capacity_state",
     }
     return [

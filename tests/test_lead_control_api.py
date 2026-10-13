@@ -784,6 +784,7 @@ class LeadControlSnapshotTests(unittest.TestCase):
         self.assertEqual(row["latest_report_id"], report_id)
         self.assertEqual(row["lead_category"], "B")
         self.assertEqual(row["lead_closure_verdict"], "disputed")
+        self.assertFalse(row["lead_closure_confirmed"])
         self.assertNotEqual(row["latest_report_id"], -1)
 
     def test_stale_refresh_writer_keeps_newer_snapshot_and_reports_conflict(self) -> None:
