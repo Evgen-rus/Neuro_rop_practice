@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { formatMoscowDateTime } from './dateTime'
 import {
   searchCandidates,
@@ -11,6 +11,7 @@ import {
   leadCategoryLabel,
   leadClosureLabel,
   leadTechnicalSummary,
+  matchesLeadSearch,
   MAX_LEAD_CONTROL_SELECTION,
   toggleLeadSelection,
   type LeadControlGroup,
@@ -77,9 +78,33 @@ function analysisState(candidate: Candidate, job: JobState | null) {
   return ANALYSIS_STATUS[status] || ANALYSIS_STATUS.not_analyzed
 }
 
+function LeadControlText({ text }: { text: string }) {
+  const textId = useId()
+  const textRef = useRef<HTMLSpanElement>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [canExpand, setCanExpand] = useState(false)
+
+  useEffect(() => setExpanded(false), [text])
+  useLayoutEffect(() => {
+    const element = textRef.current
+    if (!element || expanded) return
+    const checkOverflow = () => setCanExpand(element.scrollHeight > element.clientHeight + 1)
+    checkOverflow()
+    const observer = new ResizeObserver(checkOverflow)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [text, expanded])
+
+  return <div className="lead-control-text-disclosure">
+    <span id={textId} ref={textRef} className={`lead-control-text${expanded ? ' expanded' : ''}`}>{text}</span>
+    {canExpand || expanded ? <button type="button" className="lead-control-text-toggle" aria-expanded={expanded} aria-controls={textId} onClick={() => setExpanded((value) => !value)}>{expanded ? 'Свернуть' : 'Развернуть'}</button> : null}
+  </div>
+}
+
 export function LeadControl({ user, managers, job, historyRevision = 0, onOpenReport, onOpenHistory, onStartAnalysis }: Props) {
   const [group, setGroup] = useState<LeadControlGroup>('active')
   const [managerId, setManagerId] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -156,11 +181,11 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
     setSelectedIds([])
     setActionError('')
     setRefreshError('')
-  }, [group, managerId])
+  }, [group, managerId, searchText])
 
   const jobRunning = Boolean(job && ['queued', 'running'].includes(job.status))
   const runDisabled = !selectedIds.length || starting || jobRunning || refreshingCrm || loading || !rowsVisible
-  const visibleCandidates = rowsVisible ? candidates : []
+  const visibleCandidates = rowsVisible ? candidates.filter((candidate) => matchesLeadSearch(candidate, searchText)) : []
   const candidateSummary = visibleCandidates.reduce((summary, candidate) => {
     const state = analysisState(candidate, job)
     if (state.kind === 'not_analyzed') summary.notAnalyzed += 1
@@ -265,7 +290,6 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
     </header>
 
     {rowsVisible && crmSnapshotAvailable ? <section className="lead-control-kpis" aria-label="Показатели текущего списка лидов">
-      <div className="lead-control-kpi-heading"><h2>Готовность анализа</h2><span>с учётом вкладки и фильтра</span></div>
       <div className="dc-kpis tasks">
         {kpis.map(([icon, label, value, tone]) => <article className={tone} key={label}>
           <span aria-hidden="true">{icon}</span><div><small>{label}</small><strong>{value}</strong></div>
@@ -284,19 +308,19 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
           {managerOptions.map(([id, name]) => <option value={id} key={id}>{name}</option>)}
         </select>
       </label>
+      <input className="lead-control-search" type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Поиск по названию или № лида" aria-label="Поиск по названию или номеру лида" />
+      <div className="lead-control-analysis-actions">
+        <span role="status" aria-live="polite">Выбрано {selectedIds.length}/{MAX_LEAD_CONTROL_SELECTION}</span>
+        <button type="button" className="dc-button primary" disabled={runDisabled} onClick={() => void startAnalysis()}>
+          {starting ? 'Запускаем…' : selectedIds.length ? `Запустить анализ (${selectedIds.length})` : 'Запустить анализ'}
+        </button>
+      </div>
     </div>
 
     {jobRunning ? <p className="lead-control-run-status" role="status">Обработка лидов идёт. Статус каждого лида обновляется отдельно.</p> : null}
     {error ? <div className="lead-control-error" role="alert"><span>{error}</span><button type="button" className="dc-button" onClick={() => setCacheReloadKey((value) => value + 1)}>Повторить загрузку</button></div> : null}
     {refreshError ? <p className="lead-control-action-error" role="alert">{refreshError}</p> : null}
     {actionError ? <p className="lead-control-action-error" role="alert">{actionError}</p> : null}
-
-    <div className="lead-control-analysis-actions">
-      <span role="status" aria-live="polite">Выбрано {selectedIds.length}/{MAX_LEAD_CONTROL_SELECTION}</span>
-      <button type="button" className="dc-button primary" disabled={runDisabled} onClick={() => void startAnalysis()}>
-        {starting ? 'Запускаем…' : selectedIds.length ? `Запустить анализ (${selectedIds.length})` : 'Запустить анализ'}
-      </button>
-    </div>
 
     <div className="dc-table-wrap lead-control-table-wrap" aria-busy={loading || refreshingCrm}>
       <div className="dc-table-scroll lead-control-table-scroll" role="table" aria-label="Лиды текущей выборки">
@@ -307,8 +331,8 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
           <span role="columnheader">Что делать</span>
         </div>
         {loading && !rowsVisible ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={4}>Загружаем сохранённый список…</p></div> : null}
-        {rowsVisible && candidates.length === 0 ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={4}>{crmSnapshotAvailable ? group === 'active' ? 'Лидов в работе за последние 30 дней не найдено.' : 'Закрытых лидов за последние 30 дней не найдено.' : 'Обновите Bitrix, чтобы загрузить лиды.'}</p></div> : null}
-        {rowsVisible ? candidates.map((candidate) => {
+        {rowsVisible && visibleCandidates.length === 0 ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={4}>{searchText.trim() ? 'По вашему запросу лиды не найдены.' : crmSnapshotAvailable ? group === 'active' ? 'Лидов в работе за последние 30 дней не найдено.' : 'Закрытых лидов за последние 30 дней не найдено.' : 'Обновите Bitrix, чтобы загрузить лиды.'}</p></div> : null}
+        {rowsVisible ? visibleCandidates.map((candidate) => {
         const reportId = candidate.latest_report_id
         const closure = leadClosureLabel(group, candidate.lead_closure_verdict)
         const state = analysisState(candidate, job)
@@ -357,9 +381,7 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
             {state.kind === 'not_analyzed' ? <p className="lead-control-assessment-empty not-analyzed"><strong>Анализ не проведён.</strong> Отметьте лид и нажмите «Запустить анализ».</p> : !reportId && state.kind !== 'ready' ? <p className="lead-control-assessment-empty">{state.label}. Оценка обработки пока недоступна.</p> : <>
               <div className="lead-control-assessment-item">
                 <span className="lead-control-assessment-label">Проблема</span>
-                {candidate.lead_issue?.trim() ? <details className="lead-control-text-disclosure">
-                  <summary><span className="lead-control-text">{candidate.lead_issue.trim()}</span><span className="lead-control-text-toggle"><span>Развернуть</span><span>Свернуть</span></span></summary>
-                </details> : <p>В отчёте не указана</p>}
+                {candidate.lead_issue?.trim() ? <LeadControlText text={candidate.lead_issue.trim()} /> : <p>В отчёте не указана</p>}
               </div>
               <details className="lead-control-analysis-details">
                 <summary>Подробности анализа</summary>
@@ -391,9 +413,7 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
             <span className="lead-control-cell-label">Что делать</span>
             <div className={`lead-control-next-action-recommendation ${state.kind !== 'not_analyzed' && candidate.lead_next_action?.trim() ? 'has-recommendation' : ''}`}>
               <span>Рекомендация</span>
-              {state.kind !== 'not_analyzed' && candidate.lead_next_action?.trim() ? <details className="lead-control-text-disclosure">
-                <summary><span className="lead-control-text">{candidate.lead_next_action}</span><span className="lead-control-text-toggle"><span>Развернуть</span><span>Свернуть</span></span></summary>
-              </details> : <span className="lead-control-muted lead-control-no-recommendation">{state.kind === 'not_analyzed' ? 'Появится после анализа' : state.kind === 'ready' ? 'В отчёте нет рекомендации' : 'Рекомендация пока недоступна'}</span>}
+              {state.kind !== 'not_analyzed' && candidate.lead_next_action?.trim() ? <LeadControlText text={candidate.lead_next_action} /> : <span className="lead-control-muted lead-control-no-recommendation">{state.kind === 'not_analyzed' ? 'Появится после анализа' : state.kind === 'ready' ? 'В отчёте нет рекомендации' : 'Рекомендация пока недоступна'}</span>}
             </div>
             <div className="lead-control-bitrix-task">
               <strong>Задача Bitrix</strong>

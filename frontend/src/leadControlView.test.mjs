@@ -7,7 +7,18 @@ import {
   leadClosureLabel,
   leadCategoryLabel,
   leadTechnicalSummary,
+  matchesLeadSearch,
 } from './leadControlView.ts'
+
+test('lead search matches title or id, ignores case and spaces, and allows an id with #', () => {
+  const lead = { entity_id: '240579', title: 'Этикетировщик на пакет муки' }
+  for (const query of ['', '  ', ' ЭТИКЕТИРОВЩИК ', 'пакет муки', '240579', '#240579', '0579']) {
+    assert.equal(matchesLeadSearch(lead, query), true)
+  }
+  assert.equal(matchesLeadSearch(lead, '240580'), false)
+  assert.equal(matchesLeadSearch(lead, 'насос'), false)
+  assert.equal(matchesLeadSearch({ entity_id: '42', title: null }, 'насос'), false)
+})
 
 test('lead control requests the server-owned 30-day stage group and optional manager filter', () => {
   assert.deepEqual(buildLeadControlSearchRequest('active', '42'), {

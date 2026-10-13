@@ -2,6 +2,11 @@ export type LeadControlGroup = 'active' | 'closed'
 
 export const MAX_LEAD_CONTROL_SELECTION = 10
 
+export function matchesLeadSearch(candidate: { entity_id: string; title?: string | null }, query: string): boolean {
+  const search = query.trim().toLocaleLowerCase('ru').replace(/^#\s*/, '')
+  return !search || candidate.entity_id.includes(search) || Boolean(candidate.title?.toLocaleLowerCase('ru').includes(search))
+}
+
 const CLOSURE_VERDICT: Record<string, string> = {
   confirmed_correct: 'Закрытие подтверждено',
   disputed: 'Закрытие оспорено',
