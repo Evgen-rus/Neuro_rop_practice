@@ -7505,6 +7505,7 @@ ul.facts.bad li:before {
   z-index: 10;
   top: 0;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 20px;
   border-bottom: 1px solid var(--line);
@@ -7512,9 +7513,11 @@ ul.facts.bad li:before {
   box-shadow: 0 8px 24px rgba(30, 42, 60, .06);
   backdrop-filter: blur(10px);
 }
-.lead-workflow-heading { min-width: 0; flex: 1; }
+.lead-workflow-heading { display: contents; }
 .lead-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .lead-title-line h2 { margin: 0; color: #15191e; font-size: 23px; }
+.lead-title-line h2 a { color: var(--dc-blue, #1768f2); text-decoration: none; }
+.lead-title-line h2 a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .workflow-status,
 .workflow-section-title > span {
   padding: 5px 9px;
@@ -7523,8 +7526,11 @@ ul.facts.bad li:before {
   background: #e8f3ff;
   font-size: 13px;
 }
-.lead-meta-line { display: flex; flex-wrap: wrap; gap: 6px 15px; margin-top: 8px; color: var(--muted); font-size: 13px; }
-.lead-header-actions { display: flex; align-items: flex-start; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+.lead-meta-line { display: flex; flex: 1 1 100%; order: 2; align-items: center; flex-wrap: wrap; gap: 6px 15px; color: var(--muted); font-size: 13px; }
+.lead-meta-item { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border-radius: 7px; background: var(--dc-blue-weak, #edf4ff); }
+.lead-meta-item small { color: var(--dc-muted, #697a95); font-size: 11px; }
+.lead-meta-item strong { color: var(--dc-text, #0f1f3a); font-size: 12px; font-weight: 600; }
+.lead-header-actions { display: flex; flex: 1; min-width: 0; align-self: center; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
 .lead-header-actions a,
 .lead-header-actions button,
 .workflow-step button,
@@ -7538,6 +7544,7 @@ ul.facts.bad li:before {
   cursor: pointer;
   text-decoration: none;
 }
+.lead-header-actions .lead-header-primary { border-color: var(--dc-blue, #1768f2); background: var(--dc-blue, #1768f2); color: white; }
 .lead-header-actions .workspace-close { border-color: #cfd5dc; background: #22272d; color: white; }
 .lead-summary-strip { display: grid; grid-template-columns: .95fr 1.2fr 1.5fr; gap: 12px; background: #eef2f6; }
 .lead-summary-card { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; background: white; box-shadow: 0 4px 16px rgba(33, 55, 84, .035); }

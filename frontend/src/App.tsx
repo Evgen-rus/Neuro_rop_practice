@@ -1163,9 +1163,10 @@ function MainApp({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<v
     setTab('history')
   }
 
-  async function openLeadControlReport(reportId: number) {
+  async function openLeadControlReport(reportId: number, managerName?: string) {
     const detail = await fetchReport(reportId, false)
     if (detail.entity_type !== 'lead') throw new Error('Отчёт не относится к лиду')
+    if (managerName) detail.report_meta = { ...detail.report_meta, manager_name: managerName }
     setShowMarkdown(false)
     setMarkdown(null)
     setSelectedReport(detail)
@@ -2653,27 +2654,24 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
         <header className="lead-workflow-header">
           <div className="lead-workflow-heading">
             <div className="lead-title-line">
-              <h2>Лид #{meta.entity_id}</h2>
-              <span className="attention-badge">{closureConfirmed ? 'Закрытие проверено' : 'Требует внимания РОПа'}</span>
-              {missingCrmReturn ? <span className="attention-badge">Нужно оформить возврат в CRM</span> : null}
-              <span className="workflow-status">{workflow.status_label}</span>
+              <h2>Лид {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">#{meta.entity_id}</a> : <>#{meta.entity_id}</>}</h2>
+              <span className="lead-meta-item"><small>Анализ</small><strong>{formatLeadDate(reportDetail?.created_at)}</strong></span>
             </div>
             <div className="lead-meta-line">
-              <span>Клиент: {client}</span>
-              {reportMeta.manager_id ? <span>Менеджер: ID {reportMeta.manager_id}</span> : null}
-              <span>Этап: {reportMeta.stage_name || 'Нет данных'}</span>
-              <span>Категория: {categoryValue}</span>
-              {meta.risk_level ? <span>Риск: {riskLabelRu(meta.risk_level)}</span> : null}
-              <span>Анализ: {formatLeadDate(reportDetail?.created_at)}</span>
+              <span className="attention-badge">{closureConfirmed ? 'Закрытие проверено' : 'Требует внимания РОПа'}</span>
+              {missingCrmReturn ? <span className="attention-badge">Нужно оформить возврат в CRM</span> : null}
+              <span className="lead-meta-item"><small>Клиент</small><strong>{client}</strong></span>
+              {reportMeta.manager_id ? <span className="lead-meta-item"><small>Менеджер</small><strong>{reportMeta.manager_name || 'Имя не найдено'}</strong></span> : null}
+              <span className="lead-meta-item"><small>Этап</small><strong>{reportMeta.stage_name || 'Нет данных'}</strong></span>
+              <span className="lead-meta-item"><small>Категория</small><strong>{categoryValue}</strong></span>
+              {meta.risk_level ? <span className="lead-meta-item"><small>Риск</small><strong>{riskLabelRu(meta.risk_level)}</strong></span> : null}
             </div>
           </div>
           <div className="lead-header-actions">
-            {meta.bitrix_url ? <a href={meta.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix</a> : null}
-            {!readOnly && props.onCopyReviewLink ? <button onClick={props.onCopyReviewLink}>Скопировать тестовую ссылку</button> : null}
-            {!readOnly && props.onCopyLeadTableRow ? <button onClick={props.onCopyLeadTableRow}>Скопировать строку для таблицы</button> : null}
-            <button onClick={() => openMaterials('bant')}>Полный BANT</button>
-            <button onClick={() => openMaterials('summary')}>Материалы анализа</button>
+            <button className="lead-header-primary" onClick={() => openMaterials('summary')}>Материалы анализа</button>
+            <button className="lead-header-primary" onClick={() => openMaterials('bant')}>Полный BANT</button>
             {!readOnly ? <button onClick={() => openMaterials('history')}>История лида</button> : null}
+            {!readOnly && props.onCopyReviewLink ? <button onClick={props.onCopyReviewLink} title="Скопировать тестовую ссылку" aria-label="Скопировать тестовую ссылку">Ссылка</button> : null}
             {!readOnly ? <button className="workspace-close" onClick={onCloseLeadWorkspace} aria-label="Закрыть карточку лида">Закрыть</button> : null}
           </div>
         </header>
@@ -2682,7 +2680,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           <article className="lead-summary-card lead-summary-about">
             <h3>Что за лид</h3>
             <ExpandableText className="lead-summary-primary" text={interest || 'Интерес не зафиксирован'} />
-            <span>Клиент: {client}</span>
           </article>
           <article className="lead-summary-card lead-summary-situation">
             <h3>Текущая ситуация</h3>

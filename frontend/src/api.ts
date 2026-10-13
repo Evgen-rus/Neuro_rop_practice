@@ -810,6 +810,7 @@ export type ModelContextSnapshot = {
 }
 
 export type LeadReportMeta = {
+  manager_name?: string | null
   client_name?: string | null
   lead_title?: string | null
   lead_created_at?: string | null

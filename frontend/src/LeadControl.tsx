@@ -19,7 +19,7 @@ type Props = {
   managers: Array<[string, string]>
   job: JobState | null
   historyRevision?: number
-  onOpenReport: (reportId: number) => Promise<void>
+  onOpenReport: (reportId: number, managerName?: string) => Promise<void>
   onOpenHistory?: (candidateId: string) => Promise<void> | void
   onStartAnalysis: (ids: string[]) => Promise<void>
 }
@@ -193,7 +193,10 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
     setOpeningReportId(reportId)
     setActionError('')
     try {
-      await onOpenReport(reportId)
+      const candidate = candidates.find((item) => item.latest_report_id === reportId)
+      const managerName = candidate?.manager_name?.trim()
+        || (candidate?.manager_id ? managerNames[candidate.manager_id] || managers.find(([id]) => id === candidate.manager_id)?.[1] : '')
+      await onOpenReport(reportId, managerName || undefined)
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : 'Не удалось открыть отчёт')
     } finally {
@@ -298,9 +301,11 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
     {refreshError ? <p className="lead-control-action-error" role="alert">{refreshError}</p> : null}
     {actionError ? <p className="lead-control-action-error" role="alert">{actionError}</p> : null}
 
-    <div className="lead-control-selection-bar">
-      <h2 id="lead-control-selection-title">Выберите лиды для анализа</h2>
+    <div className="lead-control-analysis-actions">
       <span role="status" aria-live="polite">Выбрано {selectedIds.length}/{MAX_LEAD_CONTROL_SELECTION}</span>
+      <button type="button" className="dc-button primary" disabled={runDisabled} onClick={() => void startAnalysis()}>
+        {starting ? 'Запускаем…' : selectedIds.length ? `Запустить анализ (${selectedIds.length})` : 'Запустить анализ'}
+      </button>
     </div>
 
     <div className="dc-table-wrap lead-control-table-wrap" aria-busy={loading || refreshingCrm}>
@@ -357,14 +362,13 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
           <div className="lead-control-main" role="cell">
             <div className="lead-control-title-line">
               <h2>{candidate.title || `Лид #${candidate.entity_id}`}</h2>
-              {reportId ? <button type="button" className="lead-control-report-link" disabled={openingReportId === reportId} onClick={() => void openReport(reportId)}>{openingReportId === reportId ? 'Открываем…' : 'Открыть отчёт'}</button> : null}
             </div>
             <div className="lead-control-id">
               <span>Лид #{candidate.entity_id}</span>
               <time dateTime={candidate.date_create || undefined}>Создан {dateLabel(candidate.date_create)}</time>
             </div>
             {details.length ? <dl className="lead-control-details">
-              {details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+              {details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><details className="lead-control-expandable"><summary>{value}</summary></details></dd></div>)}
             </dl> : null}
             {qualification ? <div className="lead-control-qualification-summary">
                 <span>{qualification.regulation_version ? `AutoBANT ${qualification.regulation_version}` : 'Старый формат квалификации'}</span>
@@ -378,34 +382,31 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
           <div className="lead-control-next-action" role="cell">
             <div className="lead-control-next-action-recommendation">
               <span>Рекомендация</span>
-              <p>{state.kind === 'not_analyzed' ? '—' : candidate.lead_next_action?.trim() || 'Не указана'}</p>
+              <details className="lead-control-expandable"><summary>{state.kind === 'not_analyzed' ? '—' : candidate.lead_next_action?.trim() || 'Не указана'}</summary></details>
             </div>
             <div className="lead-control-bitrix-task">
               <strong>Задача Bitrix</strong>
               {currentTask ? <div>
-                <p>{currentTask.subject}</p>
+                <details className="lead-control-expandable"><summary>{currentTask.subject}</summary></details>
                 {currentTask.deadline ? <time dateTime={currentTask.deadline}>Срок: {dateLabel(currentTask.deadline)}</time> : null}
               </div> : <span>{candidate.crm_task_checked ? 'Активная задача не найдена' : 'Задача не загружена'}</span>}
             </div>
           </div>
           <div className="lead-control-history-cell" role="cell">
-            {onOpenHistory ? <button type="button" className="lead-control-report-link" disabled={openingHistoryId === candidate.entity_id} onClick={() => void openHistory(candidate.entity_id)}>
+            {onOpenHistory ? <button type="button" className="dc-button" disabled={openingHistoryId === candidate.entity_id} onClick={() => void openHistory(candidate.entity_id)}>
               {openingHistoryId === candidate.entity_id ? 'Открываем…' : 'История лида'}
             </button> : <span className="lead-control-muted">—</span>}
           </div>
           <div className="lead-control-analysis" role="cell">
-            <span className={`lead-control-status ${state.tone}`}>{state.label}</span>
+            <div className="lead-control-report-action">
+            {reportId && state.kind === 'ready' ? <button type="button" className="dc-button primary" disabled={openingReportId === reportId} onClick={() => void openReport(reportId)}>{openingReportId === reportId ? 'Открываем…' : 'Открыть отчёт'}</button> : <span className={`lead-control-status ${state.tone}`}>{state.label}</span>}
             {candidate.analyzed_at ? <time dateTime={candidate.analyzed_at}>Анализ {dateLabel(candidate.analyzed_at)}</time> : null}
+            </div>
           </div>
         </article>
         }) : null}
       </div>
     </div>
 
-    <footer className="lead-control-footer">
-      <button type="button" className="dc-button primary" disabled={runDisabled} onClick={() => void startAnalysis()}>
-        {starting ? 'Запускаем…' : selectedIds.length ? `Запустить анализ (${selectedIds.length})` : 'Запустить анализ'}
-      </button>
-    </footer>
   </section>
 }
