@@ -49,6 +49,12 @@ const CLOSURE_VERDICT: Record<string, string> = {
   not_applicable: 'Оценка не применима',
 }
 
+const STAGE_REVIEW_VERDICT: Record<string, string> = {
+  confirmed_correct: 'Этап подтверждён фактами',
+  disputed: 'Этап расходится с фактами',
+  insufficient_evidence: 'Недостаточно данных по этапу',
+}
+
 function dateLabel(value: string | null | undefined): string {
   if (!value) return 'не указана'
   return formatMoscowDateTime(value, { day: '2-digit', month: 'short', year: 'numeric' }) || value
@@ -314,6 +320,16 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
         const reportId = candidate.latest_report_id
         const state = analysisState(candidate, job)
         const currentTask = candidate.crm_task_checked === true ? candidate.crm_task : null
+        const qualification = candidate.lead_qualification
+        const hasTechnicalCounts = typeof qualification?.technical_collected_count === 'number'
+          && typeof qualification.technical_total_count === 'number'
+        const technicalSummary = hasTechnicalCounts
+          ? qualification?.technical_readiness === 'unknown'
+            ? 'Тип оборудования не определён'
+            : `ТЗ собрано ${qualification.technical_collected_count} из ${qualification.technical_total_count}${qualification.technical_partial_count ? ` · частично ${qualification.technical_partial_count}` : ''}`
+          : qualification?.regulation_version
+            ? 'Сводка ТЗ недоступна'
+            : 'В старом формате ТЗ не сохранялось'
         const details = state.kind === 'not_analyzed' ? [] : [
           ['Категория', candidate.lead_category],
           ['Проблема', candidate.lead_issue],
@@ -350,6 +366,12 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
             {details.length ? <dl className="lead-control-details">
               {details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
             </dl> : null}
+            {qualification ? <div className="lead-control-qualification-summary">
+                <span>{qualification.regulation_version ? `AutoBANT ${qualification.regulation_version}` : 'Старый формат квалификации'}</span>
+                <span>{technicalSummary}{qualification.technical_required_now === true ? ' · требуется сейчас' : qualification.technical_required_now === false ? ' · пока не требуется' : ''}</span>
+                <span><strong>Проверка этапа:</strong> {STAGE_REVIEW_VERDICT[qualification.stage_verdict || ''] || (qualification.regulation_version ? 'нет данных' : 'не сохранена в старом отчёте')}</span>
+                {qualification.stage_reason ? <span>{qualification.stage_reason}</span> : null}
+              </div> : null}
           </div>
           <div className="lead-control-manager-cell" role="cell">{managerName}</div>
           <div className="lead-control-stage-cell" role="cell">{candidate.status || 'Этап не указан'}</div>

@@ -463,6 +463,15 @@ export type LeadQualificationSummary = {
   controlled_return_status?: string | null
   controlled_return_date?: string | null
   recommended_return_date?: string | null
+  regulation_version?: string | null
+  technical_collected_count?: number
+  technical_total_count?: number
+  technical_partial_count?: number
+  technical_required_now?: boolean
+  technical_readiness?: string | null
+  stage_verdict?: string | null
+  stage_reason?: string | null
+  requires_attention?: boolean
 }
 
 export type Candidate = {

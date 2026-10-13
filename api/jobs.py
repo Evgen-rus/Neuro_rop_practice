@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from bitrix.customer_history import build_normalized_communications
 from openai_api.bitrix_links import bitrix_entity_url
+from openai_api.llm.lead_requirements import requirements_summary
 from openai_api.llm.validation import validate_deal_recommendation_materialization
 from progress_events import (
     DECISION_STATUS_ERROR,
@@ -647,6 +648,7 @@ def extract_lead_qualification_summary(analysis: dict[str, Any]) -> dict[str, An
         "controlled_return_status": str(route.get("controlled_return_status") or "unknown"),
         "controlled_return_date": route.get("controlled_return_date"),
         "recommended_return_date": route.get("recommended_return_date"),
+        **(requirements_summary(assessment) if isinstance(assessment.get("autobant"), dict) else {}),
     }
 
 

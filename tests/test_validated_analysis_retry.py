@@ -569,6 +569,7 @@ class FullSectionRepairTests(unittest.TestCase):
 
     def test_full_entrypoints_save_merged_metadata_and_never_render_failure(self):
         from openai_api.llm import analyze_deal, analyze_lead
+        from test_lead_requirements import autobant_analysis
         for entity, module in (("deal", analyze_deal), ("lead", analyze_lead)):
             for success in (True, False):
                 with self.subTest(entity=entity, success=success), tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
@@ -581,7 +582,11 @@ class FullSectionRepairTests(unittest.TestCase):
                     args = SimpleNamespace(allow_direct_llm=True, dry_run=False, model="gpt-5.6-terra",
                                            transcript="none", knowledge_dir=str(knowledge),
                                            **{f"{entity}_id": "42", f"{entity}_root": str(root)})
-                    good = self.good if entity == "deal" else lead_analysis()
+                    good = self.good if entity == "deal" else autobant_analysis()
+                    if entity == "lead":
+                        good["qualification_assessment"]["stage_review"].update(
+                            current_stage_id="IN_PROCESS", current_stage_name="В работе",
+                        )
                     bad = deepcopy(good)
                     bad["rop_manager_message_block"]["deadline"] = "27/08/2026"
                     responses = [bad, {"sections": {"rop_manager_message_block": {"deadline": "2026-08-27"}}}] if success else [bad, {"cannot_repair": True}, bad]
@@ -619,6 +624,8 @@ class FullSectionRepairTests(unittest.TestCase):
                     self.assertEqual(payload["model_metadata"]["repair_succeeded"], success)
                     if success:
                         self.assertEqual(payload["analysis"]["rop_manager_message_block"]["deadline"], "2026-08-27")
+                        if entity == "lead":
+                            self.assertEqual(payload["analysis"]["qualification_assessment"]["autobant_result"]["category"], "A")
 
 
 if __name__ == "__main__":

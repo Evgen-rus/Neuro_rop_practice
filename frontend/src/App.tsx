@@ -4,6 +4,7 @@ import './index.css'
 import { lockBodyScroll } from './bodyScrollLock'
 import { DealControl } from './DealControl'
 import { LeadControl } from './LeadControl'
+import { LeadRequirements } from './LeadRequirements'
 import { LeadHistory } from './LeadHistory'
 import { formatMoscowDateTime, moscowDateInputValue } from './dateTime'
 import {
@@ -2422,7 +2423,7 @@ function ExpandableText(props: { text: string; className?: string }) {
   )
 }
 
-type LeadMaterialTab = 'summary' | 'bant' | 'evidence' | 'audit' | 'history' | 'technical'
+type LeadMaterialTab = 'summary' | 'bant' | 'evidence' | 'audit' | 'history' | 'technical' | 'tz'
 
 function formatLeadDate(value: string | null | undefined, includeTime = true): string {
   if (!value) return 'дата не указана'
@@ -2515,11 +2516,16 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
   const closureReview = asRecord(analysis?.closure_review)
   const managerQuality = asRecord(analysis?.manager_quality)
   const assessment = asRecord(analysis?.qualification_assessment)
+  const autobant = asRecord(assessment.autobant)
+  const hasAutobant3 = asString(autobant.version) === '3.0'
   const bant = asRecord(assessment.bant)
   const category = asRecord(assessment.lead_category)
   const route = asRecord(assessment.lead_route)
   const solutionFit = asRecord(assessment.solution_fit)
   const commercialFit = asRecord(assessment.commercial_fit)
+  const legacyCommercialBudget = hasAutobant3 ? null : (
+    <p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p>
+  )
   const reportMeta = reportDetail?.report_meta || {}
   const bantItems = [
     { key: 'budget', letter: 'B', label: 'Бюджет' },
@@ -2573,6 +2579,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
       <section className="section lead-workflow-empty">
         <h2>Лид {meta?.entity_id}</h2>
         <p>Workflow станет доступен после сохранения отчёта. Аналитические данные уже можно просматривать в текущем отчёте.</p>
+        <LeadRequirements assessment={assessment} />
+        <LeadRequirements assessment={assessment} detailed />
       </section>
     )
   }
@@ -2726,6 +2734,8 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </div>
         </section>
 
+        <LeadRequirements assessment={assessment} onOpenDetails={() => openMaterials('tz')} />
+
         <section className="workflow-steps">
           <div className="workflow-section-title">
             <div><h3>Работа РОПа по лиду</h3><p>{closureNeedsNoWorkflow ? 'Проверить корректность закрытия' : missingCrmReturn ? 'Закрытие проверено → оформить возврат в CRM → проконтролировать' : 'Разобрать → поручить → поставить на контроль'}</p></div>
@@ -2780,14 +2790,15 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             <nav className="analysis-drawer-tabs">
               {([
                 ['summary', 'Краткий вывод'], ['bant', 'Полный BANT'], ['evidence', 'Доказательства'],
-                ['audit', 'Аудитный отчёт'], ['history', 'История лида'], ['technical', 'Техническая информация'],
+                ['audit', 'Аудитный отчёт'], ['tz', 'Техническое задание'], ['history', 'История лида'], ['technical', 'Техническая информация'],
               ] as Array<[LeadMaterialTab, string]>).filter(([key]) => !readOnly || (key !== 'history' && key !== 'technical')).map(([key, label]) => <button className={materialTab === key ? 'active' : ''} onClick={() => openMaterials(key)} key={key}>{label}</button>)}
             </nav>
             <div className="analysis-drawer-content" onChange={(event) => {
               if (event.target instanceof HTMLTextAreaElement) setQualificationComment(event.target.value)
             }}>
               {materialTab === 'summary' ? <div className="material-summary"><h3>Краткий вывод</h3><p><strong>Вывод:</strong> {formatMoneyText(asString(leadState.summary)) || meta.attention_reason || 'Нет данных'}</p><p><strong>Поручение:</strong> {formatMoneyText(asString(rop.message_to_manager)) || workflow.manager_task_text || 'Нет данных'}</p><p><strong>Критерий проверки:</strong> {formatMoneyText(asString(rop.success_condition)) || 'Нет данных'}</p></div> : null}
-              {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p><p><strong>Бюджет нового оборудования:</strong> {assessmentLabel(asString(commercialFit.new_equipment_budget_status, 'unknown'), COMMERCIAL_FIT_STATUS_RU)}</p></article>{!readOnly ? <div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div> : null}</div> : null}
+              {materialTab === 'tz' ? <LeadRequirements assessment={assessment} detailed /> : null}
+              {materialTab === 'bant' ? <div className="material-bant"><h3>Полный BANT</h3>{bantItems.map((item) => <article key={item.key}><h4>{item.letter} · {item.label} — {assessmentLabel(asString(item.value.status, 'unknown'), BANT_STATUS_RU)}</h4><p>{formatMoneyText(asString(item.value.summary) || asString(item.value.explanation)) || 'Пояснение отсутствует'}</p><b>Доказательства</b><ul>{asStringList(item.value.evidence).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.evidence).length ? <li>Нет подтверждённых фактов</li> : null}</ul><b>Чего не хватает</b><ul>{asStringList(item.value.missing_facts).map((text) => <li key={text}>{formatMoneyText(text)}</li>)}{!asStringList(item.value.missing_facts).length ? <li>Не указано</li> : null}</ul></article>)}<article><h4>Категория {categoryValue}</h4><p>{formatMoneyText(asString(category.reason)) || 'Обоснование отсутствует'}</p><p><strong>Маршрут:</strong> {assessmentLabel(asString(route.status, 'unknown'), LEAD_ROUTE_STATUS_RU)}</p><p><strong>Техническая применимость:</strong> {assessmentLabel(asString(solutionFit.status, 'unknown'), SOLUTION_FIT_STATUS_RU)}</p>{legacyCommercialBudget}</article>{!readOnly ? <div className="qualification-feedback"><h4>Проверка РОПом</h4>{latestQualificationReview ? <p className="muted">Последняя проверка: {latestQualificationReview.is_correct ? 'оценка верна' : 'есть исправления'} · {asString(latestQualificationReview.created_at)}</p> : null}<button onClick={() => props.onQualificationReview({ is_correct: true })}>Оценка верна</button><div className="qualification-issue-grid">{Object.entries(QUALIFICATION_ISSUE_LABELS).map(([key, label]) => <label key={key}><input type="checkbox" checked={qualificationIssues.includes(key)} onChange={() => setQualificationIssues((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />{label}</label>)}</div><textarea placeholder="Как должно быть и на каком факте это основано" value={qualificationComment} onChange={(event) => setQualificationComment(event.target.value)} /><button disabled={!qualificationIssues.length} onClick={() => { props.onQualificationReview({ is_correct: false, issue_fields: qualificationIssues, comment: qualificationComment || null }); setQualificationIssues([]); setQualificationComment('') }}>Сохранить исправление</button></div> : null}</div> : null}
               {materialTab === 'evidence' ? <div><h3>Доказательства</h3><ul>{[...new Set(evidence)].map((item) => <li key={item}>{item}</li>)}{!evidence.length ? <li>Доказательства в этом анализе отсутствуют.</li> : null}</ul><h3>Недостающие данные</h3><ul>{props.unknowns.map((item) => <li key={item}>{item}</li>)}{!props.unknowns.length ? <li>Пробелы не выделены.</li> : null}</ul></div> : null}
               {materialTab === 'audit' ? <div><h3>Аудитный отчёт</h3>{!reportDetail?.markdown_available ? <p className="muted">Для этого отчёта Markdown недоступен.</p> : props.markdown ? <div className="markdown">{formatMoneyText(props.markdown)}</div> : <p className="muted">Загрузка отчёта…</p>}</div> : null}
               {materialTab === 'history' ? <div>
@@ -2820,6 +2831,9 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const loss = asRecord(analysis?.loss_diagnosis)
   const rop = asRecord(analysis?.rop_manager_message_block)
   const qualificationAssessment = asRecord(analysis?.qualification_assessment)
+  const autobant = asRecord(qualificationAssessment.autobant)
+  const autobantResult = asRecord(qualificationAssessment.autobant_result)
+  const hasAutobant3 = asString(autobant.version) === '3.0'
   const bant = asRecord(qualificationAssessment.bant)
   const timeframeAssessment = asRecord(bant.timeframe)
   const solutionFit = asRecord(qualificationAssessment.solution_fit)
@@ -2834,8 +2848,8 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
   const riskType = asString(mainRisk.risk_type)
   const verdict = asString(loss.final_verdict)
   const client = asString(leadState.client) || asString(dealState.client) || '—'
-  const qualification = asString(leadCategory.value) || asString(leadState.qualification) || 'Unknown'
-  const qualificationReason = asString(leadCategory.reason) || asString(leadState.qualification_reason)
+  const qualification = (hasAutobant3 ? asString(autobantResult.category) : asString(leadCategory.value)) || asString(leadState.qualification) || 'Unknown'
+  const qualificationReason = (hasAutobant3 ? asString(autobantResult.reason) : asString(leadCategory.reason)) || asString(leadState.qualification_reason)
   const hasQualificationAssessment = Object.keys(qualificationAssessment).length > 0
   const bantStatus = assessmentLabel(asString(bant.overall_status), BANT_STATUS_RU)
   const solutionFitStatus = assessmentLabel(asString(solutionFit.status), SOLUTION_FIT_STATUS_RU)
@@ -2844,7 +2858,9 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
     COMMERCIAL_FIT_STATUS_RU,
   )
   const confirmedBudget = formatMoney(commercialFit.confirmed_budget_rub)
-  const minimumBudget = formatMoney(commercialFit.new_equipment_minimum_rub) || '1 000 000 ₽'
+  const minimumBudget = hasAutobant3
+    ? formatMoney(autobantResult.minimum_budget_rub) || 'не указан в расчёте'
+    : formatMoney(commercialFit.new_equipment_minimum_rub) || '1 000 000 ₽'
   const nextQualificationQuestion = formatMoneyText(asString(bant.next_question))
   const bantItems = [
     { key: 'budget', letter: 'B', fallbackLabel: 'Budget · Бюджет и финансовая готовность' },
@@ -3029,7 +3045,7 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                 <div className="category-factor-grid">
                   <div><div className="label">BANT-факторы</div>{categoryBantFactors.length ? <ul>{categoryBantFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span className="muted">См. BANT выше</span>}</div>
                   <div><div className="label">Техника</div>{categoryTechnicalFactors.length ? <ul>{categoryTechnicalFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span>{solutionFitStatus}</span>}</div>
-                  <div><div className="label">Бюджет нового оборудования</div>{categoryBudgetFactors.length ? <ul>{categoryBudgetFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span>{commercialFitStatus}</span>}</div>
+                  {!hasAutobant3 ? <div><div className="label">Бюджет нового оборудования</div>{categoryBudgetFactors.length ? <ul>{categoryBudgetFactors.map((item) => <li key={item}>{item}</li>)}</ul> : <span>{commercialFitStatus}</span>}</div> : null}
                 </div>
                 {categoryMissingFacts.length ? <div><div className="label">Недостающие сведения</div><ul>{categoryMissingFacts.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
                 <div className="category-next-step"><div className="label">Следующий шаг</div>{categoryNextStep || 'Проверить факты и определить следующий шаг.'}</div>
@@ -3122,6 +3138,10 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
             ) : null}
           </section>
         ) : null}
+        {isLead ? <>
+          <LeadRequirements assessment={qualificationAssessment} />
+          <LeadRequirements assessment={qualificationAssessment} detailed />
+        </> : null}
         {isLead && !readOnly ? ropControlBlock : null}
         {!isLead && hasQualificationAssessment ? (
           <section className="qualification-summary" aria-label="Квалификация и применимость">
@@ -3146,14 +3166,14 @@ function FullAnalysisPanels(props: ReportPanelsProps) {
                       <div className="hint">{verdictLabelRu(asString(solutionFit.reason_code))}</div>
                     ) : null}
                   </div>
-                  <div className="card">
-                    <div className="label">Бюджет нового оборудования</div>
+                  {!(isLead && hasAutobant3) ? <div className="card">
+                    <div className="label">{isLead ? 'Бюджет нового оборудования · старый анализ' : 'Бюджет нового оборудования'}</div>
                     <div className="value">{commercialFitStatus}</div>
                     <div className="hint">
                       {confirmedBudget && confirmedBudget !== '—' ? `Подтверждён: ${confirmedBudget}. ` : ''}
-                      Порог: {minimumBudget}
+                      {isLead ? 'Порог старого анализа: ' : 'Порог: '}{minimumBudget}
                     </div>
-                  </div>
+                  </div> : null}
                   <div className="card">
                     <div className="label">{isLead ? 'Категория и вердикт' : 'Режим и приоритет'}</div>
                     <div className="value">{isLead ? qualification : asString(dealMode.mode, '—')}</div>

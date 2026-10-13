@@ -264,6 +264,19 @@
 .lead-control-details dt { color: var(--dc-muted); font-size: 10px; font-weight: 700; }
 .lead-control-details dd { min-width: 0; margin: 0; color: #29435f; font-size: 11px; line-height: 1.4; }
 
+.lead-control-qualification-summary {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  border-top: 1px solid #e2eaf3;
+  padding-top: 7px;
+  color: var(--dc-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.lead-control-qualification-summary strong { color: #29435f; }
+
 .lead-control-manager-cell,
 .lead-control-stage-cell,
 .lead-control-next-action {

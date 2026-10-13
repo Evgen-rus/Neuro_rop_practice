@@ -5,11 +5,16 @@ Lightweight validation for model-generated ROP analysis JSON.
 from __future__ import annotations
 
 from datetime import date, datetime
+import math
 import re
 from typing import Any
 
 from business_time import recommendation_due_at
 from openai_api.config import COMMUNICATION_QUALITY_AUDIT_ENABLED
+from openai_api.llm.lead_autobant import (
+    AUTOBANT_D_REASONS, AUTOBANT_E_REASONS, PRODUCTS, evaluate_autobant, validate_autobant,
+)
+from openai_api.llm.lead_requirements import validate_requirements
 
 
 class AnalysisValidationError(ValueError):
@@ -559,7 +564,7 @@ def _normalize_qualification_assessment(
                     "action": "null_to_unknown",
                 }
             )
-        if commercial_fit.get("new_equipment_minimum_rub") is None:
+        if commercial_fit.get("new_equipment_minimum_rub") is None and "autobant" not in assessment:
             commercial_fit["new_equipment_minimum_rub"] = 1_000_000
             changes.append(
                 {
@@ -931,12 +936,90 @@ def _validate_bant_item(
         )
 
 
+def _validate_autobant_assessment(
+    analysis: dict[str, Any], assessment: dict[str, Any], errors: list[str],
+) -> None:
+    start = len(errors)
+    assessment.pop("autobant_result", None)
+    autobant = assessment.get("autobant")
+    validate_autobant(autobant, errors)
+    validate_requirements(assessment, errors)
+    commercial = assessment.get("commercial_fit")
+    if not isinstance(commercial, dict):
+        errors.append("АвтоBANT requires commercial_fit")
+        return
+    budget = commercial.get("confirmed_budget_rub")
+    valid_budget = budget is None
+    if _is_number(budget):
+        try:
+            valid_budget = math.isfinite(budget) and budget >= 0
+        except OverflowError:
+            valid_budget = False
+    if not valid_budget:
+        errors.append("АвтоBANT confirmed_budget_rub must be a finite non-negative number or null")
+    if budget is not None and (
+        commercial.get("budget_named") is not True
+        or commercial.get("applies_to_new_equipment") is not True
+        or not commercial.get("evidence")
+    ):
+        errors.append("АвтоBANT numeric budget requires confirmed new-equipment budget evidence")
+    if len(errors) != start:
+        return
+    activity = analysis.get("activity_summary")
+    result = evaluate_autobant(autobant, budget, isinstance(activity, dict) and activity.get("meaningful_contact") is True)
+    # Derived values belong to the server, not to the model's arithmetic.
+    assessment["autobant_result"] = result
+    category = assessment.get("lead_category")
+    if not isinstance(category, dict):
+        errors.append("АвтоBANT requires lead_category")
+        return
+    if category.get("value") != result["category"] or category.get("reason_codes") != result["reason_codes"]:
+        errors.append(f"АвтоBANT category/reason_codes must match deterministic result: {result['category']} / {result['reason_codes']}")
+    expected_budget = "unknown" if result["budget_fit"] in {"noprod", "unknown"} else (
+        "sufficient" if result["budget_fit"] == "fit" else "below_minimum"
+    )
+    if commercial.get("new_equipment_budget_status") != expected_budget:
+        errors.append(f"АвтоBANT commercial_fit status must be {expected_budget}")
+    technical = assessment["technical_requirements"]
+    actual_types = {group["type"] for group in technical["equipment"]}
+    product_types = {"fill": "filling_line", "label": "labeler"}
+    expected_types = {product_types[PRODUCTS[item["id"]]["family"]] for item in autobant["products"]
+                      if PRODUCTS[item["id"]]["family"] in product_types}
+    if not expected_types.issubset(actual_types):
+        errors.append("АвтоBANT technical_requirements must cover all selected equipment families")
+    if autobant["tz"]["value"] == "yes" and actual_types and technical["readiness"] != "ready":
+        errors.append("АвтоBANT tz=yes requires all technical checklist items collected or not_applicable")
+    if result["category"] == "A":
+        if _bant_statuses(assessment) != ["confirmed"] * 4:
+            errors.append("АвтоBANT A requires four confirmed BANT criteria")
+        solution = assessment.get("solution_fit")
+        if not isinstance(solution, dict) or solution.get("status") != "compatible":
+            errors.append("АвтоBANT A requires confirmed technical compatibility")
+    if result["category"] == "C":
+        route = assessment.get("lead_route")
+        if not isinstance(route, dict) or route.get("controlled_return_required") is not True:
+            errors.append("АвтоBANT C requires a controlled return")
+        elif route.get("controlled_return_status") == "missing_in_crm" and route.get("status") != "violation":
+            errors.append("АвтоBANT C missing CRM return must be a route violation")
+    if any(item["code"] == "e2" for item in autobant["screening"]):
+        call = analysis.get("call_attempt_recommendation")
+        if not isinstance(call, dict) or call.get("cycle_status") != "completed":
+            errors.append("АвтоBANT e2 requires a completed call cycle, not just missing contact")
+    closure = analysis.get("closure_review")
+    stage = assessment["stage_review"]
+    if isinstance(closure, dict) and closure.get("applicable") is True and stage.get("verdict") != closure.get("verdict"):
+        errors.append("stage_review must agree with closure_review for a closed lead")
+
+
 def _validate_qualification_assessment(
     analysis: dict[str, Any], errors: list[str], *, lead_contract: bool = False
 ) -> None:
     assessment = _expect_dict(analysis.get("qualification_assessment"), "qualification_assessment", errors)
     if not assessment:
         return
+    autobant = lead_contract and "autobant" in assessment
+    if autobant:
+        _validate_autobant_assessment(analysis, assessment, errors)
     required = {"bant", "solution_fit", "commercial_fit"}
     if lead_contract:
         required |= {"lead_category", "lead_route"}
@@ -1085,8 +1168,10 @@ def _validate_qualification_assessment(
             "qualification_assessment.commercial_fit.confirmed_budget_rub",
             errors,
         )
-        if commercial_fit.get("new_equipment_minimum_rub") != 1_000_000:
-            errors.append("qualification_assessment.commercial_fit.new_equipment_minimum_rub must equal 1000000")
+        result = assessment.get("autobant_result") if autobant else None
+        minimum = result.get("minimum_budget_rub") if isinstance(result, dict) else 1_000_000
+        if commercial_fit.get("new_equipment_minimum_rub") != minimum:
+            errors.append(f"qualification_assessment.commercial_fit.new_equipment_minimum_rub must equal {minimum}")
         _expect_enum(
             commercial_fit.get("reason_code"),
             "qualification_assessment.commercial_fit.reason_code",
@@ -1102,17 +1187,17 @@ def _validate_qualification_assessment(
         )
         budget = commercial_fit.get("confirmed_budget_rub")
         if status == "below_minimum":
-            if not _is_number(budget) or budget >= 1_000_000:
+            if not _is_number(budget) or minimum is None or budget >= minimum:
                 errors.append(
-                    "qualification_assessment.commercial_fit.confirmed_budget_rub must be a number below 1000000 when status=below_minimum"
+                    "qualification_assessment.commercial_fit.confirmed_budget_rub must be below the applicable minimum when status=below_minimum"
                 )
             if commercial_fit.get("reason_code") != "budget_below_new_equipment_minimum":
                 errors.append(
                     "qualification_assessment.commercial_fit.reason_code must be budget_below_new_equipment_minimum when status=below_minimum"
                 )
-        if status == "sufficient" and (not _is_number(budget) or budget < 1_000_000):
+        if status == "sufficient" and (not _is_number(budget) or minimum is None or budget < minimum):
             errors.append(
-                "qualification_assessment.commercial_fit.confirmed_budget_rub must be a number at least 1000000 when status=sufficient"
+                "qualification_assessment.commercial_fit.confirmed_budget_rub must meet the applicable minimum when status=sufficient"
             )
         if commercial_fit.get("reason_code") == "budget_below_new_equipment_minimum" and status != "below_minimum":
             errors.append(
@@ -1146,7 +1231,7 @@ def _validate_qualification_assessment(
                     )
 
     if lead_contract:
-        _validate_lead_category(assessment.get("lead_category"), errors)
+        _validate_lead_category(assessment.get("lead_category"), errors, autobant=autobant)
         _validate_lead_route(assessment.get("lead_route"), errors)
 
 
@@ -1175,7 +1260,7 @@ LEAD_ROUTES = {
 }
 
 
-def _validate_lead_category(value: Any, errors: list[str]) -> None:
+def _validate_lead_category(value: Any, errors: list[str], *, autobant: bool = False) -> None:
     path = "qualification_assessment.lead_category"
     category = _expect_dict(value, path, errors)
     if not category:
@@ -1200,14 +1285,17 @@ def _validate_lead_category(value: Any, errors: list[str]) -> None:
     _expect_non_empty_string(category.get("reason"), f"{path}.reason", errors)
     _expect_non_empty_string(category.get("next_step"), f"{path}.next_step", errors)
     reason_codes = _validate_short_text_list(category.get("reason_codes"), f"{path}.reason_codes", 7, errors)
-    invalid_reasons = [reason for reason in reason_codes if reason not in LEAD_CATEGORY_REASONS]
+    d_reasons = AUTOBANT_D_REASONS if autobant else LEAD_D_REASONS
+    e_reasons = AUTOBANT_E_REASONS if autobant else LEAD_E_REASONS
+    allowed_reasons = d_reasons | e_reasons if autobant else LEAD_CATEGORY_REASONS
+    invalid_reasons = [reason for reason in reason_codes if reason not in allowed_reasons]
     if invalid_reasons:
         errors.append(f"invalid lead category reason_codes: {invalid_reasons!r}")
     for field in ("bant_factors", "technical_factors", "budget_factors", "missing_facts"):
         _validate_short_text_list(category.get(field), f"{path}.{field}", 7, errors)
-    if value_name == "D" and (not reason_codes or any(reason not in LEAD_D_REASONS for reason in reason_codes)):
+    if value_name == "D" and (not reason_codes or any(reason not in d_reasons for reason in reason_codes)):
         errors.append("qualification_assessment.lead_category.value=D requires only confirmed D reason_codes")
-    if value_name == "E" and (not reason_codes or any(reason not in LEAD_E_REASONS for reason in reason_codes)):
+    if value_name == "E" and (not reason_codes or any(reason not in e_reasons for reason in reason_codes)):
         errors.append("qualification_assessment.lead_category.value=E requires only confirmed E reason_codes")
     if value_name not in {"D", "E"} and reason_codes:
         errors.append("qualification_assessment.lead_category.reason_codes are reserved for D/E grounds")
@@ -1306,6 +1394,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
     if not isinstance(category, dict) or not isinstance(route, dict) or not isinstance(bant, dict):
         return
     category_value = category.get("value")
+    legacy_category = category_value if "autobant" not in assessment else None
     if lead_state.get("qualification") != category_value:
         errors.append("lead_state.qualification must match qualification_assessment.lead_category.value")
     statuses = _bant_statuses(assessment)
@@ -1320,7 +1409,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
     if any(status in {"not_confirmed", "unknown"} for status in statuses) and overall_status == "confirmed":
         errors.append("qualification_assessment.bant.overall_status cannot be confirmed with incomplete criteria")
 
-    if category_value == "A":
+    if legacy_category == "A":
         if statuses != ["confirmed", "confirmed", "confirmed", "confirmed"]:
             errors.append("lead category A requires all four BANT criteria confirmed")
         if purchase_window != "up_to_60_days":
@@ -1329,7 +1418,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
             errors.append("lead category A requires compatible solution_fit")
         if not isinstance(commercial_fit, dict) or commercial_fit.get("new_equipment_budget_status") != "sufficient":
             errors.append("lead category A requires sufficient confirmed new-equipment budget")
-    elif category_value == "B":
+    elif legacy_category == "B":
         if statuses[2:3] != ["confirmed"]:
             errors.append("lead category B requires confirmed real need")
         if purchase_window not in {"up_to_60_days", "days_61_to_89"}:
@@ -1345,7 +1434,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
             errors.append("lead category B does not allow confirmed technical mismatch")
         if isinstance(commercial_fit, dict) and commercial_fit.get("new_equipment_budget_status") == "below_minimum":
             errors.append("lead category B does not allow confirmed budget below the new-equipment minimum")
-    elif category_value == "C":
+    elif legacy_category == "C":
         if purchase_window != "months_3_to_12":
             errors.append("lead category C requires timeframe months_3_to_12")
         if route.get("controlled_return_required") is not True:
@@ -1361,7 +1450,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
             errors.append("lead category C does not override confirmed technical mismatch")
         if isinstance(commercial_fit, dict) and commercial_fit.get("new_equipment_budget_status") == "below_minimum":
             errors.append("lead category C does not override confirmed budget below the new-equipment minimum")
-    elif category_value == "D":
+    elif legacy_category == "D":
         confirmed_reasons: set[str] = set()
         if purchase_window == "over_12_months":
             confirmed_reasons.add("timeframe_over_12_months")
@@ -1371,7 +1460,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
             confirmed_reasons.add("budget_below_new_equipment_minimum")
         if set(reason_codes) != confirmed_reasons:
             errors.append("lead category D reason_codes must exactly match confirmed D grounds")
-    elif category_value == "E":
+    elif legacy_category == "E":
         if not route.get("evidence"):
             errors.append("lead category E requires evidence of spam, invalid contact, or completed call cycle")
         call_attempt = analysis.get("call_attempt_recommendation")
@@ -1380,7 +1469,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
             and (not isinstance(call_attempt, dict) or call_attempt.get("cycle_status") != "completed")
         ):
             errors.append("call_cycle_completed_no_contact requires call_attempt_recommendation.cycle_status=completed")
-    elif category_value == "unknown":
+    elif legacy_category == "unknown":
         looks_ready_for_a = (
             statuses == ["confirmed", "confirmed", "confirmed", "confirmed"]
             and purchase_window == "up_to_60_days"
@@ -1415,7 +1504,7 @@ def _validate_lead_qualification_consistency(analysis: dict[str, Any], errors: l
     if current_route == "op2" and not one_unconfirmed and route_status == "allowed":
         errors.append("op2 is allowed only with exactly one unconfirmed BANT criterion")
 
-    if category_value != "D":
+    if legacy_category != "D":
         return
     reason_to_verdict = {
         "technical_mismatch": "technical_mismatch",

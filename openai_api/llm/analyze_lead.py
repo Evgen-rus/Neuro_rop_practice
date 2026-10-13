@@ -24,6 +24,8 @@ from openai_api.llm.full_analysis_repair import build_full_repair_builder
 from openai_api.llm.analyze_deal import knowledge_files, read_text
 from openai_api.llm.llm_client import ValidatedAnalysisFailure, call_analysis_json, call_validated_analysis_json
 from openai_api.llm.prompt_budget import attach_response_metadata, build_prompt_budget, write_prompt_budget
+from openai_api.llm.lead_autobant import AUTOBANT_PROMPT, AUTOBANT_SCHEMA
+from openai_api.llm.lead_requirements import REQUIREMENTS_RULES, render_requirements, requirements_contract
 from openai_api.llm.validation import AnalysisValidationError, normalize_analysis_for_validation, validate_lead_analysis
 from openai_api.logging_utils import log_model_file_payload, log_model_text_payload
 from openai_api.pricing import format_usd_rub
@@ -131,8 +133,12 @@ def load_lead_crm_state(lead_dir: Path) -> dict[str, Any]:
 def validate_lead_analysis_for_crm_state(
     analysis: dict[str, Any],
     crm_state: dict[str, Any],
+    *, require_autobant: bool = False,
 ) -> None:
     """Validate the model contract and bind its CRM claims to deterministic input."""
+    assessment = analysis.get("qualification_assessment")
+    if require_autobant and (not isinstance(assessment, dict) or "autobant" not in assessment):
+        raise AnalysisValidationError("New lead analysis requires qualification_assessment.autobant version 3.0")
     validate_lead_analysis(analysis)
     closure_review = analysis.get("closure_review")
     if not isinstance(closure_review, dict):
@@ -151,6 +157,13 @@ def validate_lead_analysis_for_crm_state(
     ]
     if mismatches:
         raise AnalysisValidationError("Invalid lead CRM closure review: " + "; ".join(mismatches))
+    if isinstance(assessment, dict) and "autobant" in assessment:
+        review = assessment["stage_review"]
+        if (review.get("current_stage_id") != crm_state.get("status_id")
+                or review.get("current_stage_name") != crm_state.get("status_name")):
+            raise AnalysisValidationError("stage_review must match deterministic CRM stage ID and name")
+        if not crm_state.get("status_id") and review.get("verdict") != "insufficient_evidence":
+            raise AnalysisValidationError("stage_review requires insufficient_evidence when CRM stage is unknown")
 
 
 def build_prompt(
@@ -170,6 +183,9 @@ def build_prompt(
         "is_converted": False,
         "status_name_available": False,
     }, ensure_ascii=False, indent=2)
+    qualification_extension = json.dumps(
+        {"autobant": AUTOBANT_SCHEMA, **requirements_contract()}, ensure_ascii=False, indent=2,
+    )[1:-1].strip()
     return f"""Ты ИИ-помощник РОПа ПрактикМ.
 
 Отчет читает только РОП. Менеджер не видит систему и не читает отчет.
@@ -253,17 +269,20 @@ def build_prompt(
    Для timeframe отдельно выбери purchase_window: up_to_60_days, days_61_to_89, months_3_to_12, over_12_months или unknown. Ровно 3 месяца относится к months_3_to_12. Не смешивай два разных срока: decision_timing — когда клиент примет решение, need_or_launch_timing — когда нужно оборудование или запуск. Для каждого укажи status=confirmed|not_confirmed|unknown и значение только по фактам; если срока нет, value=null.
 2. Для каждого критерия верни заметное русское label, краткий summary, evidence, missing_facts и один конкретный next_question_or_action при нехватке данных. Общий bant.next_question оставь как один главный вопрос для обратной совместимости.
 3. Техническая применимость оценивается отдельно от BANT по типу оборудования и известным параметрам из OKF technical_data.md. Ожидание заключения технического специалиста и нехватка параметров означают needs_technical_data/insufficient, а не техническую несовместимость и не категорию D. technical_mismatch допустим только при подтверждённом конкретном стоп-факторе из CRM-истории или транскрибации.
-4. Коммерческая проверка относится только к явно названному бюджету нового оборудования. below_minimum и budget_below_new_equipment_minimum допустимы только при явно названной числовой сумме менее 1000000 рублей. Формулировки без точного числа вроде «десятки тысяч», «сотни тысяч», «дорого» или отказ от озвученной менеджером цены не являются названным бюджетом клиента: в таком случае ставь budget_named=false, new_equipment_budget_status=unknown и confirmed_budget_rub=null. Не извлекай, не округляй и не предполагай бюджет. Лизинг, рассрочка, аренда, б/у или более доступная комплектация могут быть рекомендацией, но не меняют категорию сами по себе.
-5. Категория A: одновременно полный confirmed BANT, compatible, явно подтверждённый бюджет нового оборудования от 1000000 рублей и timeframe up_to_60_days.
-6. Категория B: проект реален (need=confirmed), срок up_to_60_days или days_61_to_89, не хватает части BANT либо технических данных, и нет подтверждённого стоп-фактора.
-7. Категория C: подтверждённая отложенная потребность со сроком months_3_to_12. Категория остаётся C, даже если менеджер не создал CRM-дело или задачу возврата. Существующий возврат подтверждай только CRM-evidence и храни его дату в controlled_return_date. Если действия в CRM нет, ставь controlled_return_status=missing_in_crm, controlled_return_date=null, маршрут violation и предлагай recommended_return_date как рекомендацию, а не как существующий факт. Отсутствие CRM-задачи возврата — это нарушение маршрута и обязательное CRM-поручение, но само по себе не повод объявлять корректное закрытие спорным или требовать новый контакт с клиентом. Даже если срок более 6 месяцев соответствует браковочной стадии текущей воронки, возврат должен остаться управляемым.
-8. Категория D допустима только для одной или нескольких подтверждённых причин: timeframe_over_12_months, technical_mismatch, budget_below_new_equipment_minimum. Причины храни в lead_category.reason_codes; нехватка технических данных не является D.
-9. Категория E допустима только для подтверждённой причины: spam, invalid_contact или call_cycle_completed_no_contact. Используй существующую рекомендацию поставщика из call_attempt_rules.md как цикл дозвона и не придумывай новый норматив. Пока цикл не завершён, ставь unknown, не E.
-10. Категория unknown: нет содержательного контакта, реальность проекта не доказана, цикл дозвона не завершён или данных недостаточно для A–E. Обязательны missing_facts и конкретный next_step. Для категорий A, B, C и unknown поле lead_category.reason_codes всегда должно быть пустым списком []; оно предназначено только для подтверждённых причин D/E.
+4. Для новых лид-анализов действует АвтоBANT 3.0 ниже; он заменяет старые A–E и фиксированный порог 1 млн ₽ из OKF только в lead-контуре. Правила сделок не меняются.
+Коммерческая проверка относится только к явно названному числовому бюджету нового оборудования. Формулировки вроде «десятки тысяч», «сотни тысяч», «дорого» или отказ от цены не являются суммой: budget_named=false, confirmed_budget_rub=null. Не извлекай, не округляй и не предполагай бюджет.
+new_equipment_minimum_rub — 90% суммы ценовых ориентиров выбранных продуктов АвтоBANT, не фиксированный миллион. Если продукт не определён, минимум null и статус unknown. sufficient — бюджет не ниже этого минимума; below_minimum — ниже, reason_code=budget_below_new_equipment_minimum; unknown — бюджет/продукт неизвестен. Не выдавай справочную цену за КП/бюджет клиента.
+5. Категорию и reason_codes выбери строго по АвтоBANT 3.0. autobant_result не генерируй: его рассчитает сервер. lead_state.qualification должен совпасть с lead_category.value. Для категорий A, B, C и unknown поле lead_category.reason_codes всегда должно быть пустым списком []; для D/E используй коды autobant_* из регламента. Для unknown обязательны missing_facts и следующий шаг. Категории A нужен подтверждённый полный BANT, техническая совместимость и полное ТЗ. Не называй ТЗ полным только по общей отметке «есть ТЗ».
+6. Для C обязателен контролируемый возврат. Существующий возврат подтверждай только CRM-evidence. Если задачи нет, controlled_return_status=missing_in_crm, controlled_return_date=null, маршрут violation, recommended_return_date — рекомендация, не факт. Отсутствие задачи не делает обоснованное закрытие спорным.
+7. Категория E по регламенту не разрешает удалять лид или писать в CRM. Покажи основание и рекомендацию РОПу. Незавершённый дозвон и недоступность материалов не являются подтверждением e1/e2. Для D/E loss_diagnosis.final_verdict=bad_lead либо technical_mismatch при подтверждённой несовместимости; для C — needs_nurture.
 11. Категория и маршрут различаются. ordinary_deal разрешён только при полном confirmed BANT. op2 разрешён при ровно одном not_confirmed/unknown критерии BANT и отсутствии negative. Иначе используй clarification, auto_reminder, deferred_demand, disqualified или unknown. Если текущий маршрут нарушает правило, lead_route.status=violation.
 12. Не смешивай качество лида с качеством обработки: loss_diagnosis независимо оценивает lead_quality, processing_quality, call_attempt_quality, next_step_quality и route_quality. Если менеджер не выяснил BANT, это не означает отрицательный BANT.
 13. Для любого доуточнения сформируй одно поручение менеджеру: один контакт, конкретные вопросы, срок и CRM-факты для фиксации.
 </qualification_rules>
+
+{AUTOBANT_PROMPT}
+
+{REQUIREMENTS_RULES}
 
 <verification_loop>
 Перед финальным JSON проверь:
@@ -286,6 +305,7 @@ def build_prompt(
     "qualification_reason": "почему такая квалификация"
   }},
   "qualification_assessment": {{
+    {qualification_extension},
     "bant": {{
       "budget": {{"label": "Бюджет и финансовая готовность", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": ["факт из CRM или коммуникации"], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
       "authority": {{"label": "ЛПР и влияние на решение", "status": "confirmed|not_confirmed|negative|unknown", "summary": "краткий вывод", "evidence": [], "missing_facts": [], "next_question_or_action": "конкретный вопрос или null"}},
@@ -309,7 +329,7 @@ def build_prompt(
       "budget_named": true,
       "applies_to_new_equipment": "JSON boolean true, JSON boolean false или строка unknown",
       "confirmed_budget_rub": "число или null",
-      "new_equipment_minimum_rub": 1000000,
+      "new_equipment_minimum_rub": "90% суммы ориентиров АвтоBANT или null",
       "reason_code": "budget_below_new_equipment_minimum|unknown|null",
       "evidence": ["краткий факт из CRM или транскрибации"],
       "missing_facts": [],
@@ -641,6 +661,7 @@ def render_report(
     limitations = render_context_limitations_section(context_diagnostics)
     limitations_section = f"\n\n{limitations}\n" if limitations else ""
     qualification_assessment = render_qualification_assessment_section(analysis)
+    requirements_section = render_requirements(analysis.get("qualification_assessment", {}))
     client_message_options = [
         str(primary.get("text") or "").strip(),
         *[str(item.get("text") or "").strip() for item in backup_texts if isinstance(item, dict)],
@@ -698,6 +719,8 @@ def render_report(
 {closure_section}
 
 {qualification_assessment}
+
+{requirements_section}
 
 ## Коммуникации
 
@@ -899,7 +922,7 @@ def main() -> None:
     try:
         analysis, metadata = call_validated_analysis_json(
             prompt,
-            validator=lambda value: validate_lead_analysis_for_crm_state(value, crm_state),
+            validator=lambda value: validate_lead_analysis_for_crm_state(value, crm_state, require_autobant=True),
             normalizer=normalize_analysis_for_validation,
             validation_error_types=(AnalysisValidationError,),
             model=args.model,

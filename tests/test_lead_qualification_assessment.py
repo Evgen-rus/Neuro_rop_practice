@@ -895,7 +895,8 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
 
         self.assertEqual(summary["lead_category"], "A")
         self.assertIsNone(summary["lead_route_status"])
-        self.assertIn("asString(leadCategory.value) || asString(leadState.qualification)", frontend_source)
+        self.assertIn("asString(autobantResult.category) : asString(leadCategory.value)", frontend_source)
+        self.assertIn("|| asString(leadState.qualification)", frontend_source)
 
     def test_new_lead_category_ui_is_not_rendered_for_deals(self) -> None:
         frontend_source = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
