@@ -36,7 +36,7 @@ CLI + FastAPI + React для анализа лидов/сделок Bitrix24; CR
 
 ## Команды и завершение
 
-- Запуск: [README](README.md); API запускает автоматический CRM/LLM-цикл — для локального smoke отключи `DAYTIME_CYCLE_ENABLED`.
+- Запуск: [README: локальный запуск агентом](README.md#локальный-запуск-агентом-для-проверки-ui) — точные команды для API/frontend, Happ и ограничений песочницы; API запускает автоматический CRM/LLM-цикл — для локального smoke отключи `DAYTIME_CYCLE_ENABLED`.
 - Сначала targeted checks; после Python-логики один полный `./venv/Scripts/python.exe -m unittest discover -s tests` на интегрированном результате.
 - После frontend: в `frontend/` — `npm run lint`, `npm run build`.
 - Всегда `git diff --check`, проверка scope, diff и контракта. Не повторяй успешные проверки без новой причины. Укажи пропуски и причины; непроверенный результат не называй завершённым.

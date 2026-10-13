@@ -74,7 +74,7 @@ VERIFICATION: команда, результат, проверенная вер�
 | HTTP/SQLite/общий lead-deal слой | Релевантные contract/regression tests обеих сторон; второй контур проверить на несовместимость | Обязательные команды затронутых слоёв выше |
 | Deploy/config | Workflow, compose, shell и `tests/test_temporary_tunnel_deploy.py` по scope | Проверки конфигурации по runbook; runtime только при разрешённом запуске |
 
-API smoke: сначала `$env:DAYTIME_CYCLE_ENABLED='false'`, затем `./venv/Scripts/python.exe -m uvicorn api.app:app --host 127.0.0.1 --port 8000`; health — `http://127.0.0.1:8000/api/health`. Отключение scheduler не отключает ручные AI/CRM-действия: не вызывай их для smoke. Старт API может инициализировать локальную SQLite; проверка документации не требует запуска.
+API smoke: сначала `$env:DAYTIME_CYCLE_ENABLED='false'`, затем `./venv/Scripts/python.exe -m uvicorn api.app:app --host 127.0.0.1 --port 8000`; health — `http://127.0.0.1:8000/api/health`. Отключение scheduler не отключает ручные AI/CRM-действия: не вызывай их для smoke. Старт API может инициализировать локальную SQLite; проверка документации не требует запуска. Полный локальный запуск UI, Happ и ограничения песочницы — [README: локальный запуск агентом](../README.md#локальный-запуск-агентом-для-проверки-ui).
 
 UI: в `frontend/` — `npm run dev`. CLI: `./venv/Scripts/python.exe run_rop_assistant.py --help` для аргументов; pipeline без аргументов не использовать как проверку документации.
 

@@ -4,6 +4,9 @@ import {
   MAX_LEAD_CONTROL_SELECTION,
   buildLeadControlSearchRequest,
   toggleLeadSelection,
+  leadClosureLabel,
+  leadCategoryLabel,
+  leadTechnicalSummary,
 } from './leadControlView.ts'
 
 test('lead control requests the server-owned 30-day stage group and optional manager filter', () => {
@@ -30,4 +33,30 @@ test('lead selection removes checked items and stops at ten', () => {
   assert.deepEqual(toggleLeadSelection(selected, '11'), selected)
   assert.deepEqual(toggleLeadSelection(selected, '10'), selected.slice(0, -1))
   assert.deepEqual(toggleLeadSelection(selected.slice(0, -1), '11'), [...selected.slice(0, -1), '11'])
+})
+
+test('active leads never show a closure review badge, including stale closure verdicts', () => {
+  for (const verdict of ['not_applicable', 'confirmed_correct', 'disputed', 'insufficient_evidence', null, undefined]) {
+    assert.equal(leadClosureLabel('active', verdict), null)
+  }
+})
+
+test('closed leads distinguish disputed closure from missing evidence and confirmation', () => {
+  assert.equal(leadClosureLabel('closed', 'confirmed_correct'), 'Закрытие подтверждено')
+  assert.equal(leadClosureLabel('closed', 'disputed'), 'Закрытие оспорено')
+  assert.equal(leadClosureLabel('closed', 'insufficient_evidence'), 'Недостаточно данных для оценки')
+  assert.equal(leadClosureLabel('closed', null), null)
+})
+
+test('lead assessment labels unknown categories and keeps technical counts with the timing qualifier', () => {
+  assert.equal(leadCategoryLabel('unknown'), 'Не определена')
+  assert.equal(leadCategoryLabel('  '), 'Не определена')
+  assert.equal(leadCategoryLabel('B'), 'B')
+  assert.equal(leadTechnicalSummary({
+    technical_collected_count: 3,
+    technical_total_count: 8,
+    technical_partial_count: 1,
+    technical_readiness: 'unknown',
+    technical_required_now: true,
+  }), 'ТЗ собрано 3 из 8 · частично 1 · тип оборудования не определён · требуется сейчас')
 })
