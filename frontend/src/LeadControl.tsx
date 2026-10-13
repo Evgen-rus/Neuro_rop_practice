@@ -313,14 +313,12 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
         <div className="dc-lead-columns" role="row">
           <span role="columnheader" aria-label="Выбор лида" />
           <span role="columnheader">Лид</span>
-          <span role="columnheader">Ответственный</span>
-          <span role="columnheader">Этап</span>
+          <span role="columnheader">Ответственный / этап</span>
           <span role="columnheader">Следующий шаг</span>
-          <span role="columnheader">История</span>
-          <span role="columnheader">Анализ</span>
+          <span role="columnheader">Действия</span>
         </div>
-        {loading && !rowsVisible ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={7}>Загружаем сохранённый список…</p></div> : null}
-        {rowsVisible && candidates.length === 0 ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={7}>{crmSnapshotAvailable ? group === 'active' ? 'Лидов в работе за последние 30 дней не найдено.' : 'Закрытых лидов за последние 30 дней не найдено.' : 'Обновите Bitrix, чтобы загрузить лиды.'}</p></div> : null}
+        {loading && !rowsVisible ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={5}>Загружаем сохранённый список…</p></div> : null}
+        {rowsVisible && candidates.length === 0 ? <div className="lead-control-empty-row" role="row"><p className="dc-empty lead-control-empty" role="cell" aria-colspan={5}>{crmSnapshotAvailable ? group === 'active' ? 'Лидов в работе за последние 30 дней не найдено.' : 'Закрытых лидов за последние 30 дней не найдено.' : 'Обновите Bitrix, чтобы загрузить лиды.'}</p></div> : null}
         {rowsVisible ? candidates.map((candidate) => {
         const reportId = candidate.latest_report_id
         const state = analysisState(candidate, job)
@@ -370,19 +368,18 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
             {details.length ? <dl className="lead-control-details">
               {details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><details className="lead-control-expandable"><summary>{value}</summary></details></dd></div>)}
             </dl> : null}
-            {qualification ? <div className="lead-control-qualification-summary">
+            {qualification ? <details className="lead-control-qualification-summary"><summary>{qualification.regulation_version ? `AutoBANT ${qualification.regulation_version} · квалификация` : 'Данные старого отчёта'}</summary><div>
                 <span>{qualification.regulation_version ? `AutoBANT ${qualification.regulation_version}` : 'Старый формат квалификации'}</span>
                 <span>{technicalSummary}{qualification.technical_required_now === true ? ' · требуется сейчас' : qualification.technical_required_now === false ? ' · пока не требуется' : ''}</span>
                 <span><strong>Проверка этапа:</strong> {STAGE_REVIEW_VERDICT[qualification.stage_verdict || ''] || (qualification.regulation_version ? 'нет данных' : 'не сохранена в старом отчёте')}</span>
                 {qualification.stage_reason ? <span>{qualification.stage_reason}</span> : null}
-              </div> : null}
+              </div></details> : null}
           </div>
-          <div className="lead-control-manager-cell" role="cell"><span className="lead-control-cell-label">Ответственный</span>{managerName}</div>
-          <div className="lead-control-stage-cell" role="cell"><span className="lead-control-cell-label">Этап</span>{candidate.status || 'Этап не указан'}</div>
+          <div className="lead-control-manager-cell" role="cell"><span>{managerName}</span><span className="lead-control-stage">{candidate.status || 'Этап не указан'}</span></div>
           <div className="lead-control-next-action" role="cell">
-            <div className="lead-control-next-action-recommendation">
+            <div className={`lead-control-next-action-recommendation ${state.kind !== 'not_analyzed' && candidate.lead_next_action?.trim() ? 'has-recommendation' : ''}`}>
               <span>Рекомендация</span>
-              <details className="lead-control-expandable"><summary>{state.kind === 'not_analyzed' ? '—' : candidate.lead_next_action?.trim() || 'Не указана'}</summary></details>
+              {state.kind !== 'not_analyzed' && candidate.lead_next_action?.trim() ? <details className="lead-control-expandable"><summary>{candidate.lead_next_action}</summary></details> : <span className="lead-control-muted lead-control-no-recommendation">Нет рекомендации</span>}
             </div>
             <div className="lead-control-bitrix-task">
               <strong>Задача Bitrix</strong>
@@ -392,16 +389,16 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
               </div> : <span>{candidate.crm_task_checked ? 'Активная задача не найдена' : 'Задача не загружена'}</span>}
             </div>
           </div>
-          <div className="lead-control-history-cell" role="cell">
-            {onOpenHistory ? <button type="button" className="dc-button" disabled={openingHistoryId === candidate.entity_id} onClick={() => void openHistory(candidate.entity_id)}>
-              {openingHistoryId === candidate.entity_id ? 'Открываем…' : 'История лида'}
-            </button> : <span className="lead-control-muted">—</span>}
-          </div>
           <div className="lead-control-analysis" role="cell">
             <div className="lead-control-report-action">
             {reportId && state.kind === 'ready' ? <button type="button" className="dc-button primary" disabled={openingReportId === reportId} onClick={() => void openReport(reportId)}>{openingReportId === reportId ? 'Открываем…' : 'Открыть отчёт'}</button> : <span className={`lead-control-status ${state.tone}`}>{state.label}</span>}
             {candidate.analyzed_at ? <time dateTime={candidate.analyzed_at}>Анализ {dateLabel(candidate.analyzed_at)}</time> : null}
             </div>
+            <div className="lead-control-history-cell">
+            {onOpenHistory ? <button type="button" className="dc-button" disabled={openingHistoryId === candidate.entity_id} onClick={() => void openHistory(candidate.entity_id)}>
+              {openingHistoryId === candidate.entity_id ? 'Открываем…' : 'История'}
+            </button> : <span className="lead-control-muted">—</span>}
+          </div>
           </div>
         </article>
         }) : null}
