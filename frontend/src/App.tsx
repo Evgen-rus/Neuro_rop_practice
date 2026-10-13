@@ -2619,34 +2619,15 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
     && Boolean(asString(route.recommended_return_date))
   const closureNeedsNoWorkflow = closureConfirmed && !missingCrmReturn
   const taskEnabled = workflow.review_completed && !closureNeedsNoWorkflow
-  const controlEnabled = workflow.task_completed && !closureNeedsNoWorkflow
-  const controlActive = Boolean(workflow.control_mode)
   const workflowDone = closureNeedsNoWorkflow
     ? (workflow.review_completed ? 1 : 0)
-    : [workflow.review_completed, workflow.task_completed, controlActive].filter(Boolean).length
-  const workflowTotal = closureNeedsNoWorkflow ? 1 : 3
-  const controlDeadline = workflow.control_mode === 'date'
-    ? workflow.control_date
-    : asString(rop.deadline) || null
+    : [workflow.review_completed, workflow.task_completed].filter(Boolean).length
+  const workflowTotal = closureNeedsNoWorkflow ? 1 : 2
   const evidence = [
     ...props.facts,
     ...asStringList(rop.evidence).map(formatMoneyText),
     ...bantItems.flatMap((item) => asStringList(item.value.evidence).map(formatMoneyText)),
   ].filter(Boolean)
-
-  async function toggleControl() {
-    if (!controlEnabled) return
-    if (controlActive) {
-      await persist({ control_mode: null, control_date: null, control_days: null, control_completed: false })
-      return
-    }
-    const deadline = asString(rop.deadline)
-    if (deadline) {
-      await persist({ control_mode: 'date', control_date: deadline, control_days: null, control_completed: false })
-      return
-    }
-    await persist({ control_mode: 'days', control_days: 2, control_date: null, control_completed: false })
-  }
 
   return (
     <>
@@ -2720,10 +2701,10 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
               const status = asString(item.value.status, 'unknown')
               const summary = formatMoneyText(asString(item.value.summary) || asString(item.value.explanation))
               return (
-                <div className={`compact-bant-card status-${status}`} key={item.key} role="button" tabIndex={0} onClick={() => openMaterials('bant')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') openMaterials('bant') }}>
+                <div className={`compact-bant-card status-${status}`} key={item.key}>
                   <strong>{item.letter} · {item.label}</strong>
                   <span>{assessmentLabel(status, BANT_STATUS_RU)}</span>
-                  {summary ? <ExpandableText text={summary} /> : null}
+                  {summary ? <details className="compact-bant-explanation"><summary>Показать полностью</summary><p>{summary}</p></details> : null}
                 </div>
               )
             })}
@@ -2735,12 +2716,12 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
 
         <section className="workflow-steps">
           <div className="workflow-section-title">
-            <div><h3>Работа РОПа по лиду</h3><p>{closureNeedsNoWorkflow ? 'Проверить корректность закрытия' : missingCrmReturn ? 'Закрытие проверено → оформить возврат в CRM → проконтролировать' : 'Разобрать → поручить → поставить на контроль'}</p></div>
+            <div><h3>Работа РОПа по лиду</h3><p>{closureNeedsNoWorkflow ? 'Проверить корректность закрытия' : missingCrmReturn ? 'Закрытие проверено → оформить возврат в CRM' : 'Разобрать → поручить'}</p></div>
             <span>{workflowDone} из {workflowTotal} выполнено</span>
           </div>
 
           <article className={`workflow-step review-step ${workflow.review_completed ? 'completed' : 'active'}`}>
-            <div className="workflow-step-label"><b>1</b><strong>Разбор для менеджера</strong><span>Сильные и слабые стороны</span></div>
+            <div className="workflow-step-label"><strong>Разбор для менеджера</strong><span>Сильные и слабые стороны</span></div>
             <div className="workflow-step-body">
               <div className="review-grid">
                 <section className="review-card good"><h4>Сильные стороны</h4><ul>{strengths.map((item) => <li key={item}>{item}</li>)}{!strengths.length ? <li>Сильные стороны в анализе не выделены.</li> : null}</ul></section>
@@ -2754,7 +2735,7 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
           </article>
 
           <article className={`workflow-step ${closureNeedsNoWorkflow || workflow.task_completed ? 'completed' : taskEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>2</b><strong>{closureNeedsNoWorkflow ? 'Задача менеджеру не требуется' : missingCrmReturn ? 'Оформить возврат в CRM' : 'Поставить задачу менеджеру'}</strong><span>{closureNeedsNoWorkflow ? 'Закрытие соответствует фактам' : missingCrmReturn ? 'Фиксация отложенного спроса' : 'Фиксация и план'}</span></div>
+            <div className="workflow-step-label"><strong>{closureNeedsNoWorkflow ? 'Задача менеджеру не требуется' : missingCrmReturn ? 'Оформить возврат в CRM' : 'Поставить задачу менеджеру'}</strong><span>{closureNeedsNoWorkflow ? 'Закрытие соответствует фактам' : missingCrmReturn ? 'Фиксация отложенного спроса' : 'Фиксация и план'}</span></div>
             <div className="workflow-step-body">
               {closureNeedsNoWorkflow ? (
                 <ExpandableText text={workflow.manager_task_text || 'Дополнительная задача менеджеру не требуется. Закрытие лида проверено и соответствует фактам CRM.'} />
@@ -2767,15 +2748,6 @@ function LeadWorkflowPanels(props: ReportPanelsProps) {
             </div> : null}
           </article>
 
-          <article className={`workflow-step ${closureNeedsNoWorkflow || controlActive ? 'completed' : controlEnabled ? 'active' : 'disabled'}`}>
-            <div className="workflow-step-label"><b>3</b><strong>{closureNeedsNoWorkflow ? 'Дополнительный контроль не требуется' : missingCrmReturn ? 'Проверить создание CRM-задачи' : 'Контроль и проверка'}</strong><span>{closureNeedsNoWorkflow ? 'Проверка завершена' : controlActive ? 'Карточка на контроле' : 'Поставить карточку на контроль'}</span></div>
-            <div className="workflow-step-body">
-              <p>{closureNeedsNoWorkflow ? 'Причина закрытия подтверждена историей CRM; возвращать карточку на контроль не нужно.' : controlActive ? `Контроль назначен${controlDeadline ? ` на ${formatLeadDate(controlDeadline, false)}` : ''}.` : missingCrmReturn ? `Проверь появление CRM-задачи возврата${controlDeadline ? ` до ${formatLeadDate(controlDeadline, false)}` : ''}.` : `Карточка вернётся в активную очередь по сроку задачи${controlDeadline ? ` — ${formatLeadDate(controlDeadline, false)}` : ''}.`}</p>
-            </div>
-            {!readOnly ? <div className="workflow-step-actions">
-              {!closureNeedsNoWorkflow ? <button disabled={!controlEnabled || saving} className="primary-dark" onClick={() => void toggleControl()}>{controlActive ? 'Снять с контроля' : 'Поставить на контроль'}</button> : null}
-            </div> : null}
-          </article>
         </section>
         {notice ? <div className="workflow-notice" role="status">{notice}</div> : null}
       </section>

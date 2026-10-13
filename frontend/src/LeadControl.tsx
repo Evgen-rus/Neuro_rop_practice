@@ -377,8 +377,8 @@ export function LeadControl({ user, managers, job, historyRevision = 0, onOpenRe
                 {qualification.stage_reason ? <span>{qualification.stage_reason}</span> : null}
               </div> : null}
           </div>
-          <div className="lead-control-manager-cell" role="cell">{managerName}</div>
-          <div className="lead-control-stage-cell" role="cell">{candidate.status || 'Этап не указан'}</div>
+          <div className="lead-control-manager-cell" role="cell"><span className="lead-control-cell-label">Ответственный</span>{managerName}</div>
+          <div className="lead-control-stage-cell" role="cell"><span className="lead-control-cell-label">Этап</span>{candidate.status || 'Этап не указан'}</div>
           <div className="lead-control-next-action" role="cell">
             <div className="lead-control-next-action-recommendation">
               <span>Рекомендация</span>
