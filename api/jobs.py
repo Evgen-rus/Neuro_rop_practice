@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from bitrix.customer_history import build_normalized_communications
+from bitrix.customer_history import build_normalized_communications, is_bitrix_task
 from openai_api.bitrix_links import bitrix_entity_url
 from openai_api.llm.lead_requirements import requirements_summary
 from openai_api.llm.validation import validate_deal_recommendation_materialization
@@ -475,7 +475,8 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
     else:
         lead = _response_result(bundle.get("lead"))
         touchpoints = [item for item in bundle.get("client_touchpoints") or [] if isinstance(item, dict)]
-        tasks = [item for item in bundle.get("tasks_and_control") or [] if isinstance(item, dict)]
+        tasks = [item for item in bundle.get("tasks_and_control") or []
+                 if isinstance(item, dict) and is_bitrix_task(item.get("raw") or {})]
     if not lead and not bundle:
         return None
 
@@ -485,8 +486,10 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
 
     last_contact = max(touchpoints, key=activity_time, default=None)
     communication_summary = build_lead_communication_summary(lead_id, bundle) if bundle else {}
-    open_tasks = [item for item in tasks if not bool(item.get("completed"))]
-    current_task = max(open_tasks or tasks, key=activity_time, default=None)
+    open_tasks = [item for item in tasks
+                  if str(item.get("completed") or (item.get("raw") or {}).get("COMPLETED") or "").upper()
+                  not in {"Y", "1", "TRUE", "COMPLETED"}]
+    current_task = min(open_tasks, key=lambda item: str((item.get("raw") or {}).get("DEADLINE") or activity_time(item)), default=None)
 
     def activity_snapshot(item: dict[str, Any] | None) -> dict[str, Any] | None:
         if not item:
@@ -505,7 +508,7 @@ def build_lead_report_meta(lead_id: str) -> dict[str, Any] | None:
             "date": _short_text(item.get("when") or raw.get("DEADLINE") or raw.get("START_TIME"), 80),
             "subject": _short_text(item.get("subject"), 240),
             "text": _short_text(item.get("text") or raw.get("DESCRIPTION"), 600),
-            "completed": bool(item.get("completed")),
+            "completed": str(item.get("completed") or raw.get("COMPLETED") or "").upper() in {"Y", "1", "TRUE", "COMPLETED"},
         }
 
     status_id = str(lead.get("STATUS_ID") or "")
@@ -670,6 +673,7 @@ def extract_summary_fields(analysis: dict[str, Any], entity_type: str) -> dict[s
         if not attention:
             attention = str(rop.get("why_it_matters") or "") or None
     if entity_type == "lead":
+        action = str(rop.get("message_to_manager") or rop.get("check_for_rop") or "") or None
         assessment = analysis.get("qualification_assessment") if isinstance(analysis.get("qualification_assessment"), dict) else {}
         category = assessment.get("lead_category") if isinstance(assessment.get("lead_category"), dict) else {}
         route = assessment.get("lead_route") if isinstance(assessment.get("lead_route"), dict) else {}

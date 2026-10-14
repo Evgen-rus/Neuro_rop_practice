@@ -205,29 +205,32 @@ def transcript_activity_ids(entity_dir: Path, entity_type: str, entity_id: str) 
     return ids
 
 
-def downloaded_audio_from_manifest(entity_dir: Path, entity_type: str, entity_id: str) -> dict[str, list[str]]:
+def audio_manifest_data(entity_dir: Path, entity_type: str, entity_id: str) -> tuple[dict[str, list[str]], set[str]]:
     manifest_path = entity_dir / "audio" / f"{entity_type}_{entity_id}_call_audio_manifest.json"
     if not manifest_path.exists():
-        return {}
+        return {}, set()
     try:
         manifest = load_json(manifest_path)
     except ValueError:
-        return {}
+        return {}, set()
 
     rows: dict[str, list[str]] = {}
+    short_no_answer_ids: set[str] = set()
     for call in manifest.get("calls") or []:
         if not isinstance(call, dict):
             continue
         activity_id = str(call.get("activity_id") or "")
         if not activity_id:
             continue
+        if call.get("skip_transcribe") is True and call.get("call_quality") == "short_no_answer":
+            short_no_answer_ids.add(activity_id)
         paths: list[str] = []
         for item in call.get("downloads") or []:
             if isinstance(item, dict) and item.get("ok") and item.get("local_path"):
                 paths.append(str(item["local_path"]))
         if paths:
             rows.setdefault(activity_id, []).extend(paths)
-    return rows
+    return rows, short_no_answer_ids
 
 
 def unavailable_source_gaps(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -374,14 +377,19 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
             related_calls.extend(single_related_calls)
     transcript_ids = transcript_activity_ids(entity_dir, entity_type, entity_id)
     audio_ids = local_audio_by_activity(entity_dir)
-    for activity_id, paths in downloaded_audio_from_manifest(entity_dir, entity_type, entity_id).items():
+    manifest_audio, short_no_answer_ids = audio_manifest_data(entity_dir, entity_type, entity_id)
+    for activity_id, paths in manifest_audio.items():
         audio_ids.setdefault(activity_id, []).extend(paths)
 
     gaps = unavailable_source_gaps(context)
     gaps.extend(converted_lead_deal_gaps(context, entity_type, entity_id))
+    short_no_answer_skipped_ids: set[str] = set()
     for call in calls:
         activity_id = str(call.get("activity_id") or "")
         if not activity_id or activity_id in transcript_ids:
+            continue
+        if activity_id in short_no_answer_ids:
+            short_no_answer_skipped_ids.add(activity_id)
             continue
         gaps.append(
             call_gap(
@@ -392,8 +400,15 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
                 has_local_audio=activity_id in audio_ids,
             )
         )
+    for call in related_calls:
+        activity_id = str(call.get("activity_id") or "")
+        if activity_id and activity_id not in transcript_ids and activity_id in short_no_answer_ids:
+            short_no_answer_skipped_ids.add(activity_id)
     related_calls_without_transcript = [
-        call for call in related_calls if str(call.get("activity_id") or "") not in transcript_ids
+        call
+        for call in related_calls
+        if str(call.get("activity_id") or "") not in transcript_ids
+        and str(call.get("activity_id") or "") not in short_no_answer_ids
     ]
     if related_calls_without_transcript:
         gaps.append(
@@ -424,7 +439,13 @@ def build_context_diagnostics(entity_type: str, entity_id: str, entity_dir: Path
             "crm_calls_found": len(calls),
             "related_crm_calls_found": len(related_calls),
             "transcript_activity_ids_found": sorted(transcript_ids),
-            "calls_without_transcript": sum(1 for call in calls if str(call.get("activity_id") or "") not in transcript_ids),
+            "calls_without_transcript": sum(
+                1
+                for call in calls
+                if str(call.get("activity_id") or "") not in transcript_ids
+                and str(call.get("activity_id") or "") not in short_no_answer_ids
+            ),
+            "short_no_answer_skipped_calls": len(short_no_answer_skipped_ids),
             "related_calls_without_transcript": len(related_calls_without_transcript),
             "critical_gaps": critical_count,
             "medium_gaps": medium_count,
@@ -519,6 +540,7 @@ def render_manual_actions(payload: dict[str, Any]) -> str:
 
 def render_llm_context(payload: dict[str, Any]) -> str:
     summary = payload.get("summary") or {}
+    short_no_answer_count = summary.get("short_no_answer_skipped_calls", 0)
     lines = [
         "# Диагностика полноты контекста",
         "",
@@ -530,6 +552,14 @@ def render_llm_context(payload: dict[str, Any]) -> str:
         "Правило для анализа: если контекст неполный, анализируй доступную историю, но явно укажи ограничения. Не делай выводы о содержании отсутствующих звонков.",
         "",
     ]
+    if short_no_answer_count:
+        lines.extend(
+            [
+                f"- Коротких звонков, штатно пропущенных по политике: {short_no_answer_count}.",
+                "  По этой классификации контакт не подтвержден; фактическое наличие ответа не установлено.",
+                "",
+            ]
+        )
     gaps = payload.get("gaps") or []
     if gaps:
         lines.extend(["## Пробелы", ""])

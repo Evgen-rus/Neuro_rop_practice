@@ -406,6 +406,30 @@ class LeadControlRouteTests(unittest.TestCase):
 
 
 class LeadControlHistoryTests(unittest.TestCase):
+    def test_legacy_task_cache_is_refreshed_without_reusing_todo(self) -> None:
+        for activities in ({"ok": True, "items": [
+            {"ID": "todo", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TODO", "COMPLETED": "N"},
+        ]}, RuntimeError("activities unavailable")):
+            with self.subTest(activities=type(activities).__name__), tempfile.TemporaryDirectory() as directory:
+                db_path = Path(directory) / "rop.sqlite3"
+                key = f"{LEAD_CONTROL_HISTORY_KEY_PREFIX}17"
+                saved_communication = {"id": "old-call", "channel": "call", "text": "Saved history"}
+                put_crm_sync_state(db_path, key, {
+                    "schema_version": 1, "lead_id": "17", "available": True,
+                    "comments": [{"id": "old-note", "text": "Saved note"}],
+                    "communications": [saved_communication],
+                    "current_task": {"subject": "Old TODO", "status": "open"},
+                    "task_checked": True, "limitations": [],
+                }, expected_revision=0)
+                client = FakeLeadHistoryClient(activities=activities, comments=RuntimeError("comments unavailable"))
+                with patch("api.candidates.make_client", return_value=client):
+                    result = load_lead_control_history("17", db_path=db_path)
+                self.assertEqual(len(client.calls), 2)
+                self.assertIsNone(result["current_task"])
+                self.assertEqual(result["comments"][0]["id"], "old-note")
+                if isinstance(activities, RuntimeError):
+                    self.assertEqual(result["communications"], [saved_communication])
+
     def test_history_reads_comments_activities_and_local_call_transcript_then_uses_cache(self) -> None:
         activities = {
             "ok": True,
@@ -420,17 +444,19 @@ class LeadControlHistoryTests(unittest.TestCase):
                     "DIRECTION": "1", "COMPLETED": "Y", "START_TIME": "2026-10-06T09:00:00+03:00",
                 },
                 {
-                    "ID": "task-later", "TYPE_ID": "6", "SUBJECT": "Later task", "COMPLETED": "N",
+                    "ID": "task-later", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK", "SUBJECT": "Later task", "COMPLETED": "N",
                     "START_TIME": "2026-10-04T09:00:00+03:00", "DEADLINE": "2026-10-20T09:00:00+03:00",
                 },
                 {
-                    "ID": "task-sooner", "TYPE_ID": "6", "SUBJECT": "Sooner task", "COMPLETED": "N",
+                    "ID": "task-sooner", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK", "SUBJECT": "Sooner task", "COMPLETED": "N",
                     "START_TIME": "2026-10-05T09:00:00+03:00", "DEADLINE": "2026-10-10T09:00:00+03:00",
                 },
                 {
-                    "ID": "task-completed", "TYPE_ID": "6", "SUBJECT": "Completed task", "COMPLETED": "Y",
+                    "ID": "task-completed", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK", "SUBJECT": "Completed task", "COMPLETED": "Y",
                     "START_TIME": "2026-10-01T09:00:00+03:00", "DEADLINE": "2026-10-07T09:00:00+03:00",
                 },
+                {"ID": "todo", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TODO", "SUBJECT": "Not a task",
+                 "COMPLETED": "N", "DEADLINE": "2026-10-01T09:00:00+03:00"},
             ],
         }
         comments = {
@@ -487,7 +513,7 @@ class LeadControlHistoryTests(unittest.TestCase):
                 db_path,
                 key,
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "lead_id": "17",
                     "available": True,
                     "comments": [{"id": "old-comment", "text": "Saved note"}],
@@ -582,7 +608,7 @@ class LeadControlSnapshotTests(unittest.TestCase):
                 db_path,
                 f"{LEAD_CONTROL_HISTORY_KEY_PREFIX}target-new",
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "lead_id": "target-new",
                     "available": True,
                     "comments": [],

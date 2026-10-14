@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import load_json, save_json
+from bitrix.customer_history import is_bitrix_task
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -149,7 +150,7 @@ def render_lead_markdown(bundle: dict[str, Any]) -> str:
     lead_id = str(bundle.get("lead_id") or lead.get("ID") or "")
     activities = result_items(bundle.get("activities"))
     calls = [item for item in activities if activity_type(item) == "call"]
-    tasks = [item for item in activities if activity_type(item) == "task"]
+    tasks = [item for item in activities if is_bitrix_task(item)]
     emails = [item for item in activities if activity_type(item) == "email"]
     messages = [item for item in activities if activity_type(item) == "message"]
     timeline = timeline_items(bundle)

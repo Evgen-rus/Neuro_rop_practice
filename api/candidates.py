@@ -19,6 +19,7 @@ from bitrix.customer_history import (
     build_history_sections,
     build_normalized_communications,
     clean_text,
+    is_bitrix_task,
     result_items,
 )
 from bitrix.usage_trace import bitrix_trace_context
@@ -1740,7 +1741,7 @@ def _lead_control_history_state(state: dict[str, Any] | None, *, lead_id: str) -
     if not isinstance(state, dict) or not isinstance(state.get("payload"), dict):
         return None
     payload = state["payload"]
-    if payload.get("schema_version") != 1 or str(payload.get("lead_id") or "") != lead_id:
+    if payload.get("schema_version") not in {1, 2} or str(payload.get("lead_id") or "") != lead_id:
         return None
     comments = payload.get("comments")
     communications = payload.get("communications")
@@ -1752,8 +1753,8 @@ def _lead_control_history_state(state: dict[str, Any] | None, *, lead_id: str) -
         "available": bool(payload.get("available")),
         "comments": [dict(item) for item in comments if isinstance(item, dict)],
         "communications": [dict(item) for item in communications if isinstance(item, dict)],
-        "current_task": dict(task) if isinstance(task, dict) else None,
-        "task_checked": bool(payload.get("task_checked")),
+        "current_task": dict(task) if payload.get("schema_version") == 2 and isinstance(task, dict) else None,
+        "task_checked": payload.get("schema_version") == 2 and bool(payload.get("task_checked")),
         "limitations": [str(item) for item in payload.get("limitations") or [] if str(item).strip()],
         "fetched_at": str(payload.get("fetched_at") or "") or None,
         "revision": int(state.get("revision") or 0),
@@ -1776,7 +1777,7 @@ def _lead_control_current_task(tasks: list[dict[str, Any]]) -> dict[str, Any] | 
         fallback = str(item.get("when") or raw.get("START_TIME") or "").strip()
         return (not bool(deadline), deadline or fallback, str(item.get("id") or ""))
 
-    open_tasks = [item for item in tasks if not completed(item)]
+    open_tasks = [item for item in tasks if is_bitrix_task(raw_of(item)) and not completed(item)]
     task = min(open_tasks, key=task_time, default=None)
     if not isinstance(task, dict):
         return None
@@ -1918,7 +1919,7 @@ def load_lead_control_history(
     key = _lead_control_history_key(lead_id)
     before = get_crm_sync_state(db_path, key)
     cached = _lead_control_history_state(before, lead_id=lead_id)
-    if cached and not refresh_crm:
+    if cached and cached["task_checked"] and not refresh_crm:
         return {field: value for field, value in cached.items() if field not in {"revision", "task_checked"}}
 
     try:
@@ -1979,7 +1980,7 @@ def load_lead_control_history(
     has_fresh_source = projected["activity_ok"] or projected["comments_ok"]
     fetched_at = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds") if has_fresh_source else (cached or {}).get("fetched_at")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "lead_id": lead_id,
         "available": bool(has_fresh_source or (cached or {}).get("available")),
         "comments": projected["comments"],

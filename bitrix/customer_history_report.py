@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bitrix.client import load_json, save_json
-from bitrix.customer_history import build_normalized_communications, clean_text, result_item
+from bitrix.customer_history import build_normalized_communications, clean_text, is_bitrix_task, result_item
 from setup import BASE_DIR, MSK_TZ, get_logger
 
 
@@ -195,6 +195,10 @@ def render_customer_history_markdown(bundle: dict[str, Any]) -> str:
     internal_context = bundle.get("internal_context") or []
     tasks_and_control = bundle.get("tasks_and_control") or []
     system_events = bundle.get("system_events") or []
+    if root_type == "lead":
+        tasks_and_control = [item for item in tasks_and_control if is_bitrix_task(item.get("raw") or {})]
+        timeline = [item for item in timeline
+                    if item.get("event_type") != "task" or is_bitrix_task(item.get("raw") or {})]
 
     lines = [
         "# Полная история клиента",

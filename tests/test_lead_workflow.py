@@ -459,7 +459,14 @@ class LeadReportSnapshotTests(unittest.TestCase):
                 "generated_at": "2026-07-20T10:00:00+07:00",
                 "lead": {"response": {"result": {"ID": "5", "TITLE": "Лид 5", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "9", "DATE_CREATE": "2026-07-13T10:30:00+03:00", "DATE_MODIFY": "2026-07-20T11:45:00+03:00"}}},
                 "client_touchpoints": [{"event_type": "call", "when": "2026-07-19", "subject": "Звонок", "text": "Обсудили задачу"}],
-                "tasks_and_control": [{"event_type": "task", "when": "2026-07-21", "subject": "Перезвонить", "completed": False}],
+                "tasks_and_control": [
+                    {"event_type": "task", "when": "2026-07-21", "subject": "Перезвонить", "completed": "N",
+                     "raw": {"PROVIDER_ID": "CRM_TASKS_TASK", "COMPLETED": "N"}},
+                    {"event_type": "task", "when": "2026-07-20", "subject": "Дело", "completed": "N",
+                     "raw": {"PROVIDER_ID": "CRM_TODO", "COMPLETED": "N"}},
+                    {"event_type": "task", "when": "2026-07-19", "subject": "Выполнена", "completed": "Y",
+                     "raw": {"PROVIDER_ID": "CRM_TASKS_TASK", "COMPLETED": "Y"}},
+                ],
             }
             (lead_dir / "lead_5_customer_history_bundle.json").write_text(
                 json.dumps(bundle, ensure_ascii=False), encoding="utf-8"
@@ -471,6 +478,12 @@ class LeadReportSnapshotTests(unittest.TestCase):
             self.assertEqual(metadata["lead_modified_at"], "2026-07-20T11:45:00+03:00")
             self.assertEqual(metadata["last_contact"]["type"], "Звонок")
             self.assertEqual(metadata["current_task"]["subject"], "Перезвонить")
+            self.assertFalse(metadata["current_task"]["completed"])
+
+            bundle["tasks_and_control"] = bundle["tasks_and_control"][1:]
+            (lead_dir / "lead_5_customer_history_bundle.json").write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
+            with patch.object(jobs, "PROJECT_ROOT", root):
+                self.assertIsNone(jobs.build_lead_report_meta("5")["current_task"])
 
     def test_model_context_snapshot_reads_only_factual_input_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

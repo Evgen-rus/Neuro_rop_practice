@@ -9,6 +9,29 @@ from openai_api.llm.analyze_lead import LEAD_ID_SECTION_MARKER, build_prompt, lo
 
 
 class LeadPromptContextTests(unittest.TestCase):
+    def test_lead_history_uses_tasks_without_todo_but_deal_history_keeps_todo(self):
+        task = {"event_type": "task", "subject": "Настоящая задача", "raw": {"PROVIDER_ID": "CRM_TASKS_TASK"}}
+        todo = {"event_type": "task", "subject": "Дело возврата", "raw": {"PROVIDER_ID": "CRM_TODO"}}
+        bundle = {"root_entity": {"type": "lead", "id": "123"},
+                  "tasks_and_control": [task, todo], "unified_timeline": [task, todo]}
+        text = render_customer_history_markdown(bundle)
+        self.assertIn("Настоящая задача", text)
+        self.assertNotIn("Дело возврата", text)
+        bundle["root_entity"]["type"] = "deal"
+        self.assertIn("Дело возврата", render_customer_history_markdown(bundle))
+
+    def test_lead_history_without_related_entities_excludes_todo(self):
+        path = Path(__file__).resolve().parents[1] / "bitrix/leads/2_build_leads_customer_path_report.py"
+        spec = importlib.util.spec_from_file_location("lead_task_renderer", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        text = module.render_lead_markdown({"lead_id": "123", "activities": {"items": [
+            {"ID": "1", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TASKS_TASK", "SUBJECT": "Настоящая задача"},
+            {"ID": "2", "TYPE_ID": "6", "PROVIDER_ID": "CRM_TODO", "SUBJECT": "Дело возврата"},
+        ]}})
+        self.assertIn("Настоящая задача", text)
+        self.assertNotIn("Дело возврата", text)
+
     def test_failed_root_card_stops_fetch_before_activity_reads(self):
         path = Path(__file__).resolve().parents[1] / "bitrix/leads/1_fetch_leads_context.py"
         spec = importlib.util.spec_from_file_location("lead_context_fetcher", path)

@@ -1271,6 +1271,10 @@ def fetch_entity_history(
     }
 
 
+def is_bitrix_task(activity: dict[str, Any]) -> bool:
+    return str(activity.get("PROVIDER_ID") or "").upper().startswith("CRM_TASKS_")
+
+
 def activity_type(activity: dict[str, Any]) -> str:
     type_id = str(activity.get("TYPE_ID") or "")
     provider = " ".join(

@@ -239,6 +239,14 @@ class LeadQualificationAssessmentTests(unittest.TestCase):
         self.assertIn("полный список существенных недостающих квалификационных или технических фактов", prompt)
         self.assertIn("обязательно оцени корректность уже выполненного закрытия", prompt)
         self.assertIn('"is_closed_lost": false', prompt)
+        self.assertIn("Короткий звонок — попытка связи", prompt)
+        self.assertIn("По одной длительности нельзя утверждать", prompt)
+        self.assertIn("Для `disputed` назови конкретное прямое противоречие", prompt)
+        self.assertIn("Если evidence недостаточно", prompt)
+        self.assertIn("CRM_TODO` — дело/CRM-активность, а не задача", prompt)
+        self.assertIn("Не включай в эти поля длительность или технические детали записи и транскрибации", prompt)
+        self.assertIn("не поручай по умолчанию «проверить запись/карточку/причину CRM»", prompt)
+        self.assertNotIn("36 секунд", prompt)
 
     def test_lead_crm_state_uses_semantic_for_closure_and_catalog_for_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
